@@ -1,6 +1,7 @@
-use super::traits::{Ccw, IntRing};
-
+use super::gaussint::to_gint;
+use super::traits::{Ccw, InnerIntType, IntRing};
 use super::zzbase::{Frac, GInt, ZZBase, ZZParams};
+use crate::traits::ComplexIntRing;
 use crate::{zz_base_impl, zz_ops_impl};
 
 use num_traits::{One, Zero};
@@ -13,7 +14,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 // numeric constants
 const SQRT_5: f64 = 2.23606797749978969;
-const PENTA: f64 = 2.0*(5.0-SQRT_5);
+const PENTA: f64 = 2.0 * (5.0 - SQRT_5);
 
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
@@ -72,7 +73,7 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 10,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 5.0, PENTA, 5.0*PENTA],
+    sym_roots_sqs: &[1.0, 5.0, PENTA, 5.0 * PENTA],
     scaling_fac: 8,
     ccw_unit_coeffs: &[[2, 0], [2, 0], [0, 2], [0, 0]],
 };
@@ -85,12 +86,12 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
 /// where x = sqrt(5), y = sqrt(2*(5-sqrt(5)))
 fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
-        [[a, b, c, d], [e, f, g, h]] =>  {
-        let w = a*e +(5,)*b*f +(10,)*(c*g +(5,)*d*h - c*h - d*g);
-        let x = a*f + b*e -(2,)*c*g +(10,)*(c*h + d*g - d*h);
-        let y = a*g +(5,)*(b*h + d*f) + c*e;            
-        let z= a*h + b*g + c*f + d*e;
-        vec![w, x, y, z]
+        [[a, b, c, d], [e, f, g, h]] => {
+            let w = a * e + (5,) * b * f + (10,) * (c * g + (5,) * d * h - c * h - d * g);
+            let x = a * f + b * e - (2,) * c * g + (10,) * (c * h + d * g - d * h);
+            let y = a * g + (5,) * (b * h + d * f) + c * e;
+            let z = a * h + b * g + c * f + d * e;
+            vec![w, x, y, z]
         }
     }
 }
@@ -123,12 +124,12 @@ pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
 /// d [ xy , 2 y , 3x  , 6   ]
 fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
-        [[a, b, c, d], [e, f, g, h]] =>  {
-        let w = a*e +(2,)*b*f +(3,)*c*g +(6,)*d*h;
-        let x = a*f + b*e +(3,)*(c*h + d*g);
-        let y = a*g + c*e +(2,)*(b*h + d*f);            
-        let z= a*h + b*g + c*f + d*e;
-        vec![w, x, y, z]
+        [[a, b, c, d], [e, f, g, h]] => {
+            let w = a * e + (2,) * b * f + (3,) * c * g + (6,) * d * h;
+            let x = a * f + b * e + (3,) * (c * h + d * g);
+            let y = a * g + c * e + (2,) * (b * h + d * f);
+            let z = a * h + b * g + c * f + d * e;
+            vec![w, x, y, z]
         }
     }
 }
@@ -143,13 +144,25 @@ zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ24);
 
+// the trait that other structures should parametrize on
+pub trait ZZNum: ZZBase<Frac> + ComplexIntRing + Display {}
+
+// implementations for different complex integer rings
+// (using default underlying integer type on the innermost level)
+impl ZZNum for ZZ4 {}
+impl ZZNum for ZZ6 {}
+impl ZZNum for ZZ8 {}
+impl ZZNum for ZZ10 {}
+impl ZZNum for ZZ12 {}
+impl ZZNum for ZZ24 {}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use num_complex::Complex64;
+    use std::collections::HashSet;
 
     use super::*;
-    
+
     // TODO: make macro to generate the tests for all instances
     // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
     type ZZi = ZZ24;
@@ -192,9 +205,14 @@ mod tests {
         assert_eq!(-ZZi::one() + ZZi::one(), ZZi::zero());
         assert_eq!(ZZi::one() - ZZi::one(), ZZi::zero());
     }
-    
+
     #[test]
     fn test_mul() {
+        // test scalar multiplication
+        assert_eq!(ZZi::zero().scale(2), ZZi::zero());
+        assert_eq!(ZZi::ccw().scale(3), ZZi::ccw() + ZZi::ccw() + ZZi::ccw());
+        assert_eq!(ZZi::one().scale(-1), -ZZi::one());
+
         // test multiplication
         assert_eq!(ZZi::zero() * ZZi::zero(), ZZi::zero());
         assert_eq!(ZZi::one() * ZZi::zero(), ZZi::zero());
@@ -210,7 +228,7 @@ mod tests {
         // test ccw()
         assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
         assert_eq!(-(-(ZZi::one()) * ZZi::ccw()), ZZi::ccw());
-        
+
         // test powi()
         assert_eq!(ZZi::ccw().powi(ZZi::hturn()), -ZZi::one());
         assert_eq!(ZZi::ccw().powi(ZZi::turn()), ZZi::one());
@@ -252,7 +270,7 @@ mod tests {
         }
         assert!(fac_is_minimal);
     }
-    
+
     #[test]
     fn test_display() {
         let x = ZZi::zero();
@@ -281,12 +299,12 @@ mod tests {
         assert_eq!(x.complex(), -Complex64::one());
         let x = ZZi::one() + ZZi::one();
         assert_eq!(x.complex(), Complex64::new(2.0, 0.0));
-        
+
         let x = ZZi::ccw();
         let c = x.complex();
         println!("{c} = {x}");
     }
-    
+
     #[test]
     fn test_hashable() {
         let mut s: HashSet<ZZi> = HashSet::new();
@@ -297,6 +315,6 @@ mod tests {
         assert!(s.contains(&(ZZi::ccw() + ZZi::zero())));
         assert!(!s.contains(&(ZZi::ccw() + ZZi::one())));
     }
-    
+
     // TODO: port rest of blog post code to Rust
 }

@@ -1,9 +1,9 @@
 use super::gaussint::GaussInt;
-use super::traits::IntRing;
+use super::traits::{InnerIntType, IntRing};
+use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Ratio;
-use num_complex::Complex64;
-use num_traits::{One, PrimInt, Zero, ToPrimitive};
+use num_traits::{One, PrimInt, ToPrimitive, Zero};
 use std::marker::PhantomData;
 
 // configure a signed primitive integer size here
@@ -48,25 +48,31 @@ where
     }
 }
 
-pub trait ZZBase<T: IntRing + ToPrimitive + 'static>  { 
+pub trait ZZBase<T: IntRing + InnerIntType + ToPrimitive + 'static> {
     #[inline]
     fn turn() -> i8 {
         Self::zz_params().full_turn_steps
     }
     #[inline]
     fn hturn() -> i8 {
-        Self::turn()/2
+        Self::turn() / 2
     }
 
     fn complex(&self) -> Complex64 {
-        let nums: Vec<Complex64> = self.zz_coeffs().into_iter().map(|x| {
-            let re = x.real.to_f64().unwrap();
-            let im = x.imag.to_f64().unwrap();
-            Complex64::new(re, im)
-        }).collect();
-        let units: Vec<Complex64> = Self::zz_params().sym_roots_sqs.into_iter().map(|x| {
-            Complex64::new(x.sqrt(), 0.0)
-        }).collect();
+        let nums: Vec<Complex64> = self
+            .zz_coeffs()
+            .into_iter()
+            .map(|x| {
+                let re = x.real.to_f64().unwrap();
+                let im = x.imag.to_f64().unwrap();
+                Complex64::new(re, im)
+            })
+            .collect();
+        let units: Vec<Complex64> = Self::zz_params()
+            .sym_roots_sqs
+            .into_iter()
+            .map(|x| Complex64::new(x.sqrt(), 0.0))
+            .collect();
         let mut ret = Complex64::zero();
         for (n, u) in nums.iter().zip(units.iter()) {
             ret += n * u;
@@ -85,6 +91,10 @@ pub trait ZZBase<T: IntRing + ToPrimitive + 'static>  {
     fn zz_params() -> &'static ZZParams<'static, T>;
     fn zz_ccw_vec() -> Vec<GaussInt<T>>;
     fn zz_mul_arrays(x: &[GaussInt<T>], y: &[GaussInt<T>]) -> Vec<GaussInt<T>>;
+    fn zz_mul_scalar(
+        arr: &[GaussInt<T>],
+        scalar: <GaussInt<T> as InnerIntType>::IntType,
+    ) -> Vec<GaussInt<T>>;
 
     // implementations for implementing other traits using zz_ops_impl!
     #[inline]
@@ -135,18 +145,30 @@ pub trait ZZBase<T: IntRing + ToPrimitive + 'static>  {
         let cs: Vec<GaussInt<T>> = self.zz_coeffs().iter().map(|c| c.conj()).collect();
         Self::new(&cs)
     }
+
+    #[inline]
+    fn scale(&self, scalar: <GaussInt<T> as InnerIntType>::IntType) -> Self
+    where
+        Self: Sized,
+    {
+        let cs: Vec<GaussInt<T>> = Self::zz_mul_scalar(self.zz_coeffs(), scalar);
+        Self::new(&cs)
+    }
 }
 
 #[macro_export]
 macro_rules! zz_base_impl {
     ($name:ident, $params:ident, $mul_func:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name {
             coeffs: [GInt; $params.sym_roots_num],
         }
 
-        impl ZZBase<Frac> for $name {
+        impl InnerIntType for $name {
+            type IntType = <GInt as InnerIntType>::IntType;
+        }
 
+        impl ZZBase<Frac> for $name {
             #[inline]
             fn zz_coeffs(&self) -> &[GInt] {
                 &self.coeffs
@@ -169,7 +191,13 @@ macro_rules! zz_base_impl {
 
             #[inline]
             fn zz_mul_arrays(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
-                return $mul_func(x, y);
+                $mul_func(x, y)
+            }
+
+            #[inline]
+            fn zz_mul_scalar(x: &[GInt], scalar: i64) -> Vec<GInt> {
+                let sc: GInt = to_gint(scalar);
+                x.into_iter().map(|c| *c * sc).collect()
             }
 
             fn new(coeffs: &[GInt]) -> Self {
@@ -179,13 +207,13 @@ macro_rules! zz_base_impl {
                 ret.coeffs.clone_from_slice(coeffs);
                 ret
             }
-            
+
             fn unit(i: i8) -> Self {
                 return Self::one() * Self::ccw().powi(i.rem_euclid(Self::turn()));
             }
-            
+
             fn powi(&self, i: i8) -> Self {
-                if (i<0) {
+                if (i < 0) {
                     panic!("Negative powers are not supported!");
                 }
                 let mut x = Self::one();
@@ -251,6 +279,7 @@ macro_rules! zz_ops_impl {
             }
         }
         impl IntRing for $t {}
+        impl ComplexIntRing for $t {}
 
         impl Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

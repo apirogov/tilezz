@@ -17,17 +17,19 @@ pub trait IntRing:
     + One
     + Eq
     + PartialEq
-    + PartialOrd
     + Neg<Output = Self>
     + Add<Self, Output = Self>
     + Sub<Self, Output = Self>
     + Mul<Self, Output = Self>
     + Copy
+    + Clone
 {
 }
 impl IntRing for i32 {}
 impl IntRing for i64 {}
 impl<T: Integer + IntRing> IntRing for Ratio<T> {}
+
+pub trait ComplexIntRing: IntRing + Ccw {}
 
 pub trait InnerIntType {
     type IntType;
@@ -40,6 +42,6 @@ impl InnerIntType for i64 {
     type IntType = i64;
 }
 
-impl<T: Integer + IntRing> InnerIntType for Ratio<T> {
-    type IntType = T;
+impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
+    type IntType = T::IntType;
 }

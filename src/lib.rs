@@ -9,3 +9,5 @@ pub mod zzbase;
 extern crate arrayref;
 
 pub mod zz;
+
+pub mod snake;
