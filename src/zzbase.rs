@@ -63,6 +63,22 @@ pub trait ZZBase<
         Self::turn() / 2
     }
 
+    /// Return quarter turn angle (if ring supports it).
+    #[inline]
+    fn qturn() -> i8 {
+        assert_eq!(Self::turn() % 4, 0);
+        Self::turn() / 4
+    }
+
+    /// Return imaginary unit (if ring supports it).
+    #[inline]
+    fn one_i() -> Self
+    where
+        Self: Sized,
+    {
+        Self::unit(Self::qturn())
+    }
+
     /// Complex conjugation.
     #[inline]
     fn conj(&self) -> Self

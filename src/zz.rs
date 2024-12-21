@@ -15,6 +15,7 @@ use std::ops::{Add, Mul, Neg, Sub};
 // numeric constants
 const SQRT_5: f64 = 2.23606797749978969;
 const PENTA: f64 = 2.0 * (5.0 - SQRT_5);
+// const PENTA_POS: f64 = 2.0 * (5.0 + SQRT_5);
 
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
@@ -68,7 +69,7 @@ fn zz8_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
         [[a, b], [c, d]] => vec![a * c + ((2,) * b * d), a * d + b * c],
     }
 }
-/// Penrose integers
+/// Halfrose integers (impractical, has no quarter turn)
 pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 10,
@@ -107,6 +108,22 @@ pub const ZZ12_PARAMS: ZZParams<Frac> = ZZParams {
 fn zz12_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     return zz6_mul(x, y);
 }
+/// Penrose integers
+pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
+    phantom: PhantomData,
+    full_turn_steps: 20,
+    sym_roots_num: 4,
+    sym_roots_sqs: &[1.0, 5.0, PENTA, 5.0 * PENTA],
+    scaling_fac: 8,
+    ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
+};
+/// Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), z = sqrt(2*(5+sqrt(5)))
+/// We have that e^(i*pi/10) = 1/4(-i + ix + z)
+/// But as 1/2(xz - z) = y ^ 1/2(xy + y) = z,
+/// we can reuse ZZ10 logic (which has y = PENTA), as 2z = xy + y
+fn zz20_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+    zz10_mul(x, y)
+}
 /// Digiclock integers
 pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
@@ -136,13 +153,15 @@ fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
 // --------
 
 // generate boilerplate implementations
+// TODO: is there a practical representation of ZZ16?
 zz_base_impl!(ZZ4, ZZ4_PARAMS, zz4_mul);
 zz_base_impl!(ZZ6, ZZ6_PARAMS, zz6_mul);
 zz_base_impl!(ZZ8, ZZ8_PARAMS, zz8_mul);
 zz_base_impl!(ZZ10, ZZ10_PARAMS, zz10_mul);
 zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
+zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
-zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ24);
+zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ20 ZZ24);
 
 // implementations for different complex integer rings
 // (using default underlying integer type on the innermost level)
@@ -151,17 +170,19 @@ impl ZZNum for ZZ6 {}
 impl ZZNum for ZZ8 {}
 impl ZZNum for ZZ10 {}
 impl ZZNum for ZZ12 {}
+impl ZZNum for ZZ20 {}
 impl ZZNum for ZZ24 {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gaussint::to_gint2;
     use num_complex::Complex64;
     use std::collections::HashSet;
 
     // TODO: make macro to generate the tests for all instances
     // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
-    type ZZi = ZZ24;
+    type ZZi = ZZ20;
 
     #[test]
     fn test_basic() {
@@ -226,23 +247,27 @@ mod tests {
         assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
         assert_eq!(-(-(ZZi::one()) * ZZi::ccw()), ZZi::ccw());
 
-        // test powi()
-        assert_eq!(ZZi::ccw().powi(ZZi::hturn()), -ZZi::one());
-        assert_eq!(ZZi::ccw().powi(ZZi::turn()), ZZi::one());
-        assert_eq!(ZZi::ccw().powi(ZZi::hturn()).powi(2), ZZi::one());
-
-        // test unit()
-        assert_eq!(ZZi::unit(0), ZZi::one());
-        assert_eq!(ZZi::unit(-1), ZZi::unit(ZZi::turn() - 1));
-        assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
-        assert_eq!(ZZi::unit(ZZi::turn() + 1), ZZi::unit(1));
-
         // test going around the unit circle step by step
         let mut x = ZZi::one();
         for _ in 0..ZZi::turn() {
             x = x * ZZi::ccw();
         }
         assert_eq!(x, ZZi::one());
+
+        // test unit()
+        assert_eq!(ZZi::unit(0), ZZi::one());
+        assert_eq!(ZZi::unit(-1), ZZi::unit(ZZi::turn() - 1));
+        assert_eq!(ZZi::unit(1), ZZi::unit(ZZi::turn() + 1));
+        assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
+        assert_eq!(ZZi::unit(ZZi::hturn()), -ZZi::one());
+        if ZZi::turn() % 4 == 0 {
+            assert_eq!(ZZi::one_i().zz_coeffs()[0], to_gint2(0, 1));
+        }
+
+        // test powi()
+        assert_eq!(ZZi::ccw().powi(ZZi::hturn()), -ZZi::one());
+        assert_eq!(ZZi::ccw().powi(ZZi::turn()), ZZi::one());
+        assert_eq!(ZZi::ccw().powi(ZZi::hturn()).powi(2), ZZi::one());
     }
 
     #[test]
@@ -256,33 +281,36 @@ mod tests {
         // test scaling fac is correct by checking denom. of coeffs of all units
         // (that the denom. always can be expressed as multple of scaling factor)
         // and that the chosen constant factor is indeed minimal
-        let sc_fac = &ZZi::zz_params().scaling_fac;
-        let mut fac_is_minimal: bool = false;
+        let sc_fac = ZZi::zz_params().scaling_fac;
+        let mut max_fac: i64 = 0;
         for i in 0..ZZi::turn() {
             let x = ZZi::unit(i);
+            println!("{x}");
             for c in x.coeffs {
                 assert_eq!(sc_fac % c.real.denom(), 0);
-                fac_is_minimal |= c.real.denom() == sc_fac;
+                assert_eq!(sc_fac % c.imag.denom(), 0);
+                max_fac = max_fac.max(*c.real.denom());
+                max_fac = max_fac.max(*c.imag.denom());
             }
         }
-        assert!(fac_is_minimal);
+        assert_eq!(sc_fac, max_fac);
     }
 
     #[test]
     fn test_display() {
-        let x = ZZi::zero();
+        let x = ZZ24::zero();
         assert_eq!(format!("{x}"), "0");
 
-        let x = ZZi::one();
+        let x = ZZ24::one();
         assert_eq!(format!("{x}"), "1");
 
-        let x = ZZi::one() + ZZi::one();
+        let x = ZZ24::one() + ZZ24::one();
         assert_eq!(format!("{x}"), "2");
 
-        let x = -ZZi::one();
+        let x = -ZZ24::one();
         assert_eq!(format!("{x}"), "-1");
 
-        let x = ZZi::one() + (ZZi::ccw()).powi(2);
+        let x = ZZ24::one() + (ZZ24::ccw()).powi(2);
         assert_eq!(format!("{x}"), "1+1/2i + (1/2)*sqrt(3)");
     }
 
