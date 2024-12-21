@@ -1,6 +1,6 @@
 use super::gaussint::to_gint;
 use super::traits::{Ccw, InnerIntType, IntRing};
-use super::zzbase::{Frac, GInt, ZZBase, ZZParams};
+use super::zzbase::{Frac, GInt, ZZBase, ZZNum, ZZParams};
 use crate::traits::ComplexIntRing;
 use crate::{zz_base_impl, zz_ops_impl};
 
@@ -144,9 +144,6 @@ zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ24);
 
-// the trait that other structures should parametrize on
-pub trait ZZNum: ZZBase<Frac> + ComplexIntRing + Display {}
-
 // implementations for different complex integer rings
 // (using default underlying integer type on the innermost level)
 impl ZZNum for ZZ4 {}
@@ -158,10 +155,9 @@ impl ZZNum for ZZ24 {}
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use num_complex::Complex64;
     use std::collections::HashSet;
-
-    use super::*;
 
     // TODO: make macro to generate the tests for all instances
     // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
@@ -212,6 +208,7 @@ mod tests {
         assert_eq!(ZZi::zero().scale(2), ZZi::zero());
         assert_eq!(ZZi::ccw().scale(3), ZZi::ccw() + ZZi::ccw() + ZZi::ccw());
         assert_eq!(ZZi::one().scale(-1), -ZZi::one());
+        assert_eq!(ZZi::one().scale(-42), ZZi::from_int(-42));
 
         // test multiplication
         assert_eq!(ZZi::zero() * ZZi::zero(), ZZi::zero());
@@ -316,5 +313,148 @@ mod tests {
         assert!(!s.contains(&(ZZi::ccw() + ZZi::one())));
     }
 
-    // TODO: port rest of blog post code to Rust
+    // Test point layout:
+    // -------
+    // E F
+    //
+    // A B C D
+    // -------
+    // static A: ZZi = ZZi::zero();
+    // static B: GaussInt<i64> = ZZi::one();
+    // static C: GaussInt<i64> = ZZi::from_int(2);
+    // static D: GaussInt<i64> = GaussInt::new(3, 0);
+    // static E: GaussInt<i64> = GaussInt::new(0, 1);
+    // static F: GaussInt<i64> = GaussInt::new(1, 1);
+
+    fn get_non_triv_point() -> ZZ12 {
+        // -0.035898384862245614-0.401923788646684i
+        let tmp1 = (ZZ12::one().scale(2) - ZZ12::unit(2) - ZZ12::unit(-1).scale(2)) * ZZ12::unit(1);
+        let tmp2 = (ZZ12::one().scale(3) - ZZ12::unit(2) - ZZ12::unit(-1).scale(3)) * ZZ12::unit(2);
+        (tmp1 - tmp2) * ZZ12::unit(-2)
+    }
+
+    #[test]
+    fn test_xy() {
+        // imaginary unit (note that we only have that
+        // in ZZi where i is divisible by 4, so in general
+        // the splitting operation may not be reversible
+        // with ring operations on the two parts.
+        let i = ZZ12::unit(3);
+
+        // test correctness of splitting and reconstruction
+        let p = get_non_triv_point();
+        let (x, y) = p.xy();
+        assert_eq!(p, x + y * i);
+    }
+
+    #[test]
+    fn test_is_real_imag_complex() {
+        assert!(ZZ12::zero().is_real());
+        assert!(ZZ12::zero().is_imag());
+
+        assert!(ZZ12::one().is_real());
+        assert!((-ZZ12::one()).is_real());
+        assert!(!ZZ12::one().is_imag());
+        assert!(!ZZ12::one().is_complex());
+
+        assert!(!ZZ12::unit(1).is_real());
+        assert!(!ZZ12::unit(2).is_imag());
+        assert!(ZZ12::unit(1).is_complex());
+        assert!(ZZ12::unit(2).is_complex());
+
+        assert!(!ZZ12::unit(3).is_real());
+        assert!(ZZ12::unit(3).is_imag());
+        assert!((-ZZ12::unit(3)).is_imag());
+        assert!(!ZZ12::unit(3).is_complex());
+    }
+
+    #[test]
+    fn test_dot() {
+        let p1 = ZZ12::one();
+        let p2 = ZZ12::from_int(2);
+        let p3 = ZZ12::from_int(3);
+        let pi = ZZ12::unit(3); // i
+        let p60 = ZZ12::unit(2);
+        let pm60 = ZZ12::unit(-2);
+
+        assert_eq!(p1.dot(&pi), ZZ12::zero());
+        assert_eq!(ZZ12::zero().dot(&pi), ZZ12::zero());
+        assert_eq!(p2.dot(&p3), ZZ12::from_int(6));
+
+        // {0, 1} dot {1/2, sqrt(3)/2} = sqrt(3) / 2
+        // => dot^2 = 3/4
+        let d1 = p60.dot(&pi).powi(2).complex();
+        assert_eq!(d1.re, 0.75);
+        assert_eq!(d1.im, 0.0);
+
+        // same but with negative sign (check indirectly)
+        let d2 = pm60.dot(&pi).complex();
+        assert!(d2.re < 0.0);
+        assert_eq!(d2.im, 0.0);
+        assert_eq!(pm60.dot(&pi).powi(2).complex().re, 0.75);
+
+        let p = get_non_triv_point();
+        let q = p.norm_sq();
+
+        // all rotations of the same point around origin
+        // have the same squared distance, i.e. quadrance
+        for i in 1..ZZ12::turn() {
+            let pi = p * ZZ12::unit(i);
+            let qi = pi.norm_sq();
+            let ci = pi.complex();
+            let ni = ci.norm();
+            println!("{ci} {ni} {qi}");
+            assert_eq!(qi, q);
+        }
+    }
+
+    #[test]
+    fn test_is_between() {
+        let a: ZZi = ZZi::zero();
+        let b: ZZi = ZZi::one();
+        let c: ZZi = ZZi::from_int(2);
+        let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
+        let f: ZZi = b + e;
+        let g: ZZi = ZZi::unit(1) + ZZi::unit(-1) - ZZi::one();
+
+        // is actually in between
+        assert!(b.is_between(&a, &c));
+        assert!(g.is_between(&a, &b));
+        // is an endpoint
+        assert!(!b.is_between(&a, &b));
+        assert!(!a.is_between(&a, &b));
+        // colinear, but not between
+        assert!(!c.is_between(&a, &b));
+        // not colinear
+        assert!(!f.is_between(&a, &b));
+    }
+
+    #[test]
+    fn test_colinear() {
+        let a: ZZi = ZZi::zero();
+        let b: ZZi = ZZi::one();
+        let c: ZZi = ZZi::from_int(2);
+        let d: ZZi = ZZi::from_int(3);
+        let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
+        let f: ZZi = b + e;
+
+        let l_ab = a.line_through(&b);
+        let l_ac = a.line_through(&c);
+        let l_af = a.line_through(&f);
+
+        // colinear, overlap
+        assert!(b.is_colinear(&l_ac));
+        assert!(d.is_colinear(&l_ac));
+        // colinear, no overlap
+        assert!(c.is_colinear(&l_ab));
+        assert!(d.is_colinear(&l_ab));
+        // parallel (not colinear)
+        assert!(!e.is_colinear(&l_ab));
+        assert!(!f.is_colinear(&l_ab));
+        // perpendicular (touches in one point, not in the other)
+        assert!(!(a.is_colinear(&l_ab) && e.is_colinear(&l_ab)));
+        // general case
+        assert!(!b.is_colinear(&l_af));
+        assert!(!d.is_colinear(&l_af));
+    }
 }

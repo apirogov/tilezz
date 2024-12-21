@@ -10,4 +10,8 @@ extern crate arrayref;
 
 pub mod zz;
 
+pub mod zzutil;
+
 pub mod snake;
+
+pub mod rat;

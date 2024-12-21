@@ -8,7 +8,9 @@ use std::marker::Copy;
 use std::ops::{Add, Mul, Neg, Sub};
 
 /// Gaussian Integer (complex number with real and imaginary part both integers).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
+/// NOTE: even though complex numbers cannot really be ordered,
+/// for convenience, we derive Ord instance, which is "lexicographic".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GaussInt<T> {
     pub real: T,
     pub imag: T,
@@ -19,7 +21,7 @@ impl<T: IntRing + InnerIntType> InnerIntType for GaussInt<T> {
 }
 
 impl<T: IntRing> GaussInt<T> {
-    pub fn new(re: T, im: T) -> Self {
+    pub const fn new(re: T, im: T) -> Self {
         Self { real: re, imag: im }
     }
 

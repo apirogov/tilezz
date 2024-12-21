@@ -1,4 +1,8 @@
-use super::zz::ZZNum;
+use super::gaussint::GaussInt;
+use super::zzbase::ZZNum;
+use super::zzutil::{cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of};
+use num_traits::Zero;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -24,7 +28,7 @@ impl<T: ZZNum> Default for Turtle<T> {
 
 /// Blueprint of a polyline or polygon that consists of
 /// unit-length segments in a chosen complex integer ring.
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct Snake<T: ZZNum> {
     /// Abstract sequence of unit segments that point into
     /// different directions (i.e. turtle movement instructions).
@@ -36,6 +40,16 @@ pub struct Snake<T: ZZNum> {
     /// Representative polyline vertices
     /// (always non-empty and starting at origin).
     points: Vec<T>,
+
+    /// Structure to collect indices of points that fall
+    /// into the same unit square grid cell.
+    /// Used to minimize number of segments to be compared
+    /// when checking for self-intersections
+    /// (including touching segment endpoints).
+    ///
+    /// Each point with index i is part of at most two segments,
+    /// with indices (i-1, i) and (i, i+1), if 0 < i < num_points
+    grid: HashMap<GaussInt<i64>, Vec<usize>>,
 }
 
 impl<T: ZZNum> Snake<T> {
@@ -45,8 +59,24 @@ impl<T: ZZNum> Snake<T> {
             points: vec![T::zero(); 1],
             angles: Vec::new(),
             ang_sum: 0,
+            grid: HashMap::from([(GaussInt::zero(), vec![0])]),
         }
     }
+
+    /// Create a snake from an angle sequence.
+    /// Equivalent to adding all angles sequentially.
+    pub fn from_slice(angles: &[i8]) -> Self {
+        let mut result = Self::new();
+        for angle in angles {
+            result.add(*angle);
+        }
+        result
+    }
+
+    /// TODO: do we really need this operation on the level of snakes?
+    // pub fn revcomp(&self) -> Self {
+    //     Self::from_slice(revcomp(self.angles.as_slice()).as_slice())
+    // }
 
     // ----
 
@@ -77,10 +107,10 @@ impl<T: ZZNum> Snake<T> {
         self.points.as_slice()
     }
 
-    /// Returns true if the represented path is closed,
-    /// i.e. the first and last point is the same (and equal to 0).
+    /// Returns true if the represented path is closed, i.e.
+    /// not empty + first and last point is the same (and equal to 0).
     pub fn is_closed(&self) -> bool {
-        *self.points.last().unwrap() == T::zero()
+        !self.is_empty() && *self.points.last().unwrap() == T::zero()
     }
 
     // ----
@@ -105,17 +135,33 @@ impl<T: ZZNum> Snake<T> {
 
     // ----
 
+    /// Return the two end points of the next segment,
+    /// obtained from adding a new directed step.
+    fn next_seg(&self, angle: i8) -> (T, T) {
+        let old_direction = self.direction();
+        let last = *self.points.last().unwrap();
+        let new_pt = last + (T::unit(old_direction) * T::unit(angle));
+        (last, new_pt)
+    }
+
     /// Add a segment to the snake without checking for
     /// denormalization, degeneracy or self-intersection.
     fn add_unsafe(&mut self, angle: i8) {
-        let old_direction = self.direction();
+        // compute next representative point (uses current orientation!)
+        let (_, new_pt) = self.next_seg(angle);
 
+        // append segment to symbolic angle sequence
         self.angles.push(angle);
         self.ang_sum += angle as i64;
 
-        let last = self.points.last().unwrap();
-        self.points
-            .push(*last + (T::unit(old_direction) * T::unit(angle)));
+        // register point in the grid
+        self.grid
+            .entry(cell_of(new_pt))
+            .or_default()
+            .push(self.points.len());
+
+        // add point to representative polyline
+        self.points.push(new_pt);
     }
 
     /// Return a polyline by tracing out snake with given turtle.
@@ -131,40 +177,65 @@ impl<T: ZZNum> Snake<T> {
         result.points
     }
 
-    /// Check that an angle does not represent a half-turn
-    /// (it is invalid because it is self-intersecting).
-    fn is_angle_valid(angle: i8) -> bool {
-        (angle % T::turn()).abs() != T::hturn()
-    }
-
-    /// Normalize an angle to (-half-turn, half-turn). This is
-    /// used to have a unique symbolic snake representation.
-    fn normalize_angle(angle: i8) -> i8 {
-        let a = angle % T::turn();
-        if a.abs() <= T::hturn() {
-            a
-        } else {
-            -(a.signum() * T::turn() - a)
+    /// Return all representative segments of the current snakes
+    /// that intersect with at least one of the given cells.
+    fn cell_segs(&self, cells: &[GaussInt<i64>]) -> Vec<(T, T)> {
+        let mut seg_pt_indices: Vec<(usize, usize)> = Vec::new();
+        for pt_idx in indices_from_cells(&self.grid, cells) {
+            // each point is part of at least one and at most 2 segments
+            if pt_idx != 0 {
+                seg_pt_indices.push((pt_idx - 1, pt_idx));
+            }
+            // NOTE: self.len() = self.points.len()-1 = last pt idx
+            if pt_idx != self.len() {
+                seg_pt_indices.push((pt_idx, pt_idx + 1));
+            }
         }
+        seg_pt_indices.sort();
+        seg_pt_indices.dedup();
+        seg_pt_indices
+            .iter()
+            .map(|(ix1, ix2)| (self.points[*ix1], self.points[*ix2]))
+            .collect()
     }
 
     /// Check if the new segment can be added without
     /// causing a self-intersection.
-    fn can_add(&self, _angle: i8) -> bool {
-        // TODO: implement, ensure that we NEVER self-intersect
-        true
+    ///
+    /// Note that the correctness of the optimized check strongly relies
+    /// on the assumption that all segments have unit length.
+    fn can_add(&self, angle: i8) -> bool {
+        if self.is_closed() {
+            return false; // already closed -> adding anything makes it non-simple
+        }
+
+        // end points of new candidate segment
+        let new_seg = self.next_seg(angle);
+        // unit square lattice cell neighborhood of new segment
+        let neighborhood = seg_neighborhood_of(new_seg.0, new_seg.1);
+        // all candidates for segment intersection
+        let _neighbor_segs = self.cell_segs(&neighborhood);
+
+        // TODO:
+        // check all relevant points for repetitions,
+        // return false if intersection is anywhere else but in the origin point
+        // (i.e. closing snake is fine -> it has become a rat (or chiral reflection))
+
+        // Check all segments for intersections and return false if any found
+        return true;
     }
 
     /// Add a new segment to the snake.
     /// Returns true on success or false if the new segment
     /// would cause a self-intersection (point is rejected).
     pub fn add(&mut self, angle: i8) -> bool {
+        // normalize angle to be in (-halfturn, ..., halfturn)
+        let a = normalize_angle::<T>(angle);
         // check that angle is not degenerate
         // for a simple polyline or polygon
-        assert!(Self::is_angle_valid(angle));
-
-        // normalize angle to be in (-halfturn, ..., halfturn)
-        let a = Self::normalize_angle(angle);
+        // (a half-turn step means walking the
+        // last segment backwards, i.e. self-intersects)
+        assert!(a.abs() != T::hturn());
 
         // check for induced self-intersections
         if !self.can_add(a) {
@@ -196,7 +267,7 @@ impl<T: ZZNum> Snake<T> {
     pub fn is_rat(&self) -> bool {
         // NOTE: no need to check that the polygon is simple,
         // as we ensure this continuously (prevent self-intersections).
-        !self.is_empty() && self.is_closed()
+        self.is_closed() && self.ang_sum == T::turn() as i64
     }
 
     pub fn slice(&self, _: usize, _: usize) -> Self {
@@ -230,47 +301,100 @@ impl<T: ZZNum> Display for Snake<T> {
     }
 }
 
-// TODO: implement Rat<T>
-// (snake must be non-empty + closed + have ccw angle sum)
-
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use crate::traits::Ccw;
     use crate::zz::ZZ12;
     use crate::zzbase::ZZBase;
-    use num_traits::Zero;
+    use num_traits::{One, Zero};
 
     #[test]
-    fn test_valid_angles() {
-        assert!(Snake::<ZZ12>::is_angle_valid(0));
-        assert!(Snake::<ZZ12>::is_angle_valid(1));
-        assert!(Snake::<ZZ12>::is_angle_valid(7));
-        assert!(Snake::<ZZ12>::is_angle_valid(12));
-        assert!(!Snake::<ZZ12>::is_angle_valid(6));
-        assert!(!Snake::<ZZ12>::is_angle_valid(-6));
-        assert!(!Snake::<ZZ12>::is_angle_valid(18));
+    fn test_cell_of() {
+        assert_eq!(cell_of(ZZ12::zero()), GaussInt::new(0, 0));
+        assert_eq!(cell_of(ZZ12::unit(0)), GaussInt::new(1, 0));
+        assert_eq!(cell_of(ZZ12::unit(1)), GaussInt::new(1, 1));
+        assert_eq!(cell_of(ZZ12::unit(2)), GaussInt::new(1, 1));
+        assert_eq!(cell_of(ZZ12::unit(3)), GaussInt::new(0, 1));
+        assert_eq!(cell_of(ZZ12::unit(4)), GaussInt::new(-1, 1));
+        assert_eq!(cell_of(ZZ12::unit(5)), GaussInt::new(-1, 1));
+        assert_eq!(cell_of(ZZ12::unit(6)), GaussInt::new(-1, 0));
+        assert_eq!(cell_of(ZZ12::unit(7)), GaussInt::new(-1, -1));
+        assert_eq!(cell_of(ZZ12::unit(8)), GaussInt::new(-1, -1));
+        assert_eq!(cell_of(ZZ12::unit(9)), GaussInt::new(0, -1));
+        assert_eq!(cell_of(ZZ12::unit(10)), GaussInt::new(1, -1));
+        assert_eq!(cell_of(ZZ12::unit(11)), GaussInt::new(1, -1));
     }
 
     #[test]
-    fn test_normalize_angles() {
-        assert_eq!(Snake::<ZZ12>::normalize_angle(0), 0);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(1), 1);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-1), -1);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(5), 5);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-5), -5);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(6), 6);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-6), -6);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(7), -5);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-7), 5);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(11), -1);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-11), 1);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(12), 0);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-12), 0);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(13), 1);
-        assert_eq!(Snake::<ZZ12>::normalize_angle(-13), -1);
+    fn test_seg_neighborhood_of() {
+        let gint_vec = |pts: &[(i64, i64)]| {
+            pts.iter()
+                .map(|(x, y)| GaussInt::new(*x, *y))
+                .collect::<Vec<GaussInt<i64>>>()
+        };
+
+        // segment fully contained in one cell
+        let tmp1 = (ZZ12::one().scale(2) - ZZ12::unit(2) - ZZ12::unit(-1).scale(2)) * ZZ12::unit(1);
+        let tmp2 = (ZZ12::one().scale(3) - ZZ12::unit(2) - ZZ12::unit(-1).scale(3)) * ZZ12::unit(2);
+        let p1 = (tmp1 - tmp2) * ZZ12::unit(-2);
+        let p2 = p1 + ZZ12::unit(2);
+        let n0 = seg_neighborhood_of(p1, p2);
+        let n0_exp = gint_vec(&[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
+        assert_eq!(n0, n0_exp);
+
+        // segment touches 2 cells (horizontal)
+        let n1 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(0));
+        let n1_exp = gint_vec(&[
+            (-1, 0),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (1, -1),
+            (1, 0),
+            (1, 1),
+            (2, 0),
+        ]);
+        assert_eq!(n1, n1_exp);
+
+        // segment touches 2 cells (vertical)
+        let n2 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(3));
+        let n2_exp = gint_vec(&[
+            (-1, 0),
+            (-1, 1),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 0),
+            (1, 1),
+        ]);
+        assert_eq!(n2, n2_exp);
+
+        // segment touches 2 cells (diagonal)
+        let n3 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(1));
+        let n3_exp = gint_vec(&[
+            (-1, 0),
+            (0, -1),
+            (0, 0),
+            (0, 1),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (2, 1),
+        ]);
+        assert_eq!(n3, n3_exp);
     }
+
+    // #[test]
+    // fn test_revcomp_snake() {
+    //     let v = vec![1, 3, -2, 4];
+    //     let vrc = revcomp(v.as_slice());
+    //     let s: Snake<ZZ12> = Snake::from_slice(v.as_slice());
+    //     assert_eq!(s.revcomp().angles, vrc);
+    //     let s2 = s.revcomp().revcomp();
+    //     assert_eq!(s, s2);
+    // }
 
     #[test]
     #[should_panic]
@@ -286,13 +410,18 @@ mod tests {
         s.add(-6);
     }
 
-    // TODO: test adding invalid angle (value, or self-intersecting)
+    #[test]
+    #[should_panic]
+    fn test_add_invalid_angle_mod() {
+        let mut s: Snake<ZZ12> = Snake::new();
+        s.add(18);
+    }
 
     #[test]
     fn test_basic() {
         let mut s: Snake<ZZ12> = Snake::new();
         assert!(s.is_empty());
-        assert!(s.is_closed());
+        assert!(!s.is_closed());
         assert!(!s.is_rat());
         assert_eq!(s.len(), 0);
         assert_eq!(s.angle_sum(), 0);
@@ -343,12 +472,87 @@ mod tests {
             .collect();
         let l2 = s.to_polyline(&t);
         assert_eq!(l2, l2_exp);
+    }
 
+    #[test]
+    fn test_is_rat() {
         let mut square: Snake<ZZ12> = Snake::new();
-        for _ in 0..4 {
+        assert!(!square.is_rat()); // empty
+
+        for _ in 0..3 {
             square.add(3);
         }
-        assert!(square.is_rat());
+        assert!(!square.is_rat()); // not closed
+
+        square.add(3);
+        assert!(square.is_rat()); // valid
+
+        // valid, but chirally non-normalized (is clockwise)
+        let square2: Snake<ZZ12> = Snake::from_slice(vec![-3, -3, -3, -3].as_slice());
+        assert!(!square2.is_rat());
+    }
+
+    #[test]
+    fn test_cell_segs() {
+        let mut s: Snake<ZZ12> = Snake::new();
+        assert!(s.cell_segs(&[GaussInt::new(0, 0)]).is_empty());
+
+        s.add(0);
+        assert_eq!(
+            s.cell_segs(&[GaussInt::new(0, 0)]),
+            &[(ZZ12::zero(), ZZ12::one())]
+        );
+
+        s.add(0);
+        assert_eq!(
+            s.cell_segs(&[GaussInt::new(0, 0)]),
+            &[(ZZ12::zero(), ZZ12::one())]
+        );
+        assert_eq!(
+            s.cell_segs(&[GaussInt::new(1, 0)]),
+            &[
+                (ZZ12::zero(), ZZ12::one()),
+                (ZZ12::one(), ZZ12::one().scale(2))
+            ]
+        );
+        assert_eq!(
+            s.cell_segs(&[GaussInt::new(2, 0)]),
+            &[(ZZ12::one(), ZZ12::one().scale(2))]
+        );
+    }
+
+    #[test]
+    fn test_can_add() {
+        let mut s: Snake<ZZ12> = Snake::from_slice(vec![3, 3, 3].as_slice());
+        assert!(s.add(3)); // can add, closes shape
+        assert!(!s.add(0)); // cannot add, shape is closed
+
+        // TODO: test self-intersection test
+    }
+
+    #[test]
+    fn test_slice() {
+        // TODO: test slicing
+    }
+
+    #[test]
+    fn test_eq_ord() {
+        let s1: Snake<ZZ12> = Snake::from_slice(vec![1, 2, 3].as_slice());
+        let mut s2: Snake<ZZ12> = Snake::from_slice(s1.angles.as_slice());
+        assert_eq!(s1, s2);
+
+        s2.add(4);
+        assert!(s1 != s2);
+        assert!(s1 < s2);
+
+        let s3: Snake<ZZ12> = Snake::from_slice(vec![-1, 4, 5].as_slice());
+        assert!(s3 < s1);
+        assert!(s3 < s2);
+
+        let s4: Snake<ZZ12> = Snake::new();
+        assert!(s4 < s1);
+        assert!(s4 < s2);
+        assert!(s4 < s3);
     }
 
     #[test]
@@ -360,7 +564,4 @@ mod tests {
         s.add(7);
         assert_eq!(format!("{s}"), "[-2, -1, 0, 1, -5]");
     }
-
-    #[test]
-    fn test_comparisons() {}
 }
