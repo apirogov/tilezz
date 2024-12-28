@@ -143,26 +143,47 @@ impl<T: Display + Zero + One + Eq + PartialOrd + Neg<Output = T>> Display for Ga
 
 impl<T: Integer + IntRing> IntRing for GaussInt<T> {}
 
-/// Lift an integer into a GaussInt of a rational of the original type.
-pub fn to_gint<T: IntRing + Integer>(re: T) -> GaussInt<Ratio<T>> {
-    GaussInt::new(Ratio::new(re, T::one()), Ratio::zero())
+// implement from(...)
+impl<T: Integer + IntRing> From<T> for GaussInt<Ratio<T>> {
+    fn from(value: T) -> Self {
+        GaussInt::new(Ratio::new(value, T::one()), Ratio::zero())
+    }
+}
+impl<T: Integer + IntRing> From<(T,)> for GaussInt<Ratio<T>> {
+    fn from((value,): (T,)) -> Self {
+        GaussInt::from(value)
+    }
+}
+impl<T: Integer + IntRing> From<(T, T)> for GaussInt<Ratio<T>> {
+    fn from((re, im): (T, T)) -> Self {
+        GaussInt::new(Ratio::new(re, T::one()), Ratio::new(im, T::one()))
+    }
 }
 
-pub fn to_gint2<T: IntRing + Integer>(re: T, im: T) -> GaussInt<Ratio<T>> {
-    GaussInt::new(Ratio::new(re, T::one()), Ratio::new(im, T::one()))
-}
-
-// convenience impls (so we can write (n,) instead of to_gint(n) to lift n)
+// for scalars on the left, use singleton tuples as wrapper
 impl<T: IntRing + Integer> Add<GaussInt<Ratio<T>>> for (T,) {
     type Output = GaussInt<Ratio<T>>;
     fn add(self, other: GaussInt<Ratio<T>>) -> GaussInt<Ratio<T>> {
-        return to_gint(T::from(self.0)) + other;
+        return GaussInt::<Ratio<T>>::from(self) + other;
     }
 }
 impl<T: IntRing + Integer> Mul<GaussInt<Ratio<T>>> for (T,) {
     type Output = GaussInt<Ratio<T>>;
     fn mul(self, other: GaussInt<Ratio<T>>) -> GaussInt<Ratio<T>> {
-        return to_gint(T::from(self.0)) * other;
+        return GaussInt::<Ratio<T>>::from(self) * other;
+    }
+}
+// for scalars on the right, no need for the tuple wrapper
+impl<T: IntRing + Integer> Add<T> for GaussInt<Ratio<T>> {
+    type Output = GaussInt<Ratio<T>>;
+    fn add(self, other: T) -> GaussInt<Ratio<T>> {
+        return self + GaussInt::<Ratio<T>>::from(other);
+    }
+}
+impl<T: IntRing + Integer> Mul<T> for GaussInt<Ratio<T>> {
+    type Output = GaussInt<Ratio<T>>;
+    fn mul(self, other: T) -> GaussInt<Ratio<T>> {
+        return self * GaussInt::<Ratio<T>>::from(other);
     }
 }
 
@@ -175,12 +196,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_gint_to_gint2_conj() {
-        assert_eq!(to_gint(2).real, Rational32::new(2, 1));
-        assert_eq!(to_gint(3).real, Rational64::new(3, 1));
-        assert_eq!(to_gint(4).imag, Rational64::new(0, 1));
+    fn test_from() {
+        assert_eq!(GaussInt32::from(2).real, Rational32::new(2, 1));
+        assert_eq!(GaussInt64::from(3).real, Rational64::new(3, 1));
+        assert_eq!(GaussInt64::from((4,)).real, Rational64::new(4, 1));
+        assert_eq!(GaussInt64::from((5,)).imag, Rational64::new(0, 1));
 
-        let x = to_gint2(3, 5);
+        let x = GaussInt32::from((3, 5));
         assert_eq!(x.real, Rational32::from(3));
         assert_eq!(x.imag, Rational32::from(5));
 
@@ -226,33 +248,19 @@ mod tests {
     #[test]
     fn test_display() {
         type GInt = GaussInt64;
-        let x = GInt::zero();
-        assert_eq!(format!("{x}"), "0");
+        assert_eq!(format!("{}", GInt::zero()), "0");
+        assert_eq!(format!("{}", GInt::one()), "1");
+        assert_eq!(format!("{}", -GInt::one()), "-1");
+        assert_eq!(format!("{}", GInt::ccw()), "i");
+        assert_eq!(format!("{}", -GInt::ccw()), "-i");
 
-        let x = GInt::one();
-        assert_eq!(format!("{x}"), "1");
-        let x = -GInt::one();
-        assert_eq!(format!("{x}"), "-1");
-        let x = GInt::ccw();
-        assert_eq!(format!("{x}"), "i");
-        let x = -GInt::ccw();
-        assert_eq!(format!("{x}"), "-i");
-
-        let x = to_gint2(2, 0);
-        assert_eq!(format!("{x}"), "2");
-        let x = to_gint2(0, 3);
-        assert_eq!(format!("{x}"), "3i");
-        let x = to_gint2(-4, 0);
-        assert_eq!(format!("{x}"), "-4");
-        let x = to_gint2(5, -1);
-        assert_eq!(format!("{x}"), "5-i");
-        let x = to_gint2(6, -2);
-        assert_eq!(format!("{x}"), "6-2i");
-        let x = to_gint2(-7, -3);
-        assert_eq!(format!("{x}"), "-7-3i");
-        let x = to_gint2(-8, 9);
-        assert_eq!(format!("{x}"), "-8+9i");
-        let x = to_gint2(0, -10);
-        assert_eq!(format!("{x}"), "-10i");
+        assert_eq!(format!("{}", GInt::from((2, 0))), "2");
+        assert_eq!(format!("{}", GInt::from((0, 3))), "3i");
+        assert_eq!(format!("{}", GInt::from((-4, 0))), "-4");
+        assert_eq!(format!("{}", GInt::from((5, -1))), "5-i");
+        assert_eq!(format!("{}", GInt::from((6, -2))), "6-2i");
+        assert_eq!(format!("{}", GInt::from((-7, -3))), "-7-3i");
+        assert_eq!(format!("{}", GInt::from((-8, 9))), "-8+9i");
+        assert_eq!(format!("{}", GInt::from((0, -10))), "-10i");
     }
 }

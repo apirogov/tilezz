@@ -1,4 +1,3 @@
-use super::gaussint::to_gint;
 use super::traits::{Ccw, InnerIntType, IntRing};
 use super::zzbase::{Frac, GInt, ZZBase, ZZNum, ZZParams};
 use crate::traits::ComplexIntRing;
@@ -176,7 +175,6 @@ impl ZZNum for ZZ24 {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gaussint::to_gint2;
     use crate::zzbase::{signum_sum_sqrt_expr_2, signum_sum_sqrt_expr_4};
     use num_complex::Complex64;
     use std::collections::HashSet;
@@ -312,7 +310,7 @@ mod tests {
         assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
         assert_eq!(ZZi::unit(ZZi::hturn()), -ZZi::one());
         if ZZi::turn() % 4 == 0 {
-            assert_eq!(ZZi::one_i().zz_coeffs()[0], to_gint2(0, 1));
+            assert_eq!(ZZi::one_i().zz_coeffs()[0], GInt::from((0, 1)));
         }
 
         // test powi()

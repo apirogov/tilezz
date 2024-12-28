@@ -536,7 +536,7 @@ macro_rules! zz_base_impl {
 
             #[inline]
             fn zz_mul_scalar(x: &[GInt], scalar: i64) -> Vec<GInt> {
-                let sc: GInt = to_gint(scalar);
+                let sc: GInt = GInt::from(scalar);
                 x.into_iter().map(|c| *c * sc).collect()
             }
 
