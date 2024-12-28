@@ -37,13 +37,14 @@ where
     T: PrimInt + Integer + Signed + IntRing,
 {
     // helper function to lift the param coeffs into a GaussInt of suitable type
-    pub fn ccw_unit(self, scaling_fac: T) -> Vec<GaussInt<Ratio<T>>> {
+    pub fn ccw_unit(self) -> Vec<GaussInt<Ratio<T>>> {
+        let sc = T::from(self.scaling_fac).unwrap();
         self.ccw_unit_coeffs
             .into_iter()
             .map(|x| {
                 GaussInt::new(
-                    Ratio::<T>::new_raw(T::from(x[0]).unwrap(), scaling_fac.clone()),
-                    Ratio::<T>::new_raw(T::from(x[1]).unwrap(), scaling_fac.clone()),
+                    Ratio::<T>::new_raw(T::from(x[0]).unwrap(), sc),
+                    Ratio::<T>::new_raw(T::from(x[1]).unwrap(), sc),
                 )
             })
             .collect()
@@ -353,14 +354,12 @@ pub trait ZZBase<
         signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l)
     }
 
-    /// Return the sign of the value (assuming it is real-valued).
+    /// Return the sign of the real part of the value.
     /// Note that ZZ cannot not support Signed trait in general.
-    fn partial_signum(&self) -> T
+    fn re_signum(&self) -> T
     where
         Self: ZZNum,
     {
-        assert!(<Self as ZZBase<T>>::is_real(self));
-
         match <Self as ZZBase<T>>::zz_params().sym_roots_num {
             // ZZ4
             1 => <Self as ZZBase<T>>::zz_partial_signum_1_sym(&self),
@@ -451,7 +450,7 @@ pub trait ZZBase<
         // if d = 0 -> p3 is equal to an endpoint
         // if d < 0 -> p3 colinear, but outside
         let d = q3 - q1 - q2; // = +- 2*sqrt(q1*q2)
-        let sgn = <Self as ZZBase<T>>::partial_signum(&d);
+        let sgn = <Self as ZZBase<T>>::zz_partial_signum(&d);
         return sgn.is_one();
         */
 
@@ -461,7 +460,7 @@ pub trait ZZBase<
         let w = *self - *p2;
         let wed = <Self as ZZBase<T>>::wedge(&v, &w);
         let dot = <Self as ZZBase<T>>::dot(&v, &w);
-        let dot_sign = <Self as ZZBase<T>>::partial_signum(&dot);
+        let dot_sign = <Self as ZZBase<T>>::re_signum(&dot);
         wed.is_zero() && dot_sign.is_one()
     }
 
@@ -523,6 +522,10 @@ pub trait ZZBase<
     }
 }
 
+/// The trait that other structures should parametrize on
+/// to work with any complex integer ring.
+pub trait ZZNum: ZZBase<Frac> + InnerIntType + ComplexIntRing + Display {}
+
 #[macro_export]
 macro_rules! zz_base_impl {
     ($name:ident, $params:ident, $mul_func:ident) => {
@@ -559,7 +562,7 @@ macro_rules! zz_base_impl {
 
             #[inline]
             fn zz_ccw_vec() -> Vec<GInt> {
-                $params.ccw_unit($params.scaling_fac)
+                $params.ccw_unit()
             }
 
             #[inline]
@@ -581,6 +584,8 @@ macro_rules! zz_base_impl {
                 ret
             }
         }
+
+        impl ZZNum for $name {}
     };
 }
 
@@ -661,7 +666,3 @@ macro_rules! zz_ops_impl {
         }
     )*)
 }
-
-/// The trait that other structures should parametrize on
-/// to work with any complex integer ring.
-pub trait ZZNum: ZZBase<Frac> + InnerIntType + ComplexIntRing + Display {}

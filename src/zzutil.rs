@@ -82,7 +82,7 @@ pub fn indices_from_cells(
 // -----------------
 
 fn is_ccw<T: ZZNum>(a: T, b: T, c: T) -> bool {
-    (b - a).wedge(&(c - a)).partial_signum().is_one()
+    (b - a).wedge(&(c - a)).re_signum().is_one()
 }
 
 /// Return whether line segments AB and CD intersect.

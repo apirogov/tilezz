@@ -162,15 +162,48 @@ zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ20 ZZ24);
 
-// implementations for different complex integer rings
-// (using default underlying integer type on the innermost level)
-impl ZZNum for ZZ4 {}
-impl ZZNum for ZZ6 {}
-impl ZZNum for ZZ8 {}
-impl ZZNum for ZZ10 {}
-impl ZZNum for ZZ12 {}
-impl ZZNum for ZZ20 {}
-impl ZZNum for ZZ24 {}
+pub mod constants {
+    use super::*;
+
+    // NOTE: as we can get the real-valued square roots represented,
+    // it means that we can represent any linear combination
+    // in a ring that supports quarter turn rotation.
+
+    pub fn zz8_sqrt2() -> ZZ8 {
+        ZZ8::unit(1) + ZZ8::unit(-1)
+    }
+    pub fn zz24_sqrt2() -> ZZ24 {
+        ZZ24::unit(3) + ZZ24::unit(-3)
+    }
+
+    pub fn zz6_isqrt3() -> ZZ6 {
+        ZZ6::unit(1) + ZZ6::unit(2)
+    }
+    pub fn zz12_sqrt3() -> ZZ12 {
+        ZZ12::unit(1) + ZZ12::unit(-1)
+    }
+    pub fn zz24_sqrt3() -> ZZ24 {
+        ZZ24::unit(2) + ZZ24::unit(-2)
+    }
+
+    pub fn zz10_isqrt_penta() -> ZZ10 {
+        ZZ10::unit(1) * ZZ10::from(4) - ZZ10::one() - zz10_sqrt5()
+    }
+    pub fn zz20_half_sqrt_penta() -> ZZ20 {
+        ZZ20::unit(3) + ZZ20::unit(-3)
+    }
+
+    pub fn zz10_sqrt5() -> ZZ10 {
+        (ZZ10::unit(1) + ZZ10::unit(-1)) * ZZ10::from(2) - ZZ10::one()
+    }
+    pub fn zz20_sqrt5() -> ZZ20 {
+        (ZZ20::unit(2) + ZZ20::unit(-2)) * ZZ20::from(2) - ZZ20::one()
+    }
+
+    pub fn zz24_sqrt6() -> ZZ24 {
+        (ZZ24::unit(1) + ZZ24::unit(-1)) * ZZ24::from(2) - zz24_sqrt2()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -182,6 +215,34 @@ mod tests {
     // TODO: make macro to generate the tests for all instances
     // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
     type ZZi = ZZ20;
+
+    #[test]
+    fn test_constants() {
+        use super::constants::*;
+        use std::f64::consts::SQRT_2;
+
+        let sq2 = SQRT_2;
+        let sq3 = 3.0_f64.sqrt();
+        let sq_penta = PENTA.sqrt();
+        let hsq_penta = 0.5 * PENTA.sqrt();
+        let sq5 = 5.0_f64.sqrt();
+        let sq6 = 6.0_f64.sqrt();
+
+        assert_eq!(zz8_sqrt2().complex().re, sq2);
+        assert_eq!(zz24_sqrt2().complex().re, sq2);
+
+        assert_eq!(zz6_isqrt3().complex().im, sq3);
+        assert_eq!(zz12_sqrt3().complex().re, sq3);
+        assert_eq!(zz24_sqrt3().complex().re, sq3);
+
+        assert_eq!(zz10_isqrt_penta().complex().im, sq_penta);
+        assert_eq!(zz20_half_sqrt_penta().complex().re, hsq_penta);
+
+        assert_eq!(zz10_sqrt5().complex().re, sq5);
+        assert_eq!(zz20_sqrt5().complex().re, sq5);
+
+        assert_eq!(zz24_sqrt6().complex().re, sq6);
+    }
 
     #[test]
     fn test_sum_root_expr_sign_2() {
@@ -343,6 +404,34 @@ mod tests {
             }
         }
         assert_eq!(sc_fac, max_fac);
+    }
+
+    #[test]
+    fn test_re_signum() {
+        use super::constants::*;
+
+        let sq2 = zz24_sqrt2();
+        let sq3 = zz24_sqrt3();
+        let sq6 = zz24_sqrt6();
+
+        let z = Frac::zero();
+        let p = Frac::one();
+        let m = -p;
+
+        // use same test as above
+        let sign_zz24 = |a, b, c, d| {
+            (ZZ24::from(a) + ZZ24::from(b) * sq2 + ZZ24::from(c) * sq3 + ZZ24::from(d) * sq6)
+                .re_signum()
+        };
+
+        let (a, b, c, d) = (485, 343, 280, 198);
+        assert_eq!(sign_zz24(0, 0, 0, 0), z);
+        assert_eq!(sign_zz24(-a, -b, c, d), m);
+        assert_eq!(sign_zz24(-a, b, -c, d), p);
+        assert_eq!(sign_zz24(-a, b, c, -d), p);
+        assert_eq!(sign_zz24(a, -b, -c, d), m);
+        assert_eq!(sign_zz24(a, -b, c, -d), m);
+        assert_eq!(sign_zz24(a, b, -c, -d), p);
     }
 
     #[test]
