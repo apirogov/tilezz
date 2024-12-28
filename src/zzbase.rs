@@ -50,6 +50,108 @@ where
     }
 }
 
+/// Floating-point-free solution to get sign of an expression
+/// a*sqrt(n) + b*sqrt(m)
+/// where a,b,m,n are all integers
+/// and m,n are squarefree coprime constants > 1.
+pub fn signum_sum_sqrt_expr_2<T: IntRing + Signed + Copy + FromPrimitive + Debug>(
+    a: T,
+    m: T,
+    b: T,
+    n: T,
+) -> T {
+    // if a and b are both positive or negative -> trivial,
+    let sgn_a = a.signum();
+    let sgn_b = b.signum();
+    if sgn_a == sgn_b {
+        return sgn_a;
+    }
+    if a.is_zero() {
+        return sgn_b;
+    }
+    if b.is_zero() {
+        return sgn_a;
+    }
+    // if a>0, b<0: z > 0 <=> n*a^2 > m*b^2 <=> n*a^2 - m*b^2 > 0
+    // if a<0, b>0: z > 0 <=> n*a^2 < m*b^2 <=> m*b^2 - n*a^2 > 0
+    // (and symmetrically for z < 0), which can be summarized
+    // by using the sign of a and b to avoid case splitting.
+    (sgn_a * a * a * m + sgn_b * b * b * n).signum()
+}
+
+/// Floating-point-free solution to get sign of an expression
+/// a + b*sqrt(m) + c*sqrt(n) + d*sqrt(m*n)
+/// where a,b,c,m,n are all integers
+/// and m,n are squarefree coprime constants > 1.
+pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug>(
+    a: T,
+    k: T,
+    b: T,
+    m: T,
+    c: T,
+    n: T,
+    d: T,
+    l: T,
+) -> T {
+    // reduce to 2x 2 roots case:
+    // a*sqrt(k) + b*sqrt(m) + c*sqrt(n) + d*sqrt(l) > 0
+    // <=> b*sqrt(m) + c*sqrt(n) > -(a*sqrt(k) + d*sqrt(l))
+
+    // sign(a*sqrt(k) + d*sqrt(l))
+    let sgn_ad_terms = signum_sum_sqrt_expr_2(a, k, d, l);
+    // sign(b*sqrt(m) + c*sqrt(n))
+    let sgn_bc_terms = signum_sum_sqrt_expr_2(b, m, c, n);
+    // both half-expressions have same sign -> trivial
+    if sgn_bc_terms == sgn_ad_terms {
+        return sgn_ad_terms;
+    }
+
+    // (at least) one half-expression is zero -> trivial
+    //
+    // NOTE: https://qchu.wordpress.com/2009/07/02/square-roots-have-no-unexpected-linear-relationships/
+    // or this question: https://math.stackexchange.com/a/30695
+    // so we have: expression is zero <=> all linear coeffs are zero
+    if sgn_ad_terms.is_zero() {
+        return sgn_bc_terms;
+    }
+    if sgn_bc_terms.is_zero() {
+        return sgn_ad_terms;
+    }
+
+    // now w.l.o.g. assume b/c term is pos. and a/d term neg.
+    // (i.e. in the inequality both LHS and RHS positive),
+    // to account for other case -> multiply result by sgn_bc_terms.
+
+    // assume k = 1 and l = m*n
+    // (typical structure of the rings we have)
+    if !(k.is_one() && l == m * n) {
+        panic!("Unhandled general case!");
+    }
+
+    // println!("ad: {sgn_ad_terms:?} bc: {sgn_bc_terms:?}");
+    // println!("{a:?} {k:?} {b:?} {m:?} {c:?} {n:?} {d:?} {l:?}");
+
+    // => use rewritten simplified expression (more efficient):
+    // b*sqrt(m) + c*sqrt(n) > -(a + d*sqrt(mn))
+    // <=> b^2*m + c^2*n + 2bc*sqrt(mn)
+    //   > a^2 + d^2*mn + 2ad*sqrt(mn)
+    // <=> b^2*m + c^2*n - d^2*mn - a^2
+    //   > 2 * (ad - bc) * sqrt(mn)
+    // <=> (b^2*m + c^2*n - d^2*mn - a^2)^2
+    //   > 4 * mn * (ad - bc)^2
+    // <=> (b^2*m + c^2*n - d^2*mn - a^2)^2 - 4mn*(ad-bc)^2 > 0
+    let four = T::from_i8(4).unwrap();
+    let mn = l;
+    let lhs = (b * b * m) + (c * c * n) - (d * d * mn) - (a * a);
+    let sq_lhs = lhs.signum() * lhs * lhs;
+    let ad_m_bc = (a * d) - (b * c);
+    let sq_rhs = four * mn * ad_m_bc.signum() * ad_m_bc * ad_m_bc;
+
+    // println!("{sgn_bc_terms:?} | {lhs:?} | {sq_lhs:?} || {ad_m_bc:?} | {sq_rhs:?}");
+
+    sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
+}
+
 pub trait ZZBase<
     T: Signed + PartialOrd + IntRing + InnerIntType + ToPrimitive + FromPrimitive + Debug + 'static,
 >
@@ -179,40 +281,47 @@ pub trait ZZBase<
         }
     }
 
-    /// Trivial implementation if there is just one component,
+    /// Trivial if there is just one term in the expression,
     /// regardless of its symbolic root (which usually will be 1).
     fn zz_partial_signum_1_sym(&self) -> T
     where
         Self: ZZNum,
     {
         let cs = <Self as ZZBase<T>>::zz_coeffs(self);
+
         cs[0].real.signum()
     }
 
-    /// Solution without using floating point operations.
-    ///
-    /// z = a*sqrt(n) + b*sqrt(m) > 0 can be checked based
-    /// on the squares, assuming that n,m  are integers > 0:
-    /// if a and b are both positive or negative -> trivial,
-    /// if a>0, b<0: z > 0 <=> n*a^2 > m*b^2 <=> n*a^2 - m*b^2 > 0
-    /// if a<0, b>0: z > 0 <=> n*a^2 < m*b^2 <=> m*b^2 - n*a^2 > 0
-    /// (and symmetrically for z < 0), which can be summarized
-    /// by using the sign of a and b to avoid case splitting.
     fn zz_partial_signum_2_sym(&self) -> T
     where
         Self: ZZNum,
     {
-        let p: &ZZParams<'_, T> = Self::zz_params();
-        let n = T::from_f64(p.sym_roots_sqs[0]).unwrap();
-        let m = T::from_f64(p.sym_roots_sqs[1]).unwrap();
-
+        let ftoi = |f| T::from_f64(f).unwrap();
         let cs = <Self as ZZBase<T>>::zz_coeffs(self);
-        let a = cs[0].real;
-        let b = cs[1].real;
+        let rs = <Self as ZZBase<T>>::zz_params().sym_roots_sqs;
 
-        let signed_n_a_sq = n * a * a * a.signum();
-        let signed_m_b_sq = m * b * b * b.signum();
-        (signed_n_a_sq + signed_m_b_sq).signum()
+        let (a, b) = (cs[0].real, cs[1].real);
+        let (m, n) = (ftoi(rs[0]), ftoi(rs[1]));
+        signum_sum_sqrt_expr_2(a, m, b, n)
+    }
+
+    fn zz_partial_signum_4_sym(&self) -> T
+    where
+        Self: ZZNum,
+    {
+        let cs: Vec<T> = <Self as ZZBase<T>>::zz_coeffs(self)
+            .iter()
+            .map(|x| x.real)
+            .collect();
+        let rs: Vec<T> = <Self as ZZBase<T>>::zz_params()
+            .sym_roots_sqs
+            .iter()
+            .map(|r| T::from_f64(*r).unwrap())
+            .collect();
+
+        let (a, b, c, d) = (cs[0], cs[1], cs[2], cs[3]);
+        let (k, m, n, l) = (rs[0], rs[1], rs[2], rs[3]);
+        signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l)
     }
 
     /// Return the sign of the value (assuming it is real-valued).
@@ -223,10 +332,17 @@ pub trait ZZBase<
     {
         assert!(<Self as ZZBase<T>>::is_real(self));
 
-        // TODO: implement special case for 4 (to get ZZ24 float-free)
         match <Self as ZZBase<T>>::zz_params().sym_roots_num {
+            // ZZ4
             1 => <Self as ZZBase<T>>::zz_partial_signum_1_sym(&self),
+            // ZZ6, ZZ8, ZZ12
             2 => <Self as ZZBase<T>>::zz_partial_signum_2_sym(&self),
+            4 => match <Self as ZZBase<T>>::zz_params().full_turn_steps {
+                // ZZ24
+                24 => <Self as ZZBase<T>>::zz_partial_signum_4_sym(&self),
+                // ZZ10 and ZZ20 have non-integers as sym. roots!
+                _ => <Self as ZZBase<T>>::zz_partial_signum_fallback(&self),
+            },
             _ => <Self as ZZBase<T>>::zz_partial_signum_fallback(&self),
         }
     }

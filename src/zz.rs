@@ -177,12 +177,63 @@ impl ZZNum for ZZ24 {}
 mod tests {
     use super::*;
     use crate::gaussint::to_gint2;
+    use crate::zzbase::{signum_sum_sqrt_expr_2, signum_sum_sqrt_expr_4};
     use num_complex::Complex64;
     use std::collections::HashSet;
 
     // TODO: make macro to generate the tests for all instances
     // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
     type ZZi = ZZ20;
+
+    #[test]
+    fn test_sum_root_expr_sign_2() {
+        assert_eq!(signum_sum_sqrt_expr_2(0, 2, 0, 3), 0);
+        assert_eq!(signum_sum_sqrt_expr_2(1, 2, 0, 3), 1);
+        assert_eq!(signum_sum_sqrt_expr_2(0, 2, -1, 3), -1);
+        assert_eq!(signum_sum_sqrt_expr_2(2, 2, -1, 3), 1);
+        assert_eq!(signum_sum_sqrt_expr_2(-5, 2, 4, 3), -1);
+        assert_eq!(signum_sum_sqrt_expr_2(-5, 2, 5, 3), 1);
+    }
+
+    #[test]
+    fn test_sum_root_expr_sign_4() {
+        let sign_zz24 = |a, b, c, d| signum_sum_sqrt_expr_4(a, 1, b, 2, c, 3, d, 6);
+        // trivial sanity-checks
+        assert_eq!(sign_zz24(0, 0, 0, 0), 0);
+        assert_eq!(sign_zz24(1, 1, 1, 1), 1);
+        assert_eq!(sign_zz24(-1, -1, -1, -1), -1);
+        assert_eq!(sign_zz24(1, 0, 0, 0), 1);
+        assert_eq!(sign_zz24(0, -1, 0, 0), -1);
+        assert_eq!(sign_zz24(0, 0, 1, 0), 1);
+        assert_eq!(sign_zz24(0, 0, 0, -1), -1);
+        // non-trivial tests
+        assert_eq!(sign_zz24(5, 7, 11, -13), 1);
+        assert_eq!(sign_zz24(5, 7, 11, -14), -1);
+        assert_eq!(sign_zz24(17, -11, 9, -7), -1);
+        assert_eq!(sign_zz24(18, -11, 9, -7), 1);
+        assert_eq!(sign_zz24(18, -11, 8, -7), -1);
+        assert_eq!(sign_zz24(18, -11, 8, -6), 1);
+
+        // try with parameters where terms are all really close
+        {
+            let (a, b, c, d) = (130, 92, 75, 53);
+            assert_eq!(sign_zz24(-a, -b, c, d), -1);
+            assert_eq!(sign_zz24(-a, b, -c, d), 1);
+            assert_eq!(sign_zz24(-a, b, c, -d), 1);
+            assert_eq!(sign_zz24(a, -b, -c, d), -1);
+            assert_eq!(sign_zz24(a, -b, c, -d), -1);
+            assert_eq!(sign_zz24(a, b, -c, -d), 1);
+        }
+        {
+            let (a, b, c, d) = (485, 343, 280, 198);
+            assert_eq!(sign_zz24(-a, -b, c, d), -1);
+            assert_eq!(sign_zz24(-a, b, -c, d), 1);
+            assert_eq!(sign_zz24(-a, b, c, -d), 1);
+            assert_eq!(sign_zz24(a, -b, -c, d), -1);
+            assert_eq!(sign_zz24(a, -b, c, -d), -1);
+            assert_eq!(sign_zz24(a, b, -c, -d), 1);
+        }
+    }
 
     #[test]
     fn test_basic() {
