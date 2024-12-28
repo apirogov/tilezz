@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(ZZi::zero().scale(2), ZZi::zero());
         assert_eq!(ZZi::ccw().scale(3), ZZi::ccw() + ZZi::ccw() + ZZi::ccw());
         assert_eq!(ZZi::one().scale(-1), -ZZi::one());
-        assert_eq!(ZZi::one().scale(-42), ZZi::from_int(-42));
+        assert_eq!(ZZi::one().scale(-42), ZZi::from(-42));
 
         // test multiplication
         assert_eq!(ZZi::zero() * ZZi::zero(), ZZi::zero());
@@ -448,15 +448,15 @@ mod tests {
     #[test]
     fn test_dot() {
         let p1 = ZZ12::one();
-        let p2 = ZZ12::from_int(2);
-        let p3 = ZZ12::from_int(3);
+        let p2 = ZZ12::from(2);
+        let p3 = ZZ12::from(3);
         let pi = ZZ12::unit(3); // i
         let p60 = ZZ12::unit(2);
         let pm60 = ZZ12::unit(-2);
 
         assert_eq!(p1.dot(&pi), ZZ12::zero());
         assert_eq!(ZZ12::zero().dot(&pi), ZZ12::zero());
-        assert_eq!(p2.dot(&p3), ZZ12::from_int(6));
+        assert_eq!(p2.dot(&p3), ZZ12::from(6));
 
         // {0, 1} dot {1/2, sqrt(3)/2} = sqrt(3) / 2
         // => dot^2 = 3/4
@@ -489,7 +489,7 @@ mod tests {
     fn test_is_between() {
         let a: ZZi = ZZi::zero();
         let b: ZZi = ZZi::one();
-        let c: ZZi = ZZi::from_int(2);
+        let c: ZZi = ZZi::from(2);
         let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
         let f: ZZi = b + e;
         let g: ZZi = ZZi::unit(1) + ZZi::unit(-1) - ZZi::one();
@@ -510,8 +510,8 @@ mod tests {
     fn test_colinear() {
         let a: ZZi = ZZi::zero();
         let b: ZZi = ZZi::one();
-        let c: ZZi = ZZi::from_int(2);
-        let d: ZZi = ZZi::from_int(3);
+        let c: ZZi = ZZi::from(2);
+        let d: ZZi = ZZi::from(3);
         let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
         let f: ZZi = b + e;
 

@@ -1,5 +1,5 @@
 use super::gaussint::GaussInt;
-use super::traits::{ComplexIntRing, InnerIntType, IntRing};
+use super::traits::{Ccw, ComplexIntRing, InnerIntType, IntRing};
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Ratio;
@@ -153,32 +153,70 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug
 }
 
 pub trait ZZBase<
-    T: Signed + PartialOrd + IntRing + InnerIntType + ToPrimitive + FromPrimitive + Debug + 'static,
+    T: Sized
+        + Signed
+        + PartialOrd
+        + IntRing
+        + InnerIntType
+        + ToPrimitive
+        + FromPrimitive
+        + Debug
+        + 'static,
 >
 {
+    /// Return angle representing one full turn.
     #[inline]
     fn turn() -> i8 {
         Self::zz_params().full_turn_steps
     }
+
+    /// Return angle representing half a turn.
     #[inline]
     fn hturn() -> i8 {
         Self::turn() / 2
     }
 
-    /// Return quarter turn angle (if ring supports it).
+    /// Return angle representing a quarter turn (if ring supports it).
     #[inline]
     fn qturn() -> i8 {
         assert_eq!(Self::turn() % 4, 0);
         Self::turn() / 4
     }
 
+    /// Return unit length vector pointing in direction of given angle.
+    fn unit(i: i8) -> Self
+    where
+        Self: ZZNum + One + Ccw,
+    {
+        let one = Self::one();
+        let ccw = Self::ccw();
+        let j = i.rem_euclid(<Self as ZZBase<T>>::turn());
+        one * <Self as ZZBase<T>>::powi(&ccw, j)
+    }
+
+    /// Raise to an integer power.
+    fn powi(&self, i: i8) -> Self
+    where
+        Self: ZZNum,
+    {
+        if i < 0 {
+            panic!("Negative powers are not supported!");
+        }
+        let mut x = Self::one();
+        for _ in 0..i {
+            x = x * (*self);
+        }
+        return x;
+    }
+
     /// Return imaginary unit (if ring supports it).
     #[inline]
     fn one_i() -> Self
     where
-        Self: Sized,
+        Self: ZZNum,
     {
-        Self::unit(Self::qturn())
+        let qt = <Self as ZZBase<T>>::qturn();
+        <Self as ZZBase<T>>::unit(qt)
     }
 
     /// Complex conjugation.
@@ -199,15 +237,6 @@ pub trait ZZBase<
     {
         let cs: Vec<GaussInt<T>> = Self::zz_mul_scalar(self.zz_coeffs(), scalar);
         Self::new(&cs)
-    }
-
-    /// Construct a new ZZ number by lifting an integer.
-    #[inline]
-    fn from_int(scalar: <GaussInt<T> as InnerIntType>::IntType) -> Self
-    where
-        Self: Sized + One,
-    {
-        Self::one().scale(scalar)
     }
 
     /// Convert to a complex floating point number.
@@ -439,8 +468,6 @@ pub trait ZZBase<
     // functions that can be implemented via zz_base_impl!
     // --------
     fn new(coeffs: &[GaussInt<T>]) -> Self;
-    fn unit(i: i8) -> Self;
-    fn powi(&self, i: i8) -> Self;
 
     fn zz_coeffs(&self) -> &[GaussInt<T>];
     fn zz_coeffs_mut(&mut self) -> &mut [GaussInt<T>];
@@ -508,6 +535,12 @@ macro_rules! zz_base_impl {
             type IntType = <GInt as InnerIntType>::IntType;
         }
 
+        impl From<<GInt as InnerIntType>::IntType> for $name {
+            fn from(value: <GInt as InnerIntType>::IntType) -> Self {
+                Self::one().scale(value)
+            }
+        }
+
         impl ZZBase<Frac> for $name {
             #[inline]
             fn zz_coeffs(&self) -> &[GInt] {
@@ -546,21 +579,6 @@ macro_rules! zz_base_impl {
                 };
                 ret.coeffs.clone_from_slice(coeffs);
                 ret
-            }
-
-            fn unit(i: i8) -> Self {
-                return Self::one() * Self::ccw().powi(i.rem_euclid(Self::turn()));
-            }
-
-            fn powi(&self, i: i8) -> Self {
-                if (i < 0) {
-                    panic!("Negative powers are not supported!");
-                }
-                let mut x = Self::one();
-                for _ in 0..i {
-                    x = x * (*self);
-                }
-                return x;
             }
         }
     };
@@ -618,6 +636,7 @@ macro_rules! zz_ops_impl {
                 self.coeffs.to_vec() == Self::zz_ccw_vec()
             }
         }
+
         impl IntRing for $t {}
         impl ComplexIntRing for $t {}
 

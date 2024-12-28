@@ -162,8 +162,8 @@ mod tests {
     fn test_intersect() {
         let a: ZZ12 = ZZ12::zero();
         let b: ZZ12 = ZZ12::one();
-        let c: ZZ12 = ZZ12::from_int(2);
-        let d: ZZ12 = ZZ12::from_int(3);
+        let c: ZZ12 = ZZ12::from(2);
+        let d: ZZ12 = ZZ12::from(3);
         let e: ZZ12 = ZZ12::unit(ZZ12::hturn() / 2);
         let f: ZZ12 = b + e;
 
