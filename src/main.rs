@@ -3,6 +3,8 @@ use tilezz::zz::ZZ12;
 
 use plotters::prelude::*;
 
+/// Given a list of (x,y) coordinates, return the bounds
+/// ((min_x, min_y), (max_x, max_y)).
 fn bounds(pts: &[(f64, f64)]) -> ((f64, f64), (f64, f64)) {
     let (x, y) = pts[0];
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (x, y, x, y);
@@ -14,7 +16,7 @@ fn bounds(pts: &[(f64, f64)]) -> ((f64, f64), (f64, f64)) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let s: Snake<ZZ12> = Snake::from_slice(&[0, 5, 3, 4, 1, 4, 1, 1, 3, 5]);
+    let s: Snake<ZZ12> = Snake::from(&[0, 5, 3, 4, 1, 4, 1, 1, 3, 5]);
     let l = s.to_polyline_f64(&Turtle::default());
     let ((min_x, min_y), (max_x, max_y)) = bounds(&l);
     let (w, h) = (max_x - min_x, max_y - min_y);
