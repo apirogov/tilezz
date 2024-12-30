@@ -1,5 +1,5 @@
-use rational_tiles::snake::{Snake, Turtle};
-use rational_tiles::zz::ZZ12;
+use tilezz::snake::{Snake, Turtle};
+use tilezz::zz::ZZ12;
 
 use plotters::prelude::*;
 
