@@ -93,7 +93,11 @@ pub fn intersect<T: ZZNum>(&(a, b): &(T, T), &(c, d): &(T, T)) -> bool {
     if c.is_colinear(&l_ab) && d.is_colinear(&l_ab) {
         c.is_between(&a, &b) || d.is_between(&a, &b)
     } else {
-        is_ccw(a, c, d) != is_ccw(b, c, d) && is_ccw(a, b, c) != is_ccw(a, b, d)
+        if a == c || a == d || b == c || b == d {
+            false // ignore touching endpoints in non-colinear case
+        } else {
+            is_ccw(a, c, d) != is_ccw(b, c, d) && is_ccw(a, b, c) != is_ccw(a, b, d)
+        }
     }
 }
 
@@ -164,7 +168,7 @@ mod tests {
         let b: ZZ12 = ZZ12::one();
         let c: ZZ12 = ZZ12::from(2);
         let d: ZZ12 = ZZ12::from(3);
-        let e: ZZ12 = ZZ12::unit(ZZ12::hturn() / 2);
+        let e: ZZ12 = ZZ12::one_i();
         let f: ZZ12 = b + e;
 
         // colinear cases:
@@ -188,6 +192,7 @@ mod tests {
         // touch in start/end-points
         assert!(!intersect(&(a, e), &(a, b))); // perp
         assert!(!intersect(&(a, f), &(a, b))); // non-perp
+        assert!(!intersect(&(a, e), &(e, e - b))); // non-perp
 
         // endpoint of one segment intersects a non-endpoint of other seg
         assert!(intersect(&(b, f), &(a, c))); // perp

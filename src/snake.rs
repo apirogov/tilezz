@@ -1,6 +1,9 @@
+use crate::zzutil::intersect;
+
 use super::gaussint::GaussInt;
 use super::zzbase::ZZNum;
 use super::zzutil::{cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of};
+use num_complex::Complex;
 use num_traits::Zero;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -68,15 +71,12 @@ impl<T: ZZNum> Snake<T> {
     pub fn from_slice(angles: &[i8]) -> Self {
         let mut result = Self::new();
         for angle in angles {
-            result.add(*angle);
+            if !result.add(*angle) {
+                panic!("Self-intersecting angle sequence!")
+            }
         }
         result
     }
-
-    /// TODO: do we really need this operation on the level of snakes?
-    // pub fn revcomp(&self) -> Self {
-    //     Self::from_slice(revcomp(self.angles.as_slice()).as_slice())
-    // }
 
     // ----
 
@@ -115,10 +115,13 @@ impl<T: ZZNum> Snake<T> {
 
     // ----
 
+    /// Returns the offset from the origin, i.e. effective
+    /// direct Euclidean distance travelled by the snake.
     pub fn offset(&self) -> T {
         *self.points.last().unwrap()
     }
 
+    /// Return the current facing direction of the snake.
     pub fn direction(&self) -> i8 {
         (self.ang_sum % (T::turn() as i64)) as i8
     }
@@ -177,6 +180,16 @@ impl<T: ZZNum> Snake<T> {
         result.points
     }
 
+    pub fn to_polyline_f64(&self, turtle: &Turtle<T>) -> Vec<(f64, f64)> {
+        self.to_polyline(&turtle)
+            .iter()
+            .map(|p| {
+                let Complex { re: x, im: y } = p.complex();
+                (x, y)
+            })
+            .collect()
+    }
+
     /// Return all representative segments of the current snakes
     /// that intersect with at least one of the given cells.
     fn cell_segs(&self, cells: &[GaussInt<i64>]) -> Vec<(T, T)> {
@@ -210,18 +223,24 @@ impl<T: ZZNum> Snake<T> {
         }
 
         // end points of new candidate segment
-        let new_seg = self.next_seg(angle);
+        let new_seg @ (prev_pt, new_pt) = self.next_seg(angle);
         // unit square lattice cell neighborhood of new segment
-        let neighborhood = seg_neighborhood_of(new_seg.0, new_seg.1);
+        let neighborhood = seg_neighborhood_of(prev_pt, new_pt);
         // all candidates for segment intersection
-        let _neighbor_segs = self.cell_segs(&neighborhood);
+        let neighbor_segs = self.cell_segs(&neighborhood);
 
-        // TODO:
-        // check all relevant points for repetitions,
-        // return false if intersection is anywhere else but in the origin point
-        // (i.e. closing snake is fine -> it has become a rat (or chiral reflection))
-
-        // Check all segments for intersections and return false if any found
+        let new_pt_nz = !new_pt.is_zero();
+        for s @ (x, y) in neighbor_segs {
+            // if the new point is NOT the origin (i.e. closes the snake),
+            // explicitly check endpoints for intersection.
+            // (the segment intersection ignores this edge case)
+            if new_pt_nz && (new_pt == x || new_pt == y) {
+                return false;
+            }
+            if intersect(&new_seg, &s) {
+                return false;
+            }
+        }
         return true;
     }
 
@@ -244,12 +263,25 @@ impl<T: ZZNum> Snake<T> {
 
         // everything is ok -> add new segment
         self.add_unsafe(a);
+
+        // if the snake is closed, we need to fix up the start angle
+        if self.is_closed() {
+            // the missing angle must complete one full turn
+            // clockwise or counter-clockwise (simple polygon property)
+            let target = (T::turn() as i64) * self.ang_sum.signum();
+            let missing = target - self.angles[0] as i64;
+            self.angles[0] = missing as i8;
+            self.ang_sum = target;
+        }
         return true;
     }
 
-    /// Concatenate two snakes in-place.
+    /// Concatenate given snake to this one in-place.
     pub fn extend(&mut self, other: &Snake<T>) {
         for angle in other.angles.iter() {
+            // NOTE: cannot use unsafe_add here,
+            // because there is no guarantee that
+            // concatenating two snakes is valid.
             self.add(*angle);
         }
     }
@@ -271,9 +303,8 @@ impl<T: ZZNum> Snake<T> {
     }
 
     pub fn slice(&self, _: usize, _: usize) -> Self {
-        Self::new()
-        // TODO: implement slicing
-        // (do we need a ISnake trait for Snake, SnakeView and Rat ?)
+        // Q: do we need a ISnake trait for Snake, SnakeView and Rat ?
+        panic!("TODO");
     }
 }
 
@@ -386,16 +417,6 @@ mod tests {
         assert_eq!(n3, n3_exp);
     }
 
-    // #[test]
-    // fn test_revcomp_snake() {
-    //     let v = vec![1, 3, -2, 4];
-    //     let vrc = revcomp(v.as_slice());
-    //     let s: Snake<ZZ12> = Snake::from_slice(v.as_slice());
-    //     assert_eq!(s.revcomp().angles, vrc);
-    //     let s2 = s.revcomp().revcomp();
-    //     assert_eq!(s, s2);
-    // }
-
     #[test]
     #[should_panic]
     fn test_add_invalid_angle() {
@@ -428,7 +449,7 @@ mod tests {
         assert_eq!(s.direction(), 0);
         assert_eq!(s.offset(), ZZ12::zero());
 
-        s.add(-9);
+        s.add(-9); // same as 3
         assert!(!s.is_empty());
         assert!(!s.is_closed());
         assert!(!s.is_rat());
@@ -436,21 +457,24 @@ mod tests {
         assert_eq!(s.direction(), 3);
         assert_eq!(s.offset(), ZZ12::unit(3));
 
-        s.add(4);
+        s.add(2);
+        s.add(2);
         s.add(5);
-
-        let mut s2: Snake<ZZ12> = Snake::new();
-        s2.add(0);
-        s2.add(-2);
-        s2.add(5);
+        assert_eq!(s.len(), 4);
 
         // check behavior of extend and concat
+        let mut s2: Snake<ZZ12> = Snake::new();
+        s2.add(-2);
+        s2.add(0);
+        s2.add(5);
+        assert_eq!(s2.len(), 3);
+
         let s3 = s.concat(&s2);
         s.extend(&s2);
         assert_eq!(s, s3);
 
         // check that state is as expected
-        assert_eq!(s.len(), 6);
+        assert_eq!(s.len(), 7);
         assert_eq!(s.angle_sum(), 15);
         assert_eq!(s.direction(), 3);
         assert_eq!(s.head().direction, s.direction());
@@ -472,6 +496,18 @@ mod tests {
             .collect();
         let l2 = s.to_polyline(&t);
         assert_eq!(l2, l2_exp);
+    }
+
+    #[test]
+    fn test_closed_snake() {
+        // test that once a snake is closed, the initial angle is fixed up
+        // (the first angle is relative to the initially undefined predecessor)
+        let sq1: Snake<ZZ12> = Snake::from_slice(&[0, 3, 3, 3]);
+        assert!(sq1.is_closed());
+        assert_eq!(sq1.angle_sum(), ZZ12::turn() as i64);
+        let sq2: Snake<ZZ12> = Snake::from_slice(&[0, -3, -3, -3]);
+        assert!(sq2.is_closed());
+        assert_eq!(sq2.angle_sum(), -ZZ12::turn() as i64);
     }
 
     #[test]
@@ -525,9 +561,38 @@ mod tests {
     fn test_can_add() {
         let mut s: Snake<ZZ12> = Snake::from_slice(vec![3, 3, 3].as_slice());
         assert!(s.add(3)); // can add, closes shape
-        assert!(!s.add(0)); // cannot add, shape is closed
+        assert!(!s.add(0)); // cannot add, shape is already closed
 
-        // TODO: test self-intersection test
+        let mut s2: Snake<ZZ12> = Snake::from_slice(vec![0, 3, 3, 3].as_slice());
+        assert!(!s2.add(3)); // cannot add, closes shape not in origin
+
+        let mut s3: Snake<ZZ12> = Snake::from_slice(vec![0, 4].as_slice());
+        assert!(!s3.add(5)); // cannot add, crosses segment
+
+        // try a more complicated example
+        let mut s4: Snake<ZZ12> = Snake::new();
+        assert!(s4.add(0));
+        assert!(s4.add(5));
+
+        // take sharpest turns possible
+        assert!(!s4.add(4));
+        assert!(s4.add(3));
+
+        assert!(!s4.add(5));
+        assert!(s4.add(4));
+
+        assert!(!s4.add(2));
+        assert!(s4.add(1));
+
+        assert!(!s4.add(5));
+        assert!(s4.add(4));
+
+        // create a dead-end where we cannot continue the snake
+        s4.extend(&Snake::from_slice(&[1, 1, 3, 5]));
+        assert_eq!(s4.len(), 10);
+        for i in (-ZZ12::hturn() + 1)..(ZZ12::hturn() - 1) {
+            assert!(!s4.add(i));
+        }
     }
 
     #[test]
@@ -545,7 +610,7 @@ mod tests {
         assert!(s1 != s2);
         assert!(s1 < s2);
 
-        let s3: Snake<ZZ12> = Snake::from_slice(vec![-1, 4, 5].as_slice());
+        let s3: Snake<ZZ12> = Snake::from_slice(vec![-1, 4, 3].as_slice());
         assert!(s3 < s1);
         assert!(s3 < s2);
 
