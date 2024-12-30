@@ -1,6 +1,15 @@
 [package]
 name = "tilezz"
 version = "0.0.1"
+authors = ["Anton Pirogov <apirogov@users.noreply.github.com>"]
+description = "Utilities to work with perfect-precision polygonal tiles built on top of complex integer rings."
+license = "MIT"
+
+readme = "README.md"
+repository = "https://github.com/apirogov/tilezz"
+keywords = ["2d", "geometry", "tilings", "math", "algebra"]
+categories = ["mathematics", "graphics"]
+
 edition = "2021"
 
 [dependencies]
