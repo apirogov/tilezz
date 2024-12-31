@@ -177,6 +177,13 @@ pub trait ZZBase<
         Self::turn() / 2
     }
 
+    /// Return whether this ring supports a quarter turn,
+    /// i.e. can represent the imaginary unit i.
+    #[inline]
+    fn has_qturn() -> bool {
+        Self::turn() % 4 == 0
+    }
+
     /// Return angle representing a quarter turn (if ring supports it).
     #[inline]
     fn qturn() -> i8 {

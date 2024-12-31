@@ -4,6 +4,7 @@ use crate::traits::ComplexIntRing;
 use crate::{zz_base_impl, zz_ops_impl};
 
 use num_traits::{One, Zero};
+use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;
 use std::marker::PhantomData;
@@ -12,9 +13,15 @@ use std::ops::{Add, Mul, Neg, Sub};
 // definitions needed to derive different ZZn types
 
 // numeric constants
+// --------
+// NOTE: sqrt(2 + sqrt(2)) = (sqrt(2)+1)sqrt(2 - sqrt(2))
+// and   sqrt(2 - sqrt(2)) = (sqrt(2)-1)sqrt(2 + sqrt(2))
+const SQRT2_P_2: f64 = 2.0 + SQRT_2;
+
 const SQRT_5: f64 = 2.23606797749978969;
+// NOTE: 2.0 * (5.0 + SQRT_5) = ??
 const PENTA: f64 = 2.0 * (5.0 - SQRT_5);
-// const PENTA_POS: f64 = 2.0 * (5.0 + SQRT_5);
+// --------
 
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
@@ -46,7 +53,7 @@ pub const ZZ6_PARAMS: ZZParams<Frac> = ZZParams {
 /// where s = sqrt(3)
 fn zz6_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + ((3,) * b * d), a * d + b * c],
+        [[a, b], [c, d]] => vec![a * c + (b * d * 3), a * d + b * c],
     }
 }
 /// Compass integers
@@ -65,7 +72,7 @@ pub const ZZ8_PARAMS: ZZParams<Frac> = ZZParams {
 /// where s = sqrt(2)
 fn zz8_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + ((2,) * b * d), a * d + b * c],
+        [[a, b], [c, d]] => vec![a * c + (b * d * 2), a * d + b * c],
     }
 }
 /// Halfrose integers (impractical, has no quarter turn)
@@ -87,11 +94,11 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
 fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let w = a * e + (5,) * b * f + (10,) * (c * g + (5,) * d * h - c * h - d * g);
-            let x = a * f + b * e - (2,) * c * g + (10,) * (c * h + d * g - d * h);
-            let y = a * g + (5,) * (b * h + d * f) + c * e;
-            let z = a * h + b * g + c * f + d * e;
-            vec![w, x, y, z]
+            let c1 = a * e + (5,) * b * f + (10,) * (c * g + (5,) * d * h - c * h - d * g);
+            let c2 = a * f + b * e - (2,) * c * g + (10,) * (c * h + d * g - d * h);
+            let c3 = a * g + (5,) * (b * h + d * f) + c * e;
+            let c4 = a * h + b * g + c * f + d * e;
+            vec![c1, c2, c3, c4]
         }
     }
 }
@@ -106,6 +113,33 @@ pub const ZZ12_PARAMS: ZZParams<Frac> = ZZParams {
 };
 fn zz12_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     return zz6_mul(x, y);
+}
+/// Hex integers
+pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
+    phantom: PhantomData,
+    full_turn_steps: 16,
+    sym_roots_num: 4,
+    sym_roots_sqs: &[1.0, 2.0, SQRT2_P_2, 2.0 * SQRT2_P_2],
+    scaling_fac: 2,
+    ccw_unit_coeffs: &[[0, 0], [0, 0], [1, -1], [0, 1]],
+};
+/// Dimension multiplication matrix (for Z[i]-valued vectors):
+///     e    f     g      h
+/// a [1   ,  x  ,   y  ,  xy  ]
+/// b [ x  , 2   ,  xy  , 2 y  ]
+/// c [  y ,  xy , 2+x  , 2+2x ]
+/// d [ xy , 2 y , 2+2x , 4+2x ]
+/// where x = sqrt(2), y = sqrt(2+sqrt(2))
+fn zz16_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+    match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
+        [[a, b, c, d], [e, f, g, h]] => {
+            let c1 = a * e + (b * f + c * g + c * h + d * g + d * h * 2) * 2;
+            let c2 = a * f + b * e + c * g + (c * h + d * g + d * h) * 2;
+            let c3 = a * g + c * e + (b * h + d * f) * 2;
+            let c4 = a * h + b * g + c * f + d * e;
+            vec![c1, c2, c3, c4]
+        }
+    }
 }
 /// Penrose integers
 pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
@@ -141,26 +175,26 @@ pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
 fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let w = a * e + (2,) * b * f + (3,) * c * g + (6,) * d * h;
-            let x = a * f + b * e + (3,) * (c * h + d * g);
-            let y = a * g + c * e + (2,) * (b * h + d * f);
-            let z = a * h + b * g + c * f + d * e;
-            vec![w, x, y, z]
+            let c1 = a * e + (2,) * b * f + (3,) * c * g + (6,) * d * h;
+            let c2 = a * f + b * e + (3,) * (c * h + d * g);
+            let c3 = a * g + c * e + (2,) * (b * h + d * f);
+            let c4 = a * h + b * g + c * f + d * e;
+            vec![c1, c2, c3, c4]
         }
     }
 }
 // --------
 
 // generate boilerplate implementations
-// TODO: is there a practical representation of ZZ16?
 zz_base_impl!(ZZ4, ZZ4_PARAMS, zz4_mul);
 zz_base_impl!(ZZ6, ZZ6_PARAMS, zz6_mul);
 zz_base_impl!(ZZ8, ZZ8_PARAMS, zz8_mul);
 zz_base_impl!(ZZ10, ZZ10_PARAMS, zz10_mul);
 zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
+zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul);
 zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
-zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ20 ZZ24);
+zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24);
 
 pub mod constants {
     use super::*;
@@ -171,6 +205,9 @@ pub mod constants {
 
     pub fn zz8_sqrt2() -> ZZ8 {
         ZZ8::unit(1) + ZZ8::unit(-1)
+    }
+    pub fn zz16_sqrt2() -> ZZ16 {
+        ZZ16::unit(2) + ZZ16::unit(-2)
     }
     pub fn zz24_sqrt2() -> ZZ24 {
         ZZ24::unit(3) + ZZ24::unit(-3)
@@ -209,12 +246,6 @@ pub mod constants {
 mod tests {
     use super::*;
     use crate::zzbase::{signum_sum_sqrt_expr_2, signum_sum_sqrt_expr_4};
-    use num_complex::Complex64;
-    use std::collections::HashSet;
-
-    // TODO: make macro to generate the tests for all instances
-    // https://eli.thegreenplace.net/2021/testing-multiple-implementations-of-a-trait-in-rust/
-    type ZZi = ZZ20;
 
     #[test]
     fn test_constants() {
@@ -229,6 +260,7 @@ mod tests {
         let sq6 = 6.0_f64.sqrt();
 
         assert_eq!(zz8_sqrt2().complex().re, sq2);
+        assert_eq!(zz16_sqrt2().complex().re, sq2);
         assert_eq!(zz24_sqrt2().complex().re, sq2);
 
         assert_eq!(zz6_isqrt3().complex().im, sq3);
@@ -293,6 +325,13 @@ mod tests {
             assert_eq!(sign_zz24(a, b, -c, -d), 1);
         }
     }
+
+    macro_rules! zz_tests {
+    ($($name:ident: $type:ty,)*) => {$(
+mod $name {
+    use super::*;
+
+    type ZZi = $type;
 
     #[test]
     fn test_basic() {
@@ -407,6 +446,149 @@ mod tests {
     }
 
     #[test]
+    fn test_xy() {
+        if !ZZi::has_qturn() {
+            return;
+        }
+
+        // test correctness of splitting and reconstruction
+        for a in 0..ZZi::hturn() {
+            let p = ZZi::unit(a);
+            let (x, y) = p.xy();
+            assert_eq!(p, x + y * ZZi::one_i());
+        }
+    }
+
+    #[test]
+    fn test_dot() {
+        // get a non-trivial point
+        let mut p = ZZi::zero();
+        for i in 1..ZZi::turn() {
+            p = p + ZZi::unit(i).scale(i as i64);
+        }
+        assert!(p.is_complex());
+
+        // all rotations of the same point around origin
+        // have the same squared distance, i.e. quadrance
+        // and it is real-valued.
+        let q = p.norm_sq();
+        assert!(q.is_real());
+        for i in 1..ZZi::turn() {
+            let pi = p * ZZi::unit(i);
+            let qi = pi.norm_sq();
+            assert_eq!(qi, q);
+        }
+    }
+
+    #[test]
+    fn test_colinear() {
+        if !ZZi::has_qturn() {
+            return;
+        }
+
+        // Test point layout:
+        // -------
+        // E F
+        //
+        // A B C D
+        // -------
+        let a: ZZi = ZZi::zero();
+        let b: ZZi = ZZi::one();
+        let c: ZZi = ZZi::from(2);
+        let d: ZZi = ZZi::from(3);
+        let e: ZZi = ZZi::one_i();
+        let f: ZZi = b + e;
+
+        let l_ab = a.line_through(&b);
+        let l_ac = a.line_through(&c);
+        let l_af = a.line_through(&f);
+
+        // colinear, overlap
+        assert!(b.is_colinear(&l_ac));
+        assert!(d.is_colinear(&l_ac));
+        // colinear, no overlap
+        assert!(c.is_colinear(&l_ab));
+        assert!(d.is_colinear(&l_ab));
+        // parallel (not colinear)
+        assert!(!e.is_colinear(&l_ab));
+        assert!(!f.is_colinear(&l_ab));
+        // perpendicular (touches in one point, not in the other)
+        assert!(!(a.is_colinear(&l_ab) && e.is_colinear(&l_ab)));
+        // general case
+        assert!(!b.is_colinear(&l_af));
+        assert!(!d.is_colinear(&l_af));
+    }
+
+    #[test]
+    fn test_is_real_imag_complex() {
+        assert!(ZZi::zero().is_real());
+        assert!(ZZi::zero().is_imag());
+
+        assert!(ZZi::one().is_real());
+        assert!((-ZZi::one()).is_real());
+        assert!(!ZZi::one().is_imag());
+        assert!(!ZZi::one().is_complex());
+
+        if ZZi::has_qturn() && ZZi::qturn() > 1 {
+            let p = ZZi::ccw();
+            assert!(!p.is_real());
+            assert!(!p.is_imag());
+            assert!(p.is_complex());
+        }
+
+        if ZZi::has_qturn() {
+            assert!(!ZZi::one_i().is_real());
+            assert!(ZZi::one_i().is_imag());
+            assert!((-ZZi::one_i()).is_imag());
+            assert!(!ZZi::one_i().is_complex());
+        }
+    }
+
+    #[test]
+    fn test_complex() {
+        use num_complex::Complex64;
+
+        let x = ZZi::zero();
+        assert_eq!(x.complex(), Complex64::zero());
+        let x = ZZi::one();
+        assert_eq!(x.complex(), Complex64::one());
+        let x = -ZZi::one();
+        assert_eq!(x.complex(), -Complex64::one());
+        let x = ZZi::one() + ZZi::one();
+        assert_eq!(x.complex(), Complex64::new(2.0, 0.0));
+
+        let x = ZZi::ccw();
+        let c = x.complex();
+        println!("{c} = {x}");
+    }
+
+    #[test]
+    fn test_hashable() {
+        use std::collections::HashSet;
+
+        let mut s: HashSet<ZZi> = HashSet::new();
+        s.insert(ZZi::zero());
+        s.insert(ZZi::one());
+        s.insert(ZZi::ccw());
+        assert!(s.contains(&ZZi::ccw()));
+        assert!(s.contains(&(ZZi::ccw() + ZZi::zero())));
+        assert!(!s.contains(&(ZZi::ccw() + ZZi::one())));
+    }
+}
+    )*}
+}
+    zz_tests! {
+        zz4: ZZ4,
+        zz6: ZZ6,
+        zz8: ZZ8,
+        zz10: ZZ10,
+        zz12: ZZ12,
+        zz16: ZZ16,
+        zz20: ZZ20,
+        zz24: ZZ24,
+    }
+
+    #[test]
     fn test_re_signum() {
         use super::constants::*;
 
@@ -453,89 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_complex() {
-        let x = ZZi::zero();
-        assert_eq!(x.complex(), Complex64::zero());
-        let x = ZZi::one();
-        assert_eq!(x.complex(), Complex64::one());
-        let x = -ZZi::one();
-        assert_eq!(x.complex(), -Complex64::one());
-        let x = ZZi::one() + ZZi::one();
-        assert_eq!(x.complex(), Complex64::new(2.0, 0.0));
-
-        let x = ZZi::ccw();
-        let c = x.complex();
-        println!("{c} = {x}");
-    }
-
-    #[test]
-    fn test_hashable() {
-        let mut s: HashSet<ZZi> = HashSet::new();
-        s.insert(ZZi::zero());
-        s.insert(ZZi::one());
-        s.insert(ZZi::ccw());
-        assert!(s.contains(&ZZi::ccw()));
-        assert!(s.contains(&(ZZi::ccw() + ZZi::zero())));
-        assert!(!s.contains(&(ZZi::ccw() + ZZi::one())));
-    }
-
-    // Test point layout:
-    // -------
-    // E F
-    //
-    // A B C D
-    // -------
-    // static A: ZZi = ZZi::zero();
-    // static B: GaussInt<i64> = ZZi::one();
-    // static C: GaussInt<i64> = ZZi::from_int(2);
-    // static D: GaussInt<i64> = GaussInt::new(3, 0);
-    // static E: GaussInt<i64> = GaussInt::new(0, 1);
-    // static F: GaussInt<i64> = GaussInt::new(1, 1);
-
-    fn get_non_triv_point() -> ZZ12 {
-        // -0.035898384862245614-0.401923788646684i
-        let tmp1 = (ZZ12::one().scale(2) - ZZ12::unit(2) - ZZ12::unit(-1).scale(2)) * ZZ12::unit(1);
-        let tmp2 = (ZZ12::one().scale(3) - ZZ12::unit(2) - ZZ12::unit(-1).scale(3)) * ZZ12::unit(2);
-        (tmp1 - tmp2) * ZZ12::unit(-2)
-    }
-
-    #[test]
-    fn test_xy() {
-        // imaginary unit (note that we only have that
-        // in ZZi where i is divisible by 4, so in general
-        // the splitting operation may not be reversible
-        // with ring operations on the two parts.
-        let i = ZZ12::unit(3);
-
-        // test correctness of splitting and reconstruction
-        let p = get_non_triv_point();
-        let (x, y) = p.xy();
-        assert_eq!(p, x + y * i);
-    }
-
-    #[test]
-    fn test_is_real_imag_complex() {
-        assert!(ZZ12::zero().is_real());
-        assert!(ZZ12::zero().is_imag());
-
-        assert!(ZZ12::one().is_real());
-        assert!((-ZZ12::one()).is_real());
-        assert!(!ZZ12::one().is_imag());
-        assert!(!ZZ12::one().is_complex());
-
-        assert!(!ZZ12::unit(1).is_real());
-        assert!(!ZZ12::unit(2).is_imag());
-        assert!(ZZ12::unit(1).is_complex());
-        assert!(ZZ12::unit(2).is_complex());
-
-        assert!(!ZZ12::unit(3).is_real());
-        assert!(ZZ12::unit(3).is_imag());
-        assert!((-ZZ12::unit(3)).is_imag());
-        assert!(!ZZ12::unit(3).is_complex());
-    }
-
-    #[test]
-    fn test_dot() {
+    fn test_dot_extra() {
         let p1 = ZZ12::one();
         let p2 = ZZ12::from(2);
         let p3 = ZZ12::from(3);
@@ -558,24 +658,12 @@ mod tests {
         assert!(d2.re < 0.0);
         assert_eq!(d2.im, 0.0);
         assert_eq!(pm60.dot(&pi).powi(2).complex().re, 0.75);
-
-        let p = get_non_triv_point();
-        let q = p.norm_sq();
-
-        // all rotations of the same point around origin
-        // have the same squared distance, i.e. quadrance
-        for i in 1..ZZ12::turn() {
-            let pi = p * ZZ12::unit(i);
-            let qi = pi.norm_sq();
-            let ci = pi.complex();
-            let ni = ci.norm();
-            println!("{ci} {ni} {qi}");
-            assert_eq!(qi, q);
-        }
     }
 
     #[test]
     fn test_is_between() {
+        type ZZi = ZZ24;
+
         let a: ZZi = ZZi::zero();
         let b: ZZi = ZZi::one();
         let c: ZZi = ZZi::from(2);
@@ -593,34 +681,5 @@ mod tests {
         assert!(!c.is_between(&a, &b));
         // not colinear
         assert!(!f.is_between(&a, &b));
-    }
-
-    #[test]
-    fn test_colinear() {
-        let a: ZZi = ZZi::zero();
-        let b: ZZi = ZZi::one();
-        let c: ZZi = ZZi::from(2);
-        let d: ZZi = ZZi::from(3);
-        let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
-        let f: ZZi = b + e;
-
-        let l_ab = a.line_through(&b);
-        let l_ac = a.line_through(&c);
-        let l_af = a.line_through(&f);
-
-        // colinear, overlap
-        assert!(b.is_colinear(&l_ac));
-        assert!(d.is_colinear(&l_ac));
-        // colinear, no overlap
-        assert!(c.is_colinear(&l_ab));
-        assert!(d.is_colinear(&l_ab));
-        // parallel (not colinear)
-        assert!(!e.is_colinear(&l_ab));
-        assert!(!f.is_colinear(&l_ab));
-        // perpendicular (touches in one point, not in the other)
-        assert!(!(a.is_colinear(&l_ab) && e.is_colinear(&l_ab)));
-        // general case
-        assert!(!b.is_colinear(&l_af));
-        assert!(!d.is_colinear(&l_af));
     }
 }
