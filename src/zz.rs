@@ -11,21 +11,43 @@ use std::marker::PhantomData;
 use std::ops::{Add, Mul, Neg, Sub};
 
 // definitions needed to derive different ZZn types
+//
+// NOTE: The bases here were derived in an ad-hoc manner. Apparently, a systematic approach
+// for deriving integral bases is described in this paper:
+// https://link.springer.com/article/10.1007/s002000050065
 
 // numeric constants for the chosen (in general non-unique) linearly independent algebraic bases
 // --------
 // NOTE: sqrt(2 + sqrt(2)) = (sqrt(2)+1)sqrt(2 - sqrt(2))
 // and   sqrt(2 - sqrt(2)) = (sqrt(2)-1)sqrt(2 + sqrt(2))
-const SQRT2_P2: f64 = SQRT_2 + 2.0;
+const ZZ16_Y: f64 = 2.0 + SQRT_2;
 
 // NOTE: sqrt(2+sqrt(2+sqrt(2))) = ( 1 + sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2-sqrt(2+sqrt(2)))
 // and   sqrt(2-sqrt(2+sqrt(2))) = (-1 - sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2+sqrt(2+sqrt(2)))
-const SQRT2_P2_SQRT_P2: f64 = 1.84775906502257351225 + 2.0;
+const ZZ32_Y: f64 = ZZ16_Y;
+const ZZ32_Z: f64 = 2.0 + 1.84775906502257351225; // 2+sqrt(2+sqrt(2))
 
-// NOTE: Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), z = sqrt(2*(5+sqrt(5)))
-// We have: y = 1/2(xz - z) ^ z = 1/2(xy + y)
+// NOTE: Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), y' = sqrt(2*(5+sqrt(5)))
+// We have: y = 1/2(xy' - y') ^ y' = 1/2(xy + y)
 const SQRT_5: f64 = 2.23606797749978969;
-const PENTA: f64 = 2.0 * (5.0 - SQRT_5);
+const ZZ20_Y: f64 = 2.0 * (5.0 - SQRT_5);
+
+// NOTE: sqrt(6(5+sqrt(5))) = sqrt(6(5-sqrt(5))) * 1/2( 1+sqrt(5))
+// and   sqrt(6(5-sqrt(5))) = sqrt(6(5+sqrt(5))) * 1/2(-1+sqrt(5))
+const ZZ30_Y: f64 = 3.0 * ZZ20_Y; // 6*(5-sqrt(5))
+
+// NOTE: Let
+// z1 = sqrt(7 - sqrt(5) - sqrt(6(5-sqrt(5))))
+// z2 = sqrt(7 + sqrt(5) - sqrt(6(5+sqrt(5))))
+// z3 = sqrt(7 - sqrt(5) + sqrt(6(5-sqrt(5))))
+// z4 = sqrt(7 + sqrt(5) + sqrt(6(5+sqrt(5))))
+// then we have:
+// z2/z1 = 1/4  (-1 +   sqrt(5) +   sqrt(6(5+sqrt(5))))
+// z3/z1 = 1/4  ( 1 + 3*sqrt(5) +   sqrt(6(5+sqrt(5))))
+// z4/z1 = 1/8  ( 8 + 4*sqrt(5) + 3*sqrt(6(5-sqrt(5))) + sqrt(30(5-sqrt(5))))
+const SQRT_ZZ30_Y: f64 = 4.07229568364101746760;
+const ZZ30_Z: f64 = 7.0 - SQRT_5 - SQRT_ZZ30_Y; // 7-sqrt(5)-sqrt(6(5-sqrt(5)))
+
 // --------
 
 /// Gauss integers
@@ -85,7 +107,7 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 10,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 5.0, PENTA, 5.0 * PENTA],
+    sym_roots_sqs: &[1.0, 5.0, ZZ20_Y, 5.0 * ZZ20_Y],
     scaling_fac: 8,
     ccw_unit_coeffs: &[[2, 0], [2, 0], [0, 2], [0, 0]],
 };
@@ -95,7 +117,7 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
 /// b [ x  , 5    ,  xy    ,  5 y   ]
 /// c [  y ,  xy  , 10-2x  , 10(x-1)]
 /// d [ xy , 5 y  , 10(x-1), 10(5-x)]
-/// where x = sqrt(5), y = sqrt(2*(5-sqrt(5)))
+/// where x = sqrt(5), y = sqrt(2(5-x))
 fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
@@ -124,7 +146,7 @@ pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 16,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 2.0, SQRT2_P2, 2.0 * SQRT2_P2],
+    sym_roots_sqs: &[1.0, 2.0, ZZ16_Y, 2.0 * ZZ16_Y],
     scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 0], [0, 0], [1, -1], [0, 1]],
 };
@@ -151,7 +173,7 @@ pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 20,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 5.0, PENTA, 5.0 * PENTA],
+    sym_roots_sqs: &[1.0, 5.0, ZZ20_Y, 5.0 * ZZ20_Y],
     scaling_fac: 8,
     ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
 };
@@ -184,6 +206,101 @@ fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
         }
     }
 }
+/// Month integers
+pub const ZZ30_PARAMS: ZZParams<Frac> = ZZParams {
+    phantom: PhantomData,
+    full_turn_steps: 30,
+    sym_roots_num: 8,
+    sym_roots_sqs: &[
+        1.0,
+        5.0,
+        ZZ30_Y,
+        ZZ30_Z,
+        5.0 * ZZ30_Y,
+        5.0 * ZZ30_Z,
+        ZZ30_Y * ZZ30_Z,
+        5.0 * ZZ30_Y * ZZ30_Z,
+    ],
+    // e^(i*pi/15) = 1/16 (-2 + 2sqrt(5) + (1+sqrt(5))sqrt(6(5-sqrt(5))) + 4i*sqrt(7-sqrt(5)-sqrt(6(5-sqrt(5)))))
+    scaling_fac: 16, // TODO: check when multiplication works
+    ccw_unit_coeffs: &[
+        [-2, 0],
+        [2, 0],
+        [1, 0],
+        [0, 4],
+        [1, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+    ],
+};
+/// Dimension multiplication matrix (for Z[i]-valued vectors):
+/// [1    ,  x   ,   y      ,     z         ,  xy       ,  x z            ,   yz              ,  xyz ]
+/// [ x   , 5    ,
+/// [  y  ,  xy  ,  30-6x   ,
+/// [   z ,  x z ,    yz    ,  7-x-y        ,
+/// [ xy  , 5 y  , -30+30x  ,   xyz         , 150-30x   ,
+/// [ x z , 5  z ,   xyz    , 7x-5-xy       , 5xy       , 5(7-x-y)        ,
+/// [  yz ,  xyz , 30z-6xz  , 7y-xy-30+6x   , 30xz-30z  , 7xy-5y-30x+30   , 6(5-x)(7-x-y) = 240-72x-30y+6xy
+/// [ xyz , 5 yz , 30xz-30z , 7xy-5y-30x+30 , 150z-30xz , 35y-5xy-150+30x , 240x+30y-30xy-360 , 30(5-x)(7-x-y) = 1200-360x-150y+30xy
+/// where x = sqrt(5), y = sqrt(6(5-x)) = sqrt(30-6x), z = sqrt(7-x-y)
+fn zz30_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+    match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
+        [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
+            // 1
+            let c1_d = (l1 * r1 + l2 * r2 * 5 + l3 * r3 * 30 + l4 * r4 * 7)
+                + (l5 * r5 * 150 + l6 * r6 * 35 + l7 * r7 * 240 + l8 * r8 * 1200);
+            let c1_a =
+                (-l3 * r5 - l4 * r7 + l4 * r8 + l6 * r7) * 30 - l6 * r8 * 150 - l7 * r8 * 360;
+            let c1_b =
+                (-r3 * l5 - r4 * l7 + r4 * l8 + r6 * l7) * 30 - r6 * l8 * 150 - r7 * l8 * 360;
+            let c1 = c1_d + c1_a + c1_b;
+
+            // TODO: complete ZZ30/ZZ60
+
+            // x
+            let c2_d =
+                -l3 * r3 * 6 - l4 * r4 - l5 * r5 * 30 - l6 * r6 * 5 - l7 * r7 * 72 - l8 * r8 * 360;
+            let c2_a = 0;
+            let c2_b = 0;
+            let c2 = c2_d + c2_a + c2_b;
+
+            // y
+            let c3_d = -l4 * r4 - l6 * r6 * 5 - l7 * r7 * 30 - l8 * r8 * 150;
+            let c3_a = 0;
+            let c3_b = 0;
+            let c3 = c3_d + c3_a + c3_b;
+
+            // z
+            let c4_a = l1 * r4;
+            let c4_b = r1 * l4;
+            let c4 = c4_a + c4_b;
+
+            // xy
+            let c5_d = l7 * r7 * 6 + l8 * r8 * 30;
+            let c5_a = 0;
+            let c5_b = 0;
+            let c5 = c5_d + c5_a + c5_b;
+
+            // xz
+            let c6_a = l1 * r6;
+            let c6_b = r1 * l6;
+            let c6 = c6_a + c6_b;
+
+            // yz
+            let c7_a = l1 * r7;
+            let c7_b = r1 * l7;
+            let c7 = c7_a + c7_b;
+
+            // xyz
+            let c8_a = l1 * r8;
+            let c8_b = r1 * l8;
+            let c8 = c8_a + c8_b;
+
+            vec![c1, c2, c3, c4, c5, c6, c7, c8]
+        }
+    }
+}
 /// Hex integers
 pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
@@ -192,12 +309,12 @@ pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
     sym_roots_sqs: &[
         1.0,
         2.0,
-        SQRT2_P2,
-        SQRT2_P2_SQRT_P2,
-        2.0 * SQRT2_P2,
-        2.0 * SQRT2_P2_SQRT_P2,
-        SQRT2_P2 * SQRT2_P2_SQRT_P2,
-        2.0 * SQRT2_P2 * SQRT2_P2_SQRT_P2,
+        ZZ32_Y,
+        ZZ32_Z,
+        2.0 * ZZ32_Y,
+        2.0 * ZZ32_Z,
+        ZZ32_Y * ZZ32_Z,
+        2.0 * ZZ32_Y * ZZ32_Z,
     ],
     // e^(i*pi/16) = 1/2((1-i)*sqrt(2+sqrt(2+sqrt(2)))
     //             - i*sqrt(2)sqrt(2+sqrt(2+sqrt(2)))
@@ -280,6 +397,37 @@ fn zz32_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
         }
     }
 }
+pub const ZZ60_PARAMS: ZZParams<Frac> = ZZParams {
+    phantom: PhantomData,
+    full_turn_steps: 60,
+    sym_roots_num: 8,
+    sym_roots_sqs: &[
+        1.0,
+        5.0,
+        ZZ30_Y,
+        ZZ30_Z,
+        5.0 * ZZ30_Y,
+        5.0 * ZZ30_Z,
+        ZZ30_Y * ZZ30_Z,
+        5.0 * ZZ30_Y * ZZ30_Z,
+    ],
+    scaling_fac: 32, // TODO: check when multiplication works
+    //e^(i*pi/30) = 1/32 (sqrt(7 - sqrt(5) - sqrt(6 (5 - sqrt(5))))(8 + 4*sqrt(5) + 3*sqrt(6(5-sqrt(5))) + sqrt(5)sqrt(6(5-sqrt(5))))
+    //            - 4i(1 + sqrt(5) - sqrt(6 (5 - sqrt(5)))))
+    ccw_unit_coeffs: &[
+        [0, -4],
+        [0, -4],
+        [0, 4],
+        [8, 0],
+        [0, 0],
+        [4, 0],
+        [3, 0],
+        [1, 0],
+    ],
+};
+fn zz60_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+    zz30_mul(x, y)
+}
 // --------
 
 // generate boilerplate implementations
@@ -291,8 +439,10 @@ zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
 zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul);
 zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
+zz_base_impl!(ZZ30, ZZ30_PARAMS, zz30_mul);
 zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul);
-zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ32);
+zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul);
+zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 
 pub mod constants {
     use super::*;
@@ -309,6 +459,9 @@ pub mod constants {
     }
     pub fn zz24_sqrt2() -> ZZ24 {
         ZZ24::unit(3) + ZZ24::unit(-3)
+    }
+    pub fn zz32_sqrt2() -> ZZ32 {
+        ZZ32::unit(4) + ZZ32::unit(-4)
     }
 
     pub fn zz6_isqrt3() -> ZZ6 {
@@ -352,14 +505,15 @@ mod tests {
 
         let sq2 = SQRT_2;
         let sq3 = 3.0_f64.sqrt();
-        let sq_penta = PENTA.sqrt();
-        let hsq_penta = 0.5 * PENTA.sqrt();
+        let sq_penta = ZZ20_Y.sqrt();
+        let hsq_penta = 0.5 * ZZ20_Y.sqrt();
         let sq5 = 5.0_f64.sqrt();
         let sq6 = 6.0_f64.sqrt();
 
         assert_eq!(zz8_sqrt2().complex().re, sq2);
         assert_eq!(zz16_sqrt2().complex().re, sq2);
         assert_eq!(zz24_sqrt2().complex().re, sq2);
+        assert_eq!(zz32_sqrt2().complex().re, sq2);
 
         assert_eq!(zz6_isqrt3().complex().im, sq3);
         assert_eq!(zz12_sqrt3().complex().re, sq3);
@@ -684,7 +838,9 @@ mod $name {
         zz16: ZZ16,
         zz20: ZZ20,
         zz24: ZZ24,
+        // zz30: ZZ30,
         zz32: ZZ32,
+        // zz60: ZZ60,
     }
 
     #[test]

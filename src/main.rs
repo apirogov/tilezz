@@ -1,6 +1,6 @@
 use tilezz::snake::{Snake, Turtle};
 use tilezz::traits::Ccw;
-use tilezz::zz::{ZZ12, ZZ32};
+use tilezz::zz::{ZZ12, ZZ30, ZZ60};
 use tilezz::zzbase::ZZBase;
 
 use plotters::prelude::*;
@@ -27,9 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pad_x = pad + if w < h { half_d } else { 0_f64 };
     let pad_y = pad + if h < w { half_d } else { 0_f64 };
 
-    println!("{}", ZZ32::ccw().complex());
-
-    // for p in l
+    println!("{}", ZZ30::ccw().complex());
+    println!("{}", ZZ60::ccw().complex());
 
     let root = BitMapBackend::new("test.png", (1000, 1000)).into_drawing_area();
     let _ = root.fill(&WHITE);
