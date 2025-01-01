@@ -12,14 +12,19 @@ use std::ops::{Add, Mul, Neg, Sub};
 
 // definitions needed to derive different ZZn types
 
-// numeric constants
+// numeric constants for the chosen (in general non-unique) linearly independent algebraic bases
 // --------
 // NOTE: sqrt(2 + sqrt(2)) = (sqrt(2)+1)sqrt(2 - sqrt(2))
 // and   sqrt(2 - sqrt(2)) = (sqrt(2)-1)sqrt(2 + sqrt(2))
-const SQRT2_P_2: f64 = 2.0 + SQRT_2;
+const SQRT2_P2: f64 = SQRT_2 + 2.0;
 
+// NOTE: sqrt(2+sqrt(2+sqrt(2))) = ( 1 + sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2-sqrt(2+sqrt(2)))
+// and   sqrt(2-sqrt(2+sqrt(2))) = (-1 - sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2+sqrt(2+sqrt(2)))
+const SQRT2_P2_SQRT_P2: f64 = 1.84775906502257351225 + 2.0;
+
+// NOTE: Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), z = sqrt(2*(5+sqrt(5)))
+// We have: y = 1/2(xz - z) ^ z = 1/2(xy + y)
 const SQRT_5: f64 = 2.23606797749978969;
-// NOTE: 2.0 * (5.0 + SQRT_5) = ??
 const PENTA: f64 = 2.0 * (5.0 - SQRT_5);
 // --------
 
@@ -94,9 +99,9 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
 fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let c1 = a * e + (5,) * b * f + (10,) * (c * g + (5,) * d * h - c * h - d * g);
-            let c2 = a * f + b * e - (2,) * c * g + (10,) * (c * h + d * g - d * h);
-            let c3 = a * g + (5,) * (b * h + d * f) + c * e;
+            let c1 = a * e + b * f * 5 + (c * g + d * h * 5 - c * h - d * g) * 10;
+            let c2 = a * f + b * e - c * g * 2 + (c * h + d * g - d * h) * 10;
+            let c3 = a * g + (b * h + d * f) * 5 + c * e;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
         }
@@ -119,7 +124,7 @@ pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 16,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 2.0, SQRT2_P_2, 2.0 * SQRT2_P_2],
+    sym_roots_sqs: &[1.0, 2.0, SQRT2_P2, 2.0 * SQRT2_P2],
     scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 0], [0, 0], [1, -1], [0, 1]],
 };
@@ -150,10 +155,6 @@ pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
     scaling_fac: 8,
     ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
 };
-/// Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), z = sqrt(2*(5+sqrt(5)))
-/// We have that e^(i*pi/10) = 1/4(-i + ix + z)
-/// But as 1/2(xz - z) = y ^ 1/2(xy + y) = z,
-/// we can reuse ZZ10 logic (which has y = PENTA), as 2z = xy + y
 fn zz20_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     zz10_mul(x, y)
 }
@@ -175,11 +176,107 @@ pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
 fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let c1 = a * e + (2,) * b * f + (3,) * c * g + (6,) * d * h;
-            let c2 = a * f + b * e + (3,) * (c * h + d * g);
-            let c3 = a * g + c * e + (2,) * (b * h + d * f);
+            let c1 = a * e + b * f * 2 + c * g * 3 + d * h * 6;
+            let c2 = a * f + b * e + (c * h + d * g) * 3;
+            let c3 = a * g + c * e + (b * h + d * f) * 2;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
+        }
+    }
+}
+/// Hex integers
+pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
+    phantom: PhantomData,
+    full_turn_steps: 32,
+    sym_roots_num: 8,
+    sym_roots_sqs: &[
+        1.0,
+        2.0,
+        SQRT2_P2,
+        SQRT2_P2_SQRT_P2,
+        2.0 * SQRT2_P2,
+        2.0 * SQRT2_P2_SQRT_P2,
+        SQRT2_P2 * SQRT2_P2_SQRT_P2,
+        2.0 * SQRT2_P2 * SQRT2_P2_SQRT_P2,
+    ],
+    // e^(i*pi/16) = 1/2((1-i)*sqrt(2+sqrt(2+sqrt(2)))
+    //             - i*sqrt(2)sqrt(2+sqrt(2+sqrt(2)))
+    //             + i*sqrt(2)sqrt(2+sqrt(2))sqrt(2+sqrt(2+sqrt(2))))
+    scaling_fac: 2,
+    ccw_unit_coeffs: &[
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [1, -1],
+        [0, 0],
+        [0, -1],
+        [0, 0],
+        [0, 1],
+    ],
+};
+/// Dimension multiplication matrix (for Z[i]-valued vectors):
+/// [1    ,  x   ,   y  ,    z   ,  xy  ,  x z    ,   yz        ,  xyz ]
+/// [ x   , 2    ,
+/// [  y  ,  xy  , 2+x  ,
+/// [   z ,  x z ,   yz , 2+y    ,
+/// [ xy  , 2 y  , 2+2x ,  xyz   , 4+2x ,
+/// [ x z , 2 z  ,  xyz ,2x+xy   , 2 yz , 4+2y    ,
+/// [  yz ,  xyz ,2z+ xz,2+ x+2y ,2z+2xz, 2+2x+2xy, 4+2x+2y+ xy
+/// [ xyz , 2 yz ,2z+2xz,2+2x+2xy,4z+2xz, 4+2x+4y , 4+4x+2y+2xy , 8+4x+4y+2xy
+/// where x = sqrt(2), y = sqrt(2+x), z = sqrt(2+y)
+fn zz32_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+    match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
+        [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
+            // 1
+            let c1_d = (l1 * r1)
+                + (l2 * r2 + l3 * r3 + l4 * r4) * 2
+                + (l5 * r5 + l6 * r6 + l7 * r7) * 4
+                + l8 * r8 * 8;
+            let c1_a = (l3 * r5 + l4 * r7 + l4 * r8 + l6 * r7) * 2 + (l6 * r8 + l7 * r8) * 4;
+            let c1_b = (r3 * l5 + r4 * l7 + r4 * l8 + r6 * l7) * 2 + (r6 * l8 + r7 * l8) * 4;
+            let c1 = c1_d + c1_a + c1_b;
+
+            // x
+            let c2_d = r3 * l3 + (r5 * l5 + r7 * l7) * 2 + r8 * l8 * 4;
+            let c2_a = (l1 * r2 + l4 * r7)
+                + (l3 * r5 + l4 * r6 + l4 * r8 + l6 * r7 + l6 * r8) * 2
+                + l7 * r8 * 4;
+            let c2_b = (r1 * l2 + r4 * l7)
+                + (r3 * l5 + r4 * l6 + r4 * l8 + r6 * l7 + r6 * l8) * 2
+                + r7 * l8 * 4;
+            let c2 = c2_d + c2_a + c2_b;
+
+            // y
+            let c3_d = l4 * r4 + (l6 * r6 + l7 * r7) * 2 + (l8 * r8) * 4;
+            let c3_a = l1 * r3 + (l2 * r5 + l4 * r7 + l7 * r8) * 2 + (l6 * r8) * 4;
+            let c3_b = r1 * l3 + (r2 * l5 + r4 * l7 + r7 * l8) * 2 + (r6 * l8) * 4;
+            let c3 = c3_d + c3_a + c3_b;
+
+            // z
+            let c4_a = l1 * r4 + (l2 * r6 + l3 * r7 + l3 * r8 + l5 * r7) * 2 + l5 * r8 * 4;
+            let c4_b = r1 * l4 + (r2 * l6 + r3 * l7 + r3 * l8 + r5 * l7) * 2 + r5 * l8 * 4;
+            let c4 = c4_a + c4_b;
+
+            // xy
+            let c5_d = l7 * r7 + l8 * r8 * 2;
+            let c5_a = l1 * r5 + l2 * r3 + l4 * r6 + (l4 * r8 + l6 * r7 + l7 * r8) * 2;
+            let c5_b = r1 * l5 + r2 * l3 + r4 * l6 + (r4 * l8 + r6 * l7 + r7 * l8) * 2;
+            let c5 = c5_d + c5_a + c5_b;
+
+            // xz
+            let c6_a = l1 * r6 + l2 * r4 + l3 * r7 + (l3 * r8 + l5 * r7 + l5 * r8) * 2;
+            let c6_b = r1 * l6 + r2 * l4 + r3 * l7 + (r3 * l8 + r5 * l7 + r5 * l8) * 2;
+            let c6 = c6_a + c6_b;
+
+            // yz
+            let c7_a = l1 * r7 + l3 * r4 + (l2 * r8 + l5 * r6) * 2;
+            let c7_b = r1 * l7 + r3 * l4 + (r2 * l8 + r5 * l6) * 2;
+            let c7 = c7_a + c7_b;
+
+            // xyz
+            let c8 = l1 * r8 + l2 * r7 + l3 * r6 + l4 * r5 + l5 * r4 + l6 * r3 + l7 * r2 + l8 * r1;
+
+            vec![c1, c2, c3, c4, c5, c6, c7, c8]
         }
     }
 }
@@ -194,7 +291,8 @@ zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
 zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul);
 zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
 zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
-zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24);
+zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul);
+zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ32);
 
 pub mod constants {
     use super::*;
@@ -586,6 +684,7 @@ mod $name {
         zz16: ZZ16,
         zz20: ZZ20,
         zz24: ZZ24,
+        zz32: ZZ32,
     }
 
     #[test]

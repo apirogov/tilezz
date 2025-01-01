@@ -1,5 +1,7 @@
 use tilezz::snake::{Snake, Turtle};
-use tilezz::zz::ZZ12;
+use tilezz::traits::Ccw;
+use tilezz::zz::{ZZ12, ZZ32};
+use tilezz::zzbase::ZZBase;
 
 use plotters::prelude::*;
 
@@ -24,6 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pad = 1_f64;
     let pad_x = pad + if w < h { half_d } else { 0_f64 };
     let pad_y = pad + if h < w { half_d } else { 0_f64 };
+
+    println!("{}", ZZ32::ccw().complex());
 
     // for p in l
 
