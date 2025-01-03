@@ -117,6 +117,9 @@ impl<T: ZZNum> Snake<T> {
 
     /// Returns true if the represented path is closed, i.e.
     /// not empty + first and last point is the same (and equal to 0).
+    ///
+    /// As we always ensure that the sequence is not self-intersecting,
+    /// this also equals to being a simple polygon.
     pub fn is_closed(&self) -> bool {
         !self.is_empty() && *self.points.last().unwrap() == T::zero()
     }
@@ -277,7 +280,7 @@ impl<T: ZZNum> Snake<T> {
             // the missing angle must complete one full turn
             // clockwise or counter-clockwise (simple polygon property)
             let target = (T::turn() as i64) * self.ang_sum.signum();
-            let missing = target - self.angles[0] as i64;
+            let missing = target - (self.ang_sum - self.angles[0] as i64);
             self.angles[0] = missing as i8;
             self.ang_sum = target;
         }
@@ -300,19 +303,6 @@ impl<T: ZZNum> Snake<T> {
         result.extend(self);
         result.extend(other);
         result
-    }
-
-    /// Check that a snake is representing a simple polygon
-    /// (and thus can be converted into a rat).
-    pub fn is_rat(&self) -> bool {
-        // NOTE: no need to check that the polygon is simple,
-        // as we ensure this continuously (prevent self-intersections).
-        self.is_closed() && self.ang_sum == T::turn() as i64
-    }
-
-    pub fn slice(&self, _: usize, _: usize) -> Self {
-        // Q: do we need a ISnake trait for Snake, SnakeView and Rat ?
-        panic!("TODO");
     }
 }
 
@@ -340,13 +330,38 @@ impl<T: ZZNum> Display for Snake<T> {
     }
 }
 
+pub mod constants {
+    use super::*;
+
+    /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
+    pub fn spectre<T: ZZNum>() -> Snake<T> {
+        let ring = T::zz_params().full_turn_steps;
+        assert_eq!(ring % 12, 0);
+
+        let seq_zz12: Vec<i8> = vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+        let scale = ring / 12;
+        let seq: Vec<i8> = seq_zz12.iter().map(|x| x * scale).collect();
+
+        Snake::from(seq.as_slice())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::traits::Ccw;
-    use crate::zz::ZZ12;
+    use crate::zz::{ZZ12, ZZ24};
     use crate::zzbase::ZZBase;
+    use constants::spectre;
     use num_traits::{One, Zero};
+
+    #[test]
+    fn test_spectre() {
+        // test adaptive scaling dependent on chosen ring
+        let seq_zz24: Vec<i8> = vec![6, 4, 0, 4, -6, 4, 6, 4, -6, 4, 6, -4, 6, -4];
+        let s: Snake<ZZ24> = spectre();
+        assert_eq!(s.angles(), seq_zz24);
+    }
 
     #[test]
     fn test_cell_of() {
@@ -451,7 +466,6 @@ mod tests {
         let mut s: Snake<ZZ12> = Snake::new();
         assert!(s.is_empty());
         assert!(!s.is_closed());
-        assert!(!s.is_rat());
         assert_eq!(s.len(), 0);
         assert_eq!(s.angle_sum(), 0);
         assert_eq!(s.direction(), 0);
@@ -460,7 +474,6 @@ mod tests {
         s.add(-9); // same as 3
         assert!(!s.is_empty());
         assert!(!s.is_closed());
-        assert!(!s.is_rat());
         assert_eq!(*s.angles().last().unwrap(), 3);
         assert_eq!(s.direction(), 3);
         assert_eq!(s.offset(), ZZ12::unit(3));
@@ -516,24 +529,17 @@ mod tests {
         let sq2: Snake<ZZ12> = Snake::from(&[0, -3, -3, -3]);
         assert!(sq2.is_closed());
         assert_eq!(sq2.angle_sum(), -ZZ12::turn() as i64);
-    }
 
-    #[test]
-    fn test_is_rat() {
         let mut square: Snake<ZZ12> = Snake::new();
-        assert!(!square.is_rat()); // empty
+        assert!(!square.is_closed()); // empty
 
         for _ in 0..3 {
             square.add(3);
         }
-        assert!(!square.is_rat()); // not closed
+        assert!(!square.is_closed()); // not closed
 
         square.add(3);
-        assert!(square.is_rat()); // valid
-
-        // valid, but chirally non-normalized (is clockwise)
-        let square2: Snake<ZZ12> = Snake::from(&[-3, -3, -3, -3]);
-        assert!(!square2.is_rat());
+        assert!(square.is_closed()); // valid
     }
 
     #[test]
@@ -601,11 +607,6 @@ mod tests {
         for i in (-ZZ12::hturn() + 1)..(ZZ12::hturn() - 1) {
             assert!(!s4.add(i));
         }
-    }
-
-    #[test]
-    fn test_slice() {
-        // TODO: test slicing
     }
 
     #[test]

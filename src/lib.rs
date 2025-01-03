@@ -15,3 +15,5 @@ pub mod zzutil;
 pub mod snake;
 
 pub mod rat;
+
+pub mod vis;
