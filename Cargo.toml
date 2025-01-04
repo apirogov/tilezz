@@ -1,6 +1,6 @@
 [package]
 name = "tilezz"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["Anton Pirogov <apirogov@users.noreply.github.com>"]
 description = "Utilities to work with perfect-precision polygonal tiles built on top of complex integer rings."
 license = "MIT"
@@ -18,4 +18,8 @@ num-complex = "0.4.6"
 num-integer = "0.1.46"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
-plotters = "0.3.7"
+plotters = { version = "^0.3.7", features = ["evcxr", "all_series"], optional = true }
+
+[features]
+default = ["plotters"]
+plotters = ["dep:plotters"]

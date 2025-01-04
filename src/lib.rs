@@ -16,4 +16,7 @@ pub mod snake;
 
 pub mod rat;
 
-pub mod vis;
+pub mod plotutils;
+
+#[cfg(feature = "plotters")]
+pub mod plotters;

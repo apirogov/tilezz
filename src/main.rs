@@ -1,7 +1,7 @@
 use plotters::prelude::*;
+use tilezz::plotters::plot_tile;
 use tilezz::snake::constants::spectre;
 use tilezz::snake::{Snake, Turtle};
-use tilezz::vis::plot_tile;
 use tilezz::zz::ZZ12;
 
 fn main() {
