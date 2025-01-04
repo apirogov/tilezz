@@ -24,38 +24,51 @@ const ZZ16_Y: f64 = 2.0 + SQRT_2;
 
 // NOTE: sqrt(2+sqrt(2+sqrt(2))) = ( 1 + sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2-sqrt(2+sqrt(2)))
 // and   sqrt(2-sqrt(2+sqrt(2))) = (-1 - sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2+sqrt(2+sqrt(2)))
-const ZZ32_Y: f64 = ZZ16_Y;
 const ZZ32_Z: f64 = 2.0 + 1.84775906502257351225; // 2+sqrt(2+sqrt(2))
 
 // NOTE: Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), y' = sqrt(2*(5+sqrt(5)))
 // We have: y = 1/2(xy' - y') ^ y' = 1/2(xy + y)
 const SQRT_5: f64 = 2.23606797749978969;
-const ZZ20_Y: f64 = 2.0 * (5.0 - SQRT_5);
+const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 
-// NOTE: sqrt(6(5+sqrt(5))) = sqrt(6(5-sqrt(5))) * 1/2( 1+sqrt(5))
-// and   sqrt(6(5-sqrt(5))) = sqrt(6(5+sqrt(5))) * 1/2(-1+sqrt(5))
-const ZZ30_Y: f64 = 3.0 * ZZ20_Y; // 6*(5-sqrt(5))
+// NOTE: could construct ZZ120 and ZZ240 as well, using only the roots we already use:
+//
+// e^(i*pi/60)  = 1/16 (1+i) (2 sqrt(5+sqrt(5)) - i sqrt(2) - sqrt(2)sqrt(3)
+//              + i sqrt(2)sqrt(5) + sqrt(2)sqrt(3)sqrt(5) - 2i sqrt(3)sqrt(5+sqrt(5)))
 
-// NOTE: Let
-// z1 = sqrt(7 - sqrt(5) - sqrt(6(5-sqrt(5))))
-// z2 = sqrt(7 + sqrt(5) - sqrt(6(5+sqrt(5))))
-// z3 = sqrt(7 - sqrt(5) + sqrt(6(5-sqrt(5))))
-// z4 = sqrt(7 + sqrt(5) + sqrt(6(5+sqrt(5))))
-// then we have:
-// z2/z1 = 1/4  (-1 +   sqrt(5) +   sqrt(6(5+sqrt(5))))
-// z3/z1 = 1/4  ( 1 + 3*sqrt(5) +   sqrt(6(5+sqrt(5))))
-// z4/z1 = 1/8  ( 8 + 4*sqrt(5) + 3*sqrt(6(5-sqrt(5))) + sqrt(30(5-sqrt(5))))
-const SQRT_ZZ30_Y: f64 = 4.07229568364101746760;
-const ZZ30_Z: f64 = 7.0 - SQRT_5 - SQRT_ZZ30_Y; // 7-sqrt(5)-sqrt(6(5-sqrt(5)))
+// e^(i*pi/120) = 1/16 (sqrt(2-sqrt(2)) (sqrt(3) + sqrt(15) - sqrt(2(5-sqrt(5)))) + sqrt(2+sqrt(2)) (1 + sqrt(5) + sqrt(6(5-sqrt(5)))))
+//              + 1/16i(sqrt(2+sqrt(2)) (sqrt(3) + sqrt(15) - sqrt(2(5-sqrt(5)))) - sqrt(2-sqrt(2)) (1 + sqrt(5) + sqrt(6(5-sqrt(5)))))
 
 // --------
+
+/// NOTE:
+///
+/// Each ring is represented by a set of linearly independent "square root units"
+/// (one of these is units is always 1, i.e. the "pure integer unit")
+/// and all their symbolic products, i.e. for k distinct units there are 2^k entries.
+/// A value is represented as a linear combination of these units,
+/// where the scalar coefficients multiplied by Gaussian integer coefficients,
+/// all of that divided by a fixed common ring-specific scaling factor.
+///
+/// Addition is simply component-wise addition of coefficients, multiplication however
+/// is more involved and can be represented as a 3D matrix (a rank 3 tensor?) that describes
+/// the expanded coefficients for each component of the outer product of the two input vectors.
+///
+/// For each pair of input vectors u (index i) and v (index j) and the multiplication tensor M
+/// that assigns to each i,j,k the contribution along the dimension k of the value u_i * v_j,
+/// the result of the multiplication w (index k) is given by w_k := sum_{i,j}(u_i * v_j * M_{i,j,k}).
+///
+/// This conceptual 3D symbolic vector multiplication matrix is not implemented
+/// explicitly, instead the resulting coefficients are manually collected and
+/// simplified for each ring separately.
 
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 4,
     sym_roots_num: 1,
-    sym_roots_sqs: &[1.0],
+    sym_roots_sqs: &[1.],
+    sym_roots_lbls: &["1"],
     scaling_fac: 1,
     ccw_unit_coeffs: &[[0, 1]],
 };
@@ -69,7 +82,8 @@ pub const ZZ6_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 6,
     sym_roots_num: 2,
-    sym_roots_sqs: &[1.0, 3.0],
+    sym_roots_sqs: &[1., 3.],
+    sym_roots_lbls: &["1", "3"],
     scaling_fac: 2,
     ccw_unit_coeffs: &[[1, 0], [0, 1]],
 };
@@ -88,7 +102,8 @@ pub const ZZ8_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 8,
     sym_roots_num: 2,
-    sym_roots_sqs: &[1.0, 2.0],
+    sym_roots_sqs: &[1., 2.],
+    sym_roots_lbls: &["1", "2"],
     scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 0], [1, 1]],
 };
@@ -107,7 +122,8 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 10,
     sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 5.0, ZZ20_Y, 5.0 * ZZ20_Y],
+    sym_roots_sqs: &[1., 5., ZZ10_Y, 5. * ZZ10_Y],
+    sym_roots_lbls: &["1", "5", "2(5-sqrt(5))", "10(5-sqrt(5))"],
     scaling_fac: 8,
     ccw_unit_coeffs: &[[2, 0], [2, 0], [0, 2], [0, 0]],
 };
@@ -133,9 +149,10 @@ fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
 pub const ZZ12_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 12,
-    sym_roots_num: 2,
-    sym_roots_sqs: &[1.0, 3.0],
-    scaling_fac: 2,
+    sym_roots_num: ZZ6_PARAMS.sym_roots_num,
+    sym_roots_sqs: ZZ6_PARAMS.sym_roots_sqs,
+    sym_roots_lbls: ZZ6_PARAMS.sym_roots_lbls,
+    scaling_fac: ZZ6_PARAMS.scaling_fac,
     ccw_unit_coeffs: &[[0, 1], [1, 0]],
 };
 fn zz12_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
@@ -147,6 +164,7 @@ pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
     full_turn_steps: 16,
     sym_roots_num: 4,
     sym_roots_sqs: &[1.0, 2.0, ZZ16_Y, 2.0 * ZZ16_Y],
+    sym_roots_lbls: &["1", "2", "2+sqrt(2)", "2(2+sqrt(2))"],
     scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 0], [0, 0], [1, -1], [0, 1]],
 };
@@ -172,9 +190,10 @@ fn zz16_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
 pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 20,
-    sym_roots_num: 4,
-    sym_roots_sqs: &[1.0, 5.0, ZZ20_Y, 5.0 * ZZ20_Y],
-    scaling_fac: 8,
+    sym_roots_num: ZZ10_PARAMS.sym_roots_num,
+    sym_roots_sqs: ZZ10_PARAMS.sym_roots_sqs,
+    sym_roots_lbls: ZZ10_PARAMS.sym_roots_lbls,
+    scaling_fac: ZZ10_PARAMS.scaling_fac,
     ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
 };
 fn zz20_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
@@ -186,6 +205,7 @@ pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
     full_turn_steps: 24,
     sym_roots_num: 4,
     sym_roots_sqs: &[1.0, 2.0, 3.0, 6.0],
+    sym_roots_lbls: &["1", "2", "3", "6"],
     scaling_fac: 4,
     ccw_unit_coeffs: &[[0, 0], [1, -1], [0, 0], [1, 1]],
 };
@@ -212,90 +232,92 @@ pub const ZZ30_PARAMS: ZZParams<Frac> = ZZParams {
     full_turn_steps: 30,
     sym_roots_num: 8,
     sym_roots_sqs: &[
-        1.0,
-        5.0,
-        ZZ30_Y,
-        ZZ30_Z,
-        5.0 * ZZ30_Y,
-        5.0 * ZZ30_Z,
-        ZZ30_Y * ZZ30_Z,
-        5.0 * ZZ30_Y * ZZ30_Z,
+        1.,
+        3.,
+        5.,
+        ZZ10_Y,
+        15.,
+        3. * ZZ10_Y,
+        5. * ZZ10_Y,
+        15. * ZZ10_Y,
     ],
-    // e^(i*pi/15) = 1/16 (-2 + 2sqrt(5) + (1+sqrt(5))sqrt(6(5-sqrt(5))) + 4i*sqrt(7-sqrt(5)-sqrt(6(5-sqrt(5)))))
-    scaling_fac: 16, // TODO: check when multiplication works
+    sym_roots_lbls: &[
+        "1",
+        "3",
+        "5",
+        "2(5-sqrt(5))",
+        "15",
+        "6(5-sqrt(5))",
+        "10(5-sqrt(5))",
+        "30(5-sqrt(5))",
+    ],
+    // e^(i*pi/15) = 1/16  (-2 + 2 sqrt(5) + sqrt(6 (5 - sqrt(5))) + sqrt(30 (5 - sqrt(5))))
+    //             + 1/16 i(2 sqrt(3) - 2 sqrt(15) + sqrt(2 (5 - sqrt(5))) + sqrt(10 (5 - sqrt(5))))
+    scaling_fac: 16,
     ccw_unit_coeffs: &[
         [-2, 0],
+        [0, 2],
         [2, 0],
+        [0, 1],
+        [0, -2],
         [1, 0],
-        [0, 4],
+        [0, 1],
         [1, 0],
-        [0, 0],
-        [0, 0],
-        [0, 0],
     ],
 };
 /// Dimension multiplication matrix (for Z[i]-valued vectors):
-/// [1    ,  x   ,   y      ,     z         ,  xy       ,  x z            ,   yz              ,  xyz ]
-/// [ x   , 5    ,
-/// [  y  ,  xy  ,  30-6x   ,
-/// [   z ,  x z ,    yz    ,  7-x-y        ,
-/// [ xy  , 5 y  , -30+30x  ,   xyz         , 150-30x   ,
-/// [ x z , 5  z ,   xyz    , 7x-5-xy       , 5xy       , 5(7-x-y)        ,
-/// [  yz ,  xyz , 30z-6xz  , 7y-xy-30+6x   , 30xz-30z  , 7xy-5y-30x+30   , 6(5-x)(7-x-y) = 240-72x-30y+6xy
-/// [ xyz , 5 yz , 30xz-30z , 7xy-5y-30x+30 , 150z-30xz , 35y-5xy-150+30x , 240x+30y-30xy-360 , 30(5-x)(7-x-y) = 1200-360x-150y+30xy
-/// where x = sqrt(5), y = sqrt(6(5-x)) = sqrt(30-6x), z = sqrt(7-x-y)
+/// [1    ,  x   ,   y    ,    z     ,  xy  ,  x z     ,   yz     ,  xyz      ]
+/// [ x   , 3    ,
+/// [  y  ,  xy  ,  5     ,
+/// [   z ,  x z ,    yz  , 10-2y    ,
+/// [ xy  , 3 y  ,  5x    , xyz      , 15   ,
+/// [ x z , 3  z ,   xyz  , 10x-2xy  ,  3yz , 3(10-2y) ,
+/// [  yz ,  xyz ,  5  z  , 10y-10   ,  5xz , 10xy-10x , 5(10-2y)
+/// [ xyz , 3 yz ,  5x z  , 10xy-10x ,  15z , 30y-30   , 50x-10xy , 15(10-2y)
+/// where x = sqrt(3), y = sqrt(5), z = sqrt(2(5-y)) = sqrt(10-2y)
 fn zz30_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
         [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
             // 1
-            let c1_d = (l1 * r1 + l2 * r2 * 5 + l3 * r3 * 30 + l4 * r4 * 7)
-                + (l5 * r5 * 150 + l6 * r6 * 35 + l7 * r7 * 240 + l8 * r8 * 1200);
-            let c1_a =
-                (-l3 * r5 - l4 * r7 + l4 * r8 + l6 * r7) * 30 - l6 * r8 * 150 - l7 * r8 * 360;
-            let c1_b =
-                (-r3 * l5 - r4 * l7 + r4 * l8 + r6 * l7) * 30 - r6 * l8 * 150 - r7 * l8 * 360;
+            let c1_d = ((l1 * r1) + (l2 * r2) * 3 + (l3 * r3) * 5 + (l4 * r4) * 10)
+                + ((l5 * r5) * 15 + (l6 * r6) * 30 + (l7 * r7) * 50 + (l8 * r8) * 150);
+            let c1_a = l4 * r7 * (-10) + l6 * r8 * (-30);
+            let c1_b = r4 * l7 * (-10) + r6 * l8 * (-30);
             let c1 = c1_d + c1_a + c1_b;
 
-            // TODO: complete ZZ30/ZZ60
-
             // x
-            let c2_d =
-                -l3 * r3 * 6 - l4 * r4 - l5 * r5 * 30 - l6 * r6 * 5 - l7 * r7 * 72 - l8 * r8 * 360;
-            let c2_a = 0;
-            let c2_b = 0;
-            let c2 = c2_d + c2_a + c2_b;
+            let c2_a = l1 * r2 + l3 * r5 * 5 + (l4 * r6 - l4 * r8 - l6 * r7) * 10 + l7 * r8 * 50;
+            let c2_b = r1 * l2 + r3 * l5 * 5 + (r4 * l6 - r4 * l8 - r6 * l7) * 10 + r7 * l8 * 50;
+            let c2 = c2_a + c2_b;
 
             // y
-            let c3_d = -l4 * r4 - l6 * r6 * 5 - l7 * r7 * 30 - l8 * r8 * 150;
-            let c3_a = 0;
-            let c3_b = 0;
+            let c3_d = r4 * l4 * (-2) + r6 * l6 * (-6) + r7 * l7 * (-10) + r8 * l8 * (-30);
+            let c3_a = l1 * r3 + l2 * r5 * 3 + l4 * r7 * 10 + l6 * r8 * 30;
+            let c3_b = r1 * l3 + r2 * l5 * 3 + r4 * l7 * 10 + r6 * l8 * 30;
             let c3 = c3_d + c3_a + c3_b;
 
             // z
-            let c4_a = l1 * r4;
-            let c4_b = r1 * l4;
+            let c4_a = l1 * r4 + l2 * r6 * 3 + l3 * r7 * 5 + l5 * r8 * 15;
+            let c4_b = r1 * l4 + r2 * l6 * 3 + r3 * l7 * 5 + r5 * l8 * 15;
             let c4 = c4_a + c4_b;
 
             // xy
-            let c5_d = l7 * r7 * 6 + l8 * r8 * 30;
-            let c5_a = 0;
-            let c5_b = 0;
-            let c5 = c5_d + c5_a + c5_b;
+            let c5_a = l1 * r5 + l2 * r3 - l4 * r6 * 2 + (l4 * r8 + l6 * r7 - l7 * r8) * 10;
+            let c5_b = r1 * l5 + r2 * l3 - r4 * l6 * 2 + (r4 * l8 + r6 * l7 - r7 * l8) * 10;
+            let c5 = c5_a + c5_b;
 
             // xz
-            let c6_a = l1 * r6;
-            let c6_b = r1 * l6;
+            let c6_a = l1 * r6 + l2 * r4 + (l3 * r8 + l5 * r7) * 5;
+            let c6_b = r1 * l6 + r2 * l4 + (r3 * l8 + r5 * l7) * 5;
             let c6 = c6_a + c6_b;
 
             // yz
-            let c7_a = l1 * r7;
-            let c7_b = r1 * l7;
+            let c7_a = l1 * r7 + l2 * r8 * 3 + l3 * r4 + l5 * r6 * 3;
+            let c7_b = r1 * l7 + r2 * l8 * 3 + r3 * l4 + r5 * l6 * 3;
             let c7 = c7_a + c7_b;
 
             // xyz
-            let c8_a = l1 * r8;
-            let c8_b = r1 * l8;
-            let c8 = c8_a + c8_b;
+            let c8 = r1 * l8 + r2 * l7 + r3 * l6 + r4 * l5 + r5 * l4 + r6 * l3 + r7 * l2 + r8 * l1;
 
             vec![c1, c2, c3, c4, c5, c6, c7, c8]
         }
@@ -307,14 +329,24 @@ pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
     full_turn_steps: 32,
     sym_roots_num: 8,
     sym_roots_sqs: &[
-        1.0,
-        2.0,
-        ZZ32_Y,
+        1.,
+        2.,
+        ZZ16_Y,
         ZZ32_Z,
-        2.0 * ZZ32_Y,
-        2.0 * ZZ32_Z,
-        ZZ32_Y * ZZ32_Z,
-        2.0 * ZZ32_Y * ZZ32_Z,
+        2. * ZZ16_Y,
+        2. * ZZ32_Z,
+        ZZ16_Y * ZZ32_Z,
+        2. * ZZ16_Y * ZZ32_Z,
+    ],
+    sym_roots_lbls: &[
+        "1",
+        "2",
+        "2+sqrt(2)",
+        "2+sqrt(2+sqrt(2))",
+        "2(2+sqrt(2))",
+        "2(2+sqrt(2+sqrt(2)))",
+        "(2+sqrt(2))(2+sqrt(2+sqrt(2)))",
+        "2(2+sqrt(2))(2+sqrt(2+sqrt(2)))",
     ],
     // e^(i*pi/16) = 1/2((1-i)*sqrt(2+sqrt(2+sqrt(2)))
     //             - i*sqrt(2)sqrt(2+sqrt(2+sqrt(2)))
@@ -400,29 +432,20 @@ fn zz32_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
 pub const ZZ60_PARAMS: ZZParams<Frac> = ZZParams {
     phantom: PhantomData,
     full_turn_steps: 60,
-    sym_roots_num: 8,
-    sym_roots_sqs: &[
-        1.0,
-        5.0,
-        ZZ30_Y,
-        ZZ30_Z,
-        5.0 * ZZ30_Y,
-        5.0 * ZZ30_Z,
-        ZZ30_Y * ZZ30_Z,
-        5.0 * ZZ30_Y * ZZ30_Z,
-    ],
-    scaling_fac: 32, // TODO: check when multiplication works
-    //e^(i*pi/30) = 1/32 (sqrt(7 - sqrt(5) - sqrt(6 (5 - sqrt(5))))(8 + 4*sqrt(5) + 3*sqrt(6(5-sqrt(5))) + sqrt(5)sqrt(6(5-sqrt(5))))
-    //            - 4i(1 + sqrt(5) - sqrt(6 (5 - sqrt(5)))))
+    sym_roots_num: ZZ30_PARAMS.sym_roots_num,
+    sym_roots_sqs: ZZ30_PARAMS.sym_roots_sqs,
+    sym_roots_lbls: ZZ30_PARAMS.sym_roots_lbls,
+    scaling_fac: ZZ30_PARAMS.scaling_fac,
+    // e^(i*pi/30) = 1/8 (sqrt(3) + sqrt(15) + sqrt(2 (5 - sqrt(5))) + i(-1 - sqrt(5) + sqrt(3)sqrt(2 (5 - sqrt(5)))))
     ccw_unit_coeffs: &[
-        [0, -4],
-        [0, -4],
-        [0, 4],
-        [8, 0],
+        [0, -2],
+        [2, 0],
+        [0, -2],
+        [2, 0],
+        [2, 0],
+        [0, 2],
         [0, 0],
-        [4, 0],
-        [3, 0],
-        [1, 0],
+        [0, 0],
     ],
 };
 fn zz60_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
@@ -446,6 +469,14 @@ zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 
 pub mod constants {
     use super::*;
+
+    pub fn zz_units_sum<T: ZZNum>() -> T {
+        let mut p = T::zero();
+        for i in 1..T::turn() {
+            p = p + T::unit(i).scale(i as i64);
+        }
+        p
+    }
 
     // NOTE: as we can get the real-valued square roots represented,
     // it means that we can represent any linear combination
@@ -495,6 +526,8 @@ pub mod constants {
 
 #[cfg(test)]
 mod tests {
+    use constants::zz_units_sum;
+
     use super::*;
     use crate::zzbase::{signum_sum_sqrt_expr_2, signum_sum_sqrt_expr_4};
 
@@ -505,8 +538,8 @@ mod tests {
 
         let sq2 = SQRT_2;
         let sq3 = 3.0_f64.sqrt();
-        let sq_penta = ZZ20_Y.sqrt();
-        let hsq_penta = 0.5 * ZZ20_Y.sqrt();
+        let sq_penta = ZZ10_Y.sqrt();
+        let hsq_penta = 0.5 * ZZ10_Y.sqrt();
         let sq5 = 5.0_f64.sqrt();
         let sq6 = 6.0_f64.sqrt();
 
@@ -584,6 +617,12 @@ mod $name {
     use super::*;
 
     type ZZi = $type;
+
+    #[test]
+    fn test_units_sum_is_complex() {
+        let p: ZZi = zz_units_sum();
+        assert!(p.is_complex());
+    }
 
     #[test]
     fn test_basic() {
@@ -714,11 +753,7 @@ mod $name {
     #[test]
     fn test_dot() {
         // get a non-trivial point
-        let mut p = ZZi::zero();
-        for i in 1..ZZi::turn() {
-            p = p + ZZi::unit(i).scale(i as i64);
-        }
-        assert!(p.is_complex());
+        let p: ZZi = zz_units_sum();
 
         // all rotations of the same point around origin
         // have the same squared distance, i.e. quadrance
@@ -838,9 +873,9 @@ mod $name {
         zz16: ZZ16,
         zz20: ZZ20,
         zz24: ZZ24,
-        // zz30: ZZ30,
+        zz30: ZZ30,
         zz32: ZZ32,
-        // zz60: ZZ60,
+        zz60: ZZ60,
     }
 
     #[test]
@@ -887,6 +922,12 @@ mod $name {
 
         let x = ZZ24::one() + (ZZ24::ccw()).powi(2);
         assert_eq!(format!("{x}"), "1+1/2i + (1/2)*sqrt(3)");
+
+        let x: ZZ10 = zz_units_sum();
+        assert_eq!(
+            format!("{x}"),
+            "-5 + (-15/4i)*sqrt(2(5-sqrt(5))) + (-5/4i)*sqrt(10(5-sqrt(5)))"
+        );
     }
 
     #[test]

@@ -22,6 +22,8 @@ pub struct ZZParams<'a, T> {
 
     /// Squares of symbolic roots.
     pub sym_roots_sqs: &'a [f64],
+    /// Labels of symbolic roots.
+    pub sym_roots_lbls: &'a [&'a str],
     /// Number of symbolic roots in array sym_roots_sqs.
     pub sym_roots_num: usize,
     /// Number of steps in this complex integer ring that makes a full rotation.
@@ -655,7 +657,7 @@ macro_rules! zz_ops_impl {
         impl Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let nums: Vec<String> = self.coeffs.into_iter().map(|x| format!("{x}")).collect();
-                let units: Vec<String> = <$t>::zz_params().sym_roots_sqs.into_iter().map(|x| format!("sqrt({x})")).collect();
+                let units: Vec<String> = <$t>::zz_params().sym_roots_lbls.into_iter().map(|x| format!("sqrt({x})")).collect();
                 let parts: Vec<String> = nums.iter().zip(units.iter()).filter(|(x, _)| x != &"0").map(|(x, y)| {
                     let is_real_unit = y == "sqrt(1)";
                     if (x == "1") {
