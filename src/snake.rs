@@ -1,6 +1,7 @@
 use crate::zzutil::intersect;
 
 use super::gaussint::GaussInt;
+use super::zz::ZZDiv12;
 use super::zzbase::ZZNum;
 use super::zzutil::{cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of};
 use num_complex::Complex;
@@ -334,12 +335,9 @@ pub mod constants {
     use super::*;
 
     /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-    pub fn spectre<T: ZZNum>() -> Snake<T> {
-        let ring = T::zz_params().full_turn_steps;
-        assert_eq!(ring % 12, 0);
-
+    pub fn spectre<T: ZZNum + ZZDiv12>() -> Snake<T> {
+        let scale = T::zz_params().full_turn_steps / 12;
         let seq_zz12: Vec<i8> = vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
-        let scale = ring / 12;
         let seq: Vec<i8> = seq_zz12.iter().map(|x| x * scale).collect();
 
         Snake::from(seq.as_slice())

@@ -470,12 +470,48 @@ zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul, zz_partial_signum_fallback);
 zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 
+pub trait ZZDiv4 {}
+pub trait ZZDiv6 {}
+pub trait ZZDiv8 {}
+pub trait ZZDiv10 {}
+pub trait ZZDiv12 {}
+
+impl ZZDiv4 for ZZ4 {}
+impl ZZDiv4 for ZZ8 {}
+impl ZZDiv4 for ZZ12 {}
+impl ZZDiv4 for ZZ16 {}
+impl ZZDiv4 for ZZ20 {}
+impl ZZDiv4 for ZZ24 {}
+impl ZZDiv4 for ZZ32 {}
+impl ZZDiv4 for ZZ60 {}
+
+impl ZZDiv6 for ZZ6 {}
+impl ZZDiv6 for ZZ12 {}
+impl ZZDiv6 for ZZ24 {}
+impl ZZDiv6 for ZZ30 {}
+impl ZZDiv6 for ZZ60 {}
+
+impl ZZDiv8 for ZZ8 {}
+impl ZZDiv8 for ZZ16 {}
+impl ZZDiv8 for ZZ24 {}
+impl ZZDiv8 for ZZ32 {}
+
+impl ZZDiv10 for ZZ10 {}
+impl ZZDiv10 for ZZ20 {}
+impl ZZDiv10 for ZZ30 {}
+impl ZZDiv10 for ZZ60 {}
+
+impl ZZDiv12 for ZZ12 {}
+impl ZZDiv12 for ZZ24 {}
+impl ZZDiv12 for ZZ60 {}
+
 pub mod constants {
     use super::*;
 
+    // Returns the sum of all units of a complex integer ring.
     pub fn zz_units_sum<T: ZZNum>() -> T {
         let mut p = T::zero();
-        for i in 1..T::turn() {
+        for i in 0..T::turn() {
             p = p + T::unit(i).scale(i as i64);
         }
         p
@@ -483,47 +519,37 @@ pub mod constants {
 
     // NOTE: as we can get the real-valued square roots represented,
     // it means that we can represent any linear combination
-    // in a ring that supports quarter turn rotation.
+    // in a ring that supports quarter turn rotation (i.e. ZZDiv4).
 
-    pub fn zz8_sqrt2() -> ZZ8 {
-        ZZ8::unit(1) + ZZ8::unit(-1)
-    }
-    pub fn zz16_sqrt2() -> ZZ16 {
-        ZZ16::unit(2) + ZZ16::unit(-2)
-    }
-    pub fn zz24_sqrt2() -> ZZ24 {
-        ZZ24::unit(3) + ZZ24::unit(-3)
-    }
-    pub fn zz32_sqrt2() -> ZZ32 {
-        ZZ32::unit(4) + ZZ32::unit(-4)
+    pub fn sqrt2<T: ZZNum + ZZDiv8>() -> T {
+        let sc = T::zz_params().full_turn_steps / 8;
+        T::unit(sc) + T::unit(-sc)
     }
 
-    pub fn zz6_isqrt3() -> ZZ6 {
+    pub fn sqrt3<T: ZZNum + ZZDiv12>() -> T {
+        let sc = T::zz_params().full_turn_steps / 12;
+        T::unit(sc) + T::unit(-sc)
+    }
+
+    pub fn sqrt5<T: ZZNum + ZZDiv10>() -> T {
+        let sc = T::zz_params().full_turn_steps / 10;
+        (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - T::one()
+    }
+
+    pub fn sqrt6<T: ZZNum + ZZDiv8 + ZZDiv12>() -> T {
+        let sc = T::zz_params().full_turn_steps / 24;
+        (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
+    }
+
+    // misc. irregular
+    pub fn isqrt3() -> ZZ6 {
         ZZ6::unit(1) + ZZ6::unit(2)
     }
-    pub fn zz12_sqrt3() -> ZZ12 {
-        ZZ12::unit(1) + ZZ12::unit(-1)
-    }
-    pub fn zz24_sqrt3() -> ZZ24 {
-        ZZ24::unit(2) + ZZ24::unit(-2)
-    }
-
     pub fn zz10_isqrt_penta() -> ZZ10 {
-        ZZ10::unit(1) * ZZ10::from(4) - ZZ10::one() - zz10_sqrt5()
+        ZZ10::unit(1) * ZZ10::from(4) - ZZ10::one() - sqrt5()
     }
     pub fn zz20_half_sqrt_penta() -> ZZ20 {
         ZZ20::unit(3) + ZZ20::unit(-3)
-    }
-
-    pub fn zz10_sqrt5() -> ZZ10 {
-        (ZZ10::unit(1) + ZZ10::unit(-1)) * ZZ10::from(2) - ZZ10::one()
-    }
-    pub fn zz20_sqrt5() -> ZZ20 {
-        (ZZ20::unit(2) + ZZ20::unit(-2)) * ZZ20::from(2) - ZZ20::one()
-    }
-
-    pub fn zz24_sqrt6() -> ZZ24 {
-        (ZZ24::unit(1) + ZZ24::unit(-1)) * ZZ24::from(2) - zz24_sqrt2()
     }
 }
 
@@ -546,22 +572,27 @@ mod tests {
         let sq5 = 5.0_f64.sqrt();
         let sq6 = 6.0_f64.sqrt();
 
-        assert_eq!(zz8_sqrt2().complex().re, sq2);
-        assert_eq!(zz16_sqrt2().complex().re, sq2);
-        assert_eq!(zz24_sqrt2().complex().re, sq2);
-        assert_eq!(zz32_sqrt2().complex().re, sq2);
+        assert_eq!(sqrt2::<ZZ8>().complex().re, sq2);
+        assert_eq!(sqrt2::<ZZ16>().complex().re, sq2);
+        assert_eq!(sqrt2::<ZZ24>().complex().re, sq2);
+        assert_eq!(sqrt2::<ZZ32>().complex().re, sq2);
 
-        assert_eq!(zz6_isqrt3().complex().im, sq3);
-        assert_eq!(zz12_sqrt3().complex().re, sq3);
-        assert_eq!(zz24_sqrt3().complex().re, sq3);
+        assert_eq!(sqrt3::<ZZ12>().complex().re, sq3);
+        assert_eq!(sqrt3::<ZZ24>().complex().re, sq3);
+        assert_eq!(sqrt3::<ZZ60>().complex().re, sq3);
 
+        assert_eq!(sqrt5::<ZZ10>().complex().re, sq5);
+        assert_eq!(sqrt5::<ZZ20>().complex().re, sq5);
+        assert_eq!(sqrt5::<ZZ30>().complex().re, sq5);
+        assert_eq!(sqrt5::<ZZ60>().complex().re, sq5);
+
+        assert_eq!(sqrt6::<ZZ24>().complex().re, sq6);
+        // assert_eq!(sqrt6::<ZZ120>().complex().re, sq6);
+        // assert_eq!(sqrt6::<ZZ240>().complex().re, sq6);
+
+        assert_eq!(isqrt3().complex().im, sq3);
         assert_eq!(zz10_isqrt_penta().complex().im, sq_penta);
         assert_eq!(zz20_half_sqrt_penta().complex().re, hsq_penta);
-
-        assert_eq!(zz10_sqrt5().complex().re, sq5);
-        assert_eq!(zz20_sqrt5().complex().re, sq5);
-
-        assert_eq!(zz24_sqrt6().complex().re, sq6);
     }
 
     #[test]
@@ -885,9 +916,9 @@ mod $name {
     fn test_re_signum() {
         use super::constants::*;
 
-        let sq2 = zz24_sqrt2();
-        let sq3 = zz24_sqrt3();
-        let sq6 = zz24_sqrt6();
+        let sq2: ZZ24 = sqrt2();
+        let sq3: ZZ24 = sqrt3();
+        let sq6: ZZ24 = sqrt6();
 
         let z = Frac::zero();
         let p = Frac::one();
