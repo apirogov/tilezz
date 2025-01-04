@@ -155,6 +155,47 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug
     sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
 }
 
+/// This implementation uses f64 (works in all ZZ rings).
+pub fn zz_partial_signum_fallback<ZZ: ZZNum>(val: &ZZ) -> Frac {
+    let val = val.complex().re;
+    if val.is_zero() {
+        Frac::zero()
+    } else {
+        Frac::from_f64(val.signum()).unwrap()
+    }
+}
+
+/// Trivial if there is just one term in the expression,
+/// regardless of its symbolic root (which usually will be 1).
+pub fn zz_partial_signum_1_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
+    let cs = val.zz_coeffs();
+
+    cs[0].real.signum()
+}
+
+pub fn zz_partial_signum_2_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
+    let ftoi = |f| Frac::from_f64(f).unwrap();
+    let cs = val.zz_coeffs();
+    let rs = ZZ::zz_params().sym_roots_sqs;
+
+    let (a, b) = (cs[0].real, cs[1].real);
+    let (m, n) = (ftoi(rs[0]), ftoi(rs[1]));
+    signum_sum_sqrt_expr_2(a, m, b, n)
+}
+
+pub fn zz_partial_signum_4_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
+    let cs: Vec<Frac> = val.zz_coeffs().iter().map(|x| x.real).collect();
+    let rs: Vec<Frac> = ZZ::zz_params()
+        .sym_roots_sqs
+        .iter()
+        .map(|r| Frac::from_f64(*r).unwrap())
+        .collect();
+
+    let (a, b, c, d) = (cs[0], cs[1], cs[2], cs[3]);
+    let (k, m, n, l) = (rs[0], rs[1], rs[2], rs[3]);
+    signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l)
+}
+
 pub trait ZZBase<
     T: Sized
         + Signed
@@ -305,86 +346,13 @@ pub trait ZZBase<
         (Self::new(&cs_x), Self::new(&cs_y))
     }
 
-    // --------
-
-    /// This implementation uses f64 (works in all ZZ rings).
-    fn zz_partial_signum_fallback(&self) -> T
-    where
-        Self: ZZNum,
-    {
-        let val = <Self as ZZBase<T>>::complex(self).re;
-        if val.is_zero() {
-            T::zero()
-        } else {
-            T::from_f64(val.signum()).unwrap()
-        }
-    }
-
-    /// Trivial if there is just one term in the expression,
-    /// regardless of its symbolic root (which usually will be 1).
-    fn zz_partial_signum_1_sym(&self) -> T
-    where
-        Self: ZZNum,
-    {
-        let cs = <Self as ZZBase<T>>::zz_coeffs(self);
-
-        cs[0].real.signum()
-    }
-
-    fn zz_partial_signum_2_sym(&self) -> T
-    where
-        Self: ZZNum,
-    {
-        let ftoi = |f| T::from_f64(f).unwrap();
-        let cs = <Self as ZZBase<T>>::zz_coeffs(self);
-        let rs = <Self as ZZBase<T>>::zz_params().sym_roots_sqs;
-
-        let (a, b) = (cs[0].real, cs[1].real);
-        let (m, n) = (ftoi(rs[0]), ftoi(rs[1]));
-        signum_sum_sqrt_expr_2(a, m, b, n)
-    }
-
-    fn zz_partial_signum_4_sym(&self) -> T
-    where
-        Self: ZZNum,
-    {
-        let cs: Vec<T> = <Self as ZZBase<T>>::zz_coeffs(self)
-            .iter()
-            .map(|x| x.real)
-            .collect();
-        let rs: Vec<T> = <Self as ZZBase<T>>::zz_params()
-            .sym_roots_sqs
-            .iter()
-            .map(|r| T::from_f64(*r).unwrap())
-            .collect();
-
-        let (a, b, c, d) = (cs[0], cs[1], cs[2], cs[3]);
-        let (k, m, n, l) = (rs[0], rs[1], rs[2], rs[3]);
-        signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l)
-    }
-
     /// Return the sign of the real part of the value.
     /// Note that ZZ cannot not support Signed trait in general.
+    ///
+    /// Implementation depends on the underlying ring.
     fn re_signum(&self) -> T
     where
-        Self: ZZNum,
-    {
-        match <Self as ZZBase<T>>::zz_params().sym_roots_num {
-            // ZZ4
-            1 => <Self as ZZBase<T>>::zz_partial_signum_1_sym(&self),
-            // ZZ6, ZZ8, ZZ12
-            2 => <Self as ZZBase<T>>::zz_partial_signum_2_sym(&self),
-            4 => match <Self as ZZBase<T>>::zz_params().full_turn_steps {
-                // ZZ24
-                24 => <Self as ZZBase<T>>::zz_partial_signum_4_sym(&self),
-                // ZZ10 and ZZ20 have non-integers as sym. roots!
-                _ => <Self as ZZBase<T>>::zz_partial_signum_fallback(&self),
-            },
-            _ => <Self as ZZBase<T>>::zz_partial_signum_fallback(&self),
-        }
-    }
-
-    // --------
+        Self: ZZNum;
 
     /// Get (a, b, c) for line ax + by + c = 0 based on two points.
     fn line_through(&self, other: &Self) -> (Self, Self, Self)
@@ -537,7 +505,7 @@ pub trait ZZNum: ZZBase<Frac> + InnerIntType + ComplexIntRing + Display {}
 
 #[macro_export]
 macro_rules! zz_base_impl {
-    ($name:ident, $params:ident, $mul_func:ident) => {
+    ($name:ident, $params:ident, $mul_func:ident, $re_signum_func:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name {
             coeffs: [GInt; $params.sym_roots_num],
@@ -577,6 +545,14 @@ macro_rules! zz_base_impl {
             #[inline]
             fn zz_mul_arrays(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
                 $mul_func(x, y)
+            }
+
+            #[inline]
+            fn re_signum(&self) -> Frac
+            where
+                Self: ZZNum,
+            {
+                $re_signum_func(self)
             }
 
             #[inline]

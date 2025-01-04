@@ -1,5 +1,8 @@
 use super::traits::{Ccw, InnerIntType, IntRing};
-use super::zzbase::{Frac, GInt, ZZBase, ZZNum, ZZParams};
+use super::zzbase::{
+    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
+    zz_partial_signum_fallback, Frac, GInt, ZZBase, ZZNum, ZZParams,
+};
 use crate::traits::ComplexIntRing;
 use crate::{zz_base_impl, zz_ops_impl};
 
@@ -454,17 +457,17 @@ fn zz60_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
 // --------
 
 // generate boilerplate implementations
-zz_base_impl!(ZZ4, ZZ4_PARAMS, zz4_mul);
-zz_base_impl!(ZZ6, ZZ6_PARAMS, zz6_mul);
-zz_base_impl!(ZZ8, ZZ8_PARAMS, zz8_mul);
-zz_base_impl!(ZZ10, ZZ10_PARAMS, zz10_mul);
-zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul);
-zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul);
-zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul);
-zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul);
-zz_base_impl!(ZZ30, ZZ30_PARAMS, zz30_mul);
-zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul);
-zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul);
+zz_base_impl!(ZZ4, ZZ4_PARAMS, zz4_mul, zz_partial_signum_1_sym);
+zz_base_impl!(ZZ6, ZZ6_PARAMS, zz6_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ8, ZZ8_PARAMS, zz8_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ10, ZZ10_PARAMS, zz10_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul, zz_partial_signum_4_sym);
+zz_base_impl!(ZZ30, ZZ30_PARAMS, zz30_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 
 pub mod constants {
