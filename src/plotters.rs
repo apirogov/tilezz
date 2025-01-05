@@ -1,4 +1,4 @@
-use crate::plotutils::{tile_center, tile_viewport};
+use crate::plotutils::{tile_mass_center, tile_viewport};
 
 use num_traits::Zero;
 use plotters::prelude::*;
@@ -59,7 +59,7 @@ pub fn plot_tile_with<'a, 'b, DB: DrawingBackend>(
     // we want to center all rendered texts
     let centered = Pos::new(HPos::Center, VPos::Center);
     // square view centered on tile
-    let vp @ ((min_x, min_y), (max_x, max_y)) = tile_viewport(tile);
+    let ((min_x, min_y), (max_x, max_y)) = tile_viewport(tile);
 
     // prepare coordinate system
     let mut chart = cb.build_cartesian_2d(min_x..max_x, min_y..max_y).unwrap();
@@ -105,7 +105,7 @@ pub fn plot_tile_with<'a, 'b, DB: DrawingBackend>(
             return EmptyElement::at(c) + Text::new(format!("{tile_lbl}"), (0, 0), &tile_lbl_style);
         };
         let tile_lbl_series =
-            PointSeries::of_element(vec![tile_center(&vp)], 20, BLACK, &tile_lbl_func);
+            PointSeries::of_element(vec![tile_mass_center(&tile)], 20, BLACK, &tile_lbl_func);
         chart.draw_series(tile_lbl_series).unwrap();
     } else {
     };

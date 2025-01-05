@@ -31,3 +31,14 @@ pub fn tile_viewport(pts: &[(f64, f64)]) -> ((f64, f64), (f64, f64)) {
 pub fn tile_center(((min_x, min_y), (max_x, max_y)): &((f64, f64), (f64, f64))) -> (f64, f64) {
     (min_x + (max_x - min_x) / 2., min_y + (max_y - min_y) / 2.)
 }
+
+/// Returns the center of the tile based on its vertex points.
+pub fn tile_mass_center(pts: &[(f64, f64)]) -> (f64, f64) {
+    let n = pts.len() as f64;
+    let (mut cx, mut cy) = (0.0, 0.0);
+    for (x, y) in pts {
+        cx += x;
+        cy += y;
+    }
+    (cx / n, cy / n)
+}

@@ -51,6 +51,26 @@ fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
     (canonical, offset)
 }
 
+/// Given two slices of sequences, return length of longest match.
+///
+fn match_length(x: &[i8], y: &[i8]) -> usize {
+    let max_len = x.len().min(y.len());
+    if max_len < 2 {
+        // at least one sequence has
+        // no nodes or only single node -> no segment
+        0
+    } else {
+        // we start checking at the 2nd point
+        for i in 1..max_len {
+            if x[i] != y[i] {
+                // first non-complementary angle -> end of match
+                return i;
+            }
+        }
+        1
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Rat<T: ZZNum> {
     /// Even though we don't need to use the underlying complex integer ring,
@@ -90,10 +110,16 @@ impl<T: ZZNum> Rat<T> {
         Self::from_seq_unsafe(snake.angles())
     }
 
+    fn revcomp_seq(&self, offset: i64) -> Vec<i8> {
+        // NOTE: needed off-by-one offset to ensure that
+        // the first angle refers to the same node as before
+        revcomp(self.slice_from(offset + 1, self.len()))
+    }
+
     /// Return chirally reflected description of the same shape
     /// (its sequence is equal to the reverse complement)
     pub fn reflect(&self) -> Self {
-        Self::from_seq_unsafe(revcomp(self.seq()).as_slice())
+        Self::from_seq_unsafe(self.revcomp_seq(0).as_slice())
     }
 
     // ----
@@ -132,19 +158,59 @@ impl<T: ZZNum> Rat<T> {
 
     /// Return a slice of the angle sequence with length n, starting
     /// at given offset index with respect to the canonical sequence.
-    pub fn slice_from_canonical(&self, start: usize, len: usize) -> &[i8] {
+    fn slice_from_canonical(&self, start: usize, len: usize) -> &[i8] {
         assert!(len <= self.len());
         &self.angles[start..(start + len)]
     }
 
     /// Return a slice of the angle sequence with length n.
+    pub fn slice_from(&self, start: i64, len: usize) -> &[i8] {
+        self.slice_from_canonical(
+            ((self.cyc as i64 + start) % self.len() as i64) as usize,
+            len,
+        )
+    }
+
+    /// Return a slice of the angle sequence with length n.
     pub fn slice(&self, len: usize) -> &[i8] {
-        self.slice_from_canonical(self.cyc, len)
+        self.slice_from(0, len)
     }
 
     /// Return the outer angle sequence.
     pub fn seq(&self) -> &[i8] {
         self.slice(self.len())
+    }
+
+    // ----
+
+    /// Return the maximal length of a match described by the given pair of indices.
+    /// Note that this still does NOT mean that the tiles can be legally glued along the match.
+    pub fn match_length(&self, (self_start, other_end): (i64, i64), other: &Self) -> usize {
+        let x = self.slice_from(self_start, self.len());
+        let y = other.revcomp_seq(other_end);
+        match_length(x, y.as_slice())
+    }
+
+    /// Return a new rat resulting from glueing two rats along a common boundary
+    /// that is given by a pair of indices.
+    pub fn glue(&self, indices @ (self_start, other_end): (i64, i64), other: &Self) -> Self {
+        let mlen = self.match_length(indices, other); // maximal match length
+
+        // get boundaries without the match (but keep the endpoints)
+        let x = self.slice_from(self_start + mlen as i64, self.len() - mlen + 1);
+        let y = self.slice_from(other_end, other.len() - mlen + 1);
+
+        // concatenate the sequences (without duplicating the endpoints)
+        let mut glued_seq: Vec<i8> = x[..x.len() - 1].to_vec();
+        glued_seq.extend_from_slice(&y[..y.len() - 1]);
+
+        // fix glued vertex angles at the transition of the boundaries
+        let a_yx = x[0] + y[y.len() - 1] - T::hturn();
+        let a_xy = y[0] + x[x.len() - 1] - T::hturn();
+        glued_seq[0] = a_yx;
+        glued_seq[x.len() - 1] = a_xy;
+
+        Self::new(&Snake::from(glued_seq.as_slice()))
     }
 
     // ----
@@ -181,8 +247,8 @@ impl<T: ZZNum> Display for Rat<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snake::constants::spectre;
-    use crate::zz::{ZZ12, ZZ24};
+    use crate::snake::constants::{hexagon, spectre};
+    use crate::zz::ZZ12;
 
     #[test]
     fn test_lex_min_rot() {
@@ -190,6 +256,21 @@ mod tests {
         assert_eq!(lex_min_rot(&[1, 3, 2, 1, 2, 1, 2, 0]), 7);
         assert_eq!(lex_min_rot(&[1, 3, 2, 1, -2, 1, 2, 0]), 4);
         assert_eq!(lex_min_rot(&[1, 1, 2, 1, 1, 1, 2, 1, 1, 2, 1, 1]), 10);
+    }
+
+    #[test]
+    fn test_match_length() {
+        // degenerate cases
+        assert_eq!(match_length(&[1, 2, 3], &[]), 0);
+        assert_eq!(match_length(&[1, 2, 3], &[1]), 0);
+
+        // match cannot be longer than shortest sequence
+        assert_eq!(match_length(&[1, 2, 3], &[1, 2]), 1);
+        // the end points do not matter
+        assert_eq!(match_length(&[1, 2, 3], &[4, 5]), 1);
+        // the inside points must be equal
+        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, -3, 6]), 2);
+        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, 3, 6]), 3);
     }
 
     #[test]
@@ -230,17 +311,64 @@ mod tests {
     }
 
     #[test]
+    fn test_reflect() {
+        let r: Rat<ZZ12> = Rat::new(&spectre());
+        assert!(r != r.reflect());
+
+        // twice reflect -> restores original sequence + offset
+        assert_eq!(r.reflect().reflect().seq(), r.seq());
+
+        // reflecting the sequence keeps the current node constant
+        // (needs off-by-one offset in implementation)
+        let exp: &[i8] = &[-3, 2, -3, 2, -3, -2, 3, -2, -3, -2, 3, -2, 0, -2];
+        assert_eq!(r.reflect().seq(), exp);
+    }
+
+    #[test]
+    fn test_slice() {
+        let r: Rat<ZZ12> = Rat::new(&spectre()).canonical();
+
+        assert_eq!(r.slice(0).len(), 0);
+        assert_eq!(r.slice(1).len(), 1);
+        assert_eq!(r.slice(r.len()), r.seq());
+        assert_eq!(r.slice_from(2, 3), &r.seq()[2..5]);
+    }
+
+    #[test]
     fn test_cycle() {
-        let r: Rat<ZZ24> = Rat::new(&spectre()).canonical();
+        let r: Rat<ZZ12> = Rat::new(&spectre()).canonical();
 
         assert!(r.seq() != r.cycled(1).seq());
         assert_eq!(r.seq(), r.cycled(1).cycled(-3).cycled(2).seq());
-        assert_eq!(r.slice_from_canonical(5, 3), r.cycled(5).slice(3));
+        assert_eq!(r.cycled(7).slice_from(-2, 3), r.slice_from(5, 3));
 
         // offset cycling does not affect equivalence, it is just convenience
         assert_eq!(r, r.cycled(2));
 
         // revcomp works respecting the current start offset
         assert_eq!(r.cycled(2), r.cycled(2).reflect().reflect());
+    }
+
+    #[test]
+    fn test_rat_match_length() {
+        // test manually verified match combinations
+        let r: Rat<ZZ12> = Rat::new(&spectre());
+        assert_eq!(r.match_length((0, 0), &r), 2);
+        assert_eq!(r.match_length((2, 0), &r), 4);
+        assert_eq!(r.match_length((2, 6), &r), 1);
+    }
+
+    #[test]
+    fn test_glue() {
+        let h: Rat<ZZ12> = Rat::new(&hexagon());
+        let t1 = h.glue((1, 5), &h);
+        assert_eq!(t1.seq(), &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2]);
+
+        let r: Rat<ZZ12> = Rat::new(&spectre());
+        let t2 = r.glue((2, 0), &r);
+        let mystic = &[
+            0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
+        ];
+        assert_eq!(t2.seq(), mystic);
     }
 }
