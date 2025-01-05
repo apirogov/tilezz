@@ -23,6 +23,14 @@ pub fn normalize_angle<T: ZZNum>(angle: i8) -> i8 {
     }
 }
 
+/// Rescale the angle sequence from one complex integer ring to another.
+/// Assumes that the target ring contains the original ring of the sequence.
+pub fn upscale_angles<T: ZZNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
+    assert_eq!(T::zz_params().full_turn_steps % src_ring, 0);
+    let scale = T::zz_params().full_turn_steps / src_ring;
+    angles.iter().map(|x| x * scale).collect()
+}
+
 // Unit square lattice utils
 // -------------------------
 

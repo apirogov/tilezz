@@ -713,6 +713,28 @@ mod $name {
         assert_eq!(-ZZi::one() * ZZi::one(), -ZZi::one());
         assert_eq!(ZZi::one() * (-ZZi::one()), -ZZi::one());
         assert_eq!((-ZZi::one()) * (-ZZi::one()), ZZi::one());
+
+        // check result numerically (simplifies debugging of multiplication)
+        let r = ZZi::zz_params().sym_roots_num;
+        for i in 0..r {
+            println!("------------");
+            for j in 0..r {
+                println!("----");
+                println!("l={i} r={j}");
+                let mut vec1: Vec<GInt> = vec![0.into(); r];
+                let mut vec2: Vec<GInt> = vec![0.into(); r];
+                vec1[i] = 1.into();
+                vec2[j] = 1.into();
+                let v1 = ZZi::new(vec1.as_slice());
+                let v2 = ZZi::new(vec2.as_slice());
+
+
+                let exp = v1.complex().re * v2.complex().re;
+                let prod = (v1 * v2).complex().re;
+                println!("x={}\ny={}\nx*y={}", v1, v2, v1 * v2);
+                assert!((exp-prod).abs() < 1e-8);
+            }
+        }
     }
 
     #[test]

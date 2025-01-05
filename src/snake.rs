@@ -1,9 +1,11 @@
 use crate::zzutil::intersect;
 
 use super::gaussint::GaussInt;
-use super::zz::ZZDiv12;
+use super::zz::{ZZDiv12, ZZDiv4, ZZDiv6};
 use super::zzbase::ZZNum;
-use super::zzutil::{cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of};
+use super::zzutil::{
+    cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of, upscale_angles,
+};
 use num_complex::Complex;
 use num_traits::{ToPrimitive, Zero};
 use std::collections::HashMap;
@@ -13,10 +15,17 @@ use std::fmt::Display;
 /// Representation of a turtle (i.e. an oriented point).
 pub struct Turtle<T: ZZNum> {
     /// Position in the complex integer plane.
-    pub position: T,
+    pub pos: T,
 
     /// Facing direction (interpreted modulo full turn).
-    pub direction: i8,
+    pub dir: i8,
+}
+
+impl<T: ZZNum> Turtle<T> {
+    /// Create a new turtle with given location and orientation.
+    pub fn new(pos: T, dir: i8) -> Self {
+        Self { pos, dir }
+    }
 }
 
 impl<T: ZZNum> Default for Turtle<T> {
@@ -24,8 +33,8 @@ impl<T: ZZNum> Default for Turtle<T> {
     /// and looking in the direction of the positive real axis.
     fn default() -> Self {
         Turtle {
-            position: T::zero(),
-            direction: 0,
+            pos: T::zero(),
+            dir: 0,
         }
     }
 }
@@ -143,8 +152,8 @@ impl<T: ZZNum> Snake<T> {
     /// The tail of a snake is always fixed at the origin.
     pub fn head(&self) -> Turtle<T> {
         Turtle {
-            position: self.offset(),
-            direction: self.direction(),
+            pos: self.offset(),
+            dir: self.direction(),
         }
     }
 
@@ -182,8 +191,8 @@ impl<T: ZZNum> Snake<T> {
     /// Return a polyline by tracing out snake with given turtle.
     pub fn to_polyline(&self, turtle: &Turtle<T>) -> Vec<T> {
         let mut result = Self::new();
-        *result.points.last_mut().unwrap() = turtle.position;
-        result.ang_sum = turtle.direction as i64;
+        *result.points.last_mut().unwrap() = turtle.pos;
+        result.ang_sum = turtle.dir as i64;
 
         for angle in self.angles.iter() {
             result.add_unsafe(*angle);
@@ -334,13 +343,26 @@ impl<T: ZZNum> Display for Snake<T> {
 pub mod constants {
     use super::*;
 
+    /// Return sequence of a square tile over a compatible ring (divisible by 4).
+    pub fn square<T: ZZNum + ZZDiv4>() -> Snake<T> {
+        Snake::from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice())
+    }
+
+    /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
+    pub fn triangle<T: ZZNum + ZZDiv6>() -> Snake<T> {
+        Snake::from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice())
+    }
+
+    /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
+    pub fn hexagon<T: ZZNum + ZZDiv6>() -> Snake<T> {
+        Snake::from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice())
+    }
+
     /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
     pub fn spectre<T: ZZNum + ZZDiv12>() -> Snake<T> {
-        let scale = T::zz_params().full_turn_steps / 12;
-        let seq_zz12: Vec<i8> = vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
-        let seq: Vec<i8> = seq_zz12.iter().map(|x| x * scale).collect();
-
-        Snake::from(seq.as_slice())
+        Snake::from(
+            upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
+        )
     }
 }
 
@@ -496,8 +518,8 @@ mod tests {
         assert_eq!(s.len(), 7);
         assert_eq!(s.angle_sum(), 15);
         assert_eq!(s.direction(), 3);
-        assert_eq!(s.head().direction, s.direction());
-        assert_eq!(s.head().position, s.offset());
+        assert_eq!(s.head().dir, s.direction());
+        assert_eq!(s.head().pos, s.offset());
 
         // rep. polyline = instantiated with default turtle
         let l_exp: Vec<ZZ12> = s.representative().to_vec();
@@ -506,12 +528,12 @@ mod tests {
 
         // check instantiation with a non-trivial turtle
         let t = Turtle {
-            position: ZZ12::ccw().scale(7),
-            direction: -2,
+            pos: ZZ12::ccw().scale(7),
+            dir: -2,
         };
         let l2_exp: Vec<ZZ12> = l_exp
             .iter()
-            .map(|pt| (*pt * ZZ12::unit(t.direction)) + t.position)
+            .map(|pt| (*pt * ZZ12::unit(t.dir)) + t.pos)
             .collect();
         let l2 = s.to_polyline(&t);
         assert_eq!(l2, l2_exp);

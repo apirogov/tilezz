@@ -1,49 +1,39 @@
 use plotters::prelude::*;
-use tilezz::plotters::plot_tile;
+use tilezz::plotters::{plot_tile, TileStyle};
+use tilezz::rat::Rat;
 use tilezz::snake::constants::spectre;
-use tilezz::snake::{Snake, Turtle};
-use tilezz::traits::Ccw;
-use tilezz::zz::{ZZ12, ZZ60};
-use tilezz::zzbase::{GInt, ZZBase};
+use tilezz::snake::Turtle;
+use tilezz::zz::ZZ12;
+use tilezz::zzbase::ZZBase;
+
+fn my_custom_style<'a>() -> TileStyle<'a> {
+    // FIXME: add builder pattern for convenient tile styling?
+    let mut st = TileStyle::default();
+    st.label_font = st.label_font.color(&BLUE);
+    st.border_style = st.border_style.stroke_width(5);
+    st.fill_style.color = TRANSPARENT;
+    st.node_size = 0;
+    st.node_font = st.node_font.color(&RED);
+    st.node_font.font = st.node_font.font.resize(40.);
+    return st;
+}
 
 fn main() {
-    let p = ZZ60::ccw();
-    println!("{}", p * p);
-
-    //                               x  x  x <- incorrect result
-    // let v1 = ZZ30::new(&[o, o, o, z, z, z, o, o]);
-    for i in 0..8 {
-        println!("------------");
-        for j in 0..8 {
-            println!("----");
-            println!("l={i} r={j}");
-            let mut vec1: Vec<GInt> = vec![0.into(); 8];
-            let mut vec2: Vec<GInt> = vec![0.into(); 8];
-            vec1[i] = 1.into();
-            vec2[j] = 1.into();
-            let v1 = ZZ60::new(vec1.as_slice());
-            let v2 = ZZ60::new(vec2.as_slice());
-
-            println!("{} {}", (v1.complex() * v2.complex()), (v1 * v2).complex());
-            println!("{}\n{}\n{}", v1, v2, v1 * v2);
-        }
-    }
-
-    let s: Snake<ZZ12> = spectre();
-
-    let tile = s.to_polyline_f64(&Turtle::default());
-
     let root = BitMapBackend::new("test.png", (1000, 1000)).into_drawing_area();
     let _ = root.fill(&WHITE);
     let root = root.margin(10, 10, 10, 10);
 
-    plot_tile(
-        &mut ChartBuilder::on(&root)
-            .caption("Spectre tile", ("sans-serif", 40).into_font())
-            .x_label_area_size(20)
-            .y_label_area_size(40),
-        &tile,
-    );
+    let tile: Rat<ZZ12> = Rat::new(&spectre());
+    let pts = tile.to_polyline_f64(Turtle::new(0.into(), -2));
+    plot_tile(&root, &pts, &TileStyle::default().with_label("The Spectre"));
+
+    let _pts2 = tile
+        .reflect()
+        .cycle(5)
+        .to_polyline_f64(Turtle::new(ZZ12::from(3) + ZZ12::one_i().scale(3), 0));
+
+    // FIXME: render multiple tiles in one plot (take a sequence of pairs of points and styles)
+    // plot_tile(&root, &pts2, &my_custom_style());
 
     root.present().unwrap();
 }
