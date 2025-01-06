@@ -1,9 +1,10 @@
-use crate::plotutils::{tile_mass_center, tile_viewport};
+use crate::plotutils::{tile_bounds, tile_mass_center, tile_viewport};
 
 use num_traits::Zero;
 use plotters::prelude::*;
 use plotters::{
-    coord::{types::RangedCoordf64, Shift},
+    coord::types::RangedCoordf64,
+    coord::Shift,
     style::text_anchor::{HPos, Pos, VPos},
 };
 
@@ -16,6 +17,7 @@ pub struct TileStyle<'a> {
     pub node_size: i32,
 
     pub node_labels: bool,
+    pub node_zero_only: bool,
     pub node_font: TextStyle<'a>,
 
     pub label: Option<String>,
@@ -27,6 +29,8 @@ impl<'a> TileStyle<'a> {
         self.label = Some(lbl.to_string());
         self
     }
+
+    // TODO: add more builder-pattern methods for convenient tile styling?
 }
 
 impl<'a> Default for TileStyle<'a> {
@@ -39,6 +43,7 @@ impl<'a> Default for TileStyle<'a> {
             node_size: 10,
 
             node_labels: true,
+            node_zero_only: false,
             node_font: ("sans-serif", 16, FontStyle::Bold).into_font().color(&BLUE),
 
             label: None,
@@ -49,21 +54,14 @@ impl<'a> Default for TileStyle<'a> {
     }
 }
 
-/// Plot a tile into a chart based on the pre-configured custom
-/// chart builder (which can be used to e.g. add axes and a caption).
-pub fn plot_tile_with<'a, 'b, DB: DrawingBackend>(
-    cb: &mut ChartBuilder<DB>,
+/// Render a tile into a prepared chart.
+fn plot_tile_into<'a, DB: DrawingBackend>(
+    chart: &mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
     tile: &[(f64, f64)],
     style: &TileStyle,
-) -> ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>> {
+) {
     // we want to center all rendered texts
     let centered = Pos::new(HPos::Center, VPos::Center);
-    // square view centered on tile
-    let ((min_x, min_y), (max_x, max_y)) = tile_viewport(tile);
-
-    // prepare coordinate system
-    let mut chart = cb.build_cartesian_2d(min_x..max_x, min_y..max_y).unwrap();
-    chart.configure_mesh().draw().unwrap();
 
     // draw segments (border and/or fill)
     let area =
@@ -72,20 +70,28 @@ pub fn plot_tile_with<'a, 'b, DB: DrawingBackend>(
 
     // draw vertex marker circles
     if !style.node_size.is_zero() {
+        let mut pts = tile.to_vec();
+        if style.node_zero_only {
+            pts.truncate(1);
+        }
+
         let node_func = |c: (f64, f64), s: i32, st: ShapeStyle| {
             EmptyElement::at(c) + Circle::<(i32, i32), i32>::new((0.into(), 0.into()), s.into(), st)
         };
-        let nodes =
-            PointSeries::of_element(tile.to_vec(), style.node_size, style.node_style, &node_func);
+        let nodes = PointSeries::of_element(pts, style.node_size, style.node_style, &node_func);
         chart.draw_series(nodes).unwrap();
     }
 
     // draw vertex labels (i.e. show indices of vertices)
     if style.node_labels {
-        let node_lbl_style: TextStyle = style.node_font.pos(centered);
         let mut ixd_pts: Vec<(usize, (f64, f64))> =
             tile.iter().enumerate().map(|(i, c)| (i, *c)).collect();
         ixd_pts.pop(); // drop last point (same as first)
+        if style.node_zero_only {
+            ixd_pts.truncate(1);
+        }
+
+        let node_lbl_style: TextStyle = style.node_font.pos(centered);
         let node_lbl_func = |(idx, c): (usize, (f64, f64)), _: i32, _: ShapeStyle| {
             EmptyElement::at(c) + Text::new(format!("{idx}"), (0, 0), &node_lbl_style)
         };
@@ -105,19 +111,73 @@ pub fn plot_tile_with<'a, 'b, DB: DrawingBackend>(
             return EmptyElement::at(c) + Text::new(format!("{tile_lbl}"), (0, 0), &tile_lbl_style);
         };
         let tile_lbl_series =
-            PointSeries::of_element(vec![tile_mass_center(&tile)], 20, BLACK, &tile_lbl_func);
+            PointSeries::of_element(vec![tile_mass_center(tile)], 20, BLACK, &tile_lbl_func);
         chart.draw_series(tile_lbl_series).unwrap();
-    } else {
+    }
+}
+
+/// Prepare a chart with a coordinate system of sufficient size for the given tiles.
+/// Returns the chart and a callback function to render the tiles.
+/// This can be used to e.g. customize how the mesh is rendered.
+pub fn tile_chart<'a, DB: DrawingBackend>(
+    cb: &mut ChartBuilder<DB>,
+    tiles: &'a [(&[(f64, f64)], &TileStyle)],
+) -> (
+    ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
+    impl FnOnce(&mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>) -> (),
+) {
+    // compute square view centered on tile(s)
+    let all_points = tiles.iter().map(|(tile, _)| *tile).flatten();
+    let ((min_x, min_y), (max_x, max_y)) = tile_viewport(tile_bounds(all_points));
+
+    let chart = cb.build_cartesian_2d(min_x..max_x, min_y..max_y).unwrap();
+    let t = tiles.to_vec();
+
+    // FIXME: as I did not figure out how to make a zero-argument closure,
+    // I have to force the user to give me the chart again.
+    // To ensure that the chart is at least compatible, the ranges are checked.
+    let x_range = chart.x_range();
+    let y_range = chart.y_range();
+
+    // Plotting function to be called when the mesh and chart are set up as desired.
+    let plot_func = move |c: &mut plotters::chart::ChartContext<
+        'a,
+        DB,
+        plotters::prelude::Cartesian2d<RangedCoordf64, RangedCoordf64>,
+    >| {
+        assert_eq!(c.x_range(), x_range);
+        assert_eq!(c.y_range(), y_range);
+        for (tile, style) in t {
+            plot_tile_into(c, tile, style);
+        }
     };
 
+    (chart, plot_func)
+}
+
+/// Plot a sequence of tiles into a chart that is constructed using the given chart builder.
+pub fn plot_tiles<'a, DB: DrawingBackend>(
+    cb: &mut ChartBuilder<DB>,
+    tiles: &'a [(&[(f64, f64)], &TileStyle)],
+) -> ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>> {
+    let (mut chart, plot_func) = tile_chart(cb, tiles);
+
+    chart
+        .configure_mesh()
+        .disable_mesh()
+        .disable_axes()
+        .draw()
+        .unwrap();
+
+    plot_func(&mut chart);
     chart
 }
 
-/// Plot a chart depicting a tile using default chart settings.
-pub fn plot_tile<'a, 'b, DB: DrawingBackend>(
+/// Plot a single tile into a bare-bones chart. Check the other plotting functions for more flexibility.
+pub fn plot_tile<'a, DB: DrawingBackend>(
     da: &DrawingArea<DB, Shift>,
     tile: &[(f64, f64)],
     style: &TileStyle,
-) -> ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>> {
-    plot_tile_with(&mut ChartBuilder::on(da), &tile, &style)
+) {
+    plot_tiles(&mut ChartBuilder::on(&da), &[(tile, style)]);
 }

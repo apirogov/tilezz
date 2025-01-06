@@ -52,7 +52,6 @@ fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
 }
 
 /// Given two slices of sequences, return length of longest match.
-///
 fn match_length(x: &[i8], y: &[i8]) -> usize {
     let max_len = x.len().min(y.len());
     if max_len < 2 {

@@ -1,57 +1,68 @@
 use plotters::prelude::*;
-use tilezz::plotters::{plot_tile_with, TileStyle};
+use tilezz::plotters::{plot_tile, tile_chart, TileStyle};
 use tilezz::rat::Rat;
 use tilezz::snake::constants::spectre;
 use tilezz::snake::Turtle;
 use tilezz::zz::ZZ12;
 
-// fn my_custom_style<'a>() -> TileStyle<'a> {
-//     // FIXME: add builder pattern for convenient tile styling?
-//     let mut st = TileStyle::default();
-//     st.label_font = st.label_font.color(&BLUE);
-//     st.border_style = st.border_style.stroke_width(5);
-//     st.fill_style.color = TRANSPARENT;
-//     st.node_size = 0;
-//     st.node_font = st.node_font.color(&RED);
-//     st.node_font.font = st.node_font.font.resize(40.);
-//     return st;
-// }
+// Return a customized tile style.
+fn my_custom_style<'a>() -> TileStyle<'a> {
+    let mut st = TileStyle::default();
+    st.label_font = st.label_font.color(&RED);
+    st.border_style = st.border_style.stroke_width(5);
+    st.fill_style.color = TRANSPARENT;
+    st.node_zero_only = true;
+    st.node_size = 10;
+    st.node_style = BLUE.filled();
+    st.node_labels = false;
+    return st;
+}
 
 fn main() {
-    let root = BitMapBackend::new("test.png", (1000, 1000)).into_drawing_area();
+    let root = BitMapBackend::new("test.png", (2000, 1000)).into_drawing_area();
     let _ = root.fill(&WHITE);
     let root = root.margin(10, 10, 10, 10);
 
     // get a spectre tile
     let spectre: Rat<ZZ12> = Rat::new(&spectre());
-    // glue a copy of it to itself to get a mystic
+    // glue a copy of the spectre to itself to get a mystic
     let mystic = spectre.glue((2, 0), &spectre);
+    // take the mirror image and shift the starting point
+    let spectre_mod = spectre.reflect().cycle(5);
 
-    // TODO: implement tile patch structure that keeps the original tiles accessible
-    // let pts = mystic.to_polyline_f64(Turtle::new(0.into(), -2));
-    // plot_tile(&root, &pts, &TileStyle::default().with_label("The Spectre"));
+    // get concrete points and define styles for the tiles
+    let t1 = spectre.to_polyline_f64(Turtle::new(0.into(), -2));
+    let s1 = TileStyle::default().with_label("The Spectre");
 
+    let t2 = mystic.to_polyline_f64(Turtle::new(ZZ12::from((2, 3)), -3));
+    let s2 = TileStyle::default().with_label("The Mystic");
+
+    let t3 = spectre_mod.to_polyline_f64(Turtle::new(0.into(), -1));
+    let s3 = my_custom_style().with_label("Customized Spectre");
+
+    // TODO: implement tile patch structure that keeps the original tiles accessible/renderable individually
     // TODO: refactor snake to allow representing sequences self-intersections (optionally)
     // TODO: provide a way to initialize snake from possibly invalid slice without panic (use Result)
 
-    let pts2 = mystic.to_polyline_f64(Turtle::new(0.into(), -3));
-    plot_tile_with(
-        &mut ChartBuilder::on(&root)
+    // split the drawing area
+    let (left, right) = root.split_horizontally(1000);
+
+    // plot two tiles in the chart on the left
+    let tiles = vec![(t1.as_slice(), &s1), (t2.as_slice(), &s2)];
+    let (mut c1, plot_tiles) = tile_chart(
+        &mut ChartBuilder::on(&left)
             .caption("Custom Tile Plot", ("sans-serif", 40).into_font())
             .x_label_area_size(20)
             .y_label_area_size(40),
-        &pts2,
-        &TileStyle::default().with_label("The Mystic"),
+        tiles.as_slice(),
     );
+    c1.configure_mesh().draw().unwrap();
+    plot_tiles(&mut c1);
 
-    // let pts3 = spectre
-    //     .reflect()
-    //     .cycle(5)
-    //     .to_polyline_f64(Turtle::new(ZZ12::from(3) + ZZ12::one_i().scale(3), 0));
-    // plot_tile(&root, &pts3, &my_custom_style());
+    // plot a tile in the chart on the right
+    right.fill(&GREEN.mix(0.1)).unwrap();
+    plot_tile(&right, t3.as_slice(), &s3);
 
-    // FIXME: render multiple tiles in one plot (take a sequence of pairs of points and styles)
-    // FIXME: figure out how to align multiple charts in one drawing area
-
+    // make sure the image is actually updated
     root.present().unwrap();
 }

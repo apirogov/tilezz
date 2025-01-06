@@ -6,7 +6,8 @@ use super::zzbase::{
 use crate::traits::ComplexIntRing;
 use crate::{zz_base_impl, zz_ops_impl};
 
-use num_traits::{One, Zero};
+use num_integer::Integer;
+use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
 use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;

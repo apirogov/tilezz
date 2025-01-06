@@ -521,6 +521,14 @@ macro_rules! zz_base_impl {
             }
         }
 
+        impl<T: Integer + ToPrimitive> From<(T, T)> for $name {
+            fn from((re, im): (T, T)) -> Self {
+                let r = <GInt as InnerIntType>::IntType::from_i64(re.to_i64().unwrap()).unwrap();
+                let i = <GInt as InnerIntType>::IntType::from_i64(im.to_i64().unwrap()).unwrap();
+                Self::one().scale(r) + Self::one_i().scale(i)
+            }
+        }
+
         impl ZZBase<Frac> for $name {
             #[inline]
             fn zz_coeffs(&self) -> &[GInt] {
