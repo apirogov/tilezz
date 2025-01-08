@@ -9,6 +9,8 @@ use plotters::{
 };
 
 /// Metadata and style to be applied to a rendered tile.
+// TODO: could allow customizing border rendering with a pair of funcs (lines, segments)
+// and provide a outline style builder to simplify describing a style.
 pub struct TileStyle<'a> {
     pub fill_style: ShapeStyle,
     pub border_style: ShapeStyle,
@@ -27,6 +29,16 @@ pub struct TileStyle<'a> {
 impl<'a> TileStyle<'a> {
     pub fn with_label(mut self, lbl: &str) -> Self {
         self.label = Some(lbl.to_string());
+        self
+    }
+
+    pub fn with_fill(mut self, style: ShapeStyle) -> Self {
+        self.fill_style = style;
+        self
+    }
+
+    pub fn with_border(mut self, style: ShapeStyle) -> Self {
+        self.border_style = style;
         self
     }
 

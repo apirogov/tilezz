@@ -2,6 +2,7 @@ use plotters::prelude::*;
 use tilezz::plotters::{plot_tile, tile_chart, TileStyle};
 use tilezz::rat::Rat;
 use tilezz::snake::constants::spectre;
+use tilezz::snake::Snake;
 use tilezz::snake::Turtle;
 use tilezz::zz::ZZ12;
 
@@ -24,7 +25,7 @@ fn main() {
     let root = root.margin(10, 10, 10, 10);
 
     // get a spectre tile
-    let spectre: Rat<ZZ12> = Rat::new(&spectre());
+    let spectre: Rat<ZZ12> = Rat::try_from(&spectre()).unwrap();
     // glue a copy of the spectre to itself to get a mystic
     let mystic = spectre.glue((2, 0), &spectre);
     // take the mirror image and shift the starting point
@@ -41,8 +42,6 @@ fn main() {
     let s3 = my_custom_style().with_label("Customized Spectre");
 
     // TODO: implement tile patch structure that keeps the original tiles accessible/renderable individually
-    // TODO: refactor snake to allow representing sequences self-intersections (optionally)
-    // TODO: provide a way to initialize snake from possibly invalid slice without panic (use Result)
 
     // split the drawing area
     let (left, right) = root.split_horizontally(1000);
@@ -62,6 +61,16 @@ fn main() {
     // plot a tile in the chart on the right
     right.fill(&GREEN.mix(0.1)).unwrap();
     plot_tile(&right, t3.as_slice(), &s3);
+
+    // test unchecked snake rendering
+    let unchecked = Snake::<ZZ12>::from_slice_unchecked(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+    let unchecked_pts = unchecked.to_polyline_f64(&Turtle::default());
+    right.fill(&WHITE).unwrap();
+    plot_tile(
+        &right,
+        unchecked_pts.as_slice(),
+        &TileStyle::default().with_fill(TRANSPARENT.into()),
+    );
 
     // make sure the image is actually updated
     root.present().unwrap();

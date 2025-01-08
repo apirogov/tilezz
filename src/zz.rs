@@ -1,18 +1,24 @@
-use super::traits::{Ccw, InnerIntType, IntRing};
-use super::zzbase::{
-    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
-    zz_partial_signum_fallback, Frac, GInt, ZZBase, ZZNum, ZZParams,
-};
-use crate::traits::ComplexIntRing;
-use crate::{zz_base_impl, zz_ops_impl};
-
 use num_integer::Integer;
-use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
+use num_traits::{FromPrimitive, ToPrimitive};
 use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;
 use std::marker::PhantomData;
 use std::ops::{Add, Mul, Neg, Sub};
+
+use crate::traits::InnerIntType;
+use crate::zzbase::{
+    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
+    zz_partial_signum_fallback, Frac, GInt,
+};
+use crate::{zz_base_impl, zz_ops_impl};
+
+// pub use for user convenience
+pub use crate::traits::Ccw;
+pub use crate::traits::{ComplexIntRing, IntRing};
+pub use crate::zzbase::{ZZBase, ZZNum, ZZParams};
+pub use num_traits::{One, Zero};
+// --------
 
 // definitions needed to derive different ZZn types
 //

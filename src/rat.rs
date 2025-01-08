@@ -51,23 +51,43 @@ fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
     (canonical, offset)
 }
 
-/// Given two slices of sequences, return length of longest match.
-fn match_length(x: &[i8], y: &[i8]) -> usize {
-    let max_len = x.len().min(y.len());
-    if max_len < 2 {
+/// Given two slices of sequences, return length of longest match
+/// (assuming that we start to match both at index 0)
+/// and possibly a offset to be subtracted from the left side
+/// (if the match can be extended to the left, assuming the sequences are cyclic)
+fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
+    let min_len = x.len().min(y.len());
+    if min_len < 2 {
         // at least one sequence has
         // no nodes or only single node -> no segment
-        0
-    } else {
-        // we start checking at the 2nd point
-        for i in 1..max_len {
-            if x[i] != y[i] {
-                // first non-complementary angle -> end of match
-                return i;
-            }
-        }
-        1
+        return (0, 0);
     }
+
+    // we start checking at the 2nd point and look for the right side end
+    let mut len = 1;
+    for i in 1..min_len {
+        if x[i] != y[i] {
+            // first non-complementary angle -> right end of match
+            len = i;
+            break;
+        }
+    }
+    if x[0] != y[0] {
+        // cannot extend to the left -> we are done
+        return (len, 0);
+    }
+
+    // go cyclically into the other direction to try extending the interval
+    let mut offset = 0;
+    for i in 1..(min_len - len) {
+        if x[x.len() - i] != y[y.len() - i] {
+            // first non-complementary angle -> left end of match
+            offset = i;
+            len += i;
+            break;
+        }
+    }
+    return (len, offset);
 }
 
 #[derive(Debug, Clone)]
@@ -87,10 +107,22 @@ pub struct Rat<T: ZZNum> {
     cyc: usize,
 }
 
+impl<T: ZZNum> TryFrom<&Snake<T>> for Rat<T> {
+    type Error = &'static str;
+    /// Construct a new rat from a snake.
+    fn try_from(snake: &Snake<T>) -> Result<Self, Self::Error> {
+        if snake.is_closed() {
+            Ok(Self::from_unchecked(snake))
+        } else {
+            Err("Given snake is not closed!")
+        }
+    }
+}
+
 impl<T: ZZNum> Rat<T> {
     /// Create a rat from an angle sequence.
     /// Assumes that the sequence describes a valid simple polygon.
-    fn from_seq_unsafe(angles: &[i8]) -> Self {
+    pub fn from_slice_unchecked(angles: &[i8]) -> Self {
         let angle_sum: i64 = angles.iter().map(|x| *x as i64).sum();
         assert_eq!(angle_sum.abs(), T::turn() as i64);
         let (seq, offset) = prepare_seq(angles);
@@ -103,10 +135,10 @@ impl<T: ZZNum> Rat<T> {
         }
     }
 
-    /// Construct a new rat from a snake.
-    pub fn new(snake: &Snake<T>) -> Self {
-        assert!(snake.is_closed());
-        Self::from_seq_unsafe(snake.angles())
+    /// Create a rat from a snake.
+    /// Assumes that the sequence describes a valid simple polygon.
+    pub fn from_unchecked(snake: &Snake<T>) -> Self {
+        Self::from_slice_unchecked(snake.angles())
     }
 
     fn revcomp_seq(&self, offset: i64) -> Vec<i8> {
@@ -118,7 +150,7 @@ impl<T: ZZNum> Rat<T> {
     /// Return chirally reflected description of the same shape
     /// (its sequence is equal to the reverse complement)
     pub fn reflect(&self) -> Self {
-        Self::from_seq_unsafe(self.revcomp_seq(0).as_slice())
+        Self::from_slice_unchecked(self.revcomp_seq(0).as_slice())
     }
 
     // ----
@@ -183,21 +215,39 @@ impl<T: ZZNum> Rat<T> {
     // ----
 
     /// Return the maximal length of a match described by the given pair of indices.
-    /// Note that this still does NOT mean that the tiles can be legally glued along the match.
+    /// Note that this still does NOT mean that the tiles can be legally glued along the match,
+    /// because outside of the match the sequence could have self-intersections.
     pub fn match_length(&self, (self_start, other_end): (i64, i64), other: &Self) -> usize {
-        let x = self.slice_from(self_start, self.len());
-        let y = other.revcomp_seq(other_end);
-        match_length(x, y.as_slice())
+        let x_seq = self.slice_from(self_start, self.len());
+        let y_seq = other.revcomp_seq(other_end);
+        match_length(x_seq, y_seq.as_slice()).0
+    }
+
+    /// Return the maximal match that touches the given pair of indices.
+    /// The returned indices are normalized to be non-negative.
+    /// Note that this still does NOT mean that the tiles can be legally glued along the match.
+    pub fn get_match(
+        &self,
+        (self_start, other_end): (i64, i64),
+        other: &Self,
+    ) -> (i64, usize, i64) {
+        let x_seq = self.slice_from(self_start, self.len());
+        let y_seq = other.revcomp_seq(other_end);
+        let (len, offset) = match_length(x_seq, y_seq.as_slice());
+
+        let ext_start: i64 = (self_start - offset as i64).rem_euclid(self.len() as i64);
+        let ext_end: i64 = (other_end + offset as i64).rem_euclid(self.len() as i64);
+        (ext_start, len, ext_end)
     }
 
     /// Return a new rat resulting from glueing two rats along a common boundary
-    /// that is given by a pair of indices.
-    pub fn glue(&self, indices @ (self_start, other_end): (i64, i64), other: &Self) -> Self {
-        let mlen = self.match_length(indices, other); // maximal match length
+    /// that is given by a pair of two glued indices (the match is extended in both directions).
+    pub fn try_glue(&self, matched_indices: (i64, i64), other: &Self) -> Result<Self, &str> {
+        let (norm_start, mlen, norm_end) = self.get_match(matched_indices, other);
 
         // get boundaries without the match (but keep the endpoints)
-        let x = self.slice_from(self_start + mlen as i64, self.len() - mlen + 1);
-        let y = self.slice_from(other_end, other.len() - mlen + 1);
+        let x = self.slice_from(norm_start + mlen as i64, self.len() - mlen + 1);
+        let y = self.slice_from(norm_end, other.len() - mlen + 1);
 
         // concatenate the sequences (without duplicating the endpoints)
         let mut glued_seq: Vec<i8> = x[..x.len() - 1].to_vec();
@@ -209,7 +259,11 @@ impl<T: ZZNum> Rat<T> {
         glued_seq[0] = a_yx;
         glued_seq[x.len() - 1] = a_xy;
 
-        Self::new(&Snake::from(glued_seq.as_slice()))
+        Snake::try_from(glued_seq.as_slice()).and_then(|s| Ok(Self::from_unchecked(&s)))
+    }
+
+    pub fn glue(&self, matched_indices: (i64, i64), other: &Self) -> Self {
+        self.try_glue(matched_indices, other).unwrap()
     }
 
     // ----
@@ -217,7 +271,7 @@ impl<T: ZZNum> Rat<T> {
     /// Return sequence of coordinates of the line segment chain describing a
     /// realized polygonal tile boundary. The first and last point will be equal.
     pub fn to_polyline_f64(&self, turtle: Turtle<T>) -> Vec<(f64, f64)> {
-        Snake::from(self.seq()).to_polyline_f64(&turtle)
+        Snake::from_slice_unchecked(self.seq()).to_polyline_f64(&turtle)
     }
 }
 
@@ -260,21 +314,23 @@ mod tests {
     #[test]
     fn test_match_length() {
         // degenerate cases
-        assert_eq!(match_length(&[1, 2, 3], &[]), 0);
-        assert_eq!(match_length(&[1, 2, 3], &[1]), 0);
+        assert_eq!(match_length(&[1, 2, 3], &[]), (0, 0));
+        assert_eq!(match_length(&[1, 2, 3], &[1]), (0, 0));
 
         // match cannot be longer than shortest sequence
-        assert_eq!(match_length(&[1, 2, 3], &[1, 2]), 1);
+        assert_eq!(match_length(&[1, 2, 3], &[1, 2]), (1, 0));
         // the end points do not matter
-        assert_eq!(match_length(&[1, 2, 3], &[4, 5]), 1);
+        assert_eq!(match_length(&[1, 2, 3], &[4, 5]), (1, 0));
         // the inside points must be equal
-        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, -3, 6]), 2);
-        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, 3, 6]), 3);
+        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, -3, 6]), (2, 0));
+        assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, 3, 6]), (3, 0));
+        // match can be extended to the left (input is starting in the middle)
+        assert_eq!(match_length(&[3, 4, 1, 2], &[3, 6, 5, 2]), (3, 2));
     }
 
     #[test]
     fn test_len_display() {
-        let r: Rat<ZZ12> = Rat::new(&spectre());
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
         // should show with start offset as used for initialization
         // (even though its normalized internally)
         let exp = "[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]";
@@ -283,19 +339,22 @@ mod tests {
 
     #[test]
     fn test_new_len_chirality_revcomp() {
-        let s: Snake<ZZ12> = spectre();
-        let spectre = s.angles();
+        let spectre: Snake<ZZ12> = spectre();
+        let spectre_angles = spectre.angles();
 
-        let mut canonical = spectre.to_vec();
+        let mut canonical = spectre_angles.to_vec();
         let offset = lex_min_rot(canonical.as_slice());
         canonical.rotate_left(offset);
 
-        let r: Rat<ZZ12> = Rat::new(&Snake::from(spectre));
-        assert_eq!(r, Rat::new(&Snake::from(canonical.as_slice())));
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre);
+        assert_eq!(
+            r,
+            Rat::from_unchecked(&Snake::from_slice_unchecked(canonical.as_slice()))
+        );
 
         // we store two copies of the angle sequence, but it is reported for one
-        assert_eq!(r.len(), spectre.len());
-        assert_eq!(r.seq(), spectre);
+        assert_eq!(r.len(), spectre_angles.len());
+        assert_eq!(r.seq(), spectre_angles);
 
         let c: Rat<ZZ12> = r.reflect();
         assert!(r != c);
@@ -311,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_reflect() {
-        let r: Rat<ZZ12> = Rat::new(&spectre());
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
         assert!(r != r.reflect());
 
         // twice reflect -> restores original sequence + offset
@@ -325,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_slice() {
-        let r: Rat<ZZ12> = Rat::new(&spectre()).canonical();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre()).canonical();
 
         assert_eq!(r.slice(0).len(), 0);
         assert_eq!(r.slice(1).len(), 1);
@@ -335,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_cycle() {
-        let r: Rat<ZZ12> = Rat::new(&spectre()).canonical();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre()).canonical();
 
         assert!(r.seq() != r.cycled(1).seq());
         assert_eq!(r.seq(), r.cycled(1).cycled(-3).cycled(2).seq());
@@ -351,7 +410,7 @@ mod tests {
     #[test]
     fn test_rat_match_length() {
         // test manually verified match combinations
-        let r: Rat<ZZ12> = Rat::new(&spectre());
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
         assert_eq!(r.match_length((0, 0), &r), 2);
         assert_eq!(r.match_length((2, 0), &r), 4);
         assert_eq!(r.match_length((2, 6), &r), 1);
@@ -359,11 +418,11 @@ mod tests {
 
     #[test]
     fn test_glue() {
-        let h: Rat<ZZ12> = Rat::new(&hexagon());
+        let h: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
         let t1 = h.glue((1, 5), &h);
         assert_eq!(t1.seq(), &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2]);
 
-        let r: Rat<ZZ12> = Rat::new(&spectre());
+        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
         let t2 = r.glue((2, 0), &r);
         let mystic = &[
             0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,

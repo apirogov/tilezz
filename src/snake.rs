@@ -63,40 +63,66 @@ pub struct Snake<T: ZZNum> {
     /// Each point with index i is part of at most two segments,
     /// with indices (i-1, i) and (i, i+1), if 0 < i < num_points
     grid: HashMap<GaussInt<i64>, Vec<usize>>,
+
+    /// If set to true, the snake will NOT prevent self-intersections.
+    allow_intersections: bool,
 }
 
-impl<I: ToPrimitive, T: ZZNum> From<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: ZZNum> TryFrom<&[I]> for Snake<T> {
+    type Error = &'static str;
+
     /// Create a snake from an angle sequence.
     /// Equivalent to adding all angles sequentially.
-    fn from(angles: &[I]) -> Self {
+    fn try_from(angles: &[I]) -> Result<Self, Self::Error> {
         let mut result = Self::new();
-        for angle in angles {
-            if !result.add(angle.to_i8().unwrap()) {
-                panic!("Self-intersecting angle sequence!")
-            }
+        match result.extend_from_slice(angles) {
+            Ok(()) => Ok(result),
+            Err(_) => Err("Self-intersecting angle sequence!"),
         }
-        result
     }
 }
+impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Snake<T> {
+    type Error = &'static str;
 
-impl<const N: usize, I: ToPrimitive, T: ZZNum> From<&[I; N]> for Snake<T> {
-    fn from(angles: &[I; N]) -> Self {
-        Self::from(angles.as_slice())
+    fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
+        Self::try_from(angles.as_slice())
     }
 }
 
 impl<T: ZZNum> Snake<T> {
-    /// Return a new empty snake.
+    /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         Self {
             points: vec![T::zero(); 1],
             angles: Vec::new(),
             ang_sum: 0,
             grid: HashMap::from([(GaussInt::zero(), vec![0])]),
+            allow_intersections: false,
         }
     }
 
+    /// Return a new empty snake that allows self-intersecting segment chains.
+    pub fn new_unchecked() -> Self {
+        Self {
+            allow_intersections: true,
+            ..Self::new()
+        }
+    }
+
+    /// Return a new empty snake that allows self-intersecting segment chains
+    /// from a given sequence of angles.
+    pub fn from_slice_unchecked<I: ToPrimitive>(angles: &[I]) -> Self {
+        let mut result = Self::new_unchecked();
+        result.extend_from_slice(angles).unwrap(); // Err will not happen with unchecked
+        result
+    }
+
     // ----
+
+    /// Returns whether the snake is unchecked (i.e. created with `new_unchecked`).
+    pub fn is_unchecked(&self) -> bool {
+        self.allow_intersections
+    }
 
     /// Return the number of unit segments of this snake.
     pub fn len(&self) -> usize {
@@ -239,6 +265,10 @@ impl<T: ZZNum> Snake<T> {
     /// Note that the correctness of the optimized check strongly relies
     /// on the assumption that all segments have unit length.
     fn can_add(&self, angle: i8) -> bool {
+        if self.allow_intersections {
+            return true; // anything goes! WOOHOOO!!!
+        }
+
         if self.is_closed() {
             return false; // already closed -> adding anything makes it non-simple
         }
@@ -297,22 +327,35 @@ impl<T: ZZNum> Snake<T> {
         return true;
     }
 
-    /// Concatenate given snake to this one in-place.
-    pub fn extend(&mut self, other: &Snake<T>) {
-        for angle in other.angles.iter() {
-            // NOTE: cannot use unsafe_add here,
-            // because there is no guarantee that
-            // concatenating two snakes is valid.
-            self.add(*angle);
+    /// Extend a snake from a sequence of angles in-place.
+    pub fn extend_from_slice<I: ToPrimitive>(&mut self, angles: &[I]) -> Result<(), &str> {
+        for angle in angles {
+            if !self.add(angle.to_i8().unwrap()) {
+                return Err("Cannot extend, self-intersecting sequence!");
+            }
         }
+        Ok(())
+    }
+
+    /// Concatenate given snake to this one in-place.
+    pub fn extend(&mut self, other: &Snake<T>) -> Result<(), &str> {
+        self.extend_from_slice(other.angles.as_slice())
     }
 
     /// Return concatenation of two snakes.
-    pub fn concat(&self, other: &Snake<T>) -> Self {
+    pub fn concat(&self, other: &Snake<T>) -> Result<Self, &str> {
+        let errmsg = "Cannot concatenate, self-intersecting sequence!";
         let mut result = Self::new();
-        result.extend(self);
-        result.extend(other);
-        result
+        // FIXME: why can't I return the error message from the inner result?! (borrow issues)
+        match result.extend(self) {
+            Ok(()) => {}
+            Err(_) => return Err(errmsg),
+        }
+        match result.extend(other) {
+            Ok(()) => {}
+            Err(_) => return Err(errmsg),
+        }
+        return Ok(result);
     }
 }
 
@@ -345,24 +388,25 @@ pub mod constants {
 
     /// Return sequence of a square tile over a compatible ring (divisible by 4).
     pub fn square<T: ZZNum + ZZDiv4>() -> Snake<T> {
-        Snake::from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice())
+        Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
     pub fn triangle<T: ZZNum + ZZDiv6>() -> Snake<T> {
-        Snake::from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice())
+        Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
     }
 
     /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
     pub fn hexagon<T: ZZNum + ZZDiv6>() -> Snake<T> {
-        Snake::from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice())
+        Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
     pub fn spectre<T: ZZNum + ZZDiv12>() -> Snake<T> {
-        Snake::from(
+        Snake::try_from(
             upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
         )
+        .unwrap()
     }
 }
 
@@ -510,8 +554,8 @@ mod tests {
         s2.add(5);
         assert_eq!(s2.len(), 3);
 
-        let s3 = s.concat(&s2);
-        s.extend(&s2);
+        let s3 = s.concat(&s2).unwrap();
+        s.extend(&s2).unwrap();
         assert_eq!(s, s3);
 
         // check that state is as expected
@@ -543,10 +587,10 @@ mod tests {
     fn test_closed_snake() {
         // test that once a snake is closed, the initial angle is fixed up
         // (the first angle is relative to the initially undefined predecessor)
-        let sq1: Snake<ZZ12> = Snake::from(&[0, 3, 3, 3]);
+        let sq1: Snake<ZZ12> = Snake::try_from(&[0, 3, 3, 3]).unwrap();
         assert!(sq1.is_closed());
         assert_eq!(sq1.angle_sum(), ZZ12::turn() as i64);
-        let sq2: Snake<ZZ12> = Snake::from(&[0, -3, -3, -3]);
+        let sq2: Snake<ZZ12> = Snake::try_from(&[0, -3, -3, -3]).unwrap();
         assert!(sq2.is_closed());
         assert_eq!(sq2.angle_sum(), -ZZ12::turn() as i64);
 
@@ -593,14 +637,14 @@ mod tests {
 
     #[test]
     fn test_can_add() {
-        let mut s: Snake<ZZ12> = Snake::from(&[3, 3, 3]);
+        let mut s: Snake<ZZ12> = Snake::try_from(&[3, 3, 3]).unwrap();
         assert!(s.add(3)); // can add, closes shape
         assert!(!s.add(0)); // cannot add, shape is already closed
 
-        let mut s2: Snake<ZZ12> = Snake::from(&[0, 3, 3, 3]);
+        let mut s2: Snake<ZZ12> = Snake::try_from(&[0, 3, 3, 3]).unwrap();
         assert!(!s2.add(3)); // cannot add, closes shape not in origin
 
-        let mut s3: Snake<ZZ12> = Snake::from(&[0, 4]);
+        let mut s3: Snake<ZZ12> = Snake::try_from(&[0, 4]).unwrap();
         assert!(!s3.add(5)); // cannot add, crosses segment
 
         // try a more complicated example
@@ -622,7 +666,7 @@ mod tests {
         assert!(s4.add(4));
 
         // create a dead-end where we cannot continue the snake
-        s4.extend(&Snake::from(&[1, 1, 3, 5]));
+        s4.extend(&Snake::try_from(&[1, 1, 3, 5]).unwrap()).unwrap();
         assert_eq!(s4.len(), 10);
         for i in (-ZZ12::hturn() + 1)..(ZZ12::hturn() - 1) {
             assert!(!s4.add(i));
@@ -631,15 +675,15 @@ mod tests {
 
     #[test]
     fn test_eq_ord() {
-        let s1: Snake<ZZ12> = Snake::from(&[1, 2, 3]);
-        let mut s2: Snake<ZZ12> = Snake::from(s1.angles.as_slice());
+        let s1: Snake<ZZ12> = Snake::try_from(&[1, 2, 3]).unwrap();
+        let mut s2: Snake<ZZ12> = Snake::try_from(s1.angles.as_slice()).unwrap();
         assert_eq!(s1, s2);
 
         s2.add(4);
         assert!(s1 != s2);
         assert!(s1 < s2);
 
-        let s3: Snake<ZZ12> = Snake::from(&[-1, 4, 3]);
+        let s3: Snake<ZZ12> = Snake::try_from(&[-1, 4, 3]).unwrap();
         assert!(s3 < s1);
         assert!(s3 < s2);
 
