@@ -41,10 +41,26 @@ impl<T: ZZNum> Default for Turtle<T> {
 
 /// Blueprint of a polyline or polygon that consists of
 /// unit-length segments in a chosen complex integer ring.
+///
+/// It can be seen as (a subset of) the free monoid of angle sequences,
+/// that is interpreted as an action on a point in the plane
+/// and can be quotiented by equal total dislocation.
+/// If we allow self intersecting sequences, we actually have
+/// the full free monoid.
+///
+/// From this perspective, a closed snake corresponds to the quotient class that
+/// contains the identity action / monoid element (i.e. no movement) as a representative.
+///
+/// Note that this structure does not support a useful inversion,
+/// because we cannot include "turning around" at the end of the chain
+/// into the formalism. The snake is in so far asymmetric, until it is closed.
+/// A closed snake traces out a path that can be inverted (see the `Rat` type).
 #[derive(Debug, Clone)]
 pub struct Snake<T: ZZNum> {
-    /// Abstract sequence of unit segments that point into
-    /// different directions (i.e. turtle movement instructions).
+    /// Abstract sequence of unit segments that point into different directions
+    /// (i.e. turtle movement instructions).
+    /// Each number corresponds to the corresponding rotated unit in the
+    /// underlying cyclotomic ring.
     angles: Vec<i8>,
 
     /// Sum of outer angles (i.e. sum of the angle sequence).
@@ -215,7 +231,7 @@ impl<T: ZZNum> Snake<T> {
     }
 
     /// Return a polyline by tracing out snake with given turtle.
-    pub fn to_polyline(&self, turtle: &Turtle<T>) -> Vec<T> {
+    pub fn to_polyline(&self, turtle: Turtle<T>) -> Vec<T> {
         let mut result = Self::new();
         *result.points.last_mut().unwrap() = turtle.pos;
         result.ang_sum = turtle.dir as i64;
@@ -227,8 +243,8 @@ impl<T: ZZNum> Snake<T> {
         result.points
     }
 
-    pub fn to_polyline_f64(&self, turtle: &Turtle<T>) -> Vec<(f64, f64)> {
-        self.to_polyline(&turtle)
+    pub fn to_polyline_f64(&self, turtle: Turtle<T>) -> Vec<(f64, f64)> {
+        self.to_polyline(turtle)
             .iter()
             .map(|p| {
                 let Complex { re: x, im: y } = p.complex();
@@ -357,6 +373,22 @@ impl<T: ZZNum> Snake<T> {
         }
         return Ok(result);
     }
+
+    /// Return twice the area of the represented polygon, computed using the shoelace formula.
+    /// If the snake is not closed, will implicitly add the segment from the last to first point.
+    /// See: https://en.wikipedia.org/wiki/Shoelace_formula
+    pub fn double_area(&self) -> T {
+        let mut result = T::zero();
+        for i in 1..self.len() {
+            // println!("{} x {} = {}", self.points[i - 1].wedge(&self.points[i]);
+            result = result + self.points[i - 1].wedge(&self.points[i]);
+        }
+        if !self.is_closed() {
+            result = result + self.points[self.len() - 1].wedge(&self.points[0]);
+        }
+
+        return result;
+    }
 }
 
 // For comparisons (Eq, Ord) and presentation (Display)
@@ -416,7 +448,8 @@ mod tests {
     use crate::traits::Ccw;
     use crate::zz::{ZZ12, ZZ24};
     use crate::zzbase::ZZBase;
-    use constants::spectre;
+    use constants::{hexagon, spectre, square, triangle};
+    use num_rational::Ratio;
     use num_traits::{One, Zero};
 
     #[test]
@@ -567,7 +600,7 @@ mod tests {
 
         // rep. polyline = instantiated with default turtle
         let l_exp: Vec<ZZ12> = s.representative().to_vec();
-        let l = s.to_polyline(&Turtle::default());
+        let l = s.to_polyline(Turtle::default());
         assert_eq!(l, l_exp);
 
         // check instantiation with a non-trivial turtle
@@ -579,7 +612,7 @@ mod tests {
             .iter()
             .map(|pt| (*pt * ZZ12::unit(t.dir)) + t.pos)
             .collect();
-        let l2 = s.to_polyline(&t);
+        let l2 = s.to_polyline(t);
         assert_eq!(l2, l2_exp);
     }
 
@@ -671,6 +704,27 @@ mod tests {
         for i in (-ZZ12::hturn() + 1)..(ZZ12::hturn() - 1) {
             assert!(!s4.add(i));
         }
+    }
+
+    #[test]
+    fn test_area() {
+        // area of an equilateral triangle with side length 1 is sqrt(3)/4
+        let tri_area_sq3 = GaussInt::new(Ratio::<i64>::new_raw(1, 2), Ratio::<i64>::zero());
+        assert_eq!(
+            triangle::<ZZ12>().double_area(),
+            ZZ12::new(&[0.into(), tri_area_sq3])
+        );
+
+        assert_eq!(
+            square::<ZZ12>().double_area(),
+            ZZ12::new(&[2.into(), 0.into()])
+        );
+
+        // area of a regular hexagon with side length 1 is 3*sqrt(3)/2
+        assert_eq!(
+            hexagon::<ZZ12>().double_area(),
+            ZZ12::new(&[0.into(), 3.into()])
+        );
     }
 
     #[test]

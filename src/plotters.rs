@@ -1,4 +1,4 @@
-use crate::plotutils::{tile_bounds, tile_mass_center, tile_viewport};
+use crate::plotutils::{tile_bounds, tile_centroid, tile_viewport};
 
 use num_traits::Zero;
 use plotters::prelude::*;
@@ -123,7 +123,7 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
             return EmptyElement::at(c) + Text::new(format!("{tile_lbl}"), (0, 0), &tile_lbl_style);
         };
         let tile_lbl_series =
-            PointSeries::of_element(vec![tile_mass_center(tile)], 20, BLACK, &tile_lbl_func);
+            PointSeries::of_element(vec![tile_centroid(tile)], 20, BLACK, &tile_lbl_func);
         chart.draw_series(tile_lbl_series).unwrap();
     }
 }

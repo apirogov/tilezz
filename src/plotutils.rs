@@ -5,7 +5,7 @@ type P64 = (f64, f64);
 type R64 = (P64, P64);
 
 /// Returns the center of the tile based on its vertex points.
-pub fn tile_mass_center<'a, I>(pts: I) -> P64
+pub fn tile_centroid<'a, I>(pts: I) -> P64
 where
     I: IntoIterator<Item = &'a (f64, f64)>,
 {

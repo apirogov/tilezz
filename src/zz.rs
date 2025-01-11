@@ -70,7 +70,7 @@ const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 ///
 /// This conceptual 3D symbolic vector multiplication matrix is not implemented
 /// explicitly, instead the resulting coefficients are manually collected and
-/// simplified for each ring separately.
+/// simplified for each ring separately, which is more efficient.
 
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
@@ -821,11 +821,11 @@ mod $name {
         // all rotations of the same point around origin
         // have the same squared distance, i.e. quadrance
         // and it is real-valued.
-        let q = p.norm_sq();
+        let q = p.norm();
         assert!(q.is_real());
         for i in 1..ZZi::turn() {
             let pi = p * ZZi::unit(i);
-            let qi = pi.norm_sq();
+            let qi = pi.norm();
             assert_eq!(qi, q);
         }
     }

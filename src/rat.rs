@@ -124,7 +124,6 @@ impl<T: ZZNum> Rat<T> {
     /// Assumes that the sequence describes a valid simple polygon.
     pub fn from_slice_unchecked(angles: &[i8]) -> Self {
         let angle_sum: i64 = angles.iter().map(|x| *x as i64).sum();
-        assert_eq!(angle_sum.abs(), T::turn() as i64);
         let (seq, offset) = prepare_seq(angles);
 
         Self {
@@ -149,7 +148,7 @@ impl<T: ZZNum> Rat<T> {
 
     /// Return chirally reflected description of the same shape
     /// (its sequence is equal to the reverse complement)
-    pub fn reflect(&self) -> Self {
+    pub fn reflected(&self) -> Self {
         Self::from_slice_unchecked(self.revcomp_seq(0).as_slice())
     }
 
@@ -164,6 +163,21 @@ impl<T: ZZNum> Rat<T> {
     /// Returns the chirality (1 = ccw, -1 = cw).
     pub fn chirality(&self) -> i8 {
         self.angle_sum.signum() as i8
+    }
+
+    /// Returns whether the represented polygon is convex.
+    pub fn is_convex(&self) -> bool {
+        self.angles.iter().all(|a| a.signum() == self.chirality())
+    }
+
+    pub fn is_canonical(&self) -> bool {
+        self.cyc == 0
+    }
+
+    /// Return twice the area of the represented polygon, computed using the shoelace formula.
+    /// See: https://en.wikipedia.org/wiki/Shoelace_formula
+    pub fn double_area(&self) -> T {
+        Snake::from_slice_unchecked(self.angles.as_slice()).double_area()
     }
 
     // ----
@@ -242,12 +256,43 @@ impl<T: ZZNum> Rat<T> {
 
     /// Return a new rat resulting from glueing two rats along a common boundary
     /// that is given by a pair of two glued indices (the match is extended in both directions).
-    pub fn try_glue(&self, matched_indices: (i64, i64), other: &Self) -> Result<Self, &str> {
+    ///
+    /// Note that glue is not commutative directly, but for flipped arguments
+    /// there exists an adjusted pair of indices. In practice is usually should not matter
+    /// which tile is considered to be left or right of the operation.
+    ///
+    /// The validation happens by converting the resulting boundary to a snake.
+    /// Snakes explicitly prevents self-intersections by construction and also
+    /// extending a snake that is closed. This automatically ensures
+    /// that the resulting boundary has no holes.
+    ///
+    /// Proof.
+    /// As the string-based matching only eliminates the connected match
+    /// boundary sequence of both tiles, even if there is another segment chain
+    /// matching, there are now two copies of the same representative segments,
+    /// so these now intersect along the glued snake boundary. For the case of
+    /// another match of single vertices outside the intended match boundary -
+    /// this is also detected, because snakes cannot be extended after they have
+    /// been closed, and they are closed automatically once they reach the same
+    /// point twice. Thus the existing checks and implementation details already
+    /// ensure holefreeness.
+    /// QED.
+    fn try_glue_impl(
+        &self,
+        matched_indices: (i64, i64),
+        other: &Self,
+        unchecked: bool,
+    ) -> Result<Self, &str> {
+        if self.chirality() != other.chirality() {
+            // FIXME: could implicitly reflect a tile and adjust the denoted index, but
+            // this is very low priority right now.
+            return Err("Cannot glue rats of opposite chirality!");
+        }
         let (norm_start, mlen, norm_end) = self.get_match(matched_indices, other);
 
         // get boundaries without the match (but keep the endpoints)
         let x = self.slice_from(norm_start + mlen as i64, self.len() - mlen + 1);
-        let y = self.slice_from(norm_end, other.len() - mlen + 1);
+        let y = other.slice_from(norm_end, other.len() - mlen + 1);
 
         // concatenate the sequences (without duplicating the endpoints)
         let mut glued_seq: Vec<i8> = x[..x.len() - 1].to_vec();
@@ -259,11 +304,23 @@ impl<T: ZZNum> Rat<T> {
         glued_seq[0] = a_yx;
         glued_seq[x.len() - 1] = a_xy;
 
-        Snake::try_from(glued_seq.as_slice()).and_then(|s| Ok(Self::from_unchecked(&s)))
+        if unchecked {
+            Ok(Self::from_slice_unchecked(glued_seq.as_slice()))
+        } else {
+            Snake::try_from(glued_seq.as_slice()).and_then(|s| Ok(Self::from_unchecked(&s)))
+        }
+    }
+
+    pub fn try_glue(&self, matched_indices: (i64, i64), other: &Self) -> Result<Self, &str> {
+        self.try_glue_impl(matched_indices, other, false)
     }
 
     pub fn glue(&self, matched_indices: (i64, i64), other: &Self) -> Self {
         self.try_glue(matched_indices, other).unwrap()
+    }
+
+    pub fn glue_unchecked(&self, matched_indices: (i64, i64), other: &Self) -> Self {
+        self.try_glue_impl(matched_indices, other, true).unwrap()
     }
 
     // ----
@@ -271,7 +328,7 @@ impl<T: ZZNum> Rat<T> {
     /// Return sequence of coordinates of the line segment chain describing a
     /// realized polygonal tile boundary. The first and last point will be equal.
     pub fn to_polyline_f64(&self, turtle: Turtle<T>) -> Vec<(f64, f64)> {
-        Snake::from_slice_unchecked(self.seq()).to_polyline_f64(&turtle)
+        Snake::from_slice_unchecked(self.seq()).to_polyline_f64(turtle)
     }
 }
 
@@ -338,7 +395,16 @@ mod tests {
     }
 
     #[test]
-    fn test_new_len_chirality_revcomp() {
+    fn test_convex() {
+        let hex = Rat::from_unchecked(&hexagon::<ZZ12>());
+        assert!(hex.is_convex());
+        assert!(hex.reflected().is_convex());
+        assert!(Rat::from_unchecked(&hexagon::<ZZ12>()).is_convex());
+        assert!(!Rat::from_unchecked(&spectre::<ZZ12>()).is_convex());
+    }
+
+    #[test]
+    fn test_new_len_chirality_canonical_revcomp() {
         let spectre: Snake<ZZ12> = spectre();
         let spectre_angles = spectre.angles();
 
@@ -347,16 +413,16 @@ mod tests {
         canonical.rotate_left(offset);
 
         let r: Rat<ZZ12> = Rat::from_unchecked(&spectre);
-        assert_eq!(
-            r,
-            Rat::from_unchecked(&Snake::from_slice_unchecked(canonical.as_slice()))
-        );
+        let r2 = Rat::from_unchecked(&Snake::from_slice_unchecked(canonical.as_slice()));
+        assert_eq!(r, r2);
+        assert!(!r.is_canonical());
+        assert!(r2.is_canonical());
 
         // we store two copies of the angle sequence, but it is reported for one
         assert_eq!(r.len(), spectre_angles.len());
         assert_eq!(r.seq(), spectre_angles);
 
-        let c: Rat<ZZ12> = r.reflect();
+        let c: Rat<ZZ12> = r.reflected();
         assert!(r != c);
 
         // check chirality flipping due to revcomp
@@ -364,22 +430,22 @@ mod tests {
         assert_eq!(c.chirality(), -1);
 
         // twice revcomp = original
-        let cc: Rat<ZZ12> = c.reflect();
+        let cc: Rat<ZZ12> = c.reflected();
         assert_eq!(r, cc);
     }
 
     #[test]
-    fn test_reflect() {
+    fn test_reflected() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
-        assert!(r != r.reflect());
+        assert!(r != r.reflected());
 
         // twice reflect -> restores original sequence + offset
-        assert_eq!(r.reflect().reflect().seq(), r.seq());
+        assert_eq!(r.reflected().reflected().seq(), r.seq());
 
         // reflecting the sequence keeps the current node constant
         // (needs off-by-one offset in implementation)
         let exp: &[i8] = &[-3, 2, -3, 2, -3, -2, 3, -2, -3, -2, 3, -2, 0, -2];
-        assert_eq!(r.reflect().seq(), exp);
+        assert_eq!(r.reflected().seq(), exp);
     }
 
     #[test]
@@ -404,7 +470,7 @@ mod tests {
         assert_eq!(r, r.cycled(2));
 
         // revcomp works respecting the current start offset
-        assert_eq!(r.cycled(2), r.cycled(2).reflect().reflect());
+        assert_eq!(r.cycled(2), r.cycled(2).reflected().reflected());
     }
 
     #[test]
@@ -419,14 +485,42 @@ mod tests {
     #[test]
     fn test_glue() {
         let h: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-        let t1 = h.glue((1, 5), &h);
-        assert_eq!(t1.seq(), &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2]);
+        let g1 = h.glue((1, 5), &h);
+        assert_eq!(g1.seq(), &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2]);
 
-        let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
-        let t2 = r.glue((2, 0), &r);
+        let r1 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0, 3]);
+        let r2 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
+
+        let g2 = r1.glue_unchecked((1, 4), &r2);
+        assert_eq!(g2.seq(), &[0, 0, 3, 3, -3, -3, 3, 3, 0, 0, 3, 0, 0, 3]);
+
+        // assert_eq!(g2, r1.glue((2, 3), &r2));  // FIXME: some bug
+        assert_eq!(g2, r1.glue((0, 5), &r2));
+        assert_eq!(g2, r1.glue((-1, 6), &r2));
+
+        assert!(r1.try_glue((8, 0), &r2).is_err());
+        let self_isect_hole = &[0, 0, 3, 0, 0, 3, 0, 3, 3, -3, -3, -3, 0, 3, 3, 0, 0, 3];
+        let g3 = r1.glue_unchecked((8, 0), &r2);
+        assert_eq!(g3.seq(), self_isect_hole);
+
+        // test case where we have vertices touching outside the match
+        // (which does not count as self-intersection)
+        let r3 = Rat::<ZZ12>::try_from(
+            &Snake::try_from(&[
+                0, 0, 3, 2, 4, -3, -3, 3, 2, 4, -3, -3, 3, 0, 2, 4, -3, -3, 3, 2, 4, -3, 3, -3,
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let r4 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
+        assert!(r3.try_glue((7, 0), &r4).is_err());
+
+        // combine two spectres into a mystic
+        let spec: Rat<ZZ12> = Rat::from_unchecked(&spectre());
         let mystic = &[
             0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
         ];
-        assert_eq!(t2.seq(), mystic);
+        let g3 = spec.glue((2, 0), &spec);
+        assert_eq!(g3.seq(), mystic);
     }
 }

@@ -114,6 +114,7 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug
     // NOTE: https://qchu.wordpress.com/2009/07/02/square-roots-have-no-unexpected-linear-relationships/
     // or this question: https://math.stackexchange.com/a/30695
     // so we have: expression is zero <=> all linear coeffs are zero
+    // (as we have distinct square-free roots)
     if sgn_ad_terms.is_zero() {
         return sgn_bc_terms;
     }
@@ -333,17 +334,34 @@ pub trait ZZBase<
     where
         Self: ZZNum,
     {
-        let cs_x: Vec<GaussInt<T>> = self
+        (<Self as ZZBase<T>>::re(self), <Self as ZZBase<T>>::im(self))
+    }
+
+    /// Return the real part of the value, i.e. the value (z + z.conj()) / 2.
+    fn re(&self) -> Self
+    where
+        Self: ZZNum,
+    {
+        let cs: Vec<GaussInt<T>> = self
             .zz_coeffs()
             .iter()
             .map(|c| GaussInt::new(c.real, T::zero()))
             .collect();
-        let cs_y: Vec<GaussInt<T>> = self
+        Self::new(cs.as_slice())
+    }
+
+    /// Return the imaginary part of the value (rotated onto the real axis),
+    /// i.e. the value (z - z.conj()) / 2i.
+    fn im(&self) -> Self
+    where
+        Self: ZZNum,
+    {
+        let cs: Vec<GaussInt<T>> = self
             .zz_coeffs()
             .iter()
             .map(|c| GaussInt::new(c.imag, T::zero()))
             .collect();
-        (Self::new(&cs_x), Self::new(&cs_y))
+        Self::new(cs.as_slice())
     }
 
     /// Return the sign of the real part of the value.
@@ -385,8 +403,8 @@ pub trait ZZBase<
         (p1x * p2x) + (p1y * p2y)
     }
 
-    /// Squared norm, i.e. dot product of value with itself.
-    fn norm_sq(&self) -> Self
+    /// norm of a value, i.e. dot product of the value with itself.
+    fn norm(&self) -> Self
     where
         Self: ZZNum,
     {

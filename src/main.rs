@@ -2,7 +2,6 @@ use plotters::prelude::*;
 use tilezz::plotters::{plot_tile, tile_chart, TileStyle};
 use tilezz::rat::Rat;
 use tilezz::snake::constants::spectre;
-use tilezz::snake::Snake;
 use tilezz::snake::Turtle;
 use tilezz::zz::ZZ12;
 
@@ -29,7 +28,7 @@ fn main() {
     // glue a copy of the spectre to itself to get a mystic
     let mystic = spectre.glue((2, 0), &spectre);
     // take the mirror image and shift the starting point
-    let spectre_mod = spectre.reflect().cycle(5);
+    let spectre_mod = spectre.reflected().cycle(5);
 
     // get concrete points and define styles for the tiles
     let t1 = spectre.to_polyline_f64(Turtle::new(0.into(), -2));
@@ -62,15 +61,33 @@ fn main() {
     right.fill(&GREEN.mix(0.1)).unwrap();
     plot_tile(&right, t3.as_slice(), &s3);
 
-    // test unchecked snake rendering
-    let unchecked = Snake::<ZZ12>::from_slice_unchecked(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
-    let unchecked_pts = unchecked.to_polyline_f64(&Turtle::default());
+    let r1 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0, 3]);
+    let upts = r1.to_polyline_f64(Turtle::default());
+    let r2 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
+    let upts2 = r2.to_polyline_f64(Turtle::new(ZZ12::from((0, 3)), 0));
+
+    let r3 = r1.glue_unchecked((0, 3), &r2);
+    // let r3 = r1.glue_unchecked((1, 4), &r2).cycle(-3);
+    let upts3 = r3.to_polyline_f64(Turtle::new(ZZ12::from((5, 3)), 3));
+
+    let s = TileStyle::default().with_fill(TRANSPARENT.into());
+    let tiles2 = vec![
+        (upts.as_slice(), &s),
+        (upts2.as_slice(), &s),
+        (upts3.as_slice(), &s),
+    ];
+    let (mut c2, plot_tiles2) = tile_chart(&mut ChartBuilder::on(&right), tiles2.as_slice());
+    c2.configure_mesh().draw().unwrap();
     right.fill(&WHITE).unwrap();
-    plot_tile(
-        &right,
-        unchecked_pts.as_slice(),
-        &TileStyle::default().with_fill(TRANSPARENT.into()),
-    );
+    plot_tiles2(&mut c2);
+
+    // test unchecked snake rendering (self-intersecting star)
+    // let unchecked = Snake::<ZZ12>::from_slice_unchecked(&[5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+    // plot_tile(
+    //     &right,
+    //     upts2.as_slice(),
+    //     &TileStyle::default().with_fill(TRANSPARENT.into()),
+    // );
 
     // make sure the image is actually updated
     root.present().unwrap();
