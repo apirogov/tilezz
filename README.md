@@ -150,7 +150,7 @@ TODO: improve/finalize API, update the example and add a screenshot.
 
 It seems that people who work on/with tiles use software like:
 
-* computer algebra systems, such as [SageMath](https://www.sagemath.org/)
+* computer algebra systems, such as [SageMath](https://doc.sagemath.org/html/en/reference/number_fields/index.html)
 * SAT or SMT solvers, such as [Z3](https://github.com/Z3Prover/z3)
 * [PolyForm Puzzle Solver](https://www.jaapsch.net/puzzles/polysolver.htm)
 

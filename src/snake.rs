@@ -1,7 +1,7 @@
 use crate::zzutil::intersect;
 
 use super::gaussint::GaussInt;
-use super::zz::{ZZDiv12, ZZDiv4, ZZDiv6};
+use super::zz::{HasZZ12, HasZZ4, HasZZ6};
 use super::zzbase::ZZNum;
 use super::zzutil::{
     cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of, upscale_angles,
@@ -419,22 +419,22 @@ pub mod constants {
     use super::*;
 
     /// Return sequence of a square tile over a compatible ring (divisible by 4).
-    pub fn square<T: ZZNum + ZZDiv4>() -> Snake<T> {
+    pub fn square<T: ZZNum + HasZZ4>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
-    pub fn triangle<T: ZZNum + ZZDiv6>() -> Snake<T> {
+    pub fn triangle<T: ZZNum + HasZZ6>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
     }
 
     /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
-    pub fn hexagon<T: ZZNum + ZZDiv6>() -> Snake<T> {
+    pub fn hexagon<T: ZZNum + HasZZ6>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-    pub fn spectre<T: ZZNum + ZZDiv12>() -> Snake<T> {
+    pub fn spectre<T: ZZNum + HasZZ12>() -> Snake<T> {
         Snake::try_from(
             upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
         )

@@ -2,7 +2,7 @@ use num_integer::Integer;
 use num_rational::Ratio;
 use num_traits::{One, Zero};
 use std::marker::Copy;
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// Trait with all traits a reasonable integer ring should provide
 pub trait IntRing:
@@ -18,9 +18,17 @@ pub trait IntRing:
     + Clone
 {
 }
+
+pub trait IntField: IntRing + Div<Self, Output = Self> {}
+
 impl IntRing for i32 {}
+impl IntField for i32 {}
+
 impl IntRing for i64 {}
+impl IntField for i64 {}
+
 impl<T: Integer + IntRing> IntRing for Ratio<T> {}
+impl<T: Integer + IntField> IntField for Ratio<T> {}
 
 pub trait Ccw {
     /// Return unit of (counterclockwise) rotation for a complex integer ring,
@@ -34,9 +42,11 @@ pub trait Ccw {
     fn is_ccw(&self) -> bool;
 }
 
-/// A complex integer ring is a cyclotomic ring, i.e.
-/// the ring of integers extended by a root of unity.
-pub trait ComplexIntRing: IntRing + Ccw {}
+/// A cyclotomic ring, i.e. the ring of integers extended by a root of unity.
+pub trait CycIntRing: IntRing + Ccw {}
+
+/// A cyclotomic field, i.e. cyclotomic field closed under division.
+pub trait CycIntField: IntField + Ccw {}
 
 /// Utility trait to access the integer type on top of which
 /// more complex numeric types are built.

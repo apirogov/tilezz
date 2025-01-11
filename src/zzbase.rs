@@ -1,5 +1,5 @@
 use super::gaussint::GaussInt;
-use super::traits::{Ccw, ComplexIntRing, InnerIntType, IntRing};
+use super::traits::{Ccw, CycIntRing, InnerIntType, IntField, IntRing};
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Ratio;
@@ -20,7 +20,7 @@ pub type GInt = GaussInt<Frac>;
 pub struct ZZParams<'a, T> {
     pub phantom: PhantomData<&'a T>,
 
-    /// Squares of symbolic roots.
+    /// Squares of symbolic roots. IMPORTANT: we assume that the first one is 1
     pub sym_roots_sqs: &'a [f64],
     /// Labels of symbolic roots.
     pub sym_roots_lbls: &'a [&'a str],
@@ -201,7 +201,7 @@ pub trait ZZBase<
     T: Sized
         + Signed
         + PartialOrd
-        + IntRing
+        + IntField
         + InnerIntType
         + ToPrimitive
         + FromPrimitive
@@ -243,11 +243,11 @@ pub trait ZZBase<
         let one = Self::one();
         let ccw = Self::ccw();
         let j = i.rem_euclid(<Self as ZZBase<T>>::turn());
-        one * <Self as ZZBase<T>>::powi(&ccw, j)
+        one * <Self as ZZBase<T>>::pow(&ccw, j)
     }
 
     /// Raise to an integer power.
-    fn powi(&self, i: i8) -> Self
+    fn pow(&self, i: i8) -> Self
     where
         Self: ZZNum,
     {
@@ -515,11 +515,80 @@ pub trait ZZBase<
     fn zz_mul(&self, other: &Self) -> Vec<GaussInt<T>> {
         Self::zz_mul_arrays(self.zz_coeffs(), other.zz_coeffs())
     }
+
+    /// Compute inverse by repeated rationalizing of the denominator.
+    ///
+    /// IMPORTANT: This only works correctly if there are no nested roots in
+    /// the representation of the cyclotomic field, i.e. it does NOT work
+    /// correctly for fields that contain ZZ5 or ZZ8 as subfields.
+    #[inline]
+    fn zz_inv(&self) -> Self
+    where
+        Self: ZZNum,
+    {
+        // for x/y where y = a + b, b being a single (scaled) square root,
+        // we compute y' = a - b and produce x*y'/(a+b)(a-b) = x*y'/a^2-b^2
+        // where a^2 is a simpler term and b is rational.
+        // we repeat this for all square roots in the denominator.
+
+        let num_terms = <Self as ZZBase<T>>::zz_params().sym_roots_num;
+
+        let mut numer = <Self as One>::one();
+        let mut denom = self.clone();
+
+        let mut root_ix = 0;
+        let mut non_root_ix = 0;
+        let mut root_found = true;
+        while root_found {
+            root_found = false;
+            for i in 0..num_terms {
+                if <Self as ZZBase<T>>::zz_params().sym_roots_sqs[i].is_one() {
+                    non_root_ix = i; // we need the non-irrational part later
+                    continue; // non-irrational term
+                }
+                let c = <Self as ZZBase<T>>::zz_coeffs(&denom)[i];
+                if !c.is_zero() {
+                    root_found = true;
+                    root_ix = i;
+                    break;
+                }
+            }
+
+            if !root_found {
+                break; // rational denominator
+            }
+
+            // "conjugate" one square root to use the binomial trick
+            let mut conjugated = denom.clone();
+            let curr_root_coeff = <Self as ZZBase<T>>::zz_coeffs(&conjugated)[root_ix];
+            conjugated.zz_coeffs_mut()[root_ix] = -curr_root_coeff;
+
+            // compute b^2
+            let mut curr_root_term_sq = <Self as Zero>::zero();
+            curr_root_term_sq.zz_coeffs_mut()[root_ix] = curr_root_coeff; // = b
+            curr_root_term_sq = curr_root_term_sq * curr_root_term_sq; // = b^2
+
+            // update numerator (= x * y')
+            numer = numer * conjugated;
+
+            // update denominator (= (a + b)(a - b)= a^2 - b^2)
+            denom.zz_coeffs_mut()[root_ix] = 0.into(); // = a
+            denom = denom * denom - curr_root_term_sq; // = a^2 - b^2
+        }
+
+        // now we have a rational denominator (i.e. no square root terms)
+        // so we can just flip it and multiply with the numerator.
+        let mut inv_denom = <Self as Zero>::zero();
+        inv_denom.zz_coeffs_mut()[non_root_ix] =
+            GaussInt::one() / <Self as ZZBase<T>>::zz_coeffs(&denom)[non_root_ix];
+
+        return numer * inv_denom;
+    }
 }
 
 /// The trait that other structures should parametrize on
 /// to work with any complex integer ring.
-pub trait ZZNum: ZZBase<Frac> + InnerIntType + ComplexIntRing + Display {}
+pub trait ZZNum: ZZBase<Frac> + InnerIntType + CycIntRing + Display {}
 
 #[macro_export]
 macro_rules! zz_base_impl {
@@ -628,6 +697,16 @@ macro_rules! zz_ops_impl {
             }
         }
 
+        // TODO: refactor and implement this for QQn types only!
+        // QQn should be defined as a newtype of ZZn, with extra ability to divide.
+        impl Div<$t> for $t {
+            type Output = Self;
+
+            fn div(self, other: Self) -> Self {
+                Self::mul(self, other.zz_inv())
+            }
+        }
+
         impl Zero for $t {
             fn zero() -> Self {
                 Self::new(&Self::zz_zero_vec())
@@ -654,7 +733,7 @@ macro_rules! zz_ops_impl {
         }
 
         impl IntRing for $t {}
-        impl ComplexIntRing for $t {}
+        impl CycIntRing for $t {}
 
         impl Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

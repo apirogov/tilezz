@@ -4,7 +4,7 @@ use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;
 use std::marker::PhantomData;
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::traits::InnerIntType;
 use crate::zzbase::{
@@ -15,7 +15,7 @@ use crate::{zz_base_impl, zz_ops_impl};
 
 // pub use for user convenience
 pub use crate::traits::Ccw;
-pub use crate::traits::{ComplexIntRing, IntRing};
+pub use crate::traits::{CycIntRing, IntRing};
 pub use crate::zzbase::{ZZBase, ZZNum, ZZParams};
 pub use num_traits::{One, Zero};
 // --------
@@ -477,40 +477,59 @@ zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul, zz_partial_signum_fallback);
 zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 
-pub trait ZZDiv4 {}
-pub trait ZZDiv6 {}
-pub trait ZZDiv8 {}
-pub trait ZZDiv10 {}
-pub trait ZZDiv12 {}
+/// rings where all expressions inside the square roots are integers
+/// (some algorithms only work with those rings)
+pub trait ZZInt {}
+pub fn is_zzint<T: ZZNum>() -> bool {
+    // rings that are multiples of 1/5 or 1/8 turn have non-integral terms
+    T::turn() % 5 != 0 && T::turn() % 8 != 0
+}
 
-impl ZZDiv4 for ZZ4 {}
-impl ZZDiv4 for ZZ8 {}
-impl ZZDiv4 for ZZ12 {}
-impl ZZDiv4 for ZZ16 {}
-impl ZZDiv4 for ZZ20 {}
-impl ZZDiv4 for ZZ24 {}
-impl ZZDiv4 for ZZ32 {}
-impl ZZDiv4 for ZZ60 {}
+impl ZZInt for ZZ4 {}
+impl ZZInt for ZZ6 {}
+impl ZZInt for ZZ8 {}
+impl ZZInt for ZZ12 {}
+impl ZZInt for ZZ24 {}
 
-impl ZZDiv6 for ZZ6 {}
-impl ZZDiv6 for ZZ12 {}
-impl ZZDiv6 for ZZ24 {}
-impl ZZDiv6 for ZZ30 {}
-impl ZZDiv6 for ZZ60 {}
+/// rings containing ZZ4
+pub trait HasZZ4 {}
+/// rings containing ZZ6
+pub trait HasZZ6 {}
+/// rings containing ZZ8
+pub trait HasZZ8 {}
+/// rings containing ZZ10
+pub trait HasZZ10 {}
+/// rings containing ZZ12
+pub trait HasZZ12 {}
 
-impl ZZDiv8 for ZZ8 {}
-impl ZZDiv8 for ZZ16 {}
-impl ZZDiv8 for ZZ24 {}
-impl ZZDiv8 for ZZ32 {}
+impl HasZZ4 for ZZ4 {}
+impl HasZZ4 for ZZ8 {}
+impl HasZZ4 for ZZ12 {}
+impl HasZZ4 for ZZ16 {}
+impl HasZZ4 for ZZ20 {}
+impl HasZZ4 for ZZ24 {}
+impl HasZZ4 for ZZ32 {}
+impl HasZZ4 for ZZ60 {}
 
-impl ZZDiv10 for ZZ10 {}
-impl ZZDiv10 for ZZ20 {}
-impl ZZDiv10 for ZZ30 {}
-impl ZZDiv10 for ZZ60 {}
+impl HasZZ6 for ZZ6 {}
+impl HasZZ6 for ZZ12 {}
+impl HasZZ6 for ZZ24 {}
+impl HasZZ6 for ZZ30 {}
+impl HasZZ6 for ZZ60 {}
 
-impl ZZDiv12 for ZZ12 {}
-impl ZZDiv12 for ZZ24 {}
-impl ZZDiv12 for ZZ60 {}
+impl HasZZ8 for ZZ8 {}
+impl HasZZ8 for ZZ16 {}
+impl HasZZ8 for ZZ24 {}
+impl HasZZ8 for ZZ32 {}
+
+impl HasZZ10 for ZZ10 {}
+impl HasZZ10 for ZZ20 {}
+impl HasZZ10 for ZZ30 {}
+impl HasZZ10 for ZZ60 {}
+
+impl HasZZ12 for ZZ12 {}
+impl HasZZ12 for ZZ24 {}
+impl HasZZ12 for ZZ60 {}
 
 pub mod constants {
     use super::*;
@@ -528,22 +547,22 @@ pub mod constants {
     // it means that we can represent any linear combination
     // in a ring that supports quarter turn rotation (i.e. ZZDiv4).
 
-    pub fn sqrt2<T: ZZNum + ZZDiv8>() -> T {
+    pub fn sqrt2<T: ZZNum + HasZZ8>() -> T {
         let sc = T::zz_params().full_turn_steps / 8;
         T::unit(sc) + T::unit(-sc)
     }
 
-    pub fn sqrt3<T: ZZNum + ZZDiv12>() -> T {
+    pub fn sqrt3<T: ZZNum + HasZZ12>() -> T {
         let sc = T::zz_params().full_turn_steps / 12;
         T::unit(sc) + T::unit(-sc)
     }
 
-    pub fn sqrt5<T: ZZNum + ZZDiv10>() -> T {
+    pub fn sqrt5<T: ZZNum + HasZZ10>() -> T {
         let sc = T::zz_params().full_turn_steps / 10;
         (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - T::one()
     }
 
-    pub fn sqrt6<T: ZZNum + ZZDiv8 + ZZDiv12>() -> T {
+    pub fn sqrt6<T: ZZNum + HasZZ8 + HasZZ12>() -> T {
         let sc = T::zz_params().full_turn_steps / 24;
         (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
     }
@@ -745,6 +764,25 @@ mod $name {
     }
 
     #[test]
+    fn test_div() {
+        if !is_zzint::<ZZi>() {
+            return;  // division currently does not work in arbitrary cyclotomic fields
+        }
+
+        for k in 0..ZZi::turn() {
+            for l in 0..ZZi::turn() {
+                let val = ZZi::unit(k) + ZZi::unit(l);
+                if val.is_zero() {
+                    continue;
+                }
+                let inv = val.zz_inv();
+                assert_eq!(val * inv, ZZi::one());
+
+            }
+        }
+    }
+
+    #[test]
     fn test_rotations() {
         // test ccw()
         assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
@@ -768,15 +806,15 @@ mod $name {
         }
 
         // test powi()
-        assert_eq!(ZZi::ccw().powi(ZZi::hturn()), -ZZi::one());
-        assert_eq!(ZZi::ccw().powi(ZZi::turn()), ZZi::one());
-        assert_eq!(ZZi::ccw().powi(ZZi::hturn()).powi(2), ZZi::one());
+        assert_eq!(ZZi::ccw().pow(ZZi::hturn()), -ZZi::one());
+        assert_eq!(ZZi::ccw().pow(ZZi::turn()), ZZi::one());
+        assert_eq!(ZZi::ccw().pow(ZZi::hturn()).pow(2), ZZi::one());
     }
 
     #[test]
     #[should_panic]
     fn test_neg_powi() {
-        ZZi::one().powi(-1);
+        ZZi::one().pow(-1);
     }
 
     #[test]
@@ -983,7 +1021,7 @@ mod $name {
         let x = -ZZ24::one();
         assert_eq!(format!("{x}"), "-1");
 
-        let x = ZZ24::one() + (ZZ24::ccw()).powi(2);
+        let x = ZZ24::one() + (ZZ24::ccw()).pow(2);
         assert_eq!(format!("{x}"), "1+1/2i + (1/2)*sqrt(3)");
 
         let x: ZZ10 = zz_units_sum();
@@ -1008,7 +1046,7 @@ mod $name {
 
         // {0, 1} dot {1/2, sqrt(3)/2} = sqrt(3) / 2
         // => dot^2 = 3/4
-        let d1 = p60.dot(&pi).powi(2).complex();
+        let d1 = p60.dot(&pi).pow(2).complex();
         assert_eq!(d1.re, 0.75);
         assert_eq!(d1.im, 0.0);
 
@@ -1016,7 +1054,7 @@ mod $name {
         let d2 = pm60.dot(&pi).complex();
         assert!(d2.re < 0.0);
         assert_eq!(d2.im, 0.0);
-        assert_eq!(pm60.dot(&pi).powi(2).complex().re, 0.75);
+        assert_eq!(pm60.dot(&pi).pow(2).complex().re, 0.75);
     }
 
     #[test]

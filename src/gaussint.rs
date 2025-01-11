@@ -1,11 +1,11 @@
-use super::traits::{Ccw, InnerIntType, IntRing};
+use super::traits::{Ccw, InnerIntType, IntField, IntRing};
 use num_integer::Integer;
 use num_rational::{Ratio, Rational32, Rational64};
 use num_traits::{One, Zero};
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::marker::Copy;
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// Gaussian Integer (complex number with real and imaginary part both integers).
 /// NOTE: even though complex numbers cannot really be ordered,
@@ -20,7 +20,7 @@ impl<T: IntRing + InnerIntType> InnerIntType for GaussInt<T> {
     type IntType = T::IntType;
 }
 
-impl<T: IntRing> GaussInt<T> {
+impl<T: Copy + Neg<Output = T>> GaussInt<T> {
     pub const fn new(re: T, im: T) -> Self {
         Self { real: re, imag: im }
     }
@@ -33,7 +33,27 @@ impl<T: IntRing> GaussInt<T> {
     }
 }
 
-impl<T: IntRing> Zero for GaussInt<T> {
+impl<
+        T: Copy
+            + Div<Output = T>
+            + Mul<Output = T>
+            + Div<Output = T>
+            + Add<Output = T>
+            + Neg<Output = T>,
+    > GaussInt<T>
+{
+    /// Return the multiplicative inverse
+    pub fn inv(&self) -> Self {
+        // 1/(a + b*i) = (a - i*b)/(a^2 + b^2)
+        let denom = self.real * self.real + self.imag * self.imag;
+        Self {
+            real: self.real / denom,
+            imag: -self.imag / denom,
+        }
+    }
+}
+
+impl<T: IntField> Zero for GaussInt<T> {
     fn zero() -> Self {
         Self::new(T::zero(), T::zero())
     }
@@ -43,7 +63,7 @@ impl<T: IntRing> Zero for GaussInt<T> {
     }
 }
 
-impl<T: IntRing> One for GaussInt<T>
+impl<T: IntField> One for GaussInt<T>
 where
     GaussInt<T>: Mul<Output = Self>,
 {
@@ -66,7 +86,7 @@ impl<T: IntRing> Ccw for GaussInt<T> {
     }
 }
 
-impl<T: IntRing> Neg for GaussInt<T> {
+impl<T: Copy + Neg<Output = T>> Neg for GaussInt<T> {
     type Output = Self;
 
     fn neg(self) -> Self {
@@ -109,6 +129,22 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Mul<GaussInt
     }
 }
 
+impl<
+        T: Copy
+            + Add<Output = T>
+            + Mul<Output = T>
+            + Div<Output = T>
+            + Sub<Output = T>
+            + Neg<Output = T>,
+    > Div<GaussInt<T>> for GaussInt<T>
+{
+    type Output = Self;
+
+    fn div(self, other: Self) -> Self {
+        self * other.inv()
+    }
+}
+
 impl<T: Display + Zero + One + Eq + PartialOrd + Neg<Output = T>> Display for GaussInt<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut terms: Vec<String> = Vec::new();
@@ -141,20 +177,18 @@ impl<T: Display + Zero + One + Eq + PartialOrd + Neg<Output = T>> Display for Ga
     }
 }
 
-impl<T: Integer + IntRing> IntRing for GaussInt<T> {}
-
 // implement from(...)
-impl<T: Integer + IntRing> From<T> for GaussInt<Ratio<T>> {
+impl<T: IntRing + Integer> From<T> for GaussInt<Ratio<T>> {
     fn from(value: T) -> Self {
         GaussInt::new(Ratio::new(value, T::one()), Ratio::zero())
     }
 }
-impl<T: Integer + IntRing> From<(T,)> for GaussInt<Ratio<T>> {
+impl<T: IntRing + Integer> From<(T,)> for GaussInt<Ratio<T>> {
     fn from((value,): (T,)) -> Self {
         GaussInt::from(value)
     }
 }
-impl<T: Integer + IntRing> From<(T, T)> for GaussInt<Ratio<T>> {
+impl<T: IntRing + Integer> From<(T, T)> for GaussInt<Ratio<T>> {
     fn from((re, im): (T, T)) -> Self {
         GaussInt::new(Ratio::new(re, T::one()), Ratio::new(im, T::one()))
     }
@@ -184,6 +218,12 @@ impl<T: IntRing + Integer> Mul<T> for GaussInt<Ratio<T>> {
     type Output = GaussInt<Ratio<T>>;
     fn mul(self, other: T) -> GaussInt<Ratio<T>> {
         return self * GaussInt::<Ratio<T>>::from(other);
+    }
+}
+impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
+    type Output = GaussInt<Ratio<T>>;
+    fn div(self, other: T) -> GaussInt<Ratio<T>> {
+        return self / GaussInt::<Ratio<T>>::from(other);
     }
 }
 
@@ -243,6 +283,15 @@ mod tests {
         assert_eq!(GInt::new(1, 2) + GInt::new(3, 4), GInt::new(4, 6));
         assert_eq!(GInt::new(1, 2) - GInt::new(3, 4), GInt::new(-2, -2));
         assert_eq!(GInt::new(1, 2) * GInt::new(3, 4), GInt::new(-5, 10));
+    }
+
+    #[test]
+    fn test_div() {
+        type GInt = GaussInt<Ratio<i32>>;
+        let x: GInt = GaussInt::new(2.into(), 3.into());
+        let y: GInt = GaussInt::new(5.into(), (-7).into());
+        let z: GInt = GaussInt::new((-11, 74).into(), (29, 74).into());
+        assert_eq!(x / y, z);
     }
 
     #[test]
