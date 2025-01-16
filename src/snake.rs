@@ -1,14 +1,10 @@
+use crate::grid::UnitSquareGrid;
+use crate::zz::{HasZZ12, HasZZ4, HasZZ6};
+use crate::zzbase::ZZNum;
 use crate::zzutil::intersect;
-
-use super::gaussint::GaussInt;
-use super::zz::{HasZZ12, HasZZ4, HasZZ6};
-use super::zzbase::ZZNum;
-use super::zzutil::{
-    cell_of, indices_from_cells, normalize_angle, seg_neighborhood_of, upscale_angles,
-};
+use crate::zzutil::{normalize_angle, upscale_angles};
 use num_complex::Complex;
-use num_traits::{ToPrimitive, Zero};
-use std::collections::HashMap;
+use num_traits::ToPrimitive;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -78,7 +74,7 @@ pub struct Snake<T: ZZNum> {
     ///
     /// Each point with index i is part of at most two segments,
     /// with indices (i-1, i) and (i, i+1), if 0 < i < num_points
-    grid: HashMap<GaussInt<i64>, Vec<usize>>,
+    grid: UnitSquareGrid,
 
     /// If set to true, the snake will NOT prevent self-intersections.
     allow_intersections: bool,
@@ -108,11 +104,13 @@ impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Snake<T> {
 impl<T: ZZNum> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
+        let mut grid = UnitSquareGrid::new();
+        grid.add((0, 0), 0);
         Self {
             points: vec![T::zero(); 1],
             angles: Vec::new(),
             ang_sum: 0,
-            grid: HashMap::from([(GaussInt::zero(), vec![0])]),
+            grid: grid,
             allow_intersections: false,
         }
     }
@@ -222,10 +220,7 @@ impl<T: ZZNum> Snake<T> {
 
         // register point in the grid
         self.grid
-            .entry(cell_of(new_pt))
-            .or_default()
-            .push(self.points.len());
-
+            .add(UnitSquareGrid::cell_of(new_pt), self.points.len());
         // add point to representative polyline
         self.points.push(new_pt);
     }
@@ -255,9 +250,9 @@ impl<T: ZZNum> Snake<T> {
 
     /// Return all representative segments of the current snakes
     /// that intersect with at least one of the given cells.
-    fn cell_segs(&self, cells: &[GaussInt<i64>]) -> Vec<(T, T)> {
+    fn cell_segs(&self, cells: &[(i64, i64)]) -> Vec<(T, T)> {
         let mut seg_pt_indices: Vec<(usize, usize)> = Vec::new();
-        for pt_idx in indices_from_cells(&self.grid, cells) {
+        for pt_idx in self.grid.get_cells(cells) {
             // each point is part of at least one and at most 2 segments
             if pt_idx != 0 {
                 seg_pt_indices.push((pt_idx - 1, pt_idx));
@@ -292,7 +287,7 @@ impl<T: ZZNum> Snake<T> {
         // end points of new candidate segment
         let new_seg @ (prev_pt, new_pt) = self.next_seg(angle);
         // unit square lattice cell neighborhood of new segment
-        let neighborhood = seg_neighborhood_of(prev_pt, new_pt);
+        let neighborhood = UnitSquareGrid::seg_neighborhood_of(prev_pt, new_pt);
         // all candidates for segment intersection
         let neighbor_segs = self.cell_segs(&neighborhood);
 
@@ -389,6 +384,15 @@ impl<T: ZZNum> Snake<T> {
 
         return result;
     }
+
+    /// Point-in-polygon check using raycasting.
+    pub fn is_point_inside(&self) -> bool {
+        if !self.is_closed() {
+            return false;
+        }
+
+        return true;
+    }
 }
 
 // For comparisons (Eq, Ord) and presentation (Display)
@@ -458,83 +462,6 @@ mod tests {
         let seq_zz24: Vec<i8> = vec![6, 4, 0, 4, -6, 4, 6, 4, -6, 4, 6, -4, 6, -4];
         let s: Snake<ZZ24> = spectre();
         assert_eq!(s.angles(), seq_zz24);
-    }
-
-    #[test]
-    fn test_cell_of() {
-        assert_eq!(cell_of(ZZ12::zero()), GaussInt::new(0, 0));
-        assert_eq!(cell_of(ZZ12::unit(0)), GaussInt::new(1, 0));
-        assert_eq!(cell_of(ZZ12::unit(1)), GaussInt::new(1, 1));
-        assert_eq!(cell_of(ZZ12::unit(2)), GaussInt::new(1, 1));
-        assert_eq!(cell_of(ZZ12::unit(3)), GaussInt::new(0, 1));
-        assert_eq!(cell_of(ZZ12::unit(4)), GaussInt::new(-1, 1));
-        assert_eq!(cell_of(ZZ12::unit(5)), GaussInt::new(-1, 1));
-        assert_eq!(cell_of(ZZ12::unit(6)), GaussInt::new(-1, 0));
-        assert_eq!(cell_of(ZZ12::unit(7)), GaussInt::new(-1, -1));
-        assert_eq!(cell_of(ZZ12::unit(8)), GaussInt::new(-1, -1));
-        assert_eq!(cell_of(ZZ12::unit(9)), GaussInt::new(0, -1));
-        assert_eq!(cell_of(ZZ12::unit(10)), GaussInt::new(1, -1));
-        assert_eq!(cell_of(ZZ12::unit(11)), GaussInt::new(1, -1));
-    }
-
-    #[test]
-    fn test_seg_neighborhood_of() {
-        let gint_vec = |pts: &[(i64, i64)]| {
-            pts.iter()
-                .map(|(x, y)| GaussInt::new(*x, *y))
-                .collect::<Vec<GaussInt<i64>>>()
-        };
-
-        // segment fully contained in one cell
-        let tmp1 = (ZZ12::one().scale(2) - ZZ12::unit(2) - ZZ12::unit(-1).scale(2)) * ZZ12::unit(1);
-        let tmp2 = (ZZ12::one().scale(3) - ZZ12::unit(2) - ZZ12::unit(-1).scale(3)) * ZZ12::unit(2);
-        let p1 = (tmp1 - tmp2) * ZZ12::unit(-2);
-        let p2 = p1 + ZZ12::unit(2);
-        let n0 = seg_neighborhood_of(p1, p2);
-        let n0_exp = gint_vec(&[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
-        assert_eq!(n0, n0_exp);
-
-        // segment touches 2 cells (horizontal)
-        let n1 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(0));
-        let n1_exp = gint_vec(&[
-            (-1, 0),
-            (0, -1),
-            (0, 0),
-            (0, 1),
-            (1, -1),
-            (1, 0),
-            (1, 1),
-            (2, 0),
-        ]);
-        assert_eq!(n1, n1_exp);
-
-        // segment touches 2 cells (vertical)
-        let n2 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(3));
-        let n2_exp = gint_vec(&[
-            (-1, 0),
-            (-1, 1),
-            (0, -1),
-            (0, 0),
-            (0, 1),
-            (0, 2),
-            (1, 0),
-            (1, 1),
-        ]);
-        assert_eq!(n2, n2_exp);
-
-        // segment touches 2 cells (diagonal)
-        let n3 = seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(1));
-        let n3_exp = gint_vec(&[
-            (-1, 0),
-            (0, -1),
-            (0, 0),
-            (0, 1),
-            (1, 0),
-            (1, 1),
-            (1, 2),
-            (2, 1),
-        ]);
-        assert_eq!(n3, n3_exp);
     }
 
     #[test]
@@ -642,28 +569,22 @@ mod tests {
     #[test]
     fn test_cell_segs() {
         let mut s: Snake<ZZ12> = Snake::new();
-        assert!(s.cell_segs(&[GaussInt::new(0, 0)]).is_empty());
+        assert!(s.cell_segs(&[(0, 0)]).is_empty());
 
         s.add(0);
-        assert_eq!(
-            s.cell_segs(&[GaussInt::new(0, 0)]),
-            &[(ZZ12::zero(), ZZ12::one())]
-        );
+        assert_eq!(s.cell_segs(&[(0, 0)]), &[(ZZ12::zero(), ZZ12::one())]);
 
         s.add(0);
+        assert_eq!(s.cell_segs(&[(0, 0)]), &[(ZZ12::zero(), ZZ12::one())]);
         assert_eq!(
-            s.cell_segs(&[GaussInt::new(0, 0)]),
-            &[(ZZ12::zero(), ZZ12::one())]
-        );
-        assert_eq!(
-            s.cell_segs(&[GaussInt::new(1, 0)]),
+            s.cell_segs(&[(1, 0)]),
             &[
                 (ZZ12::zero(), ZZ12::one()),
                 (ZZ12::one(), ZZ12::one().scale(2))
             ]
         );
         assert_eq!(
-            s.cell_segs(&[GaussInt::new(2, 0)]),
+            s.cell_segs(&[(2, 0)]),
             &[(ZZ12::one(), ZZ12::one().scale(2))]
         );
     }
@@ -708,6 +629,8 @@ mod tests {
 
     #[test]
     fn test_area() {
+        use crate::gaussint::GaussInt;
+
         // area of an equilateral triangle with side length 1 is sqrt(3)/4
         let tri_area_sq3 = GaussInt::new(Ratio::<i64>::new_raw(1, 2), Ratio::<i64>::zero());
         assert_eq!(

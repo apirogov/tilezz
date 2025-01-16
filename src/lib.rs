@@ -12,6 +12,8 @@ pub mod zz;
 
 pub mod zzutil;
 
+pub mod grid;
+
 pub mod snake;
 
 pub mod rat;

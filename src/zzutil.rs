@@ -1,7 +1,5 @@
-use super::gaussint::GaussInt;
 use super::zzbase::ZZNum;
 use num_traits::One;
-use std::collections::HashMap;
 
 // Misc utils
 // ----------
@@ -32,61 +30,6 @@ pub fn upscale_angles<T: ZZNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
 
     let scale = T::zz_params().full_turn_steps / src_ring;
     angles.iter().map(|x| x * scale).collect()
-}
-
-// Unit square lattice utils
-// -------------------------
-
-/// Return coordinates of closest unit square lattice cell
-/// that a complex integer falls in. The cells are centered
-/// at points that are pairs of two integers in the complex plane.
-pub fn cell_of<T: ZZNum>(zz: T) -> GaussInt<i64> {
-    let c = zz.complex();
-    GaussInt {
-        real: c.re.round() as i64,
-        imag: c.im.round() as i64,
-    }
-}
-
-/// Given a complex integer point, return the 5 unit square lattice cells
-/// that make up the neighborhood of the cell of the point.
-pub fn cell_neighborhood_of<T: ZZNum>(zz: T) -> Vec<GaussInt<i64>> {
-    let c = cell_of(zz);
-    let r = GaussInt::new(c.real + 1, c.imag);
-    let l = GaussInt::new(c.real - 1, c.imag);
-    let u = GaussInt::new(c.real, c.imag + 1);
-    let d = GaussInt::new(c.real, c.imag - 1);
-    vec![l, d, c, u, r] // sorted by first x, then y
-}
-
-/// Given endpoints of a unit length line segment,
-/// returns the 5 or 8 distinct unit square lattice cells that:
-/// 1. the line segment is guaranteed to be fully contained inside, and
-/// 2. all intersecting unit length segments also have at least one point in it.
-pub fn seg_neighborhood_of<T: ZZNum>(p1: T, p2: T) -> Vec<GaussInt<i64>> {
-    let mut result = cell_neighborhood_of(p1);
-    result.extend(cell_neighborhood_of(p2));
-    result.sort();
-    result.dedup();
-    result
-}
-
-/// Returns indices of all points in the given unit square lattice
-/// that are located inside one of the given cells.
-///
-/// Note that this does neither sort not deduplicate points.
-pub fn indices_from_cells(
-    lattice: &HashMap<GaussInt<i64>, Vec<usize>>,
-    cells: &[GaussInt<i64>],
-) -> Vec<usize> {
-    let mut pt_indices: Vec<usize> = Vec::new();
-    for cell in cells {
-        lattice.get(&cell).and_then(|pts| {
-            pt_indices.extend(pts);
-            None::<()>
-        });
-    }
-    pt_indices
 }
 
 // 2D geometry utils
@@ -151,32 +94,6 @@ mod tests {
     fn test_upscale_angles() {
         let exp: &[i8] = &[-4, 8, 12];
         assert_eq!(upscale_angles::<ZZ24>(ZZ6::turn(), &[-1, 2, 3]), exp);
-    }
-
-    #[test]
-    fn test_indices_from_cells() {
-        let grid: HashMap<GaussInt<i64>, Vec<usize>> = HashMap::from([
-            (GaussInt::new(0, 0), vec![0, 1]),
-            (GaussInt::new(1, 0), vec![2, 0]),
-        ]);
-
-        // sanity-check
-        assert_eq!(indices_from_cells(&grid, &[GaussInt::new(0, 0)]), &[0, 1]);
-        assert_eq!(indices_from_cells(&grid, &[GaussInt::new(1, 0)]), &[2, 0]);
-        assert_eq!(indices_from_cells(&grid, &[GaussInt::new(2, 0)]), &[]);
-
-        // combined results are simply concatenated
-        assert_eq!(
-            indices_from_cells(
-                &grid,
-                &[
-                    GaussInt::new(2, 0),
-                    GaussInt::new(1, 0),
-                    GaussInt::new(0, 0)
-                ]
-            ),
-            &[2, 0, 0, 1]
-        );
     }
 
     #[test]

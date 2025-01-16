@@ -22,10 +22,6 @@ pub use num_traits::{One, Zero};
 
 // definitions needed to derive different ZZn types
 //
-// NOTE: The bases here were derived in an ad-hoc manner. Apparently, a systematic approach
-// for deriving integral bases is described in this paper:
-// https://link.springer.com/article/10.1007/s002000050065
-
 // numeric constants for the chosen (in general non-unique) linearly independent algebraic bases
 // --------
 // NOTE: sqrt(2 + sqrt(2)) = (sqrt(2)+1)sqrt(2 - sqrt(2))

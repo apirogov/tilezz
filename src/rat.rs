@@ -332,6 +332,12 @@ impl<T: ZZNum> Rat<T> {
     }
 }
 
+impl<T: ZZNum> From<Rat<T>> for Snake<T> {
+    fn from(value: Rat<T>) -> Self {
+        Snake::from_slice_unchecked(value.seq())
+    }
+}
+
 impl<T: ZZNum> PartialEq for Rat<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
