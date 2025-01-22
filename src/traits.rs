@@ -1,6 +1,6 @@
 use num_integer::Integer;
 use num_rational::Ratio;
-use num_traits::{One, Zero};
+use num_traits::{One, Signed, Zero};
 use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
@@ -63,4 +63,18 @@ impl InnerIntType for i64 {
 
 impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
     type IntType = T::IntType;
+}
+
+pub trait RealSigned {
+    /// Return the sign of the real part of the value.
+    /// Note that ZZ cannot not support Signed trait in general.
+    ///
+    /// Implementation depends on the underlying ring.
+    fn re_signum(&self) -> Self;
+}
+
+impl<T: Signed> RealSigned for T {
+    fn re_signum(&self) -> Self {
+        self.signum()
+    }
 }

@@ -1,4 +1,4 @@
-// 2D Point
+// 2D Point (X, Y)
 type P64 = (f64, f64);
 
 // 2D Rectangle (top left and bottom right corners)
@@ -25,12 +25,18 @@ pub fn tile_bounds<'a, I>(pts: I) -> R64
 where
     I: IntoIterator<Item = &'a P64>,
 {
+    let mut empty = true;
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
     for (x, y) in pts {
+        empty = false;
         (min_x, min_y) = (min_x.min(*x), min_y.min(*y));
         (max_x, max_y) = (max_x.max(*x), max_y.max(*y));
     }
-    ((min_x, min_y), (max_x, max_y))
+    if !empty {
+        ((min_x, min_y), (max_x, max_y))
+    } else {
+        ((-1., -1.), (1., 1.))
+    }
 }
 
 /// Given the bounds of a tile, adjust them to a square

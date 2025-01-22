@@ -1,12 +1,11 @@
 use super::gaussint::GaussInt;
-use super::traits::{Ccw, CycIntRing, InnerIntType, IntField, IntRing};
+use super::traits::{Ccw, CycIntRing, InnerIntType, IntField, IntRing, RealSigned};
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Ratio;
-use num_traits::{FromPrimitive, One, PrimInt, Signed, ToPrimitive, Zero};
+use num_traits::{FromPrimitive, One, PrimInt, Zero};
 use std::fmt::Debug;
 use std::fmt::Display;
-use std::marker::PhantomData;
 
 // configure a signed primitive integer size here
 pub type MyInt = i64;
@@ -17,9 +16,8 @@ pub type Frac = Ratio<MyInt>;
 pub type GInt = GaussInt<Frac>;
 
 #[derive(Debug)]
-pub struct ZZParams<'a, T> {
-    pub phantom: PhantomData<&'a T>,
-
+pub struct ZZParams<'a> {
+    // pub phantom: PhantomData<&'a T>,
     /// Squares of symbolic roots. IMPORTANT: we assume that the first one is 1
     pub sym_roots_sqs: &'a [f64],
     /// Labels of symbolic roots.
@@ -34,12 +32,9 @@ pub struct ZZParams<'a, T> {
     pub ccw_unit_coeffs: &'a [[MyInt; 2]],
 }
 
-impl<T> ZZParams<'static, Ratio<T>>
-where
-    T: PrimInt + Integer + Signed + IntRing,
-{
+impl ZZParams<'static> {
     // helper function to lift the param coeffs into a GaussInt of suitable type
-    pub fn ccw_unit(self) -> Vec<GaussInt<Ratio<T>>> {
+    pub fn ccw_unit<T: PrimInt + Integer + IntRing>(&self) -> Vec<GaussInt<Ratio<T>>> {
         let sc = T::from(self.scaling_fac).unwrap();
         self.ccw_unit_coeffs
             .into_iter()
@@ -53,19 +48,16 @@ where
     }
 }
 
+// --------------------------------
+
 /// Floating-point-free solution to get sign of an expression
 /// a*sqrt(n) + b*sqrt(m)
 /// where a,b,m,n are all integers
 /// and m,n are squarefree coprime constants > 1.
-pub fn signum_sum_sqrt_expr_2<T: IntRing + Signed + Copy + FromPrimitive + Debug>(
-    a: T,
-    m: T,
-    b: T,
-    n: T,
-) -> T {
+pub fn signum_sum_sqrt_expr_2<T: IntRing + RealSigned>(a: T, m: T, b: T, n: T) -> T {
     // if a and b are both positive or negative -> trivial,
-    let sgn_a = a.signum();
-    let sgn_b = b.signum();
+    let sgn_a = a.re_signum();
+    let sgn_b = b.re_signum();
     if sgn_a == sgn_b {
         return sgn_a;
     }
@@ -79,14 +71,14 @@ pub fn signum_sum_sqrt_expr_2<T: IntRing + Signed + Copy + FromPrimitive + Debug
     // if a<0, b>0: z > 0 <=> n*a^2 < m*b^2 <=> m*b^2 - n*a^2 > 0
     // (and symmetrically for z < 0), which can be summarized
     // by using the sign of a and b to avoid case splitting.
-    (sgn_a * a * a * m + sgn_b * b * b * n).signum()
+    (sgn_a * a * a * m + sgn_b * b * b * n).re_signum()
 }
 
 /// Floating-point-free solution to get sign of an expression
 /// a + b*sqrt(m) + c*sqrt(n) + d*sqrt(m*n)
 /// where a,b,c,m,n are all integers
 /// and m,n are squarefree coprime constants > 1.
-pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug>(
+pub fn signum_sum_sqrt_expr_4<T: IntRing + RealSigned + FromPrimitive>(
     a: T,
     k: T,
     b: T,
@@ -147,68 +139,144 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + Signed + Copy + FromPrimitive + Debug
     let four = T::from_i8(4).unwrap();
     let mn = l;
     let lhs = (b * b * m) + (c * c * n) - (d * d * mn) - (a * a);
-    let sq_lhs = lhs.signum() * lhs * lhs;
+    let sq_lhs = lhs.re_signum() * lhs * lhs;
     let ad_m_bc = (a * d) - (b * c);
-    let sq_rhs = four * mn * ad_m_bc.signum() * ad_m_bc * ad_m_bc;
+    let sq_rhs = four * mn * ad_m_bc.re_signum() * ad_m_bc * ad_m_bc;
 
     // println!("{sgn_bc_terms:?} | {lhs:?} | {sq_lhs:?} || {ad_m_bc:?} | {sq_rhs:?}");
 
-    sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
+    sgn_bc_terms.re_signum() * (sq_lhs - sq_rhs).re_signum()
 }
 
+// --------------------------------
+
 /// This implementation uses f64 (works in all ZZ rings).
-pub fn zz_partial_signum_fallback<ZZ: ZZNum>(val: &ZZ) -> Frac {
-    let val = val.complex().re;
+pub fn zz_partial_signum_fallback<Z: ZNum>(val: &Z) -> Z {
+    let val = val.complex64().re;
     if val.is_zero() {
-        Frac::zero()
+        Z::zero()
     } else {
-        Frac::from_f64(val.signum()).unwrap()
+        let mut result = Z::zero();
+        result.zz_coeffs_mut()[0] = Z::Scalar::from_f64(val.signum()).unwrap();
+        result
     }
 }
 
 /// Trivial if there is just one term in the expression,
 /// regardless of its symbolic root (which usually will be 1).
-pub fn zz_partial_signum_1_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
+pub fn zz_partial_signum_1_sym<Z: ZNum>(val: &Z) -> Z {
     let cs = val.zz_coeffs();
 
-    cs[0].real.signum()
+    let mut result = Z::zero();
+    result.zz_coeffs_mut()[0] = Z::Scalar::from(cs[0].re_signum());
+    result
 }
 
-pub fn zz_partial_signum_2_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
-    let ftoi = |f| Frac::from_f64(f).unwrap();
+pub fn zz_partial_signum_2_sym<Z: ZNum>(val: &Z) -> Z {
+    let ftoi = |f| Z::Scalar::from_f64(f).unwrap();
     let cs = val.zz_coeffs();
-    let rs = ZZ::zz_params().sym_roots_sqs;
+    let rs = Z::zz_params().sym_roots_sqs;
 
-    let (a, b) = (cs[0].real, cs[1].real);
+    let (a, b) = (cs[0], cs[1]);
     let (m, n) = (ftoi(rs[0]), ftoi(rs[1]));
-    signum_sum_sqrt_expr_2(a, m, b, n)
+    let sgn = signum_sum_sqrt_expr_2(a, m, b, n);
+
+    let mut result = Z::zero();
+    result.zz_coeffs_mut()[0] = Z::Scalar::from(sgn);
+    result
 }
 
-pub fn zz_partial_signum_4_sym<ZZ: ZZNum>(val: &ZZ) -> Frac {
-    let cs: Vec<Frac> = val.zz_coeffs().iter().map(|x| x.real).collect();
-    let rs: Vec<Frac> = ZZ::zz_params()
+pub fn zz_partial_signum_4_sym<Z: ZNum>(val: &Z) -> Z {
+    let cs: Vec<Z::Scalar> = val.zz_coeffs().to_vec();
+    let rs: Vec<Z::Scalar> = Z::zz_params()
         .sym_roots_sqs
         .iter()
-        .map(|r| Frac::from_f64(*r).unwrap())
+        .map(|r| Z::Scalar::from_f64(*r).unwrap())
         .collect();
 
     let (a, b, c, d) = (cs[0], cs[1], cs[2], cs[3]);
     let (k, m, n, l) = (rs[0], rs[1], rs[2], rs[3]);
-    signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l)
+
+    let sgn = signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l);
+
+    let mut result = Z::zero();
+    result.zz_coeffs_mut()[0] = Z::Scalar::from(sgn);
+    result
 }
 
-pub trait ZZBase<
-    T: Sized
-        + Signed
-        + PartialOrd
-        + IntField
-        + InnerIntType
-        + ToPrimitive
-        + FromPrimitive
-        + Debug
-        + 'static,
->
-{
+// --------------------------------
+
+/// Compute inverse by repeated rationalizing of the denominator.
+///
+/// IMPORTANT: This only works correctly if there are no nested roots in
+/// the representation of the cyclotomic field, i.e. it does NOT work
+/// correctly for fields that contain ZZ5 or ZZ8 as subfields.
+#[inline]
+pub fn zz_inv<Z: ZNum>(val: &Z) -> Z {
+    // for x/y where y = a + b, b being a single (scaled) square root,
+    // we compute y' = a - b and produce x*y'/(a+b)(a-b) = x*y'/a^2-b^2
+    // where a^2 is a simpler term and b is rational.
+    // we repeat this for all square roots in the denominator.
+
+    let num_terms = Z::zz_params().sym_roots_num;
+
+    let mut numer = Z::one();
+    let mut denom = val.clone();
+
+    let mut root_ix = 0;
+    let mut non_root_ix = 0;
+    let mut root_found = true;
+    while root_found {
+        root_found = false;
+        for i in 0..num_terms {
+            if Z::zz_params().sym_roots_sqs[i].is_one() {
+                non_root_ix = i; // we need the non-irrational part later
+                continue; // non-irrational term
+            }
+            let c = denom.zz_coeffs()[i];
+            if !c.is_zero() {
+                root_found = true;
+                root_ix = i;
+                break;
+            }
+        }
+
+        if !root_found {
+            break; // rational denominator
+        }
+
+        // "conjugate" one square root to use the binomial trick
+        let mut conjugated = denom.clone();
+        let curr_root_coeff = conjugated.zz_coeffs()[root_ix];
+        conjugated.zz_coeffs_mut()[root_ix] = -curr_root_coeff;
+
+        // compute b^2
+        let mut curr_root_term_sq = Z::zero();
+        curr_root_term_sq.zz_coeffs_mut()[root_ix] = curr_root_coeff; // = b
+        curr_root_term_sq = curr_root_term_sq * curr_root_term_sq; // = b^2
+
+        // update numerator (= x * y')
+        numer = numer * conjugated;
+
+        // update denominator (= (a + b)(a - b)= a^2 - b^2)
+        denom.zz_coeffs_mut()[root_ix] = Z::Scalar::zero(); // = a
+        denom = denom * denom - curr_root_term_sq; // = a^2 - b^2
+    }
+
+    // now we have a rational denominator (i.e. no square root terms)
+    // so we can just flip it and multiply with the numerator.
+    let mut inv_denom = Z::zero();
+    inv_denom.zz_coeffs_mut()[non_root_ix] = Z::Scalar::one() / denom.zz_coeffs()[non_root_ix];
+
+    return numer * inv_denom;
+}
+
+// --------------------------------
+
+pub trait ZZBase {
+    type Scalar: PartialOrd + IntField + InnerIntType + FromPrimitive + Debug + RealSigned + 'static;
+    type Real: ZNum;
+
     /// Return angle representing one full turn.
     #[inline]
     fn turn() -> i8 {
@@ -242,18 +310,17 @@ pub trait ZZBase<
     {
         let one = Self::one();
         let ccw = Self::ccw();
-        let j = i.rem_euclid(<Self as ZZBase<T>>::turn());
-        one * <Self as ZZBase<T>>::pow(&ccw, j)
+        let j = i.rem_euclid(<Self as ZZBase>::turn());
+        one * <Self as ZZBase>::pow(&ccw, j)
     }
 
     /// Raise to an integer power.
+    // NOTE: using i8 instead of u8 for convenience (angles use i8)
     fn pow(&self, i: i8) -> Self
     where
-        Self: ZZNum,
+        Self: ZNum,
     {
-        if i < 0 {
-            panic!("Negative powers are not supported!");
-        }
+        assert!(i >= 0, "Negative powers are not supported!");
         let mut x = Self::one();
         for _ in 0..i {
             x = x * (*self);
@@ -261,233 +328,57 @@ pub trait ZZBase<
         return x;
     }
 
-    /// Return imaginary unit (if ring supports it).
+    /// Return imaginary unit (if the ring supports it).
     #[inline]
     fn one_i() -> Self
     where
         Self: ZZNum,
     {
-        let qt = <Self as ZZBase<T>>::qturn();
-        <Self as ZZBase<T>>::unit(qt)
-    }
-
-    /// Complex conjugation.
-    #[inline]
-    fn conj(&self) -> Self
-    where
-        Self: Sized,
-    {
-        let cs: Vec<GaussInt<T>> = self.zz_coeffs().iter().map(|c| c.conj()).collect();
-        Self::new(&cs)
+        let qt = <Self as ZZBase>::qturn();
+        <Self as ZZBase>::unit(qt)
     }
 
     /// Scalar multiplication.
     #[inline]
-    fn scale(&self, scalar: <GaussInt<T> as InnerIntType>::IntType) -> Self
+    fn scale(&self, scalar: i64) -> Self
     where
         Self: Sized,
     {
-        let cs: Vec<GaussInt<T>> = Self::zz_mul_scalar(self.zz_coeffs(), scalar);
+        let cs: Vec<Self::Scalar> = Self::zz_mul_scalar(self.zz_coeffs(), scalar);
         Self::new(&cs)
     }
 
     /// Convert to a complex floating point number.
-    fn complex(&self) -> Complex64 {
-        let nums: Vec<Complex64> = self
-            .zz_coeffs()
-            .into_iter()
-            .map(|x| {
-                let re = x.real.to_f64().unwrap();
-                let im = x.imag.to_f64().unwrap();
-                Complex64::new(re, im)
-            })
-            .collect();
-        let units: Vec<Complex64> = Self::zz_params()
-            .sym_roots_sqs
-            .into_iter()
-            .map(|x| Complex64::new(x.sqrt(), 0.0))
-            .collect();
-        let mut ret = Complex64::zero();
-        for (n, u) in nums.iter().zip(units.iter()) {
-            ret += n * u;
-        }
-        ret
-    }
-
-    /// Return true if the value is purely real.
-    fn is_real(&self) -> bool {
-        self.zz_coeffs().iter().all(|c| c.imag.is_zero())
-    }
-
-    /// Return true if the value is purely imaginary.
-    fn is_imag(&self) -> bool {
-        self.zz_coeffs().iter().all(|c| c.real.is_zero())
-    }
-
-    fn is_complex(&self) -> bool {
-        !self.is_real() && !self.is_imag()
-    }
-
-    /// Split the value into its real and imaginary contributions.
-    /// Note that the imaginary component is converted to real.
-    fn xy(&self) -> (Self, Self)
-    where
-        Self: ZZNum,
-    {
-        (<Self as ZZBase<T>>::re(self), <Self as ZZBase<T>>::im(self))
-    }
-
-    /// Return the real part of the value, i.e. the value (z + z.conj()) / 2.
-    fn re(&self) -> Self
-    where
-        Self: ZZNum,
-    {
-        let cs: Vec<GaussInt<T>> = self
-            .zz_coeffs()
-            .iter()
-            .map(|c| GaussInt::new(c.real, T::zero()))
-            .collect();
-        Self::new(cs.as_slice())
-    }
-
-    /// Return the imaginary part of the value (rotated onto the real axis),
-    /// i.e. the value (z - z.conj()) / 2i.
-    fn im(&self) -> Self
-    where
-        Self: ZZNum,
-    {
-        let cs: Vec<GaussInt<T>> = self
-            .zz_coeffs()
-            .iter()
-            .map(|c| GaussInt::new(c.imag, T::zero()))
-            .collect();
-        Self::new(cs.as_slice())
-    }
-
-    /// Return the sign of the real part of the value.
-    /// Note that ZZ cannot not support Signed trait in general.
-    ///
-    /// Implementation depends on the underlying ring.
-    fn re_signum(&self) -> T
-    where
-        Self: ZZNum;
-
-    /// Get (a, b, c) for line ax + by + c = 0 based on two points.
-    fn line_through(&self, other: &Self) -> (Self, Self, Self)
-    where
-        Self: ZZNum,
-    {
-        let (p1x, p1y) = <Self as ZZBase<T>>::xy(self);
-        let (p2x, p2y) = <Self as ZZBase<T>>::xy(other);
-        (p1y - p2y, p2x - p1x, p1x * p2y - p2x * p1y)
-    }
-
-    /// Return whether the point is on the given line.
-    fn is_colinear(&self, (a, b, c): &(Self, Self, Self)) -> bool
-    where
-        Self: ZZNum,
-    {
-        let (px, py) = <Self as ZZBase<T>>::xy(self);
-        (*a * px + *b * py + *c).is_zero()
-    }
-
-    /// Dot product between two values.
-    ///
-    /// Result is always real-valued.
-    fn dot(&self, other: &Self) -> Self
-    where
-        Self: ZZNum,
-    {
-        let (p1x, p1y) = <Self as ZZBase<T>>::xy(self);
-        let (p2x, p2y) = <Self as ZZBase<T>>::xy(other);
-        (p1x * p2x) + (p1y * p2y)
-    }
-
-    /// norm of a value, i.e. dot product of the value with itself.
-    fn norm(&self) -> Self
-    where
-        Self: ZZNum,
-    {
-        <Self as ZZBase<T>>::dot(self, self)
-    }
-
-    /// 2D "cross" product (wedge is the general name).
-    ///
-    /// Result is always real-valued.
-    fn wedge(&self, other: &Self) -> Self
-    where
-        Self: ZZNum,
-    {
-        let (p1x, p1y) = <Self as ZZBase<T>>::xy(self);
-        let (p2x, p2y) = <Self as ZZBase<T>>::xy(other);
-        (p1x * p2y) - (p1y * p2x)
-    }
-
-    /// Return whether this point is strictly between the other two.
-    /// Note that we assume all three involved points are colinear.
-    fn is_between(&self, p1: &Self, p2: &Self) -> bool
-    where
-        Self: ZZNum,
-    {
-        // Alternative approach (from Wilderberger, "Divine Proportions"):
-        /*
-        let l = <Self as ZZBase<T>>::line_through(&p1, &p2);
-        if !<Self as ZZBase<T>>::is_colinear(&self, &l) {
-            return false;
-        }
-
-        // NOTE: self = p3, i.e. check that p1 ---- p3 ---- p2
-        let q1 = <Self as ZZBase<T>>::q(&(*self - *p1));
-        let q2 = <Self as ZZBase<T>>::q(&(*self - *p2));
-        let q3 = <Self as ZZBase<T>>::q(&(*p1 - *p2));
-
-        // if d > 0 -> p3 on segment (p1, p2)
-        // if d = 0 -> p3 is equal to an endpoint
-        // if d < 0 -> p3 colinear, but outside
-        let d = q3 - q1 - q2; // = +- 2*sqrt(q1*q2)
-        let sgn = <Self as ZZBase<T>>::zz_partial_signum(&d);
-        return sgn.is_one();
-        */
-
-        // classical approach:
-        // ----
-        let v = *p1 - *self;
-        let w = *self - *p2;
-        let wed = <Self as ZZBase<T>>::wedge(&v, &w);
-        let dot = <Self as ZZBase<T>>::dot(&v, &w);
-        let dot_sign = <Self as ZZBase<T>>::re_signum(&dot);
-        wed.is_zero() && dot_sign.is_one()
-    }
+    fn complex64(&self) -> Complex64;
 
     // functions that can be implemented via zz_base_impl!
     // --------
-    fn new(coeffs: &[GaussInt<T>]) -> Self;
+    fn new(coeffs: &[Self::Scalar]) -> Self;
 
-    fn zz_coeffs(&self) -> &[GaussInt<T>];
-    fn zz_coeffs_mut(&mut self) -> &mut [GaussInt<T>];
+    fn conj(&self) -> Self;
 
-    fn zz_params() -> &'static ZZParams<'static, T>;
-    fn zz_ccw_vec() -> Vec<GaussInt<T>>;
-    fn zz_mul_arrays(x: &[GaussInt<T>], y: &[GaussInt<T>]) -> Vec<GaussInt<T>>;
-    fn zz_mul_scalar(
-        arr: &[GaussInt<T>],
-        scalar: <GaussInt<T> as InnerIntType>::IntType,
-    ) -> Vec<GaussInt<T>>;
+    fn zz_coeffs(&self) -> &[Self::Scalar];
+    fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar];
+
+    fn zz_params() -> &'static ZZParams<'static>;
+    // fn zz_ccw_vec() -> Vec<Self::Scalar>;
+    fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar>;
+    fn zz_mul_scalar(arr: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar>;
 
     // implementations for implementing other traits using zz_ops_impl!
     // --------
     #[inline]
-    fn zz_zero_vec() -> Vec<GaussInt<T>> {
-        vec![GaussInt::zero(); Self::zz_params().sym_roots_num]
+    fn zz_zero_vec() -> Vec<Self::Scalar> {
+        vec![Self::Scalar::zero(); Self::zz_params().sym_roots_num]
     }
 
-    fn zz_one_vec() -> Vec<GaussInt<T>> {
-        let mut ret = vec![GaussInt::zero(); Self::zz_params().sym_roots_num];
-        ret[0] = GaussInt::one();
+    fn zz_one_vec() -> Vec<Self::Scalar> {
+        let mut ret = vec![Self::Scalar::zero(); Self::zz_params().sym_roots_num];
+        ret[0] = Self::Scalar::one();
         ret
     }
 
-    fn zz_add(&self, other: &Self) -> Vec<GaussInt<T>> {
+    fn zz_add(&self, other: &Self) -> Vec<Self::Scalar> {
         let mut ret = Self::zz_zero_vec();
         for (i, (aval, bval)) in self.zz_coeffs().iter().zip(other.zz_coeffs()).enumerate() {
             ret[i] = *aval + *bval;
@@ -495,7 +386,7 @@ pub trait ZZBase<
         ret
     }
 
-    fn zz_sub(&self, other: &Self) -> Vec<GaussInt<T>> {
+    fn zz_sub(&self, other: &Self) -> Vec<Self::Scalar> {
         let mut ret = Self::zz_zero_vec();
         for (i, (aval, bval)) in self.zz_coeffs().iter().zip(other.zz_coeffs()).enumerate() {
             ret[i] = *aval - *bval;
@@ -503,7 +394,7 @@ pub trait ZZBase<
         ret
     }
 
-    fn zz_neg(&self) -> Vec<GaussInt<T>> {
+    fn zz_neg(&self) -> Vec<Self::Scalar> {
         let mut ret = Self::zz_zero_vec();
         for (i, val) in self.zz_coeffs().iter().enumerate() {
             ret[i] = -(*val);
@@ -512,159 +403,280 @@ pub trait ZZBase<
     }
 
     #[inline]
-    fn zz_mul(&self, other: &Self) -> Vec<GaussInt<T>> {
+    fn zz_mul(&self, other: &Self) -> Vec<Self::Scalar> {
         Self::zz_mul_arrays(self.zz_coeffs(), other.zz_coeffs())
-    }
-
-    /// Compute inverse by repeated rationalizing of the denominator.
-    ///
-    /// IMPORTANT: This only works correctly if there are no nested roots in
-    /// the representation of the cyclotomic field, i.e. it does NOT work
-    /// correctly for fields that contain ZZ5 or ZZ8 as subfields.
-    #[inline]
-    fn zz_inv(&self) -> Self
-    where
-        Self: ZZNum,
-    {
-        // for x/y where y = a + b, b being a single (scaled) square root,
-        // we compute y' = a - b and produce x*y'/(a+b)(a-b) = x*y'/a^2-b^2
-        // where a^2 is a simpler term and b is rational.
-        // we repeat this for all square roots in the denominator.
-
-        let num_terms = <Self as ZZBase<T>>::zz_params().sym_roots_num;
-
-        let mut numer = <Self as One>::one();
-        let mut denom = self.clone();
-
-        let mut root_ix = 0;
-        let mut non_root_ix = 0;
-        let mut root_found = true;
-        while root_found {
-            root_found = false;
-            for i in 0..num_terms {
-                if <Self as ZZBase<T>>::zz_params().sym_roots_sqs[i].is_one() {
-                    non_root_ix = i; // we need the non-irrational part later
-                    continue; // non-irrational term
-                }
-                let c = <Self as ZZBase<T>>::zz_coeffs(&denom)[i];
-                if !c.is_zero() {
-                    root_found = true;
-                    root_ix = i;
-                    break;
-                }
-            }
-
-            if !root_found {
-                break; // rational denominator
-            }
-
-            // "conjugate" one square root to use the binomial trick
-            let mut conjugated = denom.clone();
-            let curr_root_coeff = <Self as ZZBase<T>>::zz_coeffs(&conjugated)[root_ix];
-            conjugated.zz_coeffs_mut()[root_ix] = -curr_root_coeff;
-
-            // compute b^2
-            let mut curr_root_term_sq = <Self as Zero>::zero();
-            curr_root_term_sq.zz_coeffs_mut()[root_ix] = curr_root_coeff; // = b
-            curr_root_term_sq = curr_root_term_sq * curr_root_term_sq; // = b^2
-
-            // update numerator (= x * y')
-            numer = numer * conjugated;
-
-            // update denominator (= (a + b)(a - b)= a^2 - b^2)
-            denom.zz_coeffs_mut()[root_ix] = 0.into(); // = a
-            denom = denom * denom - curr_root_term_sq; // = a^2 - b^2
-        }
-
-        // now we have a rational denominator (i.e. no square root terms)
-        // so we can just flip it and multiply with the numerator.
-        let mut inv_denom = <Self as Zero>::zero();
-        inv_denom.zz_coeffs_mut()[non_root_ix] =
-            GaussInt::one() / <Self as ZZBase<T>>::zz_coeffs(&denom)[non_root_ix];
-
-        return numer * inv_denom;
     }
 }
 
-/// The trait that other structures should parametrize on
-/// to work with any complex integer ring.
-pub trait ZZNum: ZZBase<Frac> + InnerIntType + CycIntRing + Display {}
+pub trait ZZComplex {
+    /// Return true if the value is purely real.
+    fn is_real(&self) -> bool;
+
+    /// Return true if the value is purely imaginary.
+    fn is_imag(&self) -> bool;
+
+    /// Return true if the value is mixed real and imaginary.
+    fn is_complex(&self) -> bool {
+        !self.is_real() && !self.is_imag()
+    }
+
+    /// Return the real part of the value,
+    /// i.e. the value (z + z.conj()) / 2
+    fn re(&self) -> <Self as ZZBase>::Real
+    where
+        Self: ZZBase;
+
+    /// Return the imaginary part of the value (rotated onto the real axis),
+    /// i.e. the value (z - z.conj()) / 2i
+    fn im(&self) -> <Self as ZZBase>::Real
+    where
+        Self: ZZBase;
+
+    /// Split the value into its real and imaginary contributions.
+    /// Note that the imaginary component is converted to real.
+    ///
+    // NOTE: z = dot(1, z) + i*wedge(1, z), as dot(1, z) = Re(z), wedge(1, z) = Im(z)
+    fn re_im(&self) -> (<Self as ZZBase>::Real, <Self as ZZBase>::Real)
+    where
+        Self: ZZBase,
+    {
+        (self.re(), self.im())
+    }
+}
+
+/// Quadratic real extension corresponding to a cyclotomic ring
+/// (used to e.g. split a cyclotomic value into separate real and imaginary parts)
+pub trait ZNum: ZZBase + InnerIntType + RealSigned + IntRing + Display {}
+
+/// A cyclotomic ring. You probably want to parametrize generic code over this trait.
+pub trait ZZNum: ZNum + ZZComplex + CycIntRing {}
+
+// --------------------------------
 
 #[macro_export]
 macro_rules! zz_base_impl {
-    ($name:ident, $params:ident, $mul_func:ident, $re_signum_func:ident) => {
+    ($name:ident, $name_real:ident, $params:ident, $mul_func:ident, $re_signum_func:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name_real {
+            coeffs: [Frac; $params.sym_roots_num],
+        }
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name {
             coeffs: [GInt; $params.sym_roots_num],
         }
 
+        impl InnerIntType for $name_real {
+            type IntType = <Frac as InnerIntType>::IntType;
+        }
         impl InnerIntType for $name {
             type IntType = <GInt as InnerIntType>::IntType;
         }
 
-        impl From<<GInt as InnerIntType>::IntType> for $name {
+        impl ZZBase for $name_real {
+            type Scalar = Frac;
+            type Real = $name_real;
+
+            fn conj(&self) -> Self {
+                self.clone()
+            }
+
+            #[inline]
+            fn zz_coeffs(&self) -> &[Self::Scalar] {
+                &self.coeffs
+            }
+
+            #[inline]
+            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
+                &mut self.coeffs
+            }
+
+            #[inline]
+            fn zz_params() -> &'static ZZParams<'static> {
+                &$params
+            }
+
+            #[inline]
+            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
+                $mul_func(x, y)
+            }
+
+            #[inline]
+            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
+                let sc: Self::Scalar = Self::Scalar::from(scalar);
+                x.into_iter().map(|c| *c * sc).collect()
+            }
+
+            fn new(coeffs: &[Self::Scalar]) -> Self {
+                let mut ret = Self {
+                    coeffs: [Self::Scalar::zero(); $params.sym_roots_num],
+                };
+                ret.coeffs.clone_from_slice(coeffs);
+                ret
+            }
+
+            fn complex64(&self) -> Complex64 {
+                let nums: Vec<Complex64> = self
+                    .zz_coeffs()
+                    .into_iter()
+                    .map(|x| {
+                        let re = x.to_f64().unwrap();
+                        Complex64::new(re, 0.0)
+                    })
+                    .collect();
+                let units: Vec<Complex64> = Self::zz_params()
+                    .sym_roots_sqs
+                    .into_iter()
+                    .map(|x| Complex64::new(x.sqrt(), 0.0))
+                    .collect();
+                let mut ret = Complex64::zero();
+                for (n, u) in nums.iter().zip(units.iter()) {
+                    ret += n * u;
+                }
+                ret
+            }
+        }
+        impl ZZBase for $name {
+            type Scalar = GaussInt<Frac>;
+            type Real = $name_real;
+
+            fn conj(&self) -> Self {
+                let cs: Vec<GInt> = self.zz_coeffs().iter().map(|c| c.conj()).collect();
+                Self::new(&cs)
+            }
+
+            #[inline]
+            fn zz_coeffs(&self) -> &[Self::Scalar] {
+                &self.coeffs
+            }
+
+            #[inline]
+            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
+                &mut self.coeffs
+            }
+
+            #[inline]
+            fn zz_params() -> &'static ZZParams<'static> {
+                &$params
+            }
+
+            #[inline]
+            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
+                $mul_func(x, y)
+            }
+
+            #[inline]
+            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
+                let sc: Self::Scalar = Self::Scalar::from(scalar);
+                x.into_iter().map(|c| *c * sc).collect()
+            }
+
+            fn new(coeffs: &[Self::Scalar]) -> Self {
+                let mut ret = Self {
+                    coeffs: [Self::Scalar::zero(); $params.sym_roots_num],
+                };
+                ret.coeffs.clone_from_slice(coeffs);
+                ret
+            }
+
+            fn complex64(&self) -> Complex64 {
+                let nums: Vec<Complex64> = self
+                    .zz_coeffs()
+                    .into_iter()
+                    .map(|x| {
+                        let re = x.real.to_f64().unwrap();
+                        let im = x.imag.to_f64().unwrap();
+                        Complex64::new(re, im)
+                    })
+                    .collect();
+                let units: Vec<Complex64> = Self::zz_params()
+                    .sym_roots_sqs
+                    .into_iter()
+                    .map(|x| Complex64::new(x.sqrt(), 0.0))
+                    .collect();
+                let mut ret = Complex64::zero();
+                for (n, u) in nums.iter().zip(units.iter()) {
+                    ret += n * u;
+                }
+                ret
+            }
+        }
+
+        impl From<<$name_real as InnerIntType>::IntType> for $name_real {
             fn from(value: <GInt as InnerIntType>::IntType) -> Self {
                 Self::one().scale(value)
             }
         }
 
+        impl From<<$name as InnerIntType>::IntType> for $name {
+            fn from(value: <GInt as InnerIntType>::IntType) -> Self {
+                Self::one().scale(value)
+            }
+        }
+
+        impl From<$name_real> for $name {
+            /// Lift real-valued ring value into the corresponding cyclomatic ring
+            fn from(value: $name_real) -> Self {
+                let cs: Vec<<$name as ZZBase>::Scalar> =
+                    value.zz_coeffs().iter().map(|z| (*z).into()).collect();
+                Self::new(cs.as_slice())
+            }
+        }
+
         impl<T: Integer + ToPrimitive> From<(T, T)> for $name {
+            /// Convert a Gaussian integer into a cyclotomic integer (only for fields including them)
             fn from((re, im): (T, T)) -> Self {
-                let r = <GInt as InnerIntType>::IntType::from_i64(re.to_i64().unwrap()).unwrap();
-                let i = <GInt as InnerIntType>::IntType::from_i64(im.to_i64().unwrap()).unwrap();
+                let r = <$name as InnerIntType>::IntType::from_i64(re.to_i64().unwrap()).unwrap();
+                let i = <$name as InnerIntType>::IntType::from_i64(im.to_i64().unwrap()).unwrap();
                 Self::one().scale(r) + Self::one_i().scale(i)
             }
         }
 
-        impl ZZBase<Frac> for $name {
-            #[inline]
-            fn zz_coeffs(&self) -> &[GInt] {
-                &self.coeffs
-            }
+        impl ZNum for $name_real {}
+        impl ZNum for $name {}
 
-            #[inline]
-            fn zz_coeffs_mut(&mut self) -> &mut [GInt] {
-                &mut self.coeffs
-            }
+        impl IntRing for $name_real {}
+        impl IntRing for $name {}
 
-            #[inline]
-            fn zz_params() -> &'static ZZParams<'static, Frac> {
-                &$params
-            }
-
-            #[inline]
-            fn zz_ccw_vec() -> Vec<GInt> {
-                $params.ccw_unit()
-            }
-
-            #[inline]
-            fn zz_mul_arrays(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
-                $mul_func(x, y)
-            }
-
-            #[inline]
-            fn re_signum(&self) -> Frac
-            where
-                Self: ZZNum,
-            {
+        impl RealSigned for $name_real {
+            fn re_signum(&self) -> Self {
                 $re_signum_func(self)
             }
-
-            #[inline]
-            fn zz_mul_scalar(x: &[GInt], scalar: i64) -> Vec<GInt> {
-                let sc: GInt = GInt::from(scalar);
-                x.into_iter().map(|c| *c * sc).collect()
-            }
-
-            fn new(coeffs: &[GInt]) -> Self {
-                let mut ret = Self {
-                    coeffs: [GInt::zero(); $params.sym_roots_num],
-                };
-                ret.coeffs.clone_from_slice(coeffs);
-                ret
+        }
+        impl RealSigned for $name {
+            fn re_signum(&self) -> Self {
+                $re_signum_func(self)
             }
         }
 
+        impl ZZComplex for $name {
+            fn is_real(&self) -> bool {
+                self.zz_coeffs().iter().all(|c| c.imag.is_zero())
+            }
+
+            fn is_imag(&self) -> bool {
+                self.zz_coeffs().iter().all(|c| c.real.is_zero())
+            }
+
+            fn re(&self) -> <Self as ZZBase>::Real {
+                let cs: Vec<Frac> = self.zz_coeffs().iter().map(|c| c.real).collect();
+                $name_real::new(cs.as_slice())
+            }
+
+            fn im(&self) -> <Self as ZZBase>::Real {
+                let cs: Vec<Frac> = self.zz_coeffs().iter().map(|c| c.imag).collect();
+                $name_real::new(cs.as_slice())
+            }
+        }
+
+        impl Ccw for $name {
+            fn ccw() -> Self {
+                Self::new(Self::zz_params().ccw_unit().as_slice())
+            }
+            fn is_ccw(&self) -> bool {
+                *self == Self::ccw()
+            }
+        }
+        impl CycIntRing for $name {}
         impl ZZNum for $name {}
     };
 }
@@ -703,7 +715,7 @@ macro_rules! zz_ops_impl {
             type Output = Self;
 
             fn div(self, other: Self) -> Self {
-                Self::mul(self, other.zz_inv())
+                Self::mul(self, zz_inv(&other))
             }
         }
 
@@ -723,17 +735,6 @@ macro_rules! zz_ops_impl {
                 self.coeffs.to_vec() == Self::zz_one_vec()
             }
         }
-        impl Ccw for $t {
-            fn ccw() -> Self {
-                Self::new(&Self::zz_ccw_vec())
-            }
-            fn is_ccw(&self) -> bool {
-                self.coeffs.to_vec() == Self::zz_ccw_vec()
-            }
-        }
-
-        impl IntRing for $t {}
-        impl CycIntRing for $t {}
 
         impl Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

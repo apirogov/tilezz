@@ -1,7 +1,7 @@
-use super::traits::{Ccw, InnerIntType, IntField, IntRing};
+use crate::traits::{Ccw, InnerIntType, IntField, IntRing, RealSigned};
 use num_integer::Integer;
 use num_rational::{Ratio, Rational32, Rational64};
-use num_traits::{One, Zero};
+use num_traits::{FromPrimitive, One, Zero};
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::marker::Copy;
@@ -33,27 +33,7 @@ impl<T: Copy + Neg<Output = T>> GaussInt<T> {
     }
 }
 
-impl<
-        T: Copy
-            + Div<Output = T>
-            + Mul<Output = T>
-            + Div<Output = T>
-            + Add<Output = T>
-            + Neg<Output = T>,
-    > GaussInt<T>
-{
-    /// Return the multiplicative inverse
-    pub fn inv(&self) -> Self {
-        // 1/(a + b*i) = (a - i*b)/(a^2 + b^2)
-        let denom = self.real * self.real + self.imag * self.imag;
-        Self {
-            real: self.real / denom,
-            imag: -self.imag / denom,
-        }
-    }
-}
-
-impl<T: IntField> Zero for GaussInt<T> {
+impl<T: IntRing> Zero for GaussInt<T> {
     fn zero() -> Self {
         Self::new(T::zero(), T::zero())
     }
@@ -63,7 +43,7 @@ impl<T: IntField> Zero for GaussInt<T> {
     }
 }
 
-impl<T: IntField> One for GaussInt<T>
+impl<T: IntRing> One for GaussInt<T>
 where
     GaussInt<T>: Mul<Output = Self>,
 {
@@ -73,6 +53,15 @@ where
 
     fn is_one(&self) -> bool {
         self.real == T::one() && self.imag == T::zero()
+    }
+}
+
+impl<T: IntRing + FromPrimitive> FromPrimitive for GaussInt<T> {
+    fn from_i64(n: i64) -> Option<Self> {
+        T::from_i64(n).and_then(|num| Some(Self::new(num, T::zero())))
+    }
+    fn from_u64(n: u64) -> Option<Self> {
+        T::from_u64(n).and_then(|num| Some(Self::new(num, T::zero())))
     }
 }
 
@@ -129,15 +118,19 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Mul<GaussInt
     }
 }
 
-impl<
-        T: Copy
-            + Add<Output = T>
-            + Mul<Output = T>
-            + Div<Output = T>
-            + Sub<Output = T>
-            + Neg<Output = T>,
-    > Div<GaussInt<T>> for GaussInt<T>
-{
+impl<T: IntField> GaussInt<T> {
+    /// Return the multiplicative inverse
+    pub fn inv(&self) -> Self {
+        // 1/(a + b*i) = (a - i*b)/(a^2 + b^2)
+        let denom = self.real * self.real + self.imag * self.imag;
+        Self {
+            real: self.real / denom,
+            imag: -self.imag / denom,
+        }
+    }
+}
+
+impl<T: IntField> Div<GaussInt<T>> for GaussInt<T> {
     type Output = Self;
 
     fn div(self, other: Self) -> Self {
@@ -145,7 +138,7 @@ impl<
     }
 }
 
-impl<T: Display + Zero + One + Eq + PartialOrd + Neg<Output = T>> Display for GaussInt<T> {
+impl<T: Display + IntRing + PartialOrd> Display for GaussInt<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut terms: Vec<String> = Vec::new();
         if !self.real.is_zero() {
@@ -178,6 +171,11 @@ impl<T: Display + Zero + One + Eq + PartialOrd + Neg<Output = T>> Display for Ga
 }
 
 // implement from(...)
+impl<T: IntRing> From<T> for GaussInt<T> {
+    fn from(value: T) -> Self {
+        GaussInt::new(value, T::zero())
+    }
+}
 impl<T: IntRing + Integer> From<T> for GaussInt<Ratio<T>> {
     fn from(value: T) -> Self {
         GaussInt::new(Ratio::new(value, T::one()), Ratio::zero())
@@ -191,6 +189,12 @@ impl<T: IntRing + Integer> From<(T,)> for GaussInt<Ratio<T>> {
 impl<T: IntRing + Integer> From<(T, T)> for GaussInt<Ratio<T>> {
     fn from((re, im): (T, T)) -> Self {
         GaussInt::new(Ratio::new(re, T::one()), Ratio::new(im, T::one()))
+    }
+}
+
+impl<T: IntRing + RealSigned> RealSigned for GaussInt<T> {
+    fn re_signum(&self) -> Self {
+        GaussInt::new(self.real.re_signum(), T::zero())
     }
 }
 
@@ -226,6 +230,9 @@ impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
         return self / GaussInt::<Ratio<T>>::from(other);
     }
 }
+
+impl<T: IntRing + Integer> IntRing for GaussInt<Ratio<T>> {}
+impl<T: IntField + Integer> IntField for GaussInt<Ratio<T>> {}
 
 // The types we will typically want to use
 pub type GaussInt32 = GaussInt<Rational32>;

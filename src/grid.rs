@@ -13,7 +13,7 @@ impl UnitSquareGrid {
     /// that a complex integer falls in. The cells are centered
     /// at points that are pairs of two integers in the complex plane.
     pub fn cell_of<T: ZZNum>(zz: T) -> (i64, i64) {
-        let c = zz.complex();
+        let c = zz.complex64();
         (c.re.round() as i64, c.im.round() as i64)
     }
 

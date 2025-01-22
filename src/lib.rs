@@ -10,7 +10,9 @@ extern crate arrayref;
 
 pub mod zz;
 
-pub mod zzutil;
+pub mod zzgeom;
+
+pub mod angles;
 
 pub mod grid;
 

@@ -11,6 +11,7 @@ use plotters::{
 /// Metadata and style to be applied to a rendered tile.
 // TODO: could allow customizing border rendering with a pair of funcs (lines, segments)
 // and provide a outline style builder to simplify describing a style.
+#[derive(Clone)]
 pub struct TileStyle<'a> {
     pub fill_style: ShapeStyle,
     pub border_style: ShapeStyle,
@@ -66,6 +67,41 @@ impl<'a> Default for TileStyle<'a> {
     }
 }
 
+/// Plot a sequence of points of a given size using the given style.
+pub fn plot_points<'a, DB: DrawingBackend, F: Fn((f64, f64)) -> String>(
+    chart: &mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
+    pts: &[(f64, f64)],
+    label_func: F,
+    size: i32,
+    style: ShapeStyle,
+) {
+    let node_func = |c: (f64, f64), s: i32, st: ShapeStyle| {
+        EmptyElement::at(c) + Circle::<(i32, i32), i32>::new((0.into(), 0.into()), s.into(), st)
+    };
+    let nodes = PointSeries::of_element(pts.to_vec(), size, style, &node_func);
+    chart.draw_series(nodes).unwrap();
+
+    let centered = Pos::new(HPos::Center, VPos::Center);
+    let mut txtstyle: TextStyle = TileStyle::default().node_font;
+    txtstyle.font = txtstyle.font.resize(size as f64 * 2.0);
+    txtstyle = txtstyle.color(&WHITE);
+    txtstyle = txtstyle.pos(centered);
+    let node_lbl_func = |c: (f64, f64), _: i32, _: ShapeStyle| {
+        EmptyElement::at(c) + Text::new(format!("{}", label_func(c)), (0, 0), &txtstyle)
+    };
+    let node_lbls = PointSeries::of_element(pts.to_vec(), size, style, &node_lbl_func);
+    chart.draw_series(node_lbls).unwrap();
+}
+
+pub fn plot_seg<'a, DB: DrawingBackend, S: Into<ShapeStyle>>(
+    chart: &mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
+    (x, y): ((f64, f64), (f64, f64)),
+    style: S,
+) {
+    let line = LineSeries::new(vec![x, y], style);
+    chart.draw_series(line).unwrap();
+}
+
 /// Render a tile into a prepared chart.
 fn plot_tile_into<'a, DB: DrawingBackend>(
     chart: &mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
@@ -87,11 +123,13 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
             pts.truncate(1);
         }
 
-        let node_func = |c: (f64, f64), s: i32, st: ShapeStyle| {
-            EmptyElement::at(c) + Circle::<(i32, i32), i32>::new((0.into(), 0.into()), s.into(), st)
-        };
-        let nodes = PointSeries::of_element(pts, style.node_size, style.node_style, &node_func);
-        chart.draw_series(nodes).unwrap();
+        plot_points(
+            chart,
+            pts.as_slice(),
+            |_| "".to_string(),
+            style.node_size,
+            style.node_style,
+        );
     }
 
     // draw vertex labels (i.e. show indices of vertices)

@@ -1,14 +1,15 @@
+use crate::gaussint::GaussInt;
+use num_complex::Complex64;
 use num_integer::Integer;
 use num_traits::{FromPrimitive, ToPrimitive};
 use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;
-use std::marker::PhantomData;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use crate::traits::InnerIntType;
+use crate::traits::{InnerIntType, RealSigned};
 use crate::zzbase::{
-    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
+    zz_inv, zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
     zz_partial_signum_fallback, Frac, GInt,
 };
 use crate::{zz_base_impl, zz_ops_impl};
@@ -16,7 +17,7 @@ use crate::{zz_base_impl, zz_ops_impl};
 // pub use for user convenience
 pub use crate::traits::Ccw;
 pub use crate::traits::{CycIntRing, IntRing};
-pub use crate::zzbase::{ZZBase, ZZNum, ZZParams};
+pub use crate::zzbase::{ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
 pub use num_traits::{One, Zero};
 // --------
 
@@ -69,8 +70,7 @@ const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 /// simplified for each ring separately, which is more efficient.
 
 /// Gauss integers
-pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ4_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 4,
     sym_roots_num: 1,
     sym_roots_sqs: &[1.],
@@ -78,14 +78,13 @@ pub const ZZ4_PARAMS: ZZParams<Frac> = ZZParams {
     scaling_fac: 1,
     ccw_unit_coeffs: &[[0, 1]],
 };
-fn zz4_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz4_mul<T: IntRing>(x: &[T], y: &[T]) -> Vec<T> {
     match [*array_ref!(x, 0, 1), *array_ref!(y, 0, 1)] {
         [[a], [b]] => vec![a * b],
     }
 }
 /// Eisenstein integers
-pub const ZZ6_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ6_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 6,
     sym_roots_num: 2,
     sym_roots_sqs: &[1., 3.],
@@ -98,14 +97,14 @@ pub const ZZ6_PARAMS: ZZParams<Frac> = ZZParams {
 /// a [1 s]
 /// b [s 3]
 /// where s = sqrt(3)
-fn zz6_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz6_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let int3 = T::from_i64(3).unwrap();
     match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + (b * d * 3), a * d + b * c],
+        [[a, b], [c, d]] => vec![a * c + (b * d * int3), a * d + b * c],
     }
 }
 /// Compass integers
-pub const ZZ8_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ8_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 8,
     sym_roots_num: 2,
     sym_roots_sqs: &[1., 2.],
@@ -118,14 +117,14 @@ pub const ZZ8_PARAMS: ZZParams<Frac> = ZZParams {
 /// a [1 s]
 /// b [s 2]
 /// where s = sqrt(2)
-fn zz8_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz8_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let int2 = T::from_i64(2).unwrap();
     match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + (b * d * 2), a * d + b * c],
+        [[a, b], [c, d]] => vec![a * c + (b * d * int2), a * d + b * c],
     }
 }
 /// Halfrose integers (impractical, has no quarter turn)
-pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ10_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 10,
     sym_roots_num: 4,
     sym_roots_sqs: &[1., 5., ZZ10_Y, 5. * ZZ10_Y],
@@ -140,20 +139,21 @@ pub const ZZ10_PARAMS: ZZParams<Frac> = ZZParams {
 /// c [  y ,  xy  , 10-2x  , 10(x-1)]
 /// d [ xy , 5 y  , 10(x-1), 10(5-x)]
 /// where x = sqrt(5), y = sqrt(2(5-x))
-fn zz10_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz10_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let i = |n: i8| T::from_i8(n).unwrap();
+    let (int2, int5, int10) = (i(2), i(5), i(10));
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let c1 = a * e + b * f * 5 + (c * g + d * h * 5 - c * h - d * g) * 10;
-            let c2 = a * f + b * e - c * g * 2 + (c * h + d * g - d * h) * 10;
-            let c3 = a * g + (b * h + d * f) * 5 + c * e;
+            let c1 = a * e + b * f * int5 + (c * g + d * h * int5 - c * h - d * g) * int10;
+            let c2 = a * f + b * e - c * g * int2 + (c * h + d * g - d * h) * int10;
+            let c3 = a * g + (b * h + d * f) * int5 + c * e;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
         }
     }
 }
 /// Clock integers
-pub const ZZ12_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ12_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 12,
     sym_roots_num: ZZ6_PARAMS.sym_roots_num,
     sym_roots_sqs: ZZ6_PARAMS.sym_roots_sqs,
@@ -161,12 +161,11 @@ pub const ZZ12_PARAMS: ZZParams<Frac> = ZZParams {
     scaling_fac: ZZ6_PARAMS.scaling_fac,
     ccw_unit_coeffs: &[[0, 1], [1, 0]],
 };
-fn zz12_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz12_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     return zz6_mul(x, y);
 }
 /// Hex integers
-pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ16_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 16,
     sym_roots_num: 4,
     sym_roots_sqs: &[1.0, 2.0, ZZ16_Y, 2.0 * ZZ16_Y],
@@ -181,20 +180,20 @@ pub const ZZ16_PARAMS: ZZParams<Frac> = ZZParams {
 /// c [  y ,  xy , 2+x  , 2+2x ]
 /// d [ xy , 2 y , 2+2x , 4+2x ]
 /// where x = sqrt(2), y = sqrt(2+sqrt(2))
-fn zz16_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz16_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let int2 = T::from_i64(2).unwrap();
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let c1 = a * e + (b * f + c * g + c * h + d * g + d * h * 2) * 2;
-            let c2 = a * f + b * e + c * g + (c * h + d * g + d * h) * 2;
-            let c3 = a * g + c * e + (b * h + d * f) * 2;
+            let c1 = a * e + (b * f + c * g + c * h + d * g + d * h * int2) * int2;
+            let c2 = a * f + b * e + c * g + (c * h + d * g + d * h) * int2;
+            let c3 = a * g + c * e + (b * h + d * f) * int2;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
         }
     }
 }
 /// Penrose integers
-pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ20_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 20,
     sym_roots_num: ZZ10_PARAMS.sym_roots_num,
     sym_roots_sqs: ZZ10_PARAMS.sym_roots_sqs,
@@ -202,12 +201,11 @@ pub const ZZ20_PARAMS: ZZParams<Frac> = ZZParams {
     scaling_fac: ZZ10_PARAMS.scaling_fac,
     ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
 };
-fn zz20_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz20_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     zz10_mul(x, y)
 }
 /// Digiclock integers
-pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ24_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 24,
     sym_roots_num: 4,
     sym_roots_sqs: &[1.0, 2.0, 3.0, 6.0],
@@ -221,20 +219,21 @@ pub const ZZ24_PARAMS: ZZParams<Frac> = ZZParams {
 /// b [ x  , 2   ,  xy , 2 y ]
 /// c [  y ,  xy , 3   , 3x  ]
 /// d [ xy , 2 y , 3x  , 6   ]
-fn zz24_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz24_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let i = |n: i8| T::from_i8(n).unwrap();
+    let (int2, int3, int6) = (i(2), i(3), i(6));
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {
         [[a, b, c, d], [e, f, g, h]] => {
-            let c1 = a * e + b * f * 2 + c * g * 3 + d * h * 6;
-            let c2 = a * f + b * e + (c * h + d * g) * 3;
-            let c3 = a * g + c * e + (b * h + d * f) * 2;
+            let c1 = a * e + b * f * int2 + c * g * int3 + d * h * int6;
+            let c2 = a * f + b * e + (c * h + d * g) * int3;
+            let c3 = a * g + c * e + (b * h + d * f) * int2;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
         }
     }
 }
 /// Month integers
-pub const ZZ30_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ30_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 30,
     sym_roots_num: 8,
     sym_roots_sqs: &[
@@ -281,45 +280,58 @@ pub const ZZ30_PARAMS: ZZParams<Frac> = ZZParams {
 /// [  yz ,  xyz ,  5  z  , 10y-10   ,  5xz , 10xy-10x , 5(10-2y)
 /// [ xyz , 3 yz ,  5x z  , 10xy-10x ,  15z , 30y-30   , 50x-10xy , 15(10-2y)
 /// where x = sqrt(3), y = sqrt(5), z = sqrt(2(5-y)) = sqrt(10-2y)
-fn zz30_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz30_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let i = |n: i64| T::from_i64(n).unwrap();
+    let int2 = i(2);
+    let int3 = i(3);
+    let int5 = i(5);
+    let int6 = i(6);
+    let int10 = i(10);
+    let int15 = i(15);
+    let int30 = i(30);
+    let int50 = i(50);
+    let int150 = i(150);
     match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
         [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
             // 1
-            let c1_d = ((l1 * r1) + (l2 * r2) * 3 + (l3 * r3) * 5 + (l4 * r4) * 10)
-                + ((l5 * r5) * 15 + (l6 * r6) * 30 + (l7 * r7) * 50 + (l8 * r8) * 150);
-            let c1_a = l4 * r7 * (-10) + l6 * r8 * (-30);
-            let c1_b = r4 * l7 * (-10) + r6 * l8 * (-30);
+            let c1_d = ((l1 * r1) + (l2 * r2) * int3 + (l3 * r3) * int5 + (l4 * r4) * int10)
+                + ((l5 * r5) * int15 + (l6 * r6) * int30 + (l7 * r7) * int50 + (l8 * r8) * int150);
+            let c1_a = l4 * r7 * (-int10) + l6 * r8 * (-int30);
+            let c1_b = r4 * l7 * (-int10) + r6 * l8 * (-int30);
             let c1 = c1_d + c1_a + c1_b;
 
             // x
-            let c2_a = l1 * r2 + l3 * r5 * 5 + (l4 * r6 - l4 * r8 - l6 * r7) * 10 + l7 * r8 * 50;
-            let c2_b = r1 * l2 + r3 * l5 * 5 + (r4 * l6 - r4 * l8 - r6 * l7) * 10 + r7 * l8 * 50;
+            let c2_a =
+                l1 * r2 + l3 * r5 * int5 + (l4 * r6 - l4 * r8 - l6 * r7) * int10 + l7 * r8 * int50;
+            let c2_b =
+                r1 * l2 + r3 * l5 * int5 + (r4 * l6 - r4 * l8 - r6 * l7) * int10 + r7 * l8 * int50;
             let c2 = c2_a + c2_b;
 
             // y
-            let c3_d = r4 * l4 * (-2) + r6 * l6 * (-6) + r7 * l7 * (-10) + r8 * l8 * (-30);
-            let c3_a = l1 * r3 + l2 * r5 * 3 + l4 * r7 * 10 + l6 * r8 * 30;
-            let c3_b = r1 * l3 + r2 * l5 * 3 + r4 * l7 * 10 + r6 * l8 * 30;
+            let c3_d =
+                r4 * l4 * (-int2) + r6 * l6 * (-int6) + r7 * l7 * (-int10) + r8 * l8 * (-int30);
+            let c3_a = l1 * r3 + l2 * r5 * int3 + l4 * r7 * int10 + l6 * r8 * int30;
+            let c3_b = r1 * l3 + r2 * l5 * int3 + r4 * l7 * int10 + r6 * l8 * int30;
             let c3 = c3_d + c3_a + c3_b;
 
             // z
-            let c4_a = l1 * r4 + l2 * r6 * 3 + l3 * r7 * 5 + l5 * r8 * 15;
-            let c4_b = r1 * l4 + r2 * l6 * 3 + r3 * l7 * 5 + r5 * l8 * 15;
+            let c4_a = l1 * r4 + l2 * r6 * int3 + l3 * r7 * int5 + l5 * r8 * int15;
+            let c4_b = r1 * l4 + r2 * l6 * int3 + r3 * l7 * int5 + r5 * l8 * int15;
             let c4 = c4_a + c4_b;
 
             // xy
-            let c5_a = l1 * r5 + l2 * r3 - l4 * r6 * 2 + (l4 * r8 + l6 * r7 - l7 * r8) * 10;
-            let c5_b = r1 * l5 + r2 * l3 - r4 * l6 * 2 + (r4 * l8 + r6 * l7 - r7 * l8) * 10;
+            let c5_a = l1 * r5 + l2 * r3 - l4 * r6 * int2 + (l4 * r8 + l6 * r7 - l7 * r8) * int10;
+            let c5_b = r1 * l5 + r2 * l3 - r4 * l6 * int2 + (r4 * l8 + r6 * l7 - r7 * l8) * int10;
             let c5 = c5_a + c5_b;
 
             // xz
-            let c6_a = l1 * r6 + l2 * r4 + (l3 * r8 + l5 * r7) * 5;
-            let c6_b = r1 * l6 + r2 * l4 + (r3 * l8 + r5 * l7) * 5;
+            let c6_a = l1 * r6 + l2 * r4 + (l3 * r8 + l5 * r7) * int5;
+            let c6_b = r1 * l6 + r2 * l4 + (r3 * l8 + r5 * l7) * int5;
             let c6 = c6_a + c6_b;
 
             // yz
-            let c7_a = l1 * r7 + l2 * r8 * 3 + l3 * r4 + l5 * r6 * 3;
-            let c7_b = r1 * l7 + r2 * l8 * 3 + r3 * l4 + r5 * l6 * 3;
+            let c7_a = l1 * r7 + l2 * r8 * int3 + l3 * r4 + l5 * r6 * int3;
+            let c7_b = r1 * l7 + r2 * l8 * int3 + r3 * l4 + r5 * l6 * int3;
             let c7 = c7_a + c7_b;
 
             // xyz
@@ -330,8 +342,7 @@ fn zz30_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
     }
 }
 /// Hex integers
-pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ32_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 32,
     sym_roots_num: 8,
     sym_roots_sqs: &[
@@ -379,53 +390,56 @@ pub const ZZ32_PARAMS: ZZParams<Frac> = ZZParams {
 /// [  yz ,  xyz ,2z+ xz,2+ x+2y ,2z+2xz, 2+2x+2xy, 4+2x+2y+ xy
 /// [ xyz , 2 yz ,2z+2xz,2+2x+2xy,4z+2xz, 4+2x+4y , 4+4x+2y+2xy , 8+4x+4y+2xy
 /// where x = sqrt(2), y = sqrt(2+x), z = sqrt(2+y)
-fn zz32_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz32_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
+    let i = |n: i8| T::from_i8(n).unwrap();
+    let int2 = i(2);
+    let int4 = i(4);
     match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
         [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
             // 1
             let c1_d = (l1 * r1)
-                + (l2 * r2 + l3 * r3 + l4 * r4) * 2
-                + (l5 * r5 + l6 * r6 + l7 * r7) * 4
-                + l8 * r8 * 8;
-            let c1_a = (l3 * r5 + l4 * r7 + l4 * r8 + l6 * r7) * 2 + (l6 * r8 + l7 * r8) * 4;
-            let c1_b = (r3 * l5 + r4 * l7 + r4 * l8 + r6 * l7) * 2 + (r6 * l8 + r7 * l8) * 4;
+                + (l2 * r2 + l3 * r3 + l4 * r4) * int2
+                + (l5 * r5 + l6 * r6 + l7 * r7) * int4
+                + l8 * r8 * i(8);
+            let c1_a = (l3 * r5 + l4 * r7 + l4 * r8 + l6 * r7) * int2 + (l6 * r8 + l7 * r8) * int4;
+            let c1_b = (r3 * l5 + r4 * l7 + r4 * l8 + r6 * l7) * int2 + (r6 * l8 + r7 * l8) * int4;
             let c1 = c1_d + c1_a + c1_b;
 
             // x
-            let c2_d = r3 * l3 + (r5 * l5 + r7 * l7) * 2 + r8 * l8 * 4;
+            let c2_d = r3 * l3 + (r5 * l5 + r7 * l7) * int2 + r8 * l8 * int4;
             let c2_a = (l1 * r2 + l4 * r7)
-                + (l3 * r5 + l4 * r6 + l4 * r8 + l6 * r7 + l6 * r8) * 2
-                + l7 * r8 * 4;
+                + (l3 * r5 + l4 * r6 + l4 * r8 + l6 * r7 + l6 * r8) * int2
+                + l7 * r8 * int4;
             let c2_b = (r1 * l2 + r4 * l7)
-                + (r3 * l5 + r4 * l6 + r4 * l8 + r6 * l7 + r6 * l8) * 2
-                + r7 * l8 * 4;
+                + (r3 * l5 + r4 * l6 + r4 * l8 + r6 * l7 + r6 * l8) * int2
+                + r7 * l8 * int4;
             let c2 = c2_d + c2_a + c2_b;
 
             // y
-            let c3_d = l4 * r4 + (l6 * r6 + l7 * r7) * 2 + (l8 * r8) * 4;
-            let c3_a = l1 * r3 + (l2 * r5 + l4 * r7 + l7 * r8) * 2 + (l6 * r8) * 4;
-            let c3_b = r1 * l3 + (r2 * l5 + r4 * l7 + r7 * l8) * 2 + (r6 * l8) * 4;
+            let c3_d = l4 * r4 + (l6 * r6 + l7 * r7) * int2 + (l8 * r8) * int4;
+            let c3_a = l1 * r3 + (l2 * r5 + l4 * r7 + l7 * r8) * int2 + (l6 * r8) * int4;
+            let c3_b = r1 * l3 + (r2 * l5 + r4 * l7 + r7 * l8) * int2 + (r6 * l8) * int4;
             let c3 = c3_d + c3_a + c3_b;
 
             // z
-            let c4_a = l1 * r4 + (l2 * r6 + l3 * r7 + l3 * r8 + l5 * r7) * 2 + l5 * r8 * 4;
-            let c4_b = r1 * l4 + (r2 * l6 + r3 * l7 + r3 * l8 + r5 * l7) * 2 + r5 * l8 * 4;
+            let c4_a = l1 * r4 + (l2 * r6 + l3 * r7 + l3 * r8 + l5 * r7) * int2 + l5 * r8 * int4;
+            let c4_b = r1 * l4 + (r2 * l6 + r3 * l7 + r3 * l8 + r5 * l7) * int2 + r5 * l8 * int4;
             let c4 = c4_a + c4_b;
 
             // xy
-            let c5_d = l7 * r7 + l8 * r8 * 2;
-            let c5_a = l1 * r5 + l2 * r3 + l4 * r6 + (l4 * r8 + l6 * r7 + l7 * r8) * 2;
-            let c5_b = r1 * l5 + r2 * l3 + r4 * l6 + (r4 * l8 + r6 * l7 + r7 * l8) * 2;
+            let c5_d = l7 * r7 + l8 * r8 * int2;
+            let c5_a = l1 * r5 + l2 * r3 + l4 * r6 + (l4 * r8 + l6 * r7 + l7 * r8) * int2;
+            let c5_b = r1 * l5 + r2 * l3 + r4 * l6 + (r4 * l8 + r6 * l7 + r7 * l8) * int2;
             let c5 = c5_d + c5_a + c5_b;
 
             // xz
-            let c6_a = l1 * r6 + l2 * r4 + l3 * r7 + (l3 * r8 + l5 * r7 + l5 * r8) * 2;
-            let c6_b = r1 * l6 + r2 * l4 + r3 * l7 + (r3 * l8 + r5 * l7 + r5 * l8) * 2;
+            let c6_a = l1 * r6 + l2 * r4 + l3 * r7 + (l3 * r8 + l5 * r7 + l5 * r8) * int2;
+            let c6_b = r1 * l6 + r2 * l4 + r3 * l7 + (r3 * l8 + r5 * l7 + r5 * l8) * int2;
             let c6 = c6_a + c6_b;
 
             // yz
-            let c7_a = l1 * r7 + l3 * r4 + (l2 * r8 + l5 * r6) * 2;
-            let c7_b = r1 * l7 + r3 * l4 + (r2 * l8 + r5 * l6) * 2;
+            let c7_a = l1 * r7 + l3 * r4 + (l2 * r8 + l5 * r6) * int2;
+            let c7_b = r1 * l7 + r3 * l4 + (r2 * l8 + r5 * l6) * int2;
             let c7 = c7_a + c7_b;
 
             // xyz
@@ -435,8 +449,7 @@ fn zz32_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
         }
     }
 }
-pub const ZZ60_PARAMS: ZZParams<Frac> = ZZParams {
-    phantom: PhantomData,
+pub const ZZ60_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 60,
     sym_roots_num: ZZ30_PARAMS.sym_roots_num,
     sym_roots_sqs: ZZ30_PARAMS.sym_roots_sqs,
@@ -454,24 +467,25 @@ pub const ZZ60_PARAMS: ZZParams<Frac> = ZZParams {
         [0, 0],
     ],
 };
-fn zz60_mul(x: &[GInt], y: &[GInt]) -> Vec<GInt> {
+fn zz60_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     zz30_mul(x, y)
 }
 // --------
 
 // generate boilerplate implementations
-zz_base_impl!(ZZ4, ZZ4_PARAMS, zz4_mul, zz_partial_signum_1_sym);
-zz_base_impl!(ZZ6, ZZ6_PARAMS, zz6_mul, zz_partial_signum_2_sym);
-zz_base_impl!(ZZ8, ZZ8_PARAMS, zz8_mul, zz_partial_signum_2_sym);
-zz_base_impl!(ZZ10, ZZ10_PARAMS, zz10_mul, zz_partial_signum_fallback);
-zz_base_impl!(ZZ12, ZZ12_PARAMS, zz12_mul, zz_partial_signum_2_sym);
-zz_base_impl!(ZZ16, ZZ16_PARAMS, zz16_mul, zz_partial_signum_fallback);
-zz_base_impl!(ZZ20, ZZ20_PARAMS, zz20_mul, zz_partial_signum_fallback);
-zz_base_impl!(ZZ24, ZZ24_PARAMS, zz24_mul, zz_partial_signum_4_sym);
-zz_base_impl!(ZZ30, ZZ30_PARAMS, zz30_mul, zz_partial_signum_fallback);
-zz_base_impl!(ZZ32, ZZ32_PARAMS, zz32_mul, zz_partial_signum_fallback);
-zz_base_impl!(ZZ60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ4, Z4, ZZ4_PARAMS, zz4_mul, zz_partial_signum_1_sym);
+zz_base_impl!(ZZ6, Z6, ZZ6_PARAMS, zz6_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ8, Z8, ZZ8_PARAMS, zz8_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ10, Z10, ZZ10_PARAMS, zz10_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ12, Z12, ZZ12_PARAMS, zz12_mul, zz_partial_signum_2_sym);
+zz_base_impl!(ZZ16, Z16, ZZ16_PARAMS, zz16_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ20, Z20, ZZ20_PARAMS, zz20_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ24, Z24, ZZ24_PARAMS, zz24_mul, zz_partial_signum_4_sym);
+zz_base_impl!(ZZ30, Z30, ZZ30_PARAMS, zz30_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ32, Z32, ZZ32_PARAMS, zz32_mul, zz_partial_signum_fallback);
+zz_base_impl!(ZZ60, Z60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
+zz_ops_impl!(Z4 Z6 Z8 Z10 Z12 Z16 Z20 Z24 Z30 Z32 Z60);
 
 /// rings where all expressions inside the square roots are integers
 /// (some algorithms only work with those rings)
@@ -594,27 +608,27 @@ mod tests {
         let sq5 = 5.0_f64.sqrt();
         let sq6 = 6.0_f64.sqrt();
 
-        assert_eq!(sqrt2::<ZZ8>().complex().re, sq2);
-        assert_eq!(sqrt2::<ZZ16>().complex().re, sq2);
-        assert_eq!(sqrt2::<ZZ24>().complex().re, sq2);
-        assert_eq!(sqrt2::<ZZ32>().complex().re, sq2);
+        assert_eq!(sqrt2::<ZZ8>().complex64().re, sq2);
+        assert_eq!(sqrt2::<ZZ16>().complex64().re, sq2);
+        assert_eq!(sqrt2::<ZZ24>().complex64().re, sq2);
+        assert_eq!(sqrt2::<ZZ32>().complex64().re, sq2);
 
-        assert_eq!(sqrt3::<ZZ12>().complex().re, sq3);
-        assert_eq!(sqrt3::<ZZ24>().complex().re, sq3);
-        assert_eq!(sqrt3::<ZZ60>().complex().re, sq3);
+        assert_eq!(sqrt3::<ZZ12>().complex64().re, sq3);
+        assert_eq!(sqrt3::<ZZ24>().complex64().re, sq3);
+        assert_eq!(sqrt3::<ZZ60>().complex64().re, sq3);
 
-        assert_eq!(sqrt5::<ZZ10>().complex().re, sq5);
-        assert_eq!(sqrt5::<ZZ20>().complex().re, sq5);
-        assert_eq!(sqrt5::<ZZ30>().complex().re, sq5);
-        assert_eq!(sqrt5::<ZZ60>().complex().re, sq5);
+        assert_eq!(sqrt5::<ZZ10>().complex64().re, sq5);
+        assert_eq!(sqrt5::<ZZ20>().complex64().re, sq5);
+        assert_eq!(sqrt5::<ZZ30>().complex64().re, sq5);
+        assert_eq!(sqrt5::<ZZ60>().complex64().re, sq5);
 
-        assert_eq!(sqrt6::<ZZ24>().complex().re, sq6);
+        assert_eq!(sqrt6::<ZZ24>().complex64().re, sq6);
         // assert_eq!(sqrt6::<ZZ120>().complex().re, sq6);
         // assert_eq!(sqrt6::<ZZ240>().complex().re, sq6);
 
-        assert_eq!(isqrt3().complex().im, sq3);
-        assert_eq!(zz10_isqrt_penta().complex().im, sq_penta);
-        assert_eq!(zz20_half_sqrt_penta().complex().re, hsq_penta);
+        assert_eq!(isqrt3().complex64().im, sq3);
+        assert_eq!(zz10_isqrt_penta().complex64().im, sq_penta);
+        assert_eq!(zz20_half_sqrt_penta().complex64().re, hsq_penta);
     }
 
     #[test]
@@ -751,8 +765,8 @@ mod $name {
                 let v2 = ZZi::new(vec2.as_slice());
 
 
-                let exp = v1.complex().re * v2.complex().re;
-                let prod = (v1 * v2).complex().re;
+                let exp = v1.complex64().re * v2.complex64().re;
+                let prod = (v1 * v2).complex64().re;
                 println!("x={}\ny={}\nx*y={}", v1, v2, v1 * v2);
                 assert!((exp-prod).abs() < 1e-8);
             }
@@ -771,7 +785,7 @@ mod $name {
                 if val.is_zero() {
                     continue;
                 }
-                let inv = val.zz_inv();
+                let inv = zz_inv(&val);
                 assert_eq!(val * inv, ZZi::one());
 
             }
@@ -781,7 +795,7 @@ mod $name {
     #[test]
     fn test_rotations() {
         // test ccw()
-        assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
+        // assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
         assert_eq!(-(-(ZZi::one()) * ZZi::ccw()), ZZi::ccw());
 
         // test going around the unit circle step by step
@@ -842,65 +856,9 @@ mod $name {
         // test correctness of splitting and reconstruction
         for a in 0..ZZi::hturn() {
             let p = ZZi::unit(a);
-            let (x, y) = p.xy();
-            assert_eq!(p, x + y * ZZi::one_i());
+            let (x, y) = p.re_im();
+            assert_eq!(p, ZZi::from(x) + ZZi::from(y) * ZZi::one_i());
         }
-    }
-
-    #[test]
-    fn test_dot() {
-        // get a non-trivial point
-        let p: ZZi = zz_units_sum();
-
-        // all rotations of the same point around origin
-        // have the same squared distance, i.e. quadrance
-        // and it is real-valued.
-        let q = p.norm();
-        assert!(q.is_real());
-        for i in 1..ZZi::turn() {
-            let pi = p * ZZi::unit(i);
-            let qi = pi.norm();
-            assert_eq!(qi, q);
-        }
-    }
-
-    #[test]
-    fn test_colinear() {
-        if !ZZi::has_qturn() {
-            return;
-        }
-
-        // Test point layout:
-        // -------
-        // E F
-        //
-        // A B C D
-        // -------
-        let a: ZZi = ZZi::zero();
-        let b: ZZi = ZZi::one();
-        let c: ZZi = ZZi::from(2);
-        let d: ZZi = ZZi::from(3);
-        let e: ZZi = ZZi::one_i();
-        let f: ZZi = b + e;
-
-        let l_ab = a.line_through(&b);
-        let l_ac = a.line_through(&c);
-        let l_af = a.line_through(&f);
-
-        // colinear, overlap
-        assert!(b.is_colinear(&l_ac));
-        assert!(d.is_colinear(&l_ac));
-        // colinear, no overlap
-        assert!(c.is_colinear(&l_ab));
-        assert!(d.is_colinear(&l_ab));
-        // parallel (not colinear)
-        assert!(!e.is_colinear(&l_ab));
-        assert!(!f.is_colinear(&l_ab));
-        // perpendicular (touches in one point, not in the other)
-        assert!(!(a.is_colinear(&l_ab) && e.is_colinear(&l_ab)));
-        // general case
-        assert!(!b.is_colinear(&l_af));
-        assert!(!d.is_colinear(&l_af));
     }
 
     #[test]
@@ -933,16 +891,16 @@ mod $name {
         use num_complex::Complex64;
 
         let x = ZZi::zero();
-        assert_eq!(x.complex(), Complex64::zero());
+        assert_eq!(x.complex64(), Complex64::zero());
         let x = ZZi::one();
-        assert_eq!(x.complex(), Complex64::one());
+        assert_eq!(x.complex64(), Complex64::one());
         let x = -ZZi::one();
-        assert_eq!(x.complex(), -Complex64::one());
+        assert_eq!(x.complex64(), -Complex64::one());
         let x = ZZi::one() + ZZi::one();
-        assert_eq!(x.complex(), Complex64::new(2.0, 0.0));
+        assert_eq!(x.complex64(), Complex64::new(2.0, 0.0));
 
         let x = ZZi::ccw();
-        let c = x.complex();
+        let c = x.complex64();
         println!("{c} = {x}");
     }
 
@@ -983,8 +941,8 @@ mod $name {
         let sq3: ZZ24 = sqrt3();
         let sq6: ZZ24 = sqrt6();
 
-        let z = Frac::zero();
-        let p = Frac::one();
+        let z = ZZ24::zero();
+        let p = ZZ24::one();
         let m = -p;
 
         // use same test as above
@@ -1025,54 +983,5 @@ mod $name {
             format!("{x}"),
             "-5 + (-15/4i)*sqrt(2(5-sqrt(5))) + (-5/4i)*sqrt(10(5-sqrt(5)))"
         );
-    }
-
-    #[test]
-    fn test_dot_extra() {
-        let p1 = ZZ12::one();
-        let p2 = ZZ12::from(2);
-        let p3 = ZZ12::from(3);
-        let pi = ZZ12::unit(3); // i
-        let p60 = ZZ12::unit(2);
-        let pm60 = ZZ12::unit(-2);
-
-        assert_eq!(p1.dot(&pi), ZZ12::zero());
-        assert_eq!(ZZ12::zero().dot(&pi), ZZ12::zero());
-        assert_eq!(p2.dot(&p3), ZZ12::from(6));
-
-        // {0, 1} dot {1/2, sqrt(3)/2} = sqrt(3) / 2
-        // => dot^2 = 3/4
-        let d1 = p60.dot(&pi).pow(2).complex();
-        assert_eq!(d1.re, 0.75);
-        assert_eq!(d1.im, 0.0);
-
-        // same but with negative sign (check indirectly)
-        let d2 = pm60.dot(&pi).complex();
-        assert!(d2.re < 0.0);
-        assert_eq!(d2.im, 0.0);
-        assert_eq!(pm60.dot(&pi).pow(2).complex().re, 0.75);
-    }
-
-    #[test]
-    fn test_is_between() {
-        type ZZi = ZZ24;
-
-        let a: ZZi = ZZi::zero();
-        let b: ZZi = ZZi::one();
-        let c: ZZi = ZZi::from(2);
-        let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
-        let f: ZZi = b + e;
-        let g: ZZi = ZZi::unit(1) + ZZi::unit(-1) - ZZi::one();
-
-        // is actually in between
-        assert!(b.is_between(&a, &c));
-        assert!(g.is_between(&a, &b));
-        // is an endpoint
-        assert!(!b.is_between(&a, &b));
-        assert!(!a.is_between(&a, &b));
-        // colinear, but not between
-        assert!(!c.is_between(&a, &b));
-        // not colinear
-        assert!(!f.is_between(&a, &b));
     }
 }

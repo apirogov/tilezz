@@ -1,10 +1,11 @@
+use crate::angles::{normalize_angle, upscale_angles};
 use crate::grid::UnitSquareGrid;
 use crate::zz::{HasZZ12, HasZZ4, HasZZ6};
-use crate::zzbase::ZZNum;
-use crate::zzutil::intersect;
-use crate::zzutil::{normalize_angle, upscale_angles};
+use crate::zzbase::{ZZBase, ZZNum};
+use crate::zzgeom::{intersect, wedge};
 use num_complex::Complex;
 use num_traits::ToPrimitive;
+use num_traits::Zero;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -242,7 +243,7 @@ impl<T: ZZNum> Snake<T> {
         self.to_polyline(turtle)
             .iter()
             .map(|p| {
-                let Complex { re: x, im: y } = p.complex();
+                let Complex { re: x, im: y } = p.complex64();
                 (x, y)
             })
             .collect()
@@ -372,14 +373,14 @@ impl<T: ZZNum> Snake<T> {
     /// Return twice the area of the represented polygon, computed using the shoelace formula.
     /// If the snake is not closed, will implicitly add the segment from the last to first point.
     /// See: https://en.wikipedia.org/wiki/Shoelace_formula
-    pub fn double_area(&self) -> T {
-        let mut result = T::zero();
+    pub fn double_area(&self) -> T::Real {
+        let mut result = <<T as ZZBase>::Real as Zero>::zero();
         for i in 1..self.len() {
             // println!("{} x {} = {}", self.points[i - 1].wedge(&self.points[i]);
-            result = result + self.points[i - 1].wedge(&self.points[i]);
+            result = result + wedge(&self.points[i - 1], &self.points[i]);
         }
         if !self.is_closed() {
-            result = result + self.points[self.len() - 1].wedge(&self.points[0]);
+            result = result + wedge(&self.points[self.len() - 1], &self.points[0]);
         }
 
         return result;
@@ -450,7 +451,7 @@ pub mod constants {
 mod tests {
     use super::*;
     use crate::traits::Ccw;
-    use crate::zz::{ZZ12, ZZ24};
+    use crate::zz::{Z12, ZZ12, ZZ24};
     use crate::zzbase::ZZBase;
     use constants::{hexagon, spectre, square, triangle};
     use num_rational::Ratio;
@@ -629,24 +630,22 @@ mod tests {
 
     #[test]
     fn test_area() {
-        use crate::gaussint::GaussInt;
-
         // area of an equilateral triangle with side length 1 is sqrt(3)/4
-        let tri_area_sq3 = GaussInt::new(Ratio::<i64>::new_raw(1, 2), Ratio::<i64>::zero());
+        let tri_area_sq3 = Ratio::<i64>::new_raw(1, 2);
         assert_eq!(
             triangle::<ZZ12>().double_area(),
-            ZZ12::new(&[0.into(), tri_area_sq3])
+            Z12::new(&[0.into(), tri_area_sq3])
         );
 
         assert_eq!(
             square::<ZZ12>().double_area(),
-            ZZ12::new(&[2.into(), 0.into()])
+            Z12::new(&[2.into(), 0.into()])
         );
 
         // area of a regular hexagon with side length 1 is 3*sqrt(3)/2
         assert_eq!(
             hexagon::<ZZ12>().double_area(),
-            ZZ12::new(&[0.into(), 3.into()])
+            Z12::new(&[0.into(), 3.into()])
         );
     }
 

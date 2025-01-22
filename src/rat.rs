@@ -1,6 +1,7 @@
+use crate::angles::revcomp;
 use crate::snake::{Snake, Turtle};
 use crate::zzbase::ZZNum;
-use crate::zzutil::revcomp;
+use num_traits::ToPrimitive;
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 
@@ -119,6 +120,20 @@ impl<T: ZZNum> TryFrom<&Snake<T>> for Rat<T> {
     }
 }
 
+impl<I: ToPrimitive, T: ZZNum> TryFrom<&[I]> for Rat<T> {
+    type Error = &'static str;
+    fn try_from(value: &[I]) -> Result<Self, Self::Error> {
+        Snake::try_from(value).and_then(|s| Rat::try_from(&s))
+    }
+}
+impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Rat<T> {
+    type Error = &'static str;
+
+    fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
+        Self::try_from(angles.as_slice())
+    }
+}
+
 impl<T: ZZNum> Rat<T> {
     /// Create a rat from an angle sequence.
     /// Assumes that the sequence describes a valid simple polygon.
@@ -176,8 +191,8 @@ impl<T: ZZNum> Rat<T> {
 
     /// Return twice the area of the represented polygon, computed using the shoelace formula.
     /// See: https://en.wikipedia.org/wiki/Shoelace_formula
-    pub fn double_area(&self) -> T {
-        Snake::from_slice_unchecked(self.angles.as_slice()).double_area()
+    pub fn double_area(&self) -> T::Real {
+        Snake::<T>::from_slice_unchecked(self.angles.as_slice()).double_area()
     }
 
     // ----
