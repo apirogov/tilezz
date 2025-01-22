@@ -10,13 +10,13 @@ use tilezz::plotters::plot_points;
 use tilezz::plotutils::tile_bounds;
 use tilezz::snake::constants::spectre;
 use tilezz::snake::Snake;
-use tilezz::traits::RealSigned;
+use tilezz::traits::ZSigned;
 use tilezz::zz::{ZZBase, ZZComplex, ZZ12};
 
 fn main() {
     // let root = BitMapBackend::new("test.png", (1000, 1000))
     let w: u32 = 3000;
-    let root = BitMapBackend::new("test.png", (w, w))
+    let root = BitMapBackend::new("scratch/test.png", (w, w))
         // let root = BitMapBackend::new("test.png", (w, (w as f64 * ((3.1415 / 3.0).sin())) as u32))
         .into_drawing_area();
 
@@ -63,16 +63,16 @@ fn main() {
 
                 let mut p_dest = *p + ZZ::unit(new_ang);
                 let (mut p_x, mut p_y) = p_dest.re_im();
-                if (p_x - Z::zero()).re_signum() == -Z::one() {
+                if (p_x - Z::zero()).is_negative() {
                     p_x = p_x + Z::one();
                 }
-                if (Z::one() - p_x).re_signum() == -Z::one() {
+                if (Z::one() - p_x).is_negative() {
                     p_x = p_x - Z::one();
                 }
-                if (p_y - Z::zero()).re_signum() == -Z::one() {
+                if (p_y - Z::zero()).is_negative() {
                     p_y = p_y + Z::one();
                 }
-                if (Z::one() - p_y).re_signum() == -Z::one() {
+                if (Z::one() - p_y).is_negative() {
                     p_y = p_y - Z::one();
                 }
                 p_dest = ZZ::from(p_x) + ZZ::one_i() * ZZ::from(p_y);

@@ -1,6 +1,6 @@
-use crate::traits::RealSigned;
+use crate::traits::ZSigned;
 use crate::zz::ZZNum;
-use num_traits::{One, Zero};
+use num_traits::Zero;
 
 // Core linear algebra utils
 // -----------------
@@ -25,23 +25,11 @@ pub fn norm<ZZ: ZZNum>(p: &ZZ) -> ZZ::Real {
     dot::<ZZ>(&p, &p)
 }
 
-/// Returns 1 if |self| < |other|, 0 on equality and -1 otherwise.
-pub fn abs_signum<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
-    (norm(p2) - norm(p1)).re_signum()
-}
-
-/// Sign of the relative ccw-positive angle between this and the other number.
-///
-/// Result is always real-valued (Zn).
-pub fn angle_signum<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
-    wedge(p1, p2).re_signum()
-}
-
 /// Return true if angle is in closed interval [a,b],
 /// assuming that a and b are in counterclockwise order and their ccw angle
 /// is less than a half turn.
 pub fn angle_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
-    angle_signum(a, p) != -ZZ::Real::one() && angle_signum(p, b) != -ZZ::Real::one()
+    !wedge(a, p).is_negative() && !wedge(p, b).is_negative()
 }
 
 /// Return whether this point is strictly between the other two.
@@ -50,13 +38,13 @@ pub fn angle_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
 pub fn is_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     let v = *a - *p;
     let w = *p - *b;
-    wedge(&v, &w).is_zero() && dot(&v, &w).re_signum().is_one()
+    wedge(&v, &w).is_zero() && dot(&v, &w).is_positive()
 }
 
 /// Return whether the segments ab and ac (in that order) have a ccw angle,
 /// i.e. c is ccw of b with respect to rotation around a.
 pub fn is_ccw<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
-    angle_signum(&(*a - *p), &(*b - *p)).is_one()
+    wedge(&(*a - *p), &(*b - *p)).is_positive()
     // NOTE: wedge(*a - *p, *p - *b).is_zero() is subexp. of is_between... interesting symmetry
 }
 
@@ -95,13 +83,14 @@ pub fn intersect<ZZ: ZZNum>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     }
 }
 
-// TODO: test and use
+/// Return whether a point is strictly inside a rectangle.
+// FIXME: add strict flag for strictly inside vs. boundary inclusive check
 pub fn point_in_rect<ZZ: ZZNum>(p: &ZZ, (pos_min, pos_max): (&ZZ, &ZZ)) -> bool {
     let (px, py) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
-    let x_in_open_bound = (px - x_min).re_signum().is_one() && (x_max - px).re_signum().is_one();
-    let y_in_open_bound = (py - y_min).re_signum().is_one() && (y_max - py).re_signum().is_one();
+    let x_in_open_bound = (px - x_min).is_positive() && (x_max - px).is_positive();
+    let y_in_open_bound = (py - y_min).is_positive() && (y_max - py).is_positive();
     x_in_open_bound && y_in_open_bound
 }
 

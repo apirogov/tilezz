@@ -1,5 +1,5 @@
 use super::gaussint::GaussInt;
-use super::traits::{Ccw, CycIntRing, InnerIntType, IntField, IntRing, RealSigned};
+use super::traits::{Ccw, CycIntRing, InnerIntType, IntField, IntRing, ZSigned};
 use num_complex::Complex64;
 use num_integer::Integer;
 use num_rational::Ratio;
@@ -54,10 +54,10 @@ impl ZZParams<'static> {
 /// a*sqrt(n) + b*sqrt(m)
 /// where a,b,m,n are all integers
 /// and m,n are squarefree coprime constants > 1.
-pub fn signum_sum_sqrt_expr_2<T: IntRing + RealSigned>(a: T, m: T, b: T, n: T) -> T {
+pub fn signum_sum_sqrt_expr_2<T: IntRing + ZSigned>(a: T, m: T, b: T, n: T) -> T {
     // if a and b are both positive or negative -> trivial,
-    let sgn_a = a.re_signum();
-    let sgn_b = b.re_signum();
+    let sgn_a = a.signum();
+    let sgn_b = b.signum();
     if sgn_a == sgn_b {
         return sgn_a;
     }
@@ -71,14 +71,14 @@ pub fn signum_sum_sqrt_expr_2<T: IntRing + RealSigned>(a: T, m: T, b: T, n: T) -
     // if a<0, b>0: z > 0 <=> n*a^2 < m*b^2 <=> m*b^2 - n*a^2 > 0
     // (and symmetrically for z < 0), which can be summarized
     // by using the sign of a and b to avoid case splitting.
-    (sgn_a * a * a * m + sgn_b * b * b * n).re_signum()
+    (sgn_a * a * a * m + sgn_b * b * b * n).signum()
 }
 
 /// Floating-point-free solution to get sign of an expression
 /// a + b*sqrt(m) + c*sqrt(n) + d*sqrt(m*n)
 /// where a,b,c,m,n are all integers
 /// and m,n are squarefree coprime constants > 1.
-pub fn signum_sum_sqrt_expr_4<T: IntRing + RealSigned + FromPrimitive>(
+pub fn signum_sum_sqrt_expr_4<T: IntRing + ZSigned + FromPrimitive>(
     a: T,
     k: T,
     b: T,
@@ -139,13 +139,13 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + RealSigned + FromPrimitive>(
     let four = T::from_i8(4).unwrap();
     let mn = l;
     let lhs = (b * b * m) + (c * c * n) - (d * d * mn) - (a * a);
-    let sq_lhs = lhs.re_signum() * lhs * lhs;
+    let sq_lhs = lhs.signum() * lhs * lhs;
     let ad_m_bc = (a * d) - (b * c);
-    let sq_rhs = four * mn * ad_m_bc.re_signum() * ad_m_bc * ad_m_bc;
+    let sq_rhs = four * mn * ad_m_bc.signum() * ad_m_bc * ad_m_bc;
 
     // println!("{sgn_bc_terms:?} | {lhs:?} | {sq_lhs:?} || {ad_m_bc:?} | {sq_rhs:?}");
 
-    sgn_bc_terms.re_signum() * (sq_lhs - sq_rhs).re_signum()
+    sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
 }
 
 // --------------------------------
@@ -168,7 +168,7 @@ pub fn zz_partial_signum_1_sym<Z: ZNum>(val: &Z) -> Z {
     let cs = val.zz_coeffs();
 
     let mut result = Z::zero();
-    result.zz_coeffs_mut()[0] = Z::Scalar::from(cs[0].re_signum());
+    result.zz_coeffs_mut()[0] = Z::Scalar::from(cs[0].signum());
     result
 }
 
@@ -212,7 +212,7 @@ pub fn zz_partial_signum_4_sym<Z: ZNum>(val: &Z) -> Z {
 /// the representation of the cyclotomic field, i.e. it does NOT work
 /// correctly for fields that contain ZZ5 or ZZ8 as subfields.
 #[inline]
-pub fn zz_inv<Z: ZNum>(val: &Z) -> Z {
+pub fn zz_inv<Z: ZCommon>(val: &Z) -> Z {
     // for x/y where y = a + b, b being a single (scaled) square root,
     // we compute y' = a - b and produce x*y'/(a+b)(a-b) = x*y'/a^2-b^2
     // where a^2 is a simpler term and b is rational.
@@ -274,7 +274,7 @@ pub fn zz_inv<Z: ZNum>(val: &Z) -> Z {
 // --------------------------------
 
 pub trait ZZBase {
-    type Scalar: PartialOrd + IntField + InnerIntType + FromPrimitive + Debug + RealSigned + 'static;
+    type Scalar: PartialOrd + IntField + InnerIntType + FromPrimitive + ZSigned + Debug + 'static;
     type Real: ZNum;
 
     /// Return angle representing one full turn.
@@ -318,7 +318,7 @@ pub trait ZZBase {
     // NOTE: using i8 instead of u8 for convenience (angles use i8)
     fn pow(&self, i: i8) -> Self
     where
-        Self: ZNum,
+        Self: ZCommon,
     {
         assert!(i >= 0, "Negative powers are not supported!");
         let mut x = Self::one();
@@ -444,12 +444,14 @@ pub trait ZZComplex {
     }
 }
 
+pub trait ZCommon: ZZBase + InnerIntType + IntRing + Display {}
+
 /// Quadratic real extension corresponding to a cyclotomic ring
 /// (used to e.g. split a cyclotomic value into separate real and imaginary parts)
-pub trait ZNum: ZZBase + InnerIntType + RealSigned + IntRing + Display {}
+pub trait ZNum: ZCommon + ZSigned {}
 
 /// A cyclotomic ring. You probably want to parametrize generic code over this trait.
-pub trait ZZNum: ZNum + ZZComplex + CycIntRing {}
+pub trait ZZNum: ZCommon + ZZComplex + CycIntRing {}
 
 // --------------------------------
 
@@ -631,22 +633,19 @@ macro_rules! zz_base_impl {
             }
         }
 
-        impl ZNum for $name_real {}
-        impl ZNum for $name {}
-
         impl IntRing for $name_real {}
         impl IntRing for $name {}
 
-        impl RealSigned for $name_real {
-            fn re_signum(&self) -> Self {
+        impl ZCommon for $name_real {}
+        impl ZCommon for $name {}
+
+        impl ZSigned for $name_real {
+            fn signum(&self) -> Self {
                 $re_signum_func(self)
             }
         }
-        impl RealSigned for $name {
-            fn re_signum(&self) -> Self {
-                $re_signum_func(self)
-            }
-        }
+
+        impl ZNum for $name_real {}
 
         impl ZZComplex for $name {
             fn is_real(&self) -> bool {

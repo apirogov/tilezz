@@ -1,4 +1,4 @@
-use crate::traits::{Ccw, InnerIntType, IntField, IntRing, RealSigned};
+use crate::traits::{Ccw, InnerIntType, IntField, IntRing, ZSigned};
 use num_integer::Integer;
 use num_rational::{Ratio, Rational32, Rational64};
 use num_traits::{FromPrimitive, One, Zero};
@@ -8,6 +8,10 @@ use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 /// Gaussian Integer (complex number with real and imaginary part both integers).
+///
+/// This type mainly exists for bootstrapping, as a scalar coefficient type
+/// that is used for constructing other rings and fields.
+///
 /// NOTE: even though complex numbers cannot really be ordered,
 /// for convenience, we derive Ord instance, which is "lexicographic".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -25,6 +29,7 @@ impl<T: Copy + Neg<Output = T>> GaussInt<T> {
         Self { real: re, imag: im }
     }
 
+    /// Return complex conjugate (i.e. with negated real value).
     pub fn conj(&self) -> Self {
         Self {
             real: self.real,
@@ -192,9 +197,9 @@ impl<T: IntRing + Integer> From<(T, T)> for GaussInt<Ratio<T>> {
     }
 }
 
-impl<T: IntRing + RealSigned> RealSigned for GaussInt<T> {
-    fn re_signum(&self) -> Self {
-        GaussInt::new(self.real.re_signum(), T::zero())
+impl<T: IntRing + ZSigned> ZSigned for GaussInt<T> {
+    fn signum(&self) -> Self {
+        GaussInt::new(self.real.signum(), T::zero())
     }
 }
 
@@ -231,10 +236,10 @@ impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
     }
 }
 
-impl<T: IntRing + Integer> IntRing for GaussInt<Ratio<T>> {}
-impl<T: IntField + Integer> IntField for GaussInt<Ratio<T>> {}
+impl<T: IntRing> IntRing for GaussInt<T> {}
+impl<T: IntField> IntField for GaussInt<T> {}
 
-// The types we will typically want to use
+/// The types we will typically want to use.
 pub type GaussInt32 = GaussInt<Rational32>;
 pub type GaussInt64 = GaussInt<Rational64>;
 

@@ -7,7 +7,7 @@ use std::fmt;
 use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use crate::traits::{InnerIntType, RealSigned};
+use crate::traits::InnerIntType;
 use crate::zzbase::{
     zz_inv, zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
     zz_partial_signum_fallback, Frac, GInt,
@@ -16,8 +16,8 @@ use crate::{zz_base_impl, zz_ops_impl};
 
 // pub use for user convenience
 pub use crate::traits::Ccw;
-pub use crate::traits::{CycIntRing, IntRing};
-pub use crate::zzbase::{ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
+pub use crate::traits::{CycIntRing, IntRing, ZSigned};
+pub use crate::zzbase::{ZCommon, ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
 pub use num_traits::{One, Zero};
 // --------
 
@@ -934,21 +934,22 @@ mod $name {
     }
 
     #[test]
-    fn test_re_signum() {
+    fn test_signum() {
         use super::constants::*;
 
         let sq2: ZZ24 = sqrt2();
         let sq3: ZZ24 = sqrt3();
         let sq6: ZZ24 = sqrt6();
 
-        let z = ZZ24::zero();
-        let p = ZZ24::one();
+        let z = Z24::zero();
+        let p = Z24::one();
         let m = -p;
 
         // use same test as above
         let sign_zz24 = |a, b, c, d| {
             (ZZ24::from(a) + ZZ24::from(b) * sq2 + ZZ24::from(c) * sq3 + ZZ24::from(d) * sq6)
-                .re_signum()
+                .re()
+                .signum()
         };
 
         let (a, b, c, d) = (485, 343, 280, 198);

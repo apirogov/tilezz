@@ -65,16 +65,26 @@ impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
     type IntType = T::IntType;
 }
 
-pub trait RealSigned {
-    /// Return the sign of the real part of the value.
-    /// Note that ZZ cannot not support Signed trait in general.
-    ///
-    /// Implementation depends on the underlying ring.
-    fn re_signum(&self) -> Self;
+/// Interface like num_traits::Signed, but without the Num-like constraints.
+pub trait ZSigned: IntRing {
+    fn signum(&self) -> Self;
+
+    fn abs(&self) -> Self {
+        *self * self.signum()
+    }
+    fn is_positive(&self) -> bool {
+        self.signum() == Self::one()
+    }
+    fn is_negative(&self) -> bool {
+        self.signum() == -Self::one()
+    }
+    fn abs_sub(&self, other: &Self) -> Self {
+        <Self as ZSigned>::abs(&(*self - *other))
+    }
 }
 
-impl<T: Signed> RealSigned for T {
-    fn re_signum(&self) -> Self {
+impl<T: IntRing + Signed> ZSigned for T {
+    fn signum(&self) -> Self {
         self.signum()
     }
 }
