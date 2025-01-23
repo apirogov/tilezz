@@ -2,7 +2,7 @@
 
 This repository provides the following main features:
 
-1. practical implementation of various [cyclotomic rings](https://en.wikipedia.org/wiki/Cyclotomic_field), which are subsets of complex numbers that admit exact representation
+1. practical implementation of various [cyclotomic rings and fields](https://en.wikipedia.org/wiki/Cyclotomic_field), which are subsets of complex numbers that admit exact representation
 2. exact representation of a rich family of polygonal tiles based on these rings, using a minimalistic and discrete form of [turtle semantics](https://en.wikipedia.org/wiki/Turtle_graphics)
 3. some useful string-based algorithms to work with these objects and visualize them
 
@@ -23,7 +23,7 @@ The concepts this work is based on are described in the following blog posts:
 
 * https://pirogov.de/blog/perfect-precision-2d-geometry-complex-integers/
 * https://pirogov.de/blog/intersecting-segments-without-tears/
-* TODO: write followup post
+* (more posts will probably added over time)
 
 Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 
@@ -36,8 +36,8 @@ representations of constructible cyclotomic rings for some fixed root of unity,
 and polygonal tiles build on top of these rings.
 
 Instead of representing polygons by segments and coordinates, they are described
-using a form of turtle semantics, i.e. interpreting a sequence of [exterior
-angles](https://en.wikipedia.org/wiki/Internal_and_external_angles) as
+using a form of turtle semantics, i.e. interpreting a sequence of discrete
+[external angles](https://en.wikipedia.org/wiki/Internal_and_external_angles) as
 instructions for tracing out a polygon or segment chain from a given starting
 point by performing unit-length steps in some direction. This, together with the
 fact that we use cyclotomics for actual coordinates, helps avoiding dependence
@@ -60,6 +60,7 @@ objects in terms of unit steps into some direction, each simple polygon allows
 for a natural representation as a sequence of exterior angles along its boundary.
 As the sequence is cyclic, there is one cyclicaly shifted sequence for each
 starting vertex.
+
 The **canonical representation** is then simply the [lexicographically
 minimal](https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation)
 such sequence. Note that this gives us a **simple and efficient equivalence
@@ -105,45 +106,45 @@ cd tilezz
 
 **Step 2:** Run `jupyter notebook`
 
-**Step 3:** Open the [example notebook](./tilezz_example.ipynb) **OR**
+**Step 3:** Open the [minimal example notebook](./examples/minimal.ipynb) **OR**
     Create a new Rust notebook (which is powered by `evcxr`) and add the following code into a cell:
 
 ```rust
+// Build and load the crate
 :dep plotters = { version = "^0.3.7", features = ["evcxr", "all_series"] }
 // 1(a) if you want to use a published version of this crate:
 // :dep tilezz = "*"
 // 1(b) (RECOMMENDED) if you cloned this repository and want to use the current development version:
-:dep tilezz = { path = "." }
+:dep tilezz = { path = ".." }
+
+// Import what we need
+use tilezz::cyclotomic::*;
+use tilezz::snake::Turtle;
+use tilezz::rat::Rat;
 
 use plotters::prelude::*;
-use tilezz::snake::constants::spectre;
-use tilezz::snake::{Snake, Turtle};
-use tilezz::plotters::plot_tile;
-use tilezz::zz::ZZ12;
+use tilezz::plotters::{plot_tile, TileStyle};
 
 evcxr_figure((500,500), |root| {
-    let s: Snake<ZZ12> = spectre();
-    let tile = s.to_polyline_f64(&Turtle::default());
-
+    // Prepare the canvas
     let _ = root.fill(&WHITE);
     let root = root.margin(10, 10, 10, 10);
 
-    plot_tile(
-        &mut ChartBuilder::on(&root)
-            .caption("Spectre tile", ("sans-serif", 40).into_font())
-            .x_label_area_size(20)
-            .y_label_area_size(40),
-        &tile,
-    );
-    root.present()?;
+    // Define a sequence of external angles. As all segments have unit length, this fully determines a polygon
+    let external_angles: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+    // Instantiate an abstract polygon over the cyclotomic ring ZZ12 (one full turn = 12 rotational unit steps)
+    let s: Rat<ZZ12> = external_angles.try_into().unwrap();
+    // Trace out the polygon in the cartesian plane using a canonical starting point and facing direction
+    let p = s.to_polyline_f64(Turtle::default());
+    // Plot the concretized polygon with default settings
+    plot_tile(&root, &p, &TileStyle::default());
+
     Ok(())
 })
 ```
 
 After waiting for some seconds (the required dependencies have to be built
 first, after that it is faster), you should see a plot showing the spectre tile.
-
-TODO: improve/finalize API, update the example and add a screenshot.
 
 ## See Also
 
