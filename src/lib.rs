@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate arrayref;
+
 pub mod traits;
 
 pub mod gaussint;
@@ -5,10 +8,11 @@ pub mod gaussint;
 #[macro_use]
 pub mod zzbase;
 
-#[macro_use]
-extern crate arrayref;
+pub mod zzsigned;
 
 pub mod zz;
+
+pub mod qq;
 
 pub mod zzgeom;
 
@@ -19,6 +23,8 @@ pub mod grid;
 pub mod snake;
 
 pub mod rat;
+
+pub mod cyclotomic;
 
 pub mod plotutils;
 

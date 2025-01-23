@@ -1,14 +1,18 @@
+//! Abstract representation of simple polygons.
+
+use std::fmt::{Debug, Display};
+use std::marker::PhantomData;
+
+use num_traits::ToPrimitive;
+
 use crate::angles::revcomp;
 use crate::snake::{Snake, Turtle};
 use crate::zzbase::ZZNum;
-use num_traits::ToPrimitive;
-use std::fmt::{Debug, Display};
-use std::marker::PhantomData;
 
 /// Booth's lexicographically minimal string rotation algorithm.
 /// Returns index of the beginning of the lex. minimal rotation of given sequence in O(n).
 ///
-/// See https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation
+/// See <https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation>
 ///
 fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
     let n = s.len() as isize;
@@ -190,7 +194,7 @@ impl<T: ZZNum> Rat<T> {
     }
 
     /// Return twice the area of the represented polygon, computed using the shoelace formula.
-    /// See: https://en.wikipedia.org/wiki/Shoelace_formula
+    /// See: <https://en.wikipedia.org/wiki/Shoelace_formula>
     pub fn double_area(&self) -> T::Real {
         Snake::<T>::from_slice_unchecked(self.angles.as_slice()).double_area()
     }
@@ -299,9 +303,9 @@ impl<T: ZZNum> Rat<T> {
         unchecked: bool,
     ) -> Result<Self, &str> {
         if self.chirality() != other.chirality() {
-            // FIXME: could implicitly reflect a tile and adjust the denoted index, but
-            // this is very low priority right now.
-            return Err("Cannot glue rats of opposite chirality!");
+            // NOTE: could implicitly reflect a tile and adjust the denoted index,
+            //       but this is very low priority right now.
+            return Err("Cannot glue rats of opposite chirality (not implemented)!");
         }
         let (norm_start, mlen, norm_end) = self.get_match(matched_indices, other);
 

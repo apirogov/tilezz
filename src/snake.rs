@@ -1,13 +1,16 @@
+//! Abstract representation of points and polygonal segment chains.
+
+use std::fmt::{Debug, Display};
+
+use num_complex::Complex;
+use num_traits::ToPrimitive;
+use num_traits::Zero;
+
 use crate::angles::{normalize_angle, upscale_angles};
 use crate::grid::UnitSquareGrid;
 use crate::zz::{HasZZ12, HasZZ4, HasZZ6};
 use crate::zzbase::{ZZBase, ZZNum};
 use crate::zzgeom::{intersect, wedge};
-use num_complex::Complex;
-use num_traits::ToPrimitive;
-use num_traits::Zero;
-use std::fmt::Debug;
-use std::fmt::Display;
 
 /// Representation of a turtle (i.e. an oriented point).
 pub struct Turtle<T: ZZNum> {
@@ -372,7 +375,7 @@ impl<T: ZZNum> Snake<T> {
 
     /// Return twice the area of the represented polygon, computed using the shoelace formula.
     /// If the snake is not closed, will implicitly add the segment from the last to first point.
-    /// See: https://en.wikipedia.org/wiki/Shoelace_formula
+    /// See: <https://en.wikipedia.org/wiki/Shoelace_formula>
     pub fn double_area(&self) -> T::Real {
         let mut result = <<T as ZZBase>::Real as Zero>::zero();
         for i in 1..self.len() {

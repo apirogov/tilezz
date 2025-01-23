@@ -1,6 +1,8 @@
-/// Unit square lattice utils
-use super::zzbase::ZZNum;
+//! Utilities for managing information attached to a unit square lattice.
+
 use std::{collections::BTreeMap, ops::Bound};
+
+use crate::zzbase::ZZNum;
 
 #[derive(Debug, Clone)]
 pub struct UnitSquareGrid {

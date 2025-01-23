@@ -1,7 +1,6 @@
-use super::zzbase::ZZNum;
+//! Angle-related utilities
 
-// Angle-related utils
-// --------------------------
+use crate::zzbase::ZZNum;
 
 /// Get reverse complement of an angle sequence,
 /// i.e. with reversed order and sign.
@@ -39,8 +38,9 @@ pub fn to_abs_seq<T: ZZNum>(angles: &[i8]) -> Vec<i8> {
     result
 }
 
-/// Normalize an angle to (-half-turn, half-turn). This is
-/// used to have a unique symbolic snake representation.
+/// Normalize an angle to the closed interval `[-H, H]`, where `H` is the
+/// half-turn of the ring. This is used to have a unique symbolic snake
+/// representation.
 pub fn normalize_angle<T: ZZNum>(angle: i8) -> i8 {
     let a = angle % T::turn();
     if a.abs() <= T::hturn() {

@@ -1,24 +1,24 @@
-use crate::gaussint::GaussInt;
-use num_complex::Complex64;
-use num_integer::Integer;
-use num_traits::{FromPrimitive, ToPrimitive};
+//! In this module the different ring types are generated using macros.
+
 use std::f64::consts::SQRT_2;
 use std::fmt;
 use std::fmt::Display;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Mul, Neg, Sub};
 
-use crate::traits::InnerIntType;
-use crate::zzbase::{
-    zz_inv, zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
-    zz_partial_signum_fallback, Frac, GInt,
+use num_complex::Complex64;
+use num_integer::Integer;
+use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
+
+use crate::gaussint::GaussInt;
+use crate::traits::{Ccw, Conj, InnerIntType, IntRing, OneImag};
+use crate::zzbase::{Frac, GInt, ZCommon, ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
+
+use crate::zzsigned::{
+    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
+    zz_partial_signum_fallback, ZSigned,
 };
-use crate::{zz_base_impl, zz_ops_impl};
+use crate::{zz_base_impl, zz_ops_impl, zz_triv_impl};
 
-// pub use for user convenience
-pub use crate::traits::Ccw;
-pub use crate::traits::{CycIntRing, IntRing, ZSigned};
-pub use crate::zzbase::{ZCommon, ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
-pub use num_traits::{One, Zero};
 // --------
 
 // definitions needed to derive different ZZn types
@@ -487,20 +487,6 @@ zz_base_impl!(ZZ60, Z60, ZZ60_PARAMS, zz60_mul, zz_partial_signum_fallback);
 zz_ops_impl!(ZZ4 ZZ6 ZZ8 ZZ10 ZZ12 ZZ16 ZZ20 ZZ24 ZZ30 ZZ32 ZZ60);
 zz_ops_impl!(Z4 Z6 Z8 Z10 Z12 Z16 Z20 Z24 Z30 Z32 Z60);
 
-/// rings where all expressions inside the square roots are integers
-/// (some algorithms only work with those rings)
-pub trait ZZInt {}
-pub fn is_zzint<T: ZZNum>() -> bool {
-    // rings that are multiples of 1/5 or 1/8 turn have non-integral terms
-    T::turn() % 5 != 0 && T::turn() % 8 != 0
-}
-
-impl ZZInt for ZZ4 {}
-impl ZZInt for ZZ6 {}
-impl ZZInt for ZZ8 {}
-impl ZZInt for ZZ12 {}
-impl ZZInt for ZZ24 {}
-
 /// rings containing ZZ4
 pub trait HasZZ4 {}
 /// rings containing ZZ6
@@ -512,34 +498,30 @@ pub trait HasZZ10 {}
 /// rings containing ZZ12
 pub trait HasZZ12 {}
 
-impl HasZZ4 for ZZ4 {}
-impl HasZZ4 for ZZ8 {}
-impl HasZZ4 for ZZ12 {}
-impl HasZZ4 for ZZ16 {}
-impl HasZZ4 for ZZ20 {}
-impl HasZZ4 for ZZ24 {}
-impl HasZZ4 for ZZ32 {}
-impl HasZZ4 for ZZ60 {}
+zz_triv_impl!(HasZZ4, ZZ4 ZZ8 ZZ12 ZZ16 ZZ20 ZZ24 ZZ32 ZZ60);
+zz_triv_impl!(HasZZ6, ZZ6 ZZ12 ZZ24 ZZ30 ZZ60);
+zz_triv_impl!(HasZZ8, ZZ8 ZZ16 ZZ24 ZZ32);
+zz_triv_impl!(HasZZ10, ZZ10 ZZ20 ZZ30 ZZ60);
+zz_triv_impl!(HasZZ12, ZZ12 ZZ24 ZZ60);
 
-impl HasZZ6 for ZZ6 {}
-impl HasZZ6 for ZZ12 {}
-impl HasZZ6 for ZZ24 {}
-impl HasZZ6 for ZZ30 {}
-impl HasZZ6 for ZZ60 {}
+impl<T: ZZNum + HasZZ4> OneImag for T {
+    fn one_i() -> Self {
+        Self::unit(Self::qturn())
+    }
 
-impl HasZZ8 for ZZ8 {}
-impl HasZZ8 for ZZ16 {}
-impl HasZZ8 for ZZ24 {}
-impl HasZZ8 for ZZ32 {}
+    fn is_one_i(&self) -> bool {
+        *self == Self::one_i()
+    }
+}
 
-impl HasZZ10 for ZZ10 {}
-impl HasZZ10 for ZZ20 {}
-impl HasZZ10 for ZZ30 {}
-impl HasZZ10 for ZZ60 {}
-
-impl HasZZ12 for ZZ12 {}
-impl HasZZ12 for ZZ24 {}
-impl HasZZ12 for ZZ60 {}
+impl<I: Integer + FromPrimitive + ToPrimitive> From<(I, I)> for ZZ12 {
+    /// Convert a Gaussian integer into a cyclotomic integer (only for fields including them)
+    fn from((re, im): (I, I)) -> Self {
+        let r = I::from_i64(re.to_i64().unwrap()).unwrap();
+        let i = I::from_i64(im.to_i64().unwrap()).unwrap();
+        Self::one().scale(r) + Self::one_i().scale(i)
+    }
+}
 
 pub mod constants {
     use super::*;
@@ -594,7 +576,6 @@ mod tests {
     use constants::zz_units_sum;
 
     use super::*;
-    use crate::zzbase::{signum_sum_sqrt_expr_2, signum_sum_sqrt_expr_4};
 
     #[test]
     fn test_constants() {
@@ -629,56 +610,6 @@ mod tests {
         assert_eq!(isqrt3().complex64().im, sq3);
         assert_eq!(zz10_isqrt_penta().complex64().im, sq_penta);
         assert_eq!(zz20_half_sqrt_penta().complex64().re, hsq_penta);
-    }
-
-    #[test]
-    fn test_sum_root_expr_sign_2() {
-        assert_eq!(signum_sum_sqrt_expr_2(0, 2, 0, 3), 0);
-        assert_eq!(signum_sum_sqrt_expr_2(1, 2, 0, 3), 1);
-        assert_eq!(signum_sum_sqrt_expr_2(0, 2, -1, 3), -1);
-        assert_eq!(signum_sum_sqrt_expr_2(2, 2, -1, 3), 1);
-        assert_eq!(signum_sum_sqrt_expr_2(-5, 2, 4, 3), -1);
-        assert_eq!(signum_sum_sqrt_expr_2(-5, 2, 5, 3), 1);
-    }
-
-    #[test]
-    fn test_sum_root_expr_sign_4() {
-        let sign_zz24 = |a, b, c, d| signum_sum_sqrt_expr_4(a, 1, b, 2, c, 3, d, 6);
-        // trivial sanity-checks
-        assert_eq!(sign_zz24(0, 0, 0, 0), 0);
-        assert_eq!(sign_zz24(1, 1, 1, 1), 1);
-        assert_eq!(sign_zz24(-1, -1, -1, -1), -1);
-        assert_eq!(sign_zz24(1, 0, 0, 0), 1);
-        assert_eq!(sign_zz24(0, -1, 0, 0), -1);
-        assert_eq!(sign_zz24(0, 0, 1, 0), 1);
-        assert_eq!(sign_zz24(0, 0, 0, -1), -1);
-        // non-trivial tests
-        assert_eq!(sign_zz24(5, 7, 11, -13), 1);
-        assert_eq!(sign_zz24(5, 7, 11, -14), -1);
-        assert_eq!(sign_zz24(17, -11, 9, -7), -1);
-        assert_eq!(sign_zz24(18, -11, 9, -7), 1);
-        assert_eq!(sign_zz24(18, -11, 8, -7), -1);
-        assert_eq!(sign_zz24(18, -11, 8, -6), 1);
-
-        // try with parameters where terms are all really close
-        {
-            let (a, b, c, d) = (130, 92, 75, 53);
-            assert_eq!(sign_zz24(-a, -b, c, d), -1);
-            assert_eq!(sign_zz24(-a, b, -c, d), 1);
-            assert_eq!(sign_zz24(-a, b, c, -d), 1);
-            assert_eq!(sign_zz24(a, -b, -c, d), -1);
-            assert_eq!(sign_zz24(a, -b, c, -d), -1);
-            assert_eq!(sign_zz24(a, b, -c, -d), 1);
-        }
-        {
-            let (a, b, c, d) = (485, 343, 280, 198);
-            assert_eq!(sign_zz24(-a, -b, c, d), -1);
-            assert_eq!(sign_zz24(-a, b, -c, d), 1);
-            assert_eq!(sign_zz24(-a, b, c, -d), 1);
-            assert_eq!(sign_zz24(a, -b, -c, d), -1);
-            assert_eq!(sign_zz24(a, -b, c, -d), -1);
-            assert_eq!(sign_zz24(a, b, -c, -d), 1);
-        }
     }
 
     macro_rules! zz_tests {
@@ -774,28 +705,9 @@ mod $name {
     }
 
     #[test]
-    fn test_div() {
-        if !is_zzint::<ZZi>() {
-            return;  // division currently does not work in arbitrary cyclotomic fields
-        }
-
-        for k in 0..ZZi::turn() {
-            for l in 0..ZZi::turn() {
-                let val = ZZi::unit(k) + ZZi::unit(l);
-                if val.is_zero() {
-                    continue;
-                }
-                let inv = zz_inv(&val);
-                assert_eq!(val * inv, ZZi::one());
-
-            }
-        }
-    }
-
-    #[test]
     fn test_rotations() {
         // test ccw()
-        // assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
+        assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
         assert_eq!(-(-(ZZi::one()) * ZZi::ccw()), ZZi::ccw());
 
         // test going around the unit circle step by step
@@ -811,8 +723,8 @@ mod $name {
         assert_eq!(ZZi::unit(1), ZZi::unit(ZZi::turn() + 1));
         assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
         assert_eq!(ZZi::unit(ZZi::hturn()), -ZZi::one());
-        if ZZi::turn() % 4 == 0 {
-            assert_eq!(ZZi::one_i().zz_coeffs()[0], GInt::from((0, 1)));
+        if ZZi::has_qturn() {
+            assert_eq!(ZZi::unit(ZZi::qturn()).zz_coeffs()[0], GInt::from((0, 1)));
         }
 
         // test powi()
@@ -857,7 +769,7 @@ mod $name {
         for a in 0..ZZi::hturn() {
             let p = ZZi::unit(a);
             let (x, y) = p.re_im();
-            assert_eq!(p, ZZi::from(x) + ZZi::from(y) * ZZi::one_i());
+            assert_eq!(p, ZZi::from(x) + ZZi::from(y) * ZZi::unit(ZZi::qturn()));
         }
     }
 
@@ -879,10 +791,11 @@ mod $name {
         }
 
         if ZZi::has_qturn() {
-            assert!(!ZZi::one_i().is_real());
-            assert!(ZZi::one_i().is_imag());
-            assert!((-ZZi::one_i()).is_imag());
-            assert!(!ZZi::one_i().is_complex());
+            let imag_unit = ZZi::unit(ZZi::qturn());
+            assert!(!imag_unit.is_real());
+            assert!(imag_unit.is_imag());
+            assert!((-imag_unit).is_imag());
+            assert!(!imag_unit.is_complex());
         }
     }
 
@@ -936,7 +849,6 @@ mod $name {
     #[test]
     fn test_signum() {
         use super::constants::*;
-
         let sq2: ZZ24 = sqrt2();
         let sq3: ZZ24 = sqrt3();
         let sq6: ZZ24 = sqrt6();

@@ -1,17 +1,14 @@
 use num_complex::ComplexFloat;
-use num_traits::{One, Zero};
+use std::collections::HashSet;
 
 use plotters::prelude::*;
 
-use std::collections::HashSet;
-
 use tilezz::angles::to_abs_seq;
+use tilezz::cyclotomic::*;
 use tilezz::plotters::plot_points;
 use tilezz::plotutils::tile_bounds;
 use tilezz::snake::constants::spectre;
 use tilezz::snake::Snake;
-use tilezz::traits::ZSigned;
-use tilezz::zz::{ZZBase, ZZComplex, ZZ12};
 
 fn main() {
     // let root = BitMapBackend::new("test.png", (1000, 1000))

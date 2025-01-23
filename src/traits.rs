@@ -1,10 +1,12 @@
+//! General traits that are needed for technical reasons to simplify implementation.
+
 use num_integer::Integer;
 use num_rational::Ratio;
-use num_traits::{One, Signed, Zero};
+use num_traits::{One, Zero};
 use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-/// Trait with all traits a reasonable integer ring should provide
+/// Trait with all traits a reasonable integer ring should provide.
 pub trait IntRing:
     Zero
     + One
@@ -19,6 +21,7 @@ pub trait IntRing:
 {
 }
 
+/// A field is a ring that supports division.
 pub trait IntField: IntRing + Div<Self, Output = Self> {}
 
 impl IntRing for i32 {}
@@ -42,11 +45,14 @@ pub trait Ccw {
     fn is_ccw(&self) -> bool;
 }
 
-/// A cyclotomic ring, i.e. the ring of integers extended by a root of unity.
-pub trait CycIntRing: IntRing + Ccw {}
+/// Trait to be implemented by rings that support the imaginary unit i directly.
+pub trait OneImag {
+    /// Return imaginary unit.
+    fn one_i() -> Self;
 
-/// A cyclotomic field, i.e. cyclotomic field closed under division.
-pub trait CycIntField: IntField + Ccw {}
+    /// Return true if the value is equal to the imaginary unit.
+    fn is_one_i(&self) -> bool;
+}
 
 /// Utility trait to access the integer type on top of which
 /// more complex numeric types are built.
@@ -65,26 +71,22 @@ impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
     type IntType = T::IntType;
 }
 
-/// Interface like num_traits::Signed, but without the Num-like constraints.
-pub trait ZSigned: IntRing {
-    fn signum(&self) -> Self;
+pub trait Conj {
+    /// For representations of complex numbers, return conjugated complex number.
+    /// For one-dimensional numbers, return same number.
+    fn conj(&self) -> Self;
 
-    fn abs(&self) -> Self {
-        *self * self.signum()
-    }
-    fn is_positive(&self) -> bool {
-        self.signum() == Self::one()
-    }
-    fn is_negative(&self) -> bool {
-        self.signum() == -Self::one()
-    }
-    fn abs_sub(&self, other: &Self) -> Self {
-        <Self as ZSigned>::abs(&(*self - *other))
-    }
+    /// For representations of complex numbers, return number with negated real part.
+    /// For one-dimensional numbers, return negation of number.
+    fn co_conj(&self) -> Self;
 }
 
-impl<T: IntRing + Signed> ZSigned for T {
-    fn signum(&self) -> Self {
-        self.signum()
+impl<T: Integer + Clone + std::ops::Neg<Output = T>> Conj for Ratio<T> {
+    fn conj(&self) -> Self {
+        self.clone()
+    }
+
+    fn co_conj(&self) -> Self {
+        self.neg()
     }
 }

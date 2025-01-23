@@ -1,7 +1,9 @@
-// 2D Point (X, Y)
+//! General plotting utilities
+
+/// 2D Point (X, Y)
 type P64 = (f64, f64);
 
-// 2D Rectangle (top left and bottom right corners)
+/// 2D Rectangle (top left and bottom right corners)
 type R64 = (P64, P64);
 
 /// Returns the center of the tile based on its vertex points.

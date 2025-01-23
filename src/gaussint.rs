@@ -1,18 +1,23 @@
-use crate::traits::{Ccw, InnerIntType, IntField, IntRing, ZSigned};
-use num_integer::Integer;
-use num_rational::{Ratio, Rational32, Rational64};
-use num_traits::{FromPrimitive, One, Zero};
+//! Gaussian integer (implementation detail, for the actual ring see ZZ4)
+
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
+
+use num_integer::Integer;
+use num_rational::{Ratio, Rational32, Rational64};
+use num_traits::{FromPrimitive, One, Zero};
+
+use crate::traits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag};
+use crate::zzsigned::ZSigned;
 
 /// Gaussian Integer (complex number with real and imaginary part both integers).
 ///
 /// This type mainly exists for bootstrapping, as a scalar coefficient type
 /// that is used for constructing other rings and fields.
 ///
-/// NOTE: even though complex numbers cannot really be ordered,
+/// *NOTE:* even though complex numbers cannot really be ordered,
 /// for convenience, we derive Ord instance, which is "lexicographic".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GaussInt<T> {
@@ -28,13 +33,14 @@ impl<T: Copy + Neg<Output = T>> GaussInt<T> {
     pub const fn new(re: T, im: T) -> Self {
         Self { real: re, imag: im }
     }
+}
 
-    /// Return complex conjugate (i.e. with negated real value).
-    pub fn conj(&self) -> Self {
-        Self {
-            real: self.real,
-            imag: -self.imag,
-        }
+impl<T: Copy + Neg<Output = T>> Conj for GaussInt<T> {
+    fn conj(&self) -> Self {
+        Self::new(self.real, -self.imag)
+    }
+    fn co_conj(&self) -> Self {
+        Self::new(-self.real, self.imag)
     }
 }
 
@@ -76,7 +82,17 @@ impl<T: IntRing> Ccw for GaussInt<T> {
     }
 
     fn is_ccw(&self) -> bool {
-        self.real == T::zero() && self.imag == T::one()
+        *self == Self::ccw()
+    }
+}
+
+impl<T: IntRing> OneImag for GaussInt<T> {
+    fn one_i() -> Self {
+        Self::new(T::zero(), T::one())
+    }
+
+    fn is_one_i(&self) -> bool {
+        *self == Self::one_i()
     }
 }
 
@@ -124,7 +140,7 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Mul<GaussInt
 }
 
 impl<T: IntField> GaussInt<T> {
-    /// Return the multiplicative inverse
+    /// Return the multiplicative inverse.
     pub fn inv(&self) -> Self {
         // 1/(a + b*i) = (a - i*b)/(a^2 + b^2)
         let denom = self.real * self.real + self.imag * self.imag;
@@ -176,6 +192,7 @@ impl<T: Display + IntRing + PartialOrd> Display for GaussInt<T> {
 }
 
 // implement from(...)
+
 impl<T: IntRing> From<T> for GaussInt<T> {
     fn from(value: T) -> Self {
         GaussInt::new(value, T::zero())
@@ -204,6 +221,7 @@ impl<T: IntRing + ZSigned> ZSigned for GaussInt<T> {
 }
 
 // for scalars on the left, use singleton tuples as wrapper
+
 impl<T: IntRing + Integer> Add<GaussInt<Ratio<T>>> for (T,) {
     type Output = GaussInt<Ratio<T>>;
     fn add(self, other: GaussInt<Ratio<T>>) -> GaussInt<Ratio<T>> {
@@ -216,7 +234,9 @@ impl<T: IntRing + Integer> Mul<GaussInt<Ratio<T>>> for (T,) {
         return GaussInt::<Ratio<T>>::from(self) * other;
     }
 }
+
 // for scalars on the right, no need for the tuple wrapper
+
 impl<T: IntRing + Integer> Add<T> for GaussInt<Ratio<T>> {
     type Output = GaussInt<Ratio<T>>;
     fn add(self, other: T) -> GaussInt<Ratio<T>> {
@@ -239,7 +259,8 @@ impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
 impl<T: IntRing> IntRing for GaussInt<T> {}
 impl<T: IntField> IntField for GaussInt<T> {}
 
-/// The types we will typically want to use.
+// The types we will typically want to use.
+
 pub type GaussInt32 = GaussInt<Rational32>;
 pub type GaussInt64 = GaussInt<Rational64>;
 
@@ -254,13 +275,17 @@ mod tests {
         assert_eq!(GaussInt64::from((4,)).real, Rational64::new(4, 1));
         assert_eq!(GaussInt64::from((5,)).imag, Rational64::new(0, 1));
 
-        let x = GaussInt32::from((3, 5));
+        let x: GaussInt32 = (3, 5).into();
         assert_eq!(x.real, Rational32::from(3));
         assert_eq!(x.imag, Rational32::from(5));
 
         let x_conj = x.conj();
         assert_eq!(x_conj.real, Rational32::from(3));
         assert_eq!(x_conj.imag, Rational32::from(-5));
+
+        let x_co_conj = x.co_conj();
+        assert_eq!(x_co_conj.real, Rational32::from(-3));
+        assert_eq!(x_co_conj.imag, Rational32::from(5));
     }
 
     #[test]

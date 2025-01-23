@@ -1,12 +1,15 @@
-use crate::plotutils::{tile_bounds, tile_centroid, tile_viewport};
+//! Helper fuctions specifically for rendering with plotters
 
 use num_traits::Zero;
+
 use plotters::prelude::*;
 use plotters::{
     coord::types::RangedCoordf64,
     coord::Shift,
     style::text_anchor::{HPos, Pos, VPos},
 };
+
+use crate::plotutils::{tile_bounds, tile_centroid, tile_viewport};
 
 /// Metadata and style to be applied to a rendered tile.
 // TODO: could allow customizing border rendering with a pair of funcs (lines, segments)

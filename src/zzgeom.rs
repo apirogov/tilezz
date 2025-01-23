@@ -1,5 +1,5 @@
-use crate::traits::ZSigned;
-use crate::zz::ZZNum;
+use crate::zzbase::ZZNum;
+use crate::zzsigned::ZSigned;
 use num_traits::Zero;
 
 // Core linear algebra utils
@@ -25,7 +25,7 @@ pub fn norm<ZZ: ZZNum>(p: &ZZ) -> ZZ::Real {
     dot::<ZZ>(&p, &p)
 }
 
-/// Return true if angle is in closed interval [a,b],
+/// Return true if angle is in closed interval `[a,b]`,
 /// assuming that a and b are in counterclockwise order and their ccw angle
 /// is less than a half turn.
 pub fn angle_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
@@ -66,7 +66,7 @@ fn is_colinear<ZZ: ZZNum>(p: &ZZ, (a, b, c): &(ZZ::Real, ZZ::Real, ZZ::Real)) ->
 
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
-/// Based on: https://stackoverflow.com/a/9997374/432908
+/// Based on: <https://stackoverflow.com/a/9997374/432908>
 pub fn intersect<ZZ: ZZNum>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
         // we ignore touching endpoints
@@ -83,22 +83,31 @@ pub fn intersect<ZZ: ZZNum>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     }
 }
 
-/// Return whether a point is strictly inside a rectangle.
-// FIXME: add strict flag for strictly inside vs. boundary inclusive check
-pub fn point_in_rect<ZZ: ZZNum>(p: &ZZ, (pos_min, pos_max): (&ZZ, &ZZ)) -> bool {
+/// Return whether a point is inside a rectangle or on its boundary.
+/// If strict is true, will not consider a point on a boundary as inside.
+pub fn point_in_rect<ZZ: ZZNum>(p: &ZZ, (pos_min, pos_max): (&ZZ, &ZZ), strict: bool) -> bool {
     let (px, py) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
-    let x_in_open_bound = (px - x_min).is_positive() && (x_max - px).is_positive();
-    let y_in_open_bound = (py - y_min).is_positive() && (y_max - py).is_positive();
+    let x_in_open_bound = if strict {
+        (px - x_min).is_positive() && (x_max - px).is_positive()
+    } else {
+        !(px - x_min).is_negative() && !(x_max - px).is_negative()
+    };
+    let y_in_open_bound = if strict {
+        (py - y_min).is_positive() && (y_max - py).is_positive()
+    } else {
+        !(py - y_min).is_negative() && !(y_max - py).is_negative()
+    };
     x_in_open_bound && y_in_open_bound
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zz::ZZBase;
+    use crate::traits::OneImag;
     use crate::zz::{Z12, ZZ12};
+    use crate::zzbase::ZZBase;
     use num_traits::{One, Zero};
 
     type ZZi = ZZ12;
@@ -260,14 +269,16 @@ mod tests {
         let max: ZZ12 = (2, 2).into();
 
         // inside
-        assert!(point_in_rect(&(1, 1).into(), (&min, &max)));
-        assert!(point_in_rect(&ZZ12::ccw(), (&min, &max)));
+        assert!(point_in_rect(&(1, 1).into(), (&min, &max), true));
+        assert!(point_in_rect(&ZZ12::ccw(), (&min, &max), true));
 
-        // boundary does not count
-        assert!(!point_in_rect(&min, (&min, &max)));
-        assert!(!point_in_rect(&max, (&min, &max)));
+        // boundary
+        assert!(!point_in_rect(&min, (&min, &max), true));
+        assert!(!point_in_rect(&max, (&min, &max), true));
+        assert!(point_in_rect(&min, (&min, &max), false));
+        assert!(point_in_rect(&max, (&min, &max), false));
 
         // outside
-        assert!(!point_in_rect(&(3, 1).into(), (&min, &max)));
+        assert!(!point_in_rect(&(3, 1).into(), (&min, &max), true));
     }
 }
