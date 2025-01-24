@@ -10,6 +10,9 @@ pub mod zzbase;
 
 pub mod zzsigned;
 
+pub mod zzparams;
+
+#[macro_use]
 pub mod zz;
 
 pub mod qq;
@@ -25,6 +28,8 @@ pub mod snake;
 pub mod rat;
 
 pub mod cyclotomic;
+
+pub mod prelude;
 
 pub mod plotutils;
 

@@ -455,7 +455,7 @@ macro_rules! zz_base_impl {
 
 #[macro_export]
 macro_rules! zz_ops_impl {
-    ($($t:ty)*) => ($(
+    ($t:ty) => {
         impl Add<$t> for $t {
             type Output = Self;
             fn add(self, other: Self) -> Self {
@@ -501,19 +501,36 @@ macro_rules! zz_ops_impl {
         impl Display for $t {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let nums: Vec<String> = self.coeffs.into_iter().map(|x| format!("{x}")).collect();
-                let units: Vec<String> = <$t>::zz_params().sym_roots_lbls.into_iter().map(|x| format!("sqrt({x})")).collect();
-                let parts: Vec<String> = nums.iter().zip(units.iter()).filter(|(x, _)| x != &"0").map(|(x, y)| {
-                    let is_real_unit = y == "sqrt(1)";
-                    if (x == "1") {
-                        if (is_real_unit) { "1".to_string() } else { y.to_string() }
-                    } else if (is_real_unit) {
-                        format!("{x}")
-                    } else {
-                        format!("({x})*{y}")
-                    }
-                }).collect();
+                let units: Vec<String> = <$t>::zz_params()
+                    .sym_roots_lbls
+                    .into_iter()
+                    .map(|x| format!("sqrt({x})"))
+                    .collect();
+                let parts: Vec<String> = nums
+                    .iter()
+                    .zip(units.iter())
+                    .filter(|(x, _)| x != &"0")
+                    .map(|(x, y)| {
+                        let is_real_unit = y == "sqrt(1)";
+                        if (x == "1") {
+                            if (is_real_unit) {
+                                "1".to_string()
+                            } else {
+                                y.to_string()
+                            }
+                        } else if (is_real_unit) {
+                            format!("{x}")
+                        } else {
+                            format!("({x})*{y}")
+                        }
+                    })
+                    .collect();
                 let joined = parts.join(" + ");
-                let result = if (joined.is_empty()){ "0".to_string() } else { joined };
+                let result = if (joined.is_empty()) {
+                    "0".to_string()
+                } else {
+                    joined
+                };
                 return write!(f, "{result}");
             }
         }
@@ -530,5 +547,226 @@ macro_rules! zz_ops_impl {
 
         impl IntRing for $t {}
         impl ZCommon for $t {}
-    )*)
+    };
+}
+
+#[macro_export]
+macro_rules! zz_test {
+    ($name:ident, $type:ty) => {
+        mod $name {
+            use super::*;
+
+            type ZZi = $type;
+
+            #[test]
+            fn test_units_sum_is_complex() {
+                let p: ZZi = zz_units_sum();
+                assert!(p.is_complex());
+            }
+
+            #[test]
+            fn test_basic() {
+                // # of full turn steps is an even natural (so a half turn is possible)
+                assert!(ZZi::turn() > 0);
+                assert!(ZZi::turn() % 2 == 0);
+
+                // check vector sizes
+                let roots_num = ZZi::zz_params().sym_roots_num;
+                assert_eq!(ZZi::zz_params().sym_roots_sqs.len(), roots_num);
+                assert_eq!(ZZi::zz_params().ccw_unit_coeffs.len(), roots_num);
+
+                // check zero-vector
+                let z = ZZi::zero();
+                let cs = z.zz_coeffs();
+                assert_eq!(cs.len(), roots_num);
+                for i in 0..roots_num {
+                    assert_eq!(cs[i], GInt::zero());
+                }
+
+                // check one-vector
+                let o = ZZi::one();
+                let cs = o.zz_coeffs();
+                assert_eq!(cs.len(), roots_num);
+                assert_eq!(cs[0], GInt::one());
+                for i in 1..roots_num {
+                    assert_eq!(cs[i], GInt::zero());
+                }
+            }
+
+            #[test]
+            fn test_add_sub() {
+                // test addition / subtraction
+                assert_eq!(ZZi::zero() + ZZi::zero(), ZZi::zero());
+                assert_eq!(ZZi::one() + ZZi::zero(), ZZi::one());
+                assert_eq!(ZZi::zero() + ZZi::one(), ZZi::one());
+                assert_eq!(-ZZi::one() + ZZi::one(), ZZi::zero());
+                assert_eq!(ZZi::one() - ZZi::one(), ZZi::zero());
+            }
+
+            #[test]
+            fn test_mul() {
+                // test scalar multiplication
+                assert_eq!(ZZi::zero().scale(2), ZZi::zero());
+                assert_eq!(ZZi::ccw().scale(3), ZZi::ccw() + ZZi::ccw() + ZZi::ccw());
+                assert_eq!(ZZi::one().scale(-1), -ZZi::one());
+                assert_eq!(ZZi::one().scale(-42), ZZi::from(-42));
+
+                // test multiplication
+                assert_eq!(ZZi::zero() * ZZi::zero(), ZZi::zero());
+                assert_eq!(ZZi::one() * ZZi::zero(), ZZi::zero());
+                assert_eq!(ZZi::zero() * ZZi::one(), ZZi::zero());
+                assert_eq!(ZZi::one() * ZZi::one(), ZZi::one());
+                assert_eq!(-ZZi::one() * ZZi::one(), -ZZi::one());
+                assert_eq!(ZZi::one() * (-ZZi::one()), -ZZi::one());
+                assert_eq!((-ZZi::one()) * (-ZZi::one()), ZZi::one());
+
+                // check result numerically (simplifies debugging of multiplication)
+                let r = ZZi::zz_params().sym_roots_num;
+                for i in 0..r {
+                    println!("------------");
+                    for j in 0..r {
+                        println!("----");
+                        println!("l={i} r={j}");
+                        let mut vec1: Vec<GInt> = vec![0.into(); r];
+                        let mut vec2: Vec<GInt> = vec![0.into(); r];
+                        vec1[i] = 1.into();
+                        vec2[j] = 1.into();
+                        let v1 = ZZi::new(vec1.as_slice());
+                        let v2 = ZZi::new(vec2.as_slice());
+
+                        let exp = v1.complex64().re * v2.complex64().re;
+                        let prod = (v1 * v2).complex64().re;
+                        println!("x={}\ny={}\nx*y={}", v1, v2, v1 * v2);
+                        assert!((exp - prod).abs() < 1e-8);
+                    }
+                }
+            }
+
+            #[test]
+            fn test_rotations() {
+                // test ccw()
+                assert_eq!(ZZi::ccw() * ZZi::ccw().conj(), ZZi::one());
+                assert_eq!(-(-(ZZi::one()) * ZZi::ccw()), ZZi::ccw());
+
+                // test going around the unit circle step by step
+                let mut x = ZZi::one();
+                for _ in 0..ZZi::turn() {
+                    x = x * ZZi::ccw();
+                }
+                assert_eq!(x, ZZi::one());
+
+                // test unit()
+                assert_eq!(ZZi::unit(0), ZZi::one());
+                assert_eq!(ZZi::unit(-1), ZZi::unit(ZZi::turn() - 1));
+                assert_eq!(ZZi::unit(1), ZZi::unit(ZZi::turn() + 1));
+                assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
+                assert_eq!(ZZi::unit(ZZi::hturn()), -ZZi::one());
+                if ZZi::has_qturn() {
+                    assert_eq!(ZZi::unit(ZZi::qturn()).zz_coeffs()[0], GInt::from((0, 1)));
+                }
+
+                // test powi()
+                assert_eq!(ZZi::ccw().pow(ZZi::hturn()), -ZZi::one());
+                assert_eq!(ZZi::ccw().pow(ZZi::turn()), ZZi::one());
+                assert_eq!(ZZi::ccw().pow(ZZi::hturn()).pow(2), ZZi::one());
+            }
+
+            #[test]
+            #[should_panic]
+            fn test_neg_powi() {
+                ZZi::one().pow(-1);
+            }
+
+            #[test]
+            fn test_scaling_fac() {
+                // test scaling fac is correct by checking denom. of coeffs of all units
+                // (that the denom. always can be expressed as multple of scaling factor)
+                // and that the chosen constant factor is indeed minimal
+                let sc_fac = ZZi::zz_params().scaling_fac;
+                let mut max_fac: i64 = 0;
+                for i in 0..ZZi::turn() {
+                    let x = ZZi::unit(i);
+                    println!("{x}");
+                    for c in x.zz_coeffs() {
+                        assert_eq!(sc_fac % c.real.denom(), 0);
+                        assert_eq!(sc_fac % c.imag.denom(), 0);
+                        max_fac = max_fac.max(*c.real.denom());
+                        max_fac = max_fac.max(*c.imag.denom());
+                    }
+                }
+                assert_eq!(sc_fac, max_fac);
+            }
+
+            #[test]
+            fn test_xy() {
+                if !ZZi::has_qturn() {
+                    return;
+                }
+
+                // test correctness of splitting and reconstruction
+                for a in 0..ZZi::hturn() {
+                    let p = ZZi::unit(a);
+                    let (x, y) = p.re_im();
+                    assert_eq!(p, ZZi::from(x) + ZZi::from(y) * ZZi::unit(ZZi::qturn()));
+                }
+            }
+
+            #[test]
+            fn test_is_real_imag_complex() {
+                assert!(ZZi::zero().is_real());
+                assert!(ZZi::zero().is_imag());
+
+                assert!(ZZi::one().is_real());
+                assert!((-ZZi::one()).is_real());
+                assert!(!ZZi::one().is_imag());
+                assert!(!ZZi::one().is_complex());
+
+                if ZZi::has_qturn() && ZZi::qturn() > 1 {
+                    let p = ZZi::ccw();
+                    assert!(!p.is_real());
+                    assert!(!p.is_imag());
+                    assert!(p.is_complex());
+                }
+
+                if ZZi::has_qturn() {
+                    let imag_unit = ZZi::unit(ZZi::qturn());
+                    assert!(!imag_unit.is_real());
+                    assert!(imag_unit.is_imag());
+                    assert!((-imag_unit).is_imag());
+                    assert!(!imag_unit.is_complex());
+                }
+            }
+
+            #[test]
+            fn test_complex() {
+                use num_complex::Complex64;
+
+                let x = ZZi::zero();
+                assert_eq!(x.complex64(), Complex64::zero());
+                let x = ZZi::one();
+                assert_eq!(x.complex64(), Complex64::one());
+                let x = -ZZi::one();
+                assert_eq!(x.complex64(), -Complex64::one());
+                let x = ZZi::one() + ZZi::one();
+                assert_eq!(x.complex64(), Complex64::new(2.0, 0.0));
+
+                let x = ZZi::ccw();
+                let c = x.complex64();
+                println!("{c} = {x}");
+            }
+
+            #[test]
+            fn test_hashable() {
+                use std::collections::HashSet;
+
+                let mut s: HashSet<ZZi> = HashSet::new();
+                s.insert(ZZi::zero());
+                s.insert(ZZi::one());
+                s.insert(ZZi::ccw());
+                assert!(s.contains(&ZZi::ccw()));
+                assert!(s.contains(&(ZZi::ccw() + ZZi::zero())));
+                assert!(!s.contains(&(ZZi::ccw() + ZZi::one())));
+            }
+        }
+    };
 }

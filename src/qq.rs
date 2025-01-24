@@ -1,12 +1,14 @@
 //! Full cyclotomic fields (allowing division)
+use paste::paste;
 use std::fmt;
 use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use num_complex::Complex64;
-use num_traits::{One, Zero};
+use num_integer::Integer;
+use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
 
-use crate::traits::{Ccw, Conj, InnerIntType, IntRing};
+use crate::traits::{Ccw, Conj, InnerIntType, IntRing, OneImag};
 use crate::zz::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
 use crate::zz::{Z10, Z12, Z24, Z4, Z6, Z8, ZZ10, ZZ12, ZZ24, ZZ4, ZZ6, ZZ8};
 use crate::zzbase::{ZCommon, ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
@@ -97,6 +99,18 @@ pub trait QNum {}
 /// cyclotomic field
 pub trait QQNum {}
 
+/// Utility trait to connect related field and ring types.
+pub trait FieldRingPair {
+    type Field;
+    type Ring;
+}
+
+impl<T: QCommon + FieldRingPair> HasZZ4 for T where T::Ring: HasZZ4 {}
+impl<T: QCommon + FieldRingPair> HasZZ6 for T where T::Ring: HasZZ6 {}
+impl<T: QCommon + FieldRingPair> HasZZ8 for T where T::Ring: HasZZ8 {}
+impl<T: QCommon + FieldRingPair> HasZZ10 for T where T::Ring: HasZZ10 {}
+impl<T: QCommon + FieldRingPair> HasZZ12 for T where T::Ring: HasZZ12 {}
+
 macro_rules! qq_impl_struct {
     ($q:ident, $z:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,6 +122,13 @@ macro_rules! qq_impl_struct {
             /// Lift ring value into the corresponding cyclomatic field
             fn from(value: $z) -> Self {
                 Self(value)
+            }
+        }
+
+        impl From<<$q as InnerIntType>::IntType> for $q {
+            /// lift an integer
+            fn from(value: <<Self as ZZBase>::Scalar as InnerIntType>::IntType) -> Self {
+                Self::one().scale(value)
             }
         }
 
@@ -281,56 +302,22 @@ macro_rules! qq_impl_common {
         }
 
         impl ZCommon for $q {}
+
+
     };
 }
 
-qq_impl_struct!(Q4, Z4);
-qq_impl_struct!(Q6, Z6);
-qq_impl_struct!(Q8, Z8);
-qq_impl_struct!(Q10, Z10);
-qq_impl_struct!(Q12, Z12);
-qq_impl_struct!(Q24, Z24);
-qq_impl_common!(Q4, Q4, Z4);
-qq_impl_common!(Q6, Q6, Z6);
-qq_impl_common!(Q8, Q8, Z8);
-qq_impl_common!(Q10, Q10, Z10);
-qq_impl_common!(Q12, Q12, Z12);
-qq_impl_common!(Q24, Q24, Z24);
-
-qq_impl_signed!(Q4 Q6 Q8 Q10 Q12 Q24);
-qq_impl_qnum!(Q4 Q6 Q8 Q10 Q12 Q24);
-
-qq_impl_struct!(QQ4, ZZ4);
-qq_impl_struct!(QQ6, ZZ6);
-qq_impl_struct!(QQ8, ZZ8);
-qq_impl_struct!(QQ10, ZZ10);
-qq_impl_struct!(QQ12, ZZ12);
-qq_impl_struct!(QQ24, ZZ24);
-qq_impl_common!(QQ4, Q4, ZZ4);
-qq_impl_common!(QQ6, Q6, ZZ6);
-qq_impl_common!(QQ8, Q8, ZZ8);
-qq_impl_common!(QQ10, Q10, ZZ10);
-qq_impl_common!(QQ12, Q12, ZZ12);
-qq_impl_common!(QQ24, Q24, ZZ24);
-
-qq_impl_complex!(QQ4, Q4);
-qq_impl_complex!(QQ6, Q6);
-qq_impl_complex!(QQ8, Q8);
-qq_impl_complex!(QQ10, Q10);
-qq_impl_complex!(QQ12, Q12);
-qq_impl_complex!(QQ24, Q24);
-qq_impl_ccw!(QQ4, ZZ4);
-qq_impl_ccw!(QQ6, ZZ6);
-qq_impl_ccw!(QQ8, ZZ8);
-qq_impl_ccw!(QQ10, ZZ10);
-qq_impl_ccw!(QQ12, ZZ12);
-qq_impl_ccw!(QQ24, ZZ24);
-
-qq_impl_qqnum!(QQ4 QQ6 QQ8 QQ10 QQ12 QQ24);
-
-pub trait FieldRingPair {
-    type Field;
-    type Ring;
+macro_rules! qq_impl_qq_from_q {
+    ($q:ident, $q_real: ident) => {
+        impl From<$q_real> for $q {
+            /// Lift real-valued ring value into the corresponding cyclomatic ring
+            fn from(value: $q_real) -> Self {
+                let cs: Vec<<$q as ZZBase>::Scalar> =
+                    value.zz_coeffs().iter().map(|v| (*v).into()).collect();
+                Self::new(cs.as_slice())
+            }
+        }
+    };
 }
 
 macro_rules! impl_ring_field_typealias {
@@ -345,80 +332,88 @@ macro_rules! impl_ring_field_typealias {
         }
     };
 }
-impl_ring_field_typealias!(Q4, Z4);
-impl_ring_field_typealias!(Q6, Z6);
-impl_ring_field_typealias!(Q8, Z8);
-impl_ring_field_typealias!(Q10, Z10);
-impl_ring_field_typealias!(Q12, Z12);
-impl_ring_field_typealias!(Q24, Z24);
 
-impl_ring_field_typealias!(QQ4, ZZ4);
-impl_ring_field_typealias!(QQ6, ZZ6);
-impl_ring_field_typealias!(QQ8, ZZ8);
-impl_ring_field_typealias!(QQ10, ZZ10);
-impl_ring_field_typealias!(QQ12, ZZ12);
-impl_ring_field_typealias!(QQ24, ZZ24);
+macro_rules! qq_derive {
+    ($($n:expr)*) => ($(
+        paste! {
+            qq_impl_struct!([<Q $n>], [<Z $n>]);
+            qq_impl_common!([<Q $n>], [<Q $n>] , [<Z $n>]);
+            qq_impl_signed!([<Q $n>]);
+            qq_impl_qnum!([<Q $n>]);
 
-impl<T: QCommon + FieldRingPair> HasZZ4 for T where T: HasZZ4 {}
-impl<T: QCommon + FieldRingPair> HasZZ6 for T where T: HasZZ6 {}
-impl<T: QCommon + FieldRingPair> HasZZ8 for T where T: HasZZ8 {}
-impl<T: QCommon + FieldRingPair> HasZZ10 for T where T: HasZZ10 {}
-impl<T: QCommon + FieldRingPair> HasZZ12 for T where T: HasZZ12 {}
+            qq_impl_struct!([<QQ $n>], [<ZZ $n>]);
+            qq_impl_common!([<QQ $n>], [<Q $n>] , [<ZZ $n>]);
+            qq_impl_complex!([<QQ $n>], [<Q $n>]);
+            qq_impl_ccw!([<QQ $n>], [<ZZ $n>]);
+            qq_impl_qqnum!([<QQ $n>]);
+            qq_impl_qq_from_q!([<QQ $n>], [<Q $n>]);
+
+            impl_ring_field_typealias!([<Q $n>], [<Z $n>]);
+            impl_ring_field_typealias!([<QQ $n>], [<ZZ $n>]);
+        }
+    )*)
+}
+
+// generate all the boilerplate code
+qq_derive!(4 6 8 10 12 24);
+
+// NOTE: list should be equal to members of HasZZ4
+impl_from_int_pair!(QQ4 QQ8 QQ12 /* QQ16 QQ20 */ QQ24 /* QQ32 QQ60 */);
 
 #[cfg(test)]
 mod tests {
-    macro_rules! zz_div_tests {
-    ($($name:ident: $type:ty,)*) => {$(
-mod $name {
     use super::*;
-    use crate::zzbase::ZZBase;
 
-    type QQi = <$type as FieldRingPair>::Field;
-    type ZZi = <$type as FieldRingPair>::Ring;
+    use crate::zz::constants::zz_units_sum;
+    use crate::zzbase::GInt;
 
-    #[test]
-    fn test_inv() {
-        // try to invert combinations of units
-        for k in 0..ZZi::turn() {
-            for l in 0..ZZi::turn() {
-                let val = ZZi::unit(k) + ZZi::unit(l);
-                if val.is_zero() {
-                    continue;
+    use crate::zz_test;
+
+    macro_rules! qq_div_test {
+        ($name:ident, $type:ty) => {
+            mod $name {
+                use super::*;
+                use crate::zzbase::ZZBase;
+
+                type QQi = <$type as FieldRingPair>::Field;
+                type ZZi = <$type as FieldRingPair>::Ring;
+
+                #[test]
+                fn test_inv() {
+                    // try to invert combinations of units
+                    for k in 0..ZZi::turn() {
+                        for l in 0..ZZi::turn() {
+                            let val = ZZi::unit(k) + ZZi::unit(l);
+                            if val.is_zero() {
+                                continue;
+                            }
+                            let inv = zz_inv(&val);
+                            assert_eq!(val * inv, ZZi::one());
+                        }
+                    }
                 }
-                let inv = zz_inv(&val);
-                assert_eq!(val * inv, ZZi::one());
+
+                #[test]
+                fn test_div() {
+                    use crate::zz::constants::zz_units_sum;
+
+                    // test with worst case - all roots are there
+                    let z = zz_units_sum::<QQi>();
+
+                    // symmetry of dividing by rotation unit
+                    // (and testing some operations via QQi types)
+                    assert_eq!(z / ZZi::ccw().into(), z * QQi::unit(-1));
+                }
             }
-        }
+        };
     }
-
-    #[test]
-    fn test_div() {
-        use crate::zz::constants::zz_units_sum;
-
-        // test with worst case - all roots are there
-        let z = zz_units_sum::<QQi>();
-
-        // symmetry of dividing by rotation unit
-        // (and testing some operations via QQi types)
-        assert_eq!(z / ZZi::ccw().into(), z * QQi::unit(-1));
-    }
+    macro_rules! qq_div_tests {
+    ($($n:expr)*) => ($(
+        paste! {
+            zz_test!([<qq_ring_ops $n>], [<QQ $n>]);
+            qq_div_test!([<qq_div $n>], [<QQ $n>]);
+         }
+    )*)
 }
-    )*}
-}
-
-    use super::*;
-
-    zz_div_tests! {
-        zz4: ZZ4,
-        zz6: ZZ6,
-        zz8: ZZ8,
-        zz10: ZZ10,
-        zz12: ZZ12,
-        // zz16: ZZ16,
-        // zz20: ZZ20,
-        zz24: ZZ24,
-        // zz30: ZZ30,
-        // zz32: ZZ32,
-        // zz60: ZZ60,
-    }
+    qq_div_tests!(4 6 8 10 12 /* 16 20 */ 24 /* 30 32 60 */);
 }
