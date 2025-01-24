@@ -8,7 +8,7 @@ use num_traits::{One, Zero};
 
 use crate::traits::{Ccw, Conj, InnerIntType, IntRing};
 use crate::zz::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
-use crate::zz::{Z10, Z12, Z4, Z6, Z8, ZZ10, ZZ12, ZZ4, ZZ6, ZZ8};
+use crate::zz::{Z10, Z12, Z24, Z4, Z6, Z8, ZZ10, ZZ12, ZZ24, ZZ4, ZZ6, ZZ8};
 use crate::zzbase::{ZCommon, ZNum, ZZBase, ZZComplex, ZZNum, ZZParams};
 use crate::zzsigned::ZSigned;
 
@@ -289,35 +289,44 @@ qq_impl_struct!(Q6, Z6);
 qq_impl_struct!(Q8, Z8);
 qq_impl_struct!(Q10, Z10);
 qq_impl_struct!(Q12, Z12);
-qq_impl_signed!(Q4 Q6 Q8 Q10 Q12);
+qq_impl_struct!(Q24, Z24);
 qq_impl_common!(Q4, Q4, Z4);
 qq_impl_common!(Q6, Q6, Z6);
 qq_impl_common!(Q8, Q8, Z8);
 qq_impl_common!(Q10, Q10, Z10);
 qq_impl_common!(Q12, Q12, Z12);
-qq_impl_qnum!(Q4 Q6 Q8 Q10 Q12);
+qq_impl_common!(Q24, Q24, Z24);
+
+qq_impl_signed!(Q4 Q6 Q8 Q10 Q12 Q24);
+qq_impl_qnum!(Q4 Q6 Q8 Q10 Q12 Q24);
 
 qq_impl_struct!(QQ4, ZZ4);
 qq_impl_struct!(QQ6, ZZ6);
 qq_impl_struct!(QQ8, ZZ8);
 qq_impl_struct!(QQ10, ZZ10);
 qq_impl_struct!(QQ12, ZZ12);
+qq_impl_struct!(QQ24, ZZ24);
 qq_impl_common!(QQ4, Q4, ZZ4);
 qq_impl_common!(QQ6, Q6, ZZ6);
 qq_impl_common!(QQ8, Q8, ZZ8);
 qq_impl_common!(QQ10, Q10, ZZ10);
 qq_impl_common!(QQ12, Q12, ZZ12);
+qq_impl_common!(QQ24, Q24, ZZ24);
+
 qq_impl_complex!(QQ4, Q4);
 qq_impl_complex!(QQ6, Q6);
 qq_impl_complex!(QQ8, Q8);
 qq_impl_complex!(QQ10, Q10);
 qq_impl_complex!(QQ12, Q12);
+qq_impl_complex!(QQ24, Q24);
 qq_impl_ccw!(QQ4, ZZ4);
 qq_impl_ccw!(QQ6, ZZ6);
 qq_impl_ccw!(QQ8, ZZ8);
 qq_impl_ccw!(QQ10, ZZ10);
 qq_impl_ccw!(QQ12, ZZ12);
-qq_impl_qqnum!(QQ4 QQ6 QQ8 QQ10 QQ12);
+qq_impl_ccw!(QQ24, ZZ24);
+
+qq_impl_qqnum!(QQ4 QQ6 QQ8 QQ10 QQ12 QQ24);
 
 pub trait FieldRingPair {
     type Field;
@@ -341,12 +350,14 @@ impl_ring_field_typealias!(Q6, Z6);
 impl_ring_field_typealias!(Q8, Z8);
 impl_ring_field_typealias!(Q10, Z10);
 impl_ring_field_typealias!(Q12, Z12);
+impl_ring_field_typealias!(Q24, Z24);
 
 impl_ring_field_typealias!(QQ4, ZZ4);
 impl_ring_field_typealias!(QQ6, ZZ6);
 impl_ring_field_typealias!(QQ8, ZZ8);
 impl_ring_field_typealias!(QQ10, ZZ10);
 impl_ring_field_typealias!(QQ12, ZZ12);
+impl_ring_field_typealias!(QQ24, ZZ24);
 
 impl<T: QCommon + FieldRingPair> HasZZ4 for T where T: HasZZ4 {}
 impl<T: QCommon + FieldRingPair> HasZZ6 for T where T: HasZZ6 {}
@@ -405,7 +416,7 @@ mod $name {
         zz12: ZZ12,
         // zz16: ZZ16,
         // zz20: ZZ20,
-        // zz24: ZZ24,
+        zz24: ZZ24,
         // zz30: ZZ30,
         // zz32: ZZ32,
         // zz60: ZZ60,
