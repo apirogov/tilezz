@@ -11,6 +11,14 @@ use plotters::{
 
 use crate::plotutils::{tile_bounds, tile_centroid, tile_viewport};
 
+/// Return a rainbow color gradient with n colors with given saturation.
+pub fn rainbow(steps: u32, sat: f64) -> Vec<RGBAColor> {
+    let step: f64 = (1.0 - 1. / 12.) / steps as f64;
+    (0..steps)
+        .map(|i| HSLColor(i as f64 * step - 1. / 24.0, sat, 0.5).to_rgba())
+        .collect()
+}
+
 /// Metadata and style to be applied to a rendered tile.
 // TODO: could allow customizing border rendering with a pair of funcs (lines, segments)
 // and provide a outline style builder to simplify describing a style.
@@ -163,8 +171,12 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
         let tile_lbl_func = |c, _, _| {
             return EmptyElement::at(c) + Text::new(format!("{tile_lbl}"), (0, 0), &tile_lbl_style);
         };
-        let tile_lbl_series =
-            PointSeries::of_element(vec![tile_centroid(tile)], 20, BLACK, &tile_lbl_func);
+        let tile_lbl_series = PointSeries::of_element(
+            vec![tile_centroid(tile.into_iter())],
+            20,
+            BLACK,
+            &tile_lbl_func,
+        );
         chart.draw_series(tile_lbl_series).unwrap();
     }
 }

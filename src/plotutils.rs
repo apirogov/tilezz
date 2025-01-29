@@ -1,15 +1,15 @@
 //! General plotting utilities
 
 /// 2D Point (X, Y)
-type P64 = (f64, f64);
+pub type P64 = (f64, f64);
 
 /// 2D Rectangle (top left and bottom right corners)
-type R64 = (P64, P64);
+pub type R64 = (P64, P64);
 
 /// Returns the center of the tile based on its vertex points.
 pub fn tile_centroid<'a, I>(pts: I) -> P64
 where
-    I: IntoIterator<Item = &'a (f64, f64)>,
+    I: IntoIterator<Item = &'a P64>,
 {
     let mut n = 0_usize;
     let (mut cx, mut cy) = (0.0, 0.0);

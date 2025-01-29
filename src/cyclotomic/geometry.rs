@@ -1,12 +1,16 @@
-use crate::zzbase::ZZNum;
-use crate::zzsigned::ZSigned;
+//! Utility functions to use cycotomic rings and fields for 2D geometry
+
 use num_traits::Zero;
+use std::ops::Range;
+
+use super::numtraits::ZSigned;
+use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
 // Core linear algebra utils
 // -----------------
 
 /// Dot product between two values, i.e. a dot b = |a||b|cos(ab).
-pub fn dot<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
+pub fn dot<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
     let (p1x, p1y) = p1.re_im();
     let (p2x, p2y) = p2.re_im();
     (p1x * p2x) + (p1y * p2y)
@@ -14,28 +18,28 @@ pub fn dot<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
 
 /// 2D "cross" product (wedge is the general name),
 /// i.e. a wedge b = |a|b|sin(ab).
-pub fn wedge<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
+pub fn wedge<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
     let (p1x, p1y) = p1.re_im();
     let (p2x, p2y) = p2.re_im();
     (p1x * p2y) - (p1y * p2x)
 }
 
 /// norm of a value, i.e. dot product of the value with itself.
-pub fn norm<ZZ: ZZNum>(p: &ZZ) -> ZZ::Real {
+pub fn norm<ZZ: IsRingOrField + IsComplex>(p: &ZZ) -> ZZ::Real {
     dot::<ZZ>(&p, &p)
 }
 
 /// Return true if angle is in closed interval `[a,b]`,
 /// assuming that a and b are in counterclockwise order and their ccw angle
 /// is less than a half turn.
-pub fn angle_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn angle_between<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     !wedge(a, p).is_negative() && !wedge(p, b).is_negative()
 }
 
 /// Return whether this point is strictly between the other two.
 ///
 /// NOTE: we already assume all three involved points are colinear.
-pub fn is_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn is_between<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     let v = *a - *p;
     let w = *p - *b;
     wedge(&v, &w).is_zero() && dot(&v, &w).is_positive()
@@ -43,7 +47,7 @@ pub fn is_between<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
 
 /// Return whether the segments ab and ac (in that order) have a ccw angle,
 /// i.e. c is ccw of b with respect to rotation around a.
-pub fn is_ccw<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn is_ccw<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     wedge(&(*a - *p), &(*b - *p)).is_positive()
     // NOTE: wedge(*a - *p, *p - *b).is_zero() is subexp. of is_between... interesting symmetry
 }
@@ -53,13 +57,16 @@ pub fn is_ccw<ZZ: ZZNum>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
 
 /// Get (a, b, c) for line ax + by + c = 0 based on two points.
 /// y(x) = -(ax + c)/b = -a/b x - c/b = mx + b' with m = -a/b and b' = -c/b
-fn line_through<ZZ: ZZNum>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real, ZZ::Real) {
+fn line_through<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real, ZZ::Real) {
     // (wedge(&ZZ::one(), &(*p1 - *p2)), dot(&ZZ::one(), &(*p2 - *p1)), wedge(&p1, &p2))
     ((*p1 - *p2).im(), (*p2 - *p1).re(), wedge::<ZZ>(&p1, &p2))
 }
 
 /// Return whether the point is on the given line.
-fn is_colinear<ZZ: ZZNum>(p: &ZZ, (a, b, c): &(ZZ::Real, ZZ::Real, ZZ::Real)) -> bool {
+fn is_colinear<ZZ: IsRingOrField + IsComplex>(
+    p: &ZZ,
+    (a, b, c): &(ZZ::Real, ZZ::Real, ZZ::Real),
+) -> bool {
     // ((*a) * dot(&ZZ::one(), p) + (*b) * wedge(&ZZ::one(), p) + *c).is_zero()
     (*a * p.re() + *b * p.im() + *c).is_zero()
 }
@@ -67,7 +74,7 @@ fn is_colinear<ZZ: ZZNum>(p: &ZZ, (a, b, c): &(ZZ::Real, ZZ::Real, ZZ::Real)) ->
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: ZZNum>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
+pub fn intersect<ZZ: IsRingOrField + IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
         // we ignore touching endpoints
         // (not counting it as proper intersection of _disjoint_ segments)
@@ -85,7 +92,11 @@ pub fn intersect<ZZ: ZZNum>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
 
 /// Return whether a point is inside a rectangle or on its boundary.
 /// If strict is true, will not consider a point on a boundary as inside.
-pub fn point_in_rect<ZZ: ZZNum>(p: &ZZ, (pos_min, pos_max): (&ZZ, &ZZ), strict: bool) -> bool {
+pub fn point_in_rect<ZZ: IsRingOrField + IsComplex>(
+    p: &ZZ,
+    (pos_min, pos_max): &(ZZ, ZZ),
+    strict: bool,
+) -> bool {
     let (px, py) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
@@ -102,25 +113,59 @@ pub fn point_in_rect<ZZ: ZZNum>(p: &ZZ, (pos_min, pos_max): (&ZZ, &ZZ), strict: 
     x_in_open_bound && y_in_open_bound
 }
 
+/// Put a number into a closed interval by repeated addition or subtraction.
+pub fn mod_bound<Z: IsReal>(p: &Z, rng: Range<&Z>) -> Z {
+    let (l, r) = (rng.start, rng.end);
+    let w = *r - *l;
+    let mut ret = *p;
+
+    let mut was_less = false;
+    while ret < *l {
+        was_less = true;
+        ret = ret + w;
+    }
+    if was_less {
+        return ret;
+    }
+    while ret > *r {
+        ret = ret - w;
+    }
+    ret
+}
+
+/// Return number modulo rect by repeated addition or subtraction of the x/y components.
+pub fn point_mod_rect<ZZ: IsComplex + HasZZ4>(
+    p: &ZZ,
+    (pos_min, pos_max): &(ZZ, ZZ),
+) -> <ZZ as IsComplex>::Field
+where
+    // FIXME: figure out how to make this extra constraint not necessary
+    <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
+{
+    let (p_x, p_y) = p.re_im();
+    let (x_min, y_min) = pos_min.re_im();
+    let (x_max, y_max) = pos_max.re_im();
+    let ret_x: <ZZ as IsRingOrField>::Real = mod_bound(&p_x, &x_min..&x_max).into();
+    let ret_y: <ZZ as IsRingOrField>::Real = mod_bound(&p_y, &y_min..&y_max).into();
+    (ret_x, ret_y).into()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::traits::OneImag;
-    use crate::zz::{Z12, ZZ12};
-    use crate::zzbase::ZZBase;
     use num_traits::{One, Zero};
+
+    use super::super::constants::zz_units_sum;
+    use super::super::numtraits::{Ccw, OneImag};
+    use super::super::symnum::SymNum;
+    use super::super::types::{Z12, ZZ12};
+    use super::*;
 
     type ZZi = ZZ12;
 
     #[test]
     fn test_dot() {
         // get a non-trivial point
-
-        let mut p = ZZi::zero();
-        for i in 0..ZZi::turn() {
-            p = p + ZZi::unit(i).scale(i as i64);
-        }
-        //p = zz_units_sum();
+        let p: ZZi = zz_units_sum();
 
         // all rotations of the same point around origin
         // have the same squared distance, i.e. quadrance
@@ -263,22 +308,19 @@ mod tests {
 
     #[test]
     fn test_point_in_rect() {
-        use crate::traits::Ccw;
-
-        let min: ZZ12 = 0.into();
-        let max: ZZ12 = (2, 2).into();
+        let rect @ (min, max): (ZZ12, ZZ12) = (0.into(), (2, 2).into());
 
         // inside
-        assert!(point_in_rect(&(1, 1).into(), (&min, &max), true));
-        assert!(point_in_rect(&ZZ12::ccw(), (&min, &max), true));
+        assert!(point_in_rect(&(1, 1).into(), &rect, true));
+        assert!(point_in_rect(&ZZ12::ccw(), &rect, true));
 
         // boundary
-        assert!(!point_in_rect(&min, (&min, &max), true));
-        assert!(!point_in_rect(&max, (&min, &max), true));
-        assert!(point_in_rect(&min, (&min, &max), false));
-        assert!(point_in_rect(&max, (&min, &max), false));
+        assert!(!point_in_rect(&min, &rect, true));
+        assert!(!point_in_rect(&max, &rect, true));
+        assert!(point_in_rect(&min, &rect, false));
+        assert!(point_in_rect(&max, &rect, false));
 
         // outside
-        assert!(!point_in_rect(&(3, 1).into(), (&min, &max), true));
+        assert!(!point_in_rect(&(3, 1).into(), &rect, true));
     }
 }

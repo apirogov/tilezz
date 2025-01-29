@@ -4,8 +4,8 @@ use std::f64::consts::SQRT_2;
 
 use num_traits::FromPrimitive;
 
-use crate::traits::IntRing;
-use crate::zzbase::ZZParams;
+use super::numtraits::IntRing;
+use super::symnum::ZZParams;
 
 // ----------------
 

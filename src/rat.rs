@@ -6,8 +6,8 @@ use std::marker::PhantomData;
 use num_traits::ToPrimitive;
 
 use crate::angles::revcomp;
+use crate::cyclotomic::{IsComplex, IsRingOrField};
 use crate::snake::{Snake, Turtle};
-use crate::zzbase::ZZNum;
 
 /// Booth's lexicographically minimal string rotation algorithm.
 /// Returns index of the beginning of the lex. minimal rotation of given sequence in O(n).
@@ -96,7 +96,7 @@ fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
 }
 
 #[derive(Debug, Clone)]
-pub struct Rat<T: ZZNum> {
+pub struct Rat<T: IsComplex> {
     /// Even though we don't need to use the underlying complex integer ring,
     /// we parametrize by that type for improved type safety (to not mix incompatible polygons).
     phantom: PhantomData<T>,
@@ -112,7 +112,7 @@ pub struct Rat<T: ZZNum> {
     cyc: usize,
 }
 
-impl<T: ZZNum> TryFrom<&Snake<T>> for Rat<T> {
+impl<T: IsComplex> TryFrom<&Snake<T>> for Rat<T> {
     type Error = &'static str;
     /// Construct a new rat from a snake.
     fn try_from(snake: &Snake<T>) -> Result<Self, Self::Error> {
@@ -124,13 +124,13 @@ impl<T: ZZNum> TryFrom<&Snake<T>> for Rat<T> {
     }
 }
 
-impl<I: ToPrimitive, T: ZZNum> TryFrom<&[I]> for Rat<T> {
+impl<I: ToPrimitive, T: IsComplex> TryFrom<&[I]> for Rat<T> {
     type Error = &'static str;
     fn try_from(value: &[I]) -> Result<Self, Self::Error> {
         Snake::try_from(value).and_then(|s| Rat::try_from(&s))
     }
 }
-impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Rat<T> {
+impl<const N: usize, I: ToPrimitive, T: IsComplex> TryFrom<&[I; N]> for Rat<T> {
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
@@ -138,7 +138,7 @@ impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Rat<T> {
     }
 }
 
-impl<T: ZZNum> Rat<T> {
+impl<T: IsComplex + IsRingOrField> Rat<T> {
     /// Create a rat from an angle sequence.
     /// Assumes that the sequence describes a valid simple polygon.
     pub fn from_slice_unchecked(angles: &[i8]) -> Self {
@@ -351,29 +351,29 @@ impl<T: ZZNum> Rat<T> {
     }
 }
 
-impl<T: ZZNum> From<Rat<T>> for Snake<T> {
+impl<T: IsComplex> From<Rat<T>> for Snake<T> {
     fn from(value: Rat<T>) -> Self {
         Snake::from_slice_unchecked(value.seq())
     }
 }
 
-impl<T: ZZNum> PartialEq for Rat<T> {
+impl<T: IsComplex> PartialEq for Rat<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
     }
 }
-impl<T: ZZNum> Eq for Rat<T> {}
-impl<T: ZZNum> PartialOrd for Rat<T> {
+impl<T: IsComplex> Eq for Rat<T> {}
+impl<T: IsComplex> PartialOrd for Rat<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.angles.partial_cmp(&other.angles)
     }
 }
-impl<T: ZZNum> Ord for Rat<T> {
+impl<T: IsComplex> Ord for Rat<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.angles.cmp(&other.angles)
     }
 }
-impl<T: ZZNum> Display for Rat<T> {
+impl<T: IsComplex> Display for Rat<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.seq().fmt(f)
     }
@@ -382,8 +382,8 @@ impl<T: ZZNum> Display for Rat<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cyclotomic::ZZ12;
     use crate::snake::constants::{hexagon, spectre};
-    use crate::zz::ZZ12;
 
     #[test]
     fn test_lex_min_rot() {

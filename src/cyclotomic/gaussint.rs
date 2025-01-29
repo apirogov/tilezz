@@ -6,11 +6,10 @@ use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use num_integer::Integer;
-use num_rational::{Ratio, Rational32, Rational64};
+use num_rational::Ratio;
 use num_traits::{FromPrimitive, One, Zero};
 
-use crate::traits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag};
-use crate::zzsigned::ZSigned;
+use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
 
 /// Gaussian Integer (complex number with real and imaginary part both integers).
 ///
@@ -38,9 +37,6 @@ impl<T: Copy + Neg<Output = T>> GaussInt<T> {
 impl<T: Copy + Neg<Output = T>> Conj for GaussInt<T> {
     fn conj(&self) -> Self {
         Self::new(self.real, -self.imag)
-    }
-    fn co_conj(&self) -> Self {
-        Self::new(-self.real, self.imag)
     }
 }
 
@@ -259,14 +255,14 @@ impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
 impl<T: IntRing> IntRing for GaussInt<T> {}
 impl<T: IntField> IntField for GaussInt<T> {}
 
-// The types we will typically want to use.
-
-pub type GaussInt32 = GaussInt<Rational32>;
-pub type GaussInt64 = GaussInt<Rational64>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use num_rational::{Rational32, Rational64};
+
+    type GaussInt32 = GaussInt<Rational32>;
+    type GaussInt64 = GaussInt<Rational64>;
 
     #[test]
     fn test_from() {
@@ -282,71 +278,67 @@ mod tests {
         let x_conj = x.conj();
         assert_eq!(x_conj.real, Rational32::from(3));
         assert_eq!(x_conj.imag, Rational32::from(-5));
-
-        let x_co_conj = x.co_conj();
-        assert_eq!(x_co_conj.real, Rational32::from(-3));
-        assert_eq!(x_co_conj.imag, Rational32::from(5));
     }
 
     #[test]
     fn test_units() {
-        type GInt = GaussInt32;
-        assert_eq!(GInt::zero() + GInt::zero(), GInt::zero());
-        assert_eq!(GInt::one() + GInt::zero(), GInt::one());
-        assert_eq!(GInt::zero() + GInt::one(), GInt::one());
-        assert_eq!(-GInt::one() + GInt::one(), GInt::zero());
-        assert_eq!(GInt::one() - GInt::one(), GInt::zero());
+        type GIntT = GaussInt32;
+        assert_eq!(GIntT::zero() + GIntT::zero(), GIntT::zero());
+        assert_eq!(GIntT::one() + GIntT::zero(), GIntT::one());
+        assert_eq!(GIntT::zero() + GIntT::one(), GIntT::one());
+        assert_eq!(-GIntT::one() + GIntT::one(), GIntT::zero());
+        assert_eq!(GIntT::one() - GIntT::one(), GIntT::zero());
 
-        assert_eq!(GInt::zero() * GInt::zero(), GInt::zero());
-        assert_eq!(GInt::one() * GInt::zero(), GInt::zero());
-        assert_eq!(GInt::zero() * GInt::one(), GInt::zero());
-        assert_eq!(GInt::one() * GInt::one(), GInt::one());
-        assert_eq!(-GInt::one() * GInt::one(), -GInt::one());
-        assert_eq!(GInt::one() * (-GInt::one()), -GInt::one());
-        assert_eq!((-GInt::one()) * (-GInt::one()), GInt::one());
+        assert_eq!(GIntT::zero() * GIntT::zero(), GIntT::zero());
+        assert_eq!(GIntT::one() * GIntT::zero(), GIntT::zero());
+        assert_eq!(GIntT::zero() * GIntT::one(), GIntT::zero());
+        assert_eq!(GIntT::one() * GIntT::one(), GIntT::one());
+        assert_eq!(-GIntT::one() * GIntT::one(), -GIntT::one());
+        assert_eq!(GIntT::one() * (-GIntT::one()), -GIntT::one());
+        assert_eq!((-GIntT::one()) * (-GIntT::one()), GIntT::one());
 
         // NOTE: for Gaussian integers, ccw() is just the complex unit i
-        assert_eq!(GInt::ccw() * GInt::ccw(), -GInt::one());
-        assert_eq!(-(GInt::ccw()) * -(GInt::ccw()), -GInt::one());
-        assert_eq!((-GInt::ccw()) * GInt::ccw(), GInt::one());
-        assert_eq!(GInt::one() * GInt::ccw(), GInt::ccw());
-        assert_eq!(-(GInt::one()) * GInt::ccw(), -GInt::ccw());
+        assert_eq!(GIntT::ccw() * GIntT::ccw(), -GIntT::one());
+        assert_eq!(-(GIntT::ccw()) * -(GIntT::ccw()), -GIntT::one());
+        assert_eq!((-GIntT::ccw()) * GIntT::ccw(), GIntT::one());
+        assert_eq!(GIntT::one() * GIntT::ccw(), GIntT::ccw());
+        assert_eq!(-(GIntT::one()) * GIntT::ccw(), -GIntT::ccw());
     }
 
     #[test]
     fn test_ring_ops() {
-        type GInt = GaussInt<i32>; // NOTE: this is != GaussInt32
-        assert_eq!(-GInt::new(1, 2), GInt::new(-1, -2));
-        assert_eq!(GInt::new(1, 2) + GInt::new(3, 4), GInt::new(4, 6));
-        assert_eq!(GInt::new(1, 2) - GInt::new(3, 4), GInt::new(-2, -2));
-        assert_eq!(GInt::new(1, 2) * GInt::new(3, 4), GInt::new(-5, 10));
+        type GIntT = GaussInt<i32>; // NOTE: this is != GaussInt32
+        assert_eq!(-GIntT::new(1, 2), GIntT::new(-1, -2));
+        assert_eq!(GIntT::new(1, 2) + GIntT::new(3, 4), GIntT::new(4, 6));
+        assert_eq!(GIntT::new(1, 2) - GIntT::new(3, 4), GIntT::new(-2, -2));
+        assert_eq!(GIntT::new(1, 2) * GIntT::new(3, 4), GIntT::new(-5, 10));
     }
 
     #[test]
     fn test_div() {
-        type GInt = GaussInt<Ratio<i32>>;
-        let x: GInt = GaussInt::new(2.into(), 3.into());
-        let y: GInt = GaussInt::new(5.into(), (-7).into());
-        let z: GInt = GaussInt::new((-11, 74).into(), (29, 74).into());
+        type GIntT = GaussInt<Ratio<i32>>;
+        let x: GIntT = GaussInt::new(2.into(), 3.into());
+        let y: GIntT = GaussInt::new(5.into(), (-7).into());
+        let z: GIntT = GaussInt::new((-11, 74).into(), (29, 74).into());
         assert_eq!(x / y, z);
     }
 
     #[test]
     fn test_display() {
-        type GInt = GaussInt64;
-        assert_eq!(format!("{}", GInt::zero()), "0");
-        assert_eq!(format!("{}", GInt::one()), "1");
-        assert_eq!(format!("{}", -GInt::one()), "-1");
-        assert_eq!(format!("{}", GInt::ccw()), "i");
-        assert_eq!(format!("{}", -GInt::ccw()), "-i");
+        type GIntT = GaussInt64;
+        assert_eq!(format!("{}", GIntT::zero()), "0");
+        assert_eq!(format!("{}", GIntT::one()), "1");
+        assert_eq!(format!("{}", -GIntT::one()), "-1");
+        assert_eq!(format!("{}", GIntT::ccw()), "i");
+        assert_eq!(format!("{}", -GIntT::ccw()), "-i");
 
-        assert_eq!(format!("{}", GInt::from((2, 0))), "2");
-        assert_eq!(format!("{}", GInt::from((0, 3))), "3i");
-        assert_eq!(format!("{}", GInt::from((-4, 0))), "-4");
-        assert_eq!(format!("{}", GInt::from((5, -1))), "5-i");
-        assert_eq!(format!("{}", GInt::from((6, -2))), "6-2i");
-        assert_eq!(format!("{}", GInt::from((-7, -3))), "-7-3i");
-        assert_eq!(format!("{}", GInt::from((-8, 9))), "-8+9i");
-        assert_eq!(format!("{}", GInt::from((0, -10))), "-10i");
+        assert_eq!(format!("{}", GIntT::from((2, 0))), "2");
+        assert_eq!(format!("{}", GIntT::from((0, 3))), "3i");
+        assert_eq!(format!("{}", GIntT::from((-4, 0))), "-4");
+        assert_eq!(format!("{}", GIntT::from((5, -1))), "5-i");
+        assert_eq!(format!("{}", GIntT::from((6, -2))), "6-2i");
+        assert_eq!(format!("{}", GIntT::from((-7, -3))), "-7-3i");
+        assert_eq!(format!("{}", GIntT::from((-8, 9))), "-8+9i");
+        assert_eq!(format!("{}", GIntT::from((0, -10))), "-10i");
     }
 }

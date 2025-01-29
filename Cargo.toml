@@ -12,6 +12,8 @@ categories = ["mathematics", "graphics"]
 
 edition = "2021"
 
+exclude = ["examples/*"]
+
 [dependencies]
 arrayref = "0.3.8"
 num-complex = "0.4.6"
@@ -19,7 +21,7 @@ num-integer = "0.1.46"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
 paste = "1.0.15"
-plotters = { version = "^0.3.7", features = ["evcxr", "all_series"], optional = true }
+plotters = { version = "^0.3.7", features = ["evcxr", "evcxr_bitmap", "all_series"], optional = true }
 
 [features]
 default = ["plotters"]

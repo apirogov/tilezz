@@ -1,6 +1,6 @@
 //! Angle-related utilities
 
-use crate::zzbase::ZZNum;
+use crate::cyclotomic::SymNum;
 
 /// Get reverse complement of an angle sequence,
 /// i.e. with reversed order and sign.
@@ -9,7 +9,7 @@ pub fn revcomp(angles: &[i8]) -> Vec<i8> {
 }
 
 /// Convert a fraction of a turn into the corresponding unit index.
-pub fn unit_idx<T: ZZNum>(angle: i8) -> i8 {
+pub fn unit_idx<T: SymNum>(angle: i8) -> i8 {
     let a = normalize_angle::<T>(angle);
     let half = T::hturn();
     if a == 0 {
@@ -28,7 +28,7 @@ pub fn unit_idx<T: ZZNum>(angle: i8) -> i8 {
 ///
 /// The directions are in ccw order starting from the pos real line,
 /// the other half-circle has the the dual opposite directions.
-pub fn to_abs_seq<T: ZZNum>(angles: &[i8]) -> Vec<i8> {
+pub fn to_abs_seq<T: SymNum>(angles: &[i8]) -> Vec<i8> {
     let mut currdir: i8 = 0;
     let mut result: Vec<i8> = Vec::new();
     for a in angles {
@@ -41,7 +41,7 @@ pub fn to_abs_seq<T: ZZNum>(angles: &[i8]) -> Vec<i8> {
 /// Normalize an angle to the closed interval `[-H, H]`, where `H` is the
 /// half-turn of the ring. This is used to have a unique symbolic snake
 /// representation.
-pub fn normalize_angle<T: ZZNum>(angle: i8) -> i8 {
+pub fn normalize_angle<T: SymNum>(angle: i8) -> i8 {
     let a = angle % T::turn();
     if a.abs() <= T::hturn() {
         a
@@ -52,7 +52,7 @@ pub fn normalize_angle<T: ZZNum>(angle: i8) -> i8 {
 
 /// Rescale the angle sequence from one complex integer ring to another.
 /// Assumes that the target ring contains the original ring of the sequence.
-pub fn upscale_angles<T: ZZNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
+pub fn upscale_angles<T: SymNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
     // NOTE: using assertion here because using
     // incompatible rings here is an implementation error.
     assert_eq!(T::zz_params().full_turn_steps % src_ring, 0);
@@ -64,8 +64,7 @@ pub fn upscale_angles<T: ZZNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zz::{ZZ12, ZZ24, ZZ6};
-    use crate::zzbase::ZZBase;
+    use crate::cyclotomic::{SymNum, ZZ12, ZZ24, ZZ6};
 
     #[test]
     fn test_revcomp() {

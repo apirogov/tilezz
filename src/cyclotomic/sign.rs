@@ -1,34 +1,7 @@
-use num_traits::{FromPrimitive, Signed, Zero};
+use num_traits::{FromPrimitive, Zero};
 
-use crate::traits::IntRing;
-use crate::zzbase::ZNum;
-
-/// ZSigned is like num_traits::Signed, but without the Num-like constraints.
-pub trait ZSigned: IntRing {
-    fn signum(&self) -> Self;
-
-    fn abs(&self) -> Self {
-        *self * self.signum()
-    }
-    fn is_positive(&self) -> bool {
-        self.signum() == Self::one()
-    }
-    fn is_negative(&self) -> bool {
-        self.signum() == -Self::one()
-    }
-    fn abs_sub(&self, other: &Self) -> Self {
-        <Self as ZSigned>::abs(&(*self - *other))
-    }
-}
-
-impl<T: IntRing + Signed> ZSigned for T {
-    fn signum(&self) -> Self {
-        self.signum()
-    }
-}
-
-
-
+use super::numtraits::{IntRing, ZSigned};
+use super::traits::IsReal;
 
 /// Floating-point-free solution to get sign of an expression
 /// a*sqrt(n) + b*sqrt(m)
@@ -131,7 +104,7 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + ZSigned + FromPrimitive>(
 // --------
 
 /// This implementation uses f64 (works in all ZZ rings).
-pub fn zz_partial_signum_fallback<Z: ZNum>(val: &Z) -> Z {
+pub fn zz_partial_signum_fallback<Z: IsReal>(val: &Z) -> Z {
     let val = val.complex64().re;
     if val.is_zero() {
         Z::zero()
@@ -144,7 +117,7 @@ pub fn zz_partial_signum_fallback<Z: ZNum>(val: &Z) -> Z {
 
 /// Trivial if there is just one term in the expression,
 /// regardless of its symbolic root (which usually will be 1).
-pub fn zz_partial_signum_1_sym<Z: ZNum>(val: &Z) -> Z {
+pub fn zz_partial_signum_1_sym<Z: IsReal>(val: &Z) -> Z {
     let cs = val.zz_coeffs();
 
     let mut result = Z::zero();
@@ -152,7 +125,7 @@ pub fn zz_partial_signum_1_sym<Z: ZNum>(val: &Z) -> Z {
     result
 }
 
-pub fn zz_partial_signum_2_sym<Z: ZNum>(val: &Z) -> Z {
+pub fn zz_partial_signum_2_sym<Z: IsReal>(val: &Z) -> Z {
     let ftoi = |f| Z::Scalar::from_f64(f).unwrap();
     let cs = val.zz_coeffs();
     let rs = Z::zz_params().sym_roots_sqs;
@@ -166,7 +139,7 @@ pub fn zz_partial_signum_2_sym<Z: ZNum>(val: &Z) -> Z {
     result
 }
 
-pub fn zz_partial_signum_4_sym<Z: ZNum>(val: &Z) -> Z {
+pub fn zz_partial_signum_4_sym<Z: IsReal>(val: &Z) -> Z {
     let cs: Vec<Z::Scalar> = val.zz_coeffs().to_vec();
     let rs: Vec<Z::Scalar> = Z::zz_params()
         .sym_roots_sqs
@@ -187,6 +160,11 @@ pub fn zz_partial_signum_4_sym<Z: ZNum>(val: &Z) -> Z {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use super::super::constants::*;
+    use super::super::symnum::ZZComplex;
+    use super::super::types::{Z24, ZZ24};
+    use num_traits::One;
 
     #[test]
     fn test_sum_root_expr_sign_2() {
@@ -237,5 +215,32 @@ mod tests {
             assert_eq!(sign_zz24(a, -b, c, -d), -1);
             assert_eq!(sign_zz24(a, b, -c, -d), 1);
         }
+    }
+
+    #[test]
+    fn test_signum() {
+        let sq2: ZZ24 = sqrt2();
+        let sq3: ZZ24 = sqrt3();
+        let sq6: ZZ24 = sqrt6();
+
+        let z = Z24::zero();
+        let p = Z24::one();
+        let m = -p;
+
+        // use same test as above
+        let sign_zz24 = |a, b, c, d| {
+            (ZZ24::from(a) + ZZ24::from(b) * sq2 + ZZ24::from(c) * sq3 + ZZ24::from(d) * sq6)
+                .re()
+                .signum()
+        };
+
+        let (a, b, c, d) = (485, 343, 280, 198);
+        assert_eq!(sign_zz24(0, 0, 0, 0), z);
+        assert_eq!(sign_zz24(-a, -b, c, d), m);
+        assert_eq!(sign_zz24(-a, b, -c, d), p);
+        assert_eq!(sign_zz24(-a, b, c, -d), p);
+        assert_eq!(sign_zz24(a, -b, -c, d), m);
+        assert_eq!(sign_zz24(a, -b, c, -d), m);
+        assert_eq!(sign_zz24(a, b, -c, -d), p);
     }
 }

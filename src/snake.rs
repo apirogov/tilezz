@@ -7,13 +7,12 @@ use num_traits::ToPrimitive;
 use num_traits::Zero;
 
 use crate::angles::{normalize_angle, upscale_angles};
+use crate::cyclotomic::geometry::{intersect, wedge};
+use crate::cyclotomic::{HasZZ12, HasZZ4, HasZZ6, IsComplex, IsRingOrField};
 use crate::grid::UnitSquareGrid;
-use crate::zz::{HasZZ12, HasZZ4, HasZZ6};
-use crate::zzbase::{ZZBase, ZZNum};
-use crate::zzgeom::{intersect, wedge};
 
 /// Representation of a turtle (i.e. an oriented point).
-pub struct Turtle<T: ZZNum> {
+pub struct Turtle<T: IsComplex> {
     /// Position in the complex integer plane.
     pub pos: T,
 
@@ -21,14 +20,14 @@ pub struct Turtle<T: ZZNum> {
     pub dir: i8,
 }
 
-impl<T: ZZNum> Turtle<T> {
+impl<T: IsComplex> Turtle<T> {
     /// Create a new turtle with given location and orientation.
     pub fn new(pos: T, dir: i8) -> Self {
         Self { pos, dir }
     }
 }
 
-impl<T: ZZNum> Default for Turtle<T> {
+impl<T: IsComplex> Default for Turtle<T> {
     /// Return a canonical turtle, i.e. located at the origin
     /// and looking in the direction of the positive real axis.
     fn default() -> Self {
@@ -56,7 +55,7 @@ impl<T: ZZNum> Default for Turtle<T> {
 /// into the formalism. The snake is in so far asymmetric, until it is closed.
 /// A closed snake traces out a path that can be inverted (see the `Rat` type).
 #[derive(Debug, Clone)]
-pub struct Snake<T: ZZNum> {
+pub struct Snake<T: IsRingOrField + IsComplex> {
     /// Abstract sequence of unit segments that point into different directions
     /// (i.e. turtle movement instructions).
     /// Each number corresponds to the corresponding rotated unit in the
@@ -84,7 +83,7 @@ pub struct Snake<T: ZZNum> {
     allow_intersections: bool,
 }
 
-impl<I: ToPrimitive, T: ZZNum> TryFrom<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: IsComplex> TryFrom<&[I]> for Snake<T> {
     type Error = &'static str;
 
     /// Create a snake from an angle sequence.
@@ -97,7 +96,7 @@ impl<I: ToPrimitive, T: ZZNum> TryFrom<&[I]> for Snake<T> {
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Snake<T> {
+impl<const N: usize, I: ToPrimitive, T: IsComplex> TryFrom<&[I; N]> for Snake<T> {
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
@@ -105,7 +104,7 @@ impl<const N: usize, I: ToPrimitive, T: ZZNum> TryFrom<&[I; N]> for Snake<T> {
     }
 }
 
-impl<T: ZZNum> Snake<T> {
+impl<T: IsComplex + IsRingOrField> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
@@ -377,7 +376,7 @@ impl<T: ZZNum> Snake<T> {
     /// If the snake is not closed, will implicitly add the segment from the last to first point.
     /// See: <https://en.wikipedia.org/wiki/Shoelace_formula>
     pub fn double_area(&self) -> T::Real {
-        let mut result = <<T as ZZBase>::Real as Zero>::zero();
+        let mut result = <T::Real>::zero();
         for i in 1..self.len() {
             // println!("{} x {} = {}", self.points[i - 1].wedge(&self.points[i]);
             result = result + wedge(&self.points[i - 1], &self.points[i]);
@@ -401,23 +400,23 @@ impl<T: ZZNum> Snake<T> {
 
 // For comparisons (Eq, Ord) and presentation (Display)
 // we only care about the angles, all other data is derivative.
-impl<T: ZZNum> PartialEq for Snake<T> {
+impl<T: IsComplex> PartialEq for Snake<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
     }
 }
-impl<T: ZZNum> Eq for Snake<T> {}
-impl<T: ZZNum> PartialOrd for Snake<T> {
+impl<T: IsComplex> Eq for Snake<T> {}
+impl<T: IsComplex> PartialOrd for Snake<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.angles.partial_cmp(&other.angles)
     }
 }
-impl<T: ZZNum> Ord for Snake<T> {
+impl<T: IsComplex> Ord for Snake<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.angles.cmp(&other.angles)
     }
 }
-impl<T: ZZNum> Display for Snake<T> {
+impl<T: IsComplex> Display for Snake<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.angles.fmt(f)
     }
@@ -427,22 +426,22 @@ pub mod constants {
     use super::*;
 
     /// Return sequence of a square tile over a compatible ring (divisible by 4).
-    pub fn square<T: ZZNum + HasZZ4>() -> Snake<T> {
+    pub fn square<T: IsComplex + HasZZ4>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
-    pub fn triangle<T: ZZNum + HasZZ6>() -> Snake<T> {
+    pub fn triangle<T: IsComplex + HasZZ6>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
     }
 
     /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
-    pub fn hexagon<T: ZZNum + HasZZ6>() -> Snake<T> {
+    pub fn hexagon<T: IsComplex + HasZZ6>() -> Snake<T> {
         Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
     }
 
     /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-    pub fn spectre<T: ZZNum + HasZZ12>() -> Snake<T> {
+    pub fn spectre<T: IsComplex + HasZZ12>() -> Snake<T> {
         Snake::try_from(
             upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
         )
@@ -453,9 +452,7 @@ pub mod constants {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::Ccw;
-    use crate::zz::{Z12, ZZ12, ZZ24};
-    use crate::zzbase::ZZBase;
+    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12, ZZ24};
     use constants::{hexagon, spectre, square, triangle};
     use num_rational::Ratio;
     use num_traits::{One, Zero};

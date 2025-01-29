@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, ops::Bound};
 
-use crate::zzbase::ZZNum;
+use crate::cyclotomic::SymNum;
 
 #[derive(Debug, Clone)]
 pub struct UnitSquareGrid {
@@ -14,14 +14,14 @@ impl UnitSquareGrid {
     /// Return coordinates of closest unit square lattice cell
     /// that a complex integer falls in. The cells are centered
     /// at points that are pairs of two integers in the complex plane.
-    pub fn cell_of<T: ZZNum>(zz: T) -> (i64, i64) {
+    pub fn cell_of<T: SymNum>(zz: T) -> (i64, i64) {
         let c = zz.complex64();
         (c.re.round() as i64, c.im.round() as i64)
     }
 
     /// Given a complex integer point, return the 5 unit square lattice cells
     /// that make up the neighborhood of the cell of the point.
-    pub fn neighborhood_of<T: ZZNum>(zz: T) -> Vec<(i64, i64)> {
+    pub fn neighborhood_of<T: SymNum>(zz: T) -> Vec<(i64, i64)> {
         let c @ (x, y) = Self::cell_of(zz);
         let r = (x + 1, y);
         let l = (x - 1, y);
@@ -34,7 +34,7 @@ impl UnitSquareGrid {
     /// returns the 5 or 8 distinct unit square lattice cells that:
     /// 1. the line segment is guaranteed to be fully contained inside, and
     /// 2. all intersecting unit length segments also have at least one point in it.
-    pub fn seg_neighborhood_of<T: ZZNum>(p1: T, p2: T) -> Vec<(i64, i64)> {
+    pub fn seg_neighborhood_of<T: SymNum>(p1: T, p2: T) -> Vec<(i64, i64)> {
         let mut result = Self::neighborhood_of(p1);
         result.extend(Self::neighborhood_of(p2));
         result.sort();
@@ -105,8 +105,7 @@ impl UnitSquareGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::zz::ZZ12;
-    use crate::zzbase::ZZBase;
+    use crate::cyclotomic::{SymNum, ZZ12};
     use num_traits::{One, Zero};
 
     #[test]
