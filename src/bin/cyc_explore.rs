@@ -1,8 +1,12 @@
 use std::collections::HashSet;
 use std::io::{stdout, Write};
+use std::marker::{Send, Sync};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
+use crossbeam;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 
@@ -11,8 +15,14 @@ use tilezz::cyclotomic::*;
 use tilezz::plotters::{plot_points, rainbow};
 use tilezz::plotutils::{tile_bounds, P64, R64};
 
+static VERBOSE: Mutex<bool> = Mutex::new(false);
+
 /// Compute the levels of points reachable within the unit square from any Gaussian integer in n steps.
-fn explore<ZZ: ZZType + HasZZ4>(n: usize, mod_unit_square: bool) -> Vec<Vec<ZZ>>
+fn explore<ZZ: ZZType + HasZZ4 + Send + Sync>(
+    n: usize,
+    mod_unit_square: bool,
+    num_threads: usize,
+) -> Vec<Vec<ZZ>>
 where
     <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
 {
@@ -23,7 +33,12 @@ where
         &[ZZ::zero()]
     };
 
-    let mut visited: HashSet<ZZ> = HashSet::from_iter(start_pts.to_vec().into_iter());
+    // FIXME: as distributing chunks alone does not make it as fast as expected,
+    // it seems like access to the visited map is the bottleneck!
+    let protected_visited: Arc<Mutex<HashSet<ZZ>>> = {
+        let visited: HashSet<ZZ> = HashSet::from_iter(start_pts.to_vec().into_iter());
+        Arc::new(Mutex::new(visited))
+    };
     let mut round_pts: Vec<Vec<ZZ>> = Vec::new();
     round_pts.push(start_pts.to_vec());
 
@@ -31,28 +46,49 @@ where
     // in each round, we go one unit step in every possible direction
     for i in 1..=n {
         let last = round_pts.last().unwrap();
-        let mut curr: Vec<ZZ> = Vec::new();
+        let protected_curr: Arc<Mutex<Vec<ZZ>>> = Arc::new(Mutex::new(Vec::new()));
 
-        for p in last.iter() {
-            for i in 0..ZZ::turn() {
-                let mut p_dest: ZZ = *p + ZZ::unit(i);
-                if mod_unit_square {
-                    // normalize back into unit square (if enabled)
-                    p_dest = point_mod_rect(&p_dest, &unit_square).coerce_ring();
-                }
-                let p_dest = p_dest;
+        let per_thread = num_threads.max(last.len() / num_threads);
 
-                if !visited.contains(&p_dest) {
-                    visited.insert(p_dest);
-                    curr.push(p_dest);
-                }
-            }
-        }
-        print!("{}{}", curr.len(), if i == n { "" } else { "+" }); // print number of new points
+        let thread_id_counter = Arc::new(AtomicUsize::new(0));
+        crossbeam::scope(|s| {
+            last.as_slice().chunks(per_thread).for_each(|chunk| {
+                let _ = thread_id_counter.fetch_add(1, Ordering::SeqCst);
+                let curr_arc = Arc::clone(&protected_curr);
+                let visited_arc = Arc::clone(&protected_visited);
+
+                s.spawn(move |_| {
+                    for p in chunk.iter() {
+                        for i in 0..ZZ::turn() {
+                            let mut p_dest: ZZ = *p + ZZ::unit(i);
+                            if mod_unit_square {
+                                // normalize back into unit square (if enabled)
+                                p_dest = point_mod_rect(&p_dest, &unit_square).coerce_ring();
+                            }
+                            let p_dest = p_dest;
+
+                            if !visited_arc.lock().unwrap().contains(&p_dest) {
+                                visited_arc.lock().unwrap().insert(p_dest);
+                                curr_arc.lock().unwrap().push(p_dest);
+                            }
+                        }
+                    }
+                });
+            });
+        })
+        .unwrap();
+
+        let used_threads = Arc::into_inner(thread_id_counter).unwrap().into_inner();
+
+        let mutex = Arc::into_inner(protected_curr).unwrap();
+        let curr: Vec<ZZ> = mutex.into_inner().unwrap();
+
+        print!("{}{}", curr.len(), if i == n { "" } else { " + " }); // print number of new points
         stdout().flush().unwrap();
-        if i % 10 == 0 {
-            println!("")
+        if *VERBOSE.lock().unwrap() {
+            println!("\n(used {used_threads} threads, each on around {per_thread} numbers)");
         }
+
         round_pts.push(curr);
     }
     let num_pts: usize = round_pts.iter().map(|v| v.len()).sum();
@@ -103,7 +139,7 @@ fn get_styles(n: usize, pt_sz: i32, pt_sz_const: bool) -> Vec<(i32, ShapeStyle)>
                     * (if pt_sz_const {
                         1.
                     } else {
-                        0.95_f64.powi(*i as i32)
+                        0.98_f64.powi(*i as i32)
                     })) as i32,
                 colors[*i as usize].filled().into(),
             )
@@ -111,15 +147,16 @@ fn get_styles(n: usize, pt_sz: i32, pt_sz_const: bool) -> Vec<(i32, ShapeStyle)>
         .collect()
 }
 
-fn prepare_render<ZZ: ZZType + HasZZ4>(
+fn prepare_render<ZZ: ZZType + HasZZ4 + Send + Sync>(
     num_rounds: usize,
     mod_unit_square: bool,
     chart_width: u32,
+    num_threads: usize,
 ) -> (Vec<Vec<P64>>, R64, Vec<(i32, ShapeStyle)>)
 where
     <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
 {
-    let points: Vec<Vec<P64>> = explore::<ZZ>(num_rounds, mod_unit_square)
+    let points: Vec<Vec<P64>> = explore::<ZZ>(num_rounds, mod_unit_square, num_threads)
         .iter()
         .map(|v| v.iter().map(|p| p.xy()).collect())
         .collect();
@@ -149,15 +186,16 @@ fn prepare_render_for(
     num_rounds: usize,
     mod_unit_square: bool,
     chart_width: u32,
+    num_threads: usize,
 ) -> (Vec<Vec<P64>>, R64, Vec<(i32, ShapeStyle)>) {
     match ring {
-        4 => prepare_render::<ZZ4>(num_rounds, mod_unit_square, chart_width),
-        8 => prepare_render::<ZZ8>(num_rounds, mod_unit_square, chart_width),
-        12 => prepare_render::<ZZ12>(num_rounds, mod_unit_square, chart_width),
-        16 => prepare_render::<ZZ16>(num_rounds, mod_unit_square, chart_width),
-        20 => prepare_render::<ZZ20>(num_rounds, mod_unit_square, chart_width),
-        24 => prepare_render::<ZZ24>(num_rounds, mod_unit_square, chart_width),
-        60 => prepare_render::<ZZ60>(num_rounds, mod_unit_square, chart_width),
+        4 => prepare_render::<ZZ4>(num_rounds, mod_unit_square, chart_width, num_threads),
+        8 => prepare_render::<ZZ8>(num_rounds, mod_unit_square, chart_width, num_threads),
+        12 => prepare_render::<ZZ12>(num_rounds, mod_unit_square, chart_width, num_threads),
+        16 => prepare_render::<ZZ16>(num_rounds, mod_unit_square, chart_width, num_threads),
+        20 => prepare_render::<ZZ20>(num_rounds, mod_unit_square, chart_width, num_threads),
+        24 => prepare_render::<ZZ24>(num_rounds, mod_unit_square, chart_width, num_threads),
+        60 => prepare_render::<ZZ60>(num_rounds, mod_unit_square, chart_width, num_threads),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -212,11 +250,18 @@ struct Cli {
         help = "Number of threads (= # of available cores if unset)"
     )]
     threads: Option<usize>,
+
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[cfg(feature = "examples")]
 fn main() {
     let cli = Cli::parse();
+    if cli.verbose {
+        let mut verbose = VERBOSE.lock().unwrap();
+        *verbose = true;
+    }
     if cli.ring % 4 != 0 {
         panic!("ZZ{} not supported for unit square exploration!", cli.ring);
     }
@@ -232,26 +277,46 @@ fn main() {
         panic!("Unknown image format!")
     };
 
-    println!("Computing points...");
+    let img_dims = (cli.width, cli.width);
     let chart_width = match output_format.unwrap_or(OutputFormat::Png) {
         OutputFormat::Gif => cli.width,
         OutputFormat::Png => cli.width / (cli.row as u32),
     };
-    let (points, bounds, styles) =
-        prepare_render_for(cli.ring, cli.num_rounds, cli.unit_square, chart_width);
+
+    // -------- Compute --------
+
+    let num_threads = cli.threads.unwrap_or(num_cpus::get());
+    if *VERBOSE.lock().unwrap() {
+        println!("Computing points using {num_threads} threads...");
+    }
+
+    let (points, bounds, styles) = prepare_render_for(
+        cli.ring,
+        cli.num_rounds,
+        cli.unit_square,
+        chart_width,
+        num_threads,
+    );
+
+    // -------- Render --------
 
     if output_format.is_none() {
-        return; // dry run, no image
+        return; // dry run -> computation with no rendering
     }
     let output_format = output_format.unwrap();
 
-    let img_dims = (cli.width, cli.width);
+    // get image of desired size for chosen backend depending of format
     let root = match output_format {
         OutputFormat::Gif => BitMapBackend::gif(&filename, img_dims, cli.delay).unwrap(),
         OutputFormat::Png => BitMapBackend::new(&filename, img_dims),
     }
     .into_drawing_area();
 
+    if *VERBOSE.lock().unwrap() {
+        println!("Plotting points...");
+    }
+
+    // frame chart of GIF <-> cell of a grid of plots in PNG
     let grid = match output_format {
         OutputFormat::Gif => (1, 1),
         OutputFormat::Png => (
@@ -261,7 +326,6 @@ fn main() {
     };
     let areas: Vec<_> = root.split_evenly(grid);
 
-    println!("Plotting points...");
     for i in 0..points.len() {
         let area = &areas[match output_format {
             OutputFormat::Gif => 0,
