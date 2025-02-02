@@ -36,6 +36,9 @@ Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 
 Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square. Each image shows the new points discovered in the corresponding round.
 
+To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore.rs) example (to be able to run
+it, make sure to build the crate with the `examples` feature enabled).
+
 ## Usage
 
 ### Essential Concepts
