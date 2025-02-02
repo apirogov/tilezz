@@ -27,6 +27,15 @@ The concepts this work is based on are described in the following blog posts:
 
 Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 
+## Demonstration
+
+### Exploring the cyclotomic ring ZZ12
+
+<img src="https://github.com/user-attachments/assets/a7d1d698-8e7c-41a8-b2a8-49a8fed80c2e" width="45%" />
+<img src="https://github.com/user-attachments/assets/d246fd60-bfed-4ff8-9393-2ae14e77e4d2" width="45%" />
+
+Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square. Each image shows the new points discovered in the corresponding round.
+
 ## Usage
 
 ### Essential Concepts
