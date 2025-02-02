@@ -21,15 +21,14 @@ pub const ZZ16_Y: f64 = 2.0 + SQRT_2;
 // and   sqrt(2-sqrt(2+sqrt(2))) = (-1 - sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2+sqrt(2+sqrt(2)))
 pub const ZZ32_Z: f64 = 2.0 + 1.84775906502257351225; // 2+sqrt(2+sqrt(2))
 
-// NOTE: Let x = sqrt(5), y = sqrt(2*(5-sqrt(5))), y' = sqrt(2*(5+sqrt(5)))
-// We have: y = 1/2(xy' - y') ^ y' = 1/2(xy + y)
+// NOTE: Let x = sqrt(5-sqrt(5)), y = sqrt(5), z = sqrt(5+sqrt(5))
+// Then:     x = 1/2z(y-1),       y = 1/2(xz), z = 1/2x(y+1)
 pub const SQRT_5: f64 = 2.23606797749978969;
 pub const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 
 // NOTE: could construct ZZ120 and ZZ240 as well, using only the roots we already use:
 //
-// e^(i*pi/60)  = 1/16 (1+i) (2 sqrt(5+sqrt(5)) - i sqrt(2) - sqrt(2)sqrt(3)
-//              + i sqrt(2)sqrt(5) + sqrt(2)sqrt(3)sqrt(5) - 2i sqrt(3)sqrt(5+sqrt(5)))
+// e^(i*pi/60)  = 1/2 1/2(1+i)sqrt(2) 1/2(sqrt(3)+i) 1/2(-1 + sqrt(5) -isqrt(2)sqrt(5+sqrt(5)))
 
 // e^(i*pi/120) = 1/16 (sqrt(2-sqrt(2)) (sqrt(3) + sqrt(15) - sqrt(2(5-sqrt(5)))) + sqrt(2+sqrt(2)) (1 + sqrt(5) + sqrt(6(5-sqrt(5)))))
 //              + 1/16i(sqrt(2+sqrt(2)) (sqrt(3) + sqrt(15) - sqrt(2(5-sqrt(5)))) - sqrt(2-sqrt(2)) (1 + sqrt(5) + sqrt(6(5-sqrt(5)))))

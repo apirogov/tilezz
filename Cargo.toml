@@ -21,8 +21,13 @@ num-integer = "0.1.46"
 num-rational = "0.4.2"
 num-traits = "0.2.19"
 paste = "1.0.15"
+
 plotters = { version = "^0.3.7", features = ["evcxr", "evcxr_bitmap", "all_series"], optional = true }
+clap = { version = "4.5.27", features = ["derive"], optional = true }
+num_cpus = { version = "1.16.0", optional = true }
+crossbeam = { version = "0.8.4", optional = true }
 
 [features]
-default = ["plotters"]
+default = ["plotters", "examples"]
 plotters = ["dep:plotters"]
+examples = ["plotters", "dep:clap", "dep:crossbeam", "dep:num_cpus"]

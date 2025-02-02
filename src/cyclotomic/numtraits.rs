@@ -10,14 +10,16 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 pub trait IntRing:
     Copy
     + Clone
-    + Eq
-    + PartialEq
+    + Zero
+    + One
     + Neg<Output = Self>
     + Add<Self, Output = Self>
     + Sub<Self, Output = Self>
     + Mul<Self, Output = Self>
-    + Zero
-    + One
+    // + Pow<i8, Output = Self>
+    // + Pow<u8, Output = Self>
+    + PartialEq
+    + Eq
 {
 }
 

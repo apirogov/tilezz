@@ -22,9 +22,11 @@ mod types;
 
 pub mod constants;
 
+pub mod linalg;
+
 pub mod geometry;
 
-pub use num_traits::{One, Zero};
+pub use num_traits::{One, Pow, Zero};
 
 pub use numtraits::{Ccw, Conj, IntField, IntRing, OneImag};
 

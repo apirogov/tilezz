@@ -6,7 +6,7 @@ use std::fmt::Display;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use num_complex::Complex64;
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::{One, Pow, ToPrimitive, Zero};
 
 use paste::paste;
 
@@ -132,7 +132,7 @@ mod tests {
         let x = -ZZ24::one();
         assert_eq!(format!("{x}"), "-1");
 
-        let x = ZZ24::one() + (ZZ24::ccw()).pow(2);
+        let x = ZZ24::one() + (ZZ24::ccw()).pow(2i8);
         assert_eq!(format!("{x}"), "1+1/2i + (1/2)*sqrt(3)");
 
         let x: ZZ10 = zz_units_sum();

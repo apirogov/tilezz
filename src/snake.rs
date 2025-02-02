@@ -7,7 +7,8 @@ use num_traits::ToPrimitive;
 use num_traits::Zero;
 
 use crate::angles::{normalize_angle, upscale_angles};
-use crate::cyclotomic::geometry::{intersect, wedge};
+use crate::cyclotomic::geometry::intersect;
+use crate::cyclotomic::linalg::wedge;
 use crate::cyclotomic::{HasZZ12, HasZZ4, HasZZ6, IsComplex, IsRingOrField};
 use crate::grid::UnitSquareGrid;
 

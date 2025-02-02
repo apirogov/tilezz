@@ -134,14 +134,14 @@ where
 
 fn main() {
     let w: u32 = 2000;
-    let root = BitMapBackend::gif("scratch/test.gif", (w, w), 250)
+    let root = BitMapBackend::gif("scratch/test.gif", (w, w), 500)
         .unwrap()
         .into_drawing_area();
     // let root = BitMapBackend::new("test.png", (w, (w as f64 * ((3.1415 / 3.0).sin())) as u32))
 
     let _ = root.fill(&WHITE);
 
-    let (points, bounds, styles) = prepare_render::<ZZ12>(16, false, Some(2));
+    let (points, bounds, styles) = prepare_render::<ZZ60>(8, false, Some(2));
 
     for i in 0..points.len() {
         println!("plotting level {i}");

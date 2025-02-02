@@ -7,7 +7,7 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use num_integer::Integer;
 use num_rational::Ratio;
-use num_traits::{FromPrimitive, One, Zero};
+use num_traits::{FromPrimitive, One, Pow, Zero};
 
 use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
 
@@ -50,7 +50,7 @@ impl<T: IntRing> Zero for GaussInt<T> {
     }
 }
 
-impl<T: IntRing> One for GaussInt<T>
+impl<T: Copy + Neg<Output = T> + One + Zero + Eq> One for GaussInt<T>
 where
     GaussInt<T>: Mul<Output = Self>,
 {
@@ -132,6 +132,46 @@ impl<T: Copy + Add<Output = T> + Mul<Output = T> + Sub<Output = T>> Mul<GaussInt
             real: self.real * other.real - self.imag * other.imag,
             imag: self.real * other.imag + self.imag * other.real,
         }
+    }
+}
+
+impl<
+        T: Copy
+            + One
+            + Zero
+            + Add<Output = T>
+            + Mul<Output = T>
+            + Sub<Output = T>
+            + Neg<Output = T>
+            + Eq,
+    > Pow<u8> for GaussInt<T>
+{
+    type Output = Self;
+
+    fn pow(self, other: u8) -> Self {
+        let mut x = Self::one();
+        for _ in 0..other {
+            x = x * self;
+        }
+        return x;
+    }
+}
+impl<
+        T: Copy
+            + One
+            + Zero
+            + Add<Output = T>
+            + Mul<Output = T>
+            + Sub<Output = T>
+            + Neg<Output = T>
+            + Eq,
+    > Pow<i8> for GaussInt<T>
+{
+    type Output = Self;
+
+    fn pow(self, other: i8) -> Self {
+        assert!(other >= 0, "Negative powers are not supported!");
+        self.pow(other as u8)
     }
 }
 

@@ -69,6 +69,8 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     /// Type used for coefficients for the symbolic vectors.
     type Scalar: SymScalar;
 
+    // --------
+
     /// Return angle representing one full turn.
     #[inline]
     fn turn() -> i8 {
@@ -107,29 +109,18 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
         }
     }
 
+    // --------
+
     /// Return unit length vector pointing in direction of given angle.
+    #[inline]
     fn unit(angle: i8) -> Self
     where
         Self: IsComplex + IsRingOrField,
     {
-        Self::one() * Self::pow(&Self::ccw(), angle.rem_euclid(Self::turn()))
+        Self::one() * Self::ccw().zz_pow(angle.rem_euclid(Self::turn()) as u8)
     }
 
-    /// Raise to an integer power.
-    // NOTE: using i8 instead of u8 for convenience (angles use i8)
-    fn pow(&self, i: i8) -> Self
-    where
-        Self: IsRingOrField,
-    {
-        assert!(i >= 0, "Negative powers are not supported!");
-        let mut x = Self::one();
-        for _ in 0..i {
-            x = x * (*self);
-        }
-        return x;
-    }
-
-    /// Scalar multiplication.
+    /// Scalar multiplication (mostly used to implement From<integer>).
     #[inline]
     fn scale<I: Integer + ToPrimitive>(&self, scalar: I) -> Self
     where
@@ -139,16 +130,18 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
         Self::new(&cs)
     }
 
+    // --------
+
     /// Convert to a complex floating point number.
     fn complex64(&self) -> Complex64;
 
     /// Convert to two coordinates.
+    #[inline]
     fn xy(&self) -> (f64, f64) {
         let c = self.complex64();
         (c.re, c.im)
     }
 
-    // functions that can be implemented via zz_base_impl!
     // --------
     fn new(coeffs: &[Self::Scalar]) -> Self;
 
@@ -159,13 +152,13 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar>;
     fn zz_mul_scalar(arr: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar>;
 
-    // implementations for implementing other traits using zz_ops_impl!
     // --------
     #[inline]
     fn zz_zero_vec() -> Vec<Self::Scalar> {
         vec![Self::Scalar::zero(); Self::zz_params().sym_roots_num]
     }
 
+    #[inline]
     fn zz_one_vec() -> Vec<Self::Scalar> {
         let mut ret = vec![Self::Scalar::zero(); Self::zz_params().sym_roots_num];
         ret[0] = Self::Scalar::one();
@@ -199,6 +192,17 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     #[inline]
     fn zz_mul(&self, other: &Self) -> Vec<Self::Scalar> {
         Self::zz_mul_arrays(self.zz_coeffs(), other.zz_coeffs())
+    }
+
+    fn zz_pow(&self, i: u8) -> Self
+    where
+        Self: IsRingOrField,
+    {
+        let mut x = Self::one();
+        for _ in 0..i {
+            x = x * (*self);
+        }
+        return x;
     }
 }
 
@@ -603,6 +607,19 @@ macro_rules! impl_intring_traits {
                 Self::new(&Self::zz_mul(&self, &other))
             }
         }
+        impl Pow<u8> for $t {
+            type Output = Self;
+            fn pow(self, other: u8) -> Self {
+                self.zz_pow(other)
+            }
+        }
+        impl Pow<i8> for $t {
+            type Output = Self;
+            fn pow(self, other: i8) -> Self {
+                assert!(other >= 0, "Negative powers are not supported!");
+                self.zz_pow(other as u8)
+            }
+        }
 
         impl Zero for $t {
             fn zero() -> Self {
@@ -936,13 +953,13 @@ macro_rules! zz_test {
                 // test powi()
                 assert_eq!(ZZi::ccw().pow(ZZi::hturn()), -ZZi::one());
                 assert_eq!(ZZi::ccw().pow(ZZi::turn()), ZZi::one());
-                assert_eq!(ZZi::ccw().pow(ZZi::hturn()).pow(2), ZZi::one());
+                assert_eq!(ZZi::ccw().pow(ZZi::hturn()).pow(2u8), ZZi::one());
             }
 
             #[test]
             #[should_panic]
             fn test_neg_powi() {
-                ZZi::one().pow(-1);
+                ZZi::one().pow(-1i8);
             }
 
             #[test]
