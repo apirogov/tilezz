@@ -9,7 +9,7 @@ use plotters::{
     style::text_anchor::{HPos, Pos, VPos},
 };
 
-use crate::plotutils::{tile_bounds, tile_centroid, tile_viewport};
+use super::plotutils::{tile_bounds, tile_centroid, tile_viewport};
 
 /// Return a rainbow color gradient with n colors with given saturation.
 pub fn rainbow(steps: u32, sat: f64) -> Vec<RGBAColor> {

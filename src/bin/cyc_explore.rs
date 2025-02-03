@@ -12,8 +12,8 @@ use plotters::prelude::*;
 
 use tilezz::cyclotomic::geometry::point_mod_rect;
 use tilezz::cyclotomic::*;
-use tilezz::plotters::{plot_points, rainbow};
-use tilezz::plotutils::{tile_bounds, P64, R64};
+use tilezz::vis::plotters::{plot_points, rainbow};
+use tilezz::vis::plotutils::{chart_padding, tiles_bounds, P64, R64};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
@@ -99,17 +99,20 @@ where
 /// Helper function to plot the points with given settings into a drawing area.
 pub fn render<'a, DB: DrawingBackend>(
     da: &DrawingArea<DB, Shift>,
-
-    ((x_min, y_min), (x_max, y_max)): R64,
+    bounds @ ((x_min, y_min), (x_max, y_max)): R64,
     point_levels: &[Vec<P64>],
     level_styles: &[(i32, ShapeStyle)],
     offset: usize,
     stride: u32,
 ) {
+    let (pad_x, pad_y) = chart_padding(da.dim_in_pixel(), bounds);
+    println!("{pad_x} {pad_y}");
+    let da = da.margin(pad_y / 2, pad_y / 2, pad_x / 2, pad_x / 2);
+
     // prepare coordinate system
     let mut chart = ChartBuilder::on(&da)
         .x_label_area_size(20)
-        .y_label_area_size(40)
+        .y_label_area_size(20)
         .build_cartesian_2d(x_min..x_max, y_min..y_max)
         .unwrap();
     chart.configure_mesh().draw().unwrap();
@@ -161,14 +164,7 @@ where
         .map(|v| v.iter().map(|p| p.xy()).collect())
         .collect();
 
-    let bounds = tile_bounds(
-        points
-            .iter()
-            .map(|p| <(P64, P64) as Into<[P64; 2]>>::into(tile_bounds(p.iter())).into_iter())
-            .flatten()
-            .collect::<Vec<P64>>()
-            .as_slice(),
-    );
+    let bounds = tiles_bounds(&points);
 
     let pt_sz_const = !mod_unit_square;
     let pt_sz = if pt_sz_const {
@@ -320,8 +316,8 @@ fn main() {
     let grid = match output_format {
         OutputFormat::Gif => (1, 1),
         OutputFormat::Png => (
-            cli.row as usize,
             (points.len() / cli.row + points.len() % cli.row) as usize,
+            cli.row as usize,
         ),
     };
     let areas: Vec<_> = root.split_evenly(grid);
@@ -332,11 +328,13 @@ fn main() {
             OutputFormat::Png => i,
         }];
 
-        // plot into gif frame or png chart matrix grid cell
         let _ = area.fill(&WHITE);
-        let area = area.margin(40, 40, 40, 40);
-        render(&area, bounds, &points[i..=i], &styles[i..=i], i, 1);
 
+        let pad = cli.width * 2 / 100;
+        let area = area.margin(pad, pad, pad, pad);
+
+        // plot into gif frame or png chart matrix grid cell
+        render(&area, bounds, &points[i..=i], &styles[i..=i], i, 1);
         area.present().unwrap();
     }
 }

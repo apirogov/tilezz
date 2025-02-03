@@ -3,7 +3,7 @@
 /// 2D Point (X, Y)
 pub type P64 = (f64, f64);
 
-/// 2D Rectangle (top left and bottom right corners)
+/// 2D Rectangle (given as pair of corners with respectively minimal and maximal coordinate values)
 pub type R64 = (P64, P64);
 
 /// Returns the center of the tile based on its vertex points.
@@ -41,6 +41,20 @@ where
     }
 }
 
+/// Like tile_bounds, but takes a sequence of sequences of points and computes overall bounds.
+pub fn tiles_bounds<'a, I, J>(ptss: I) -> R64
+where
+    I: IntoIterator<Item = J>,
+    J: IntoIterator<Item = &'a P64>,
+{
+    let pts: Vec<P64> = ptss
+        .into_iter()
+        .map(|p| <(P64, P64) as Into<[P64; 2]>>::into(tile_bounds(p.into_iter())).into_iter())
+        .flatten()
+        .collect::<Vec<P64>>();
+    return tile_bounds(&pts);
+}
+
 /// Given the bounds of a tile, adjust them to a square
 /// centered on and including all the points.
 pub fn tile_viewport(((min_x, min_y), (max_x, max_y)): R64) -> R64 {
@@ -54,4 +68,28 @@ pub fn tile_viewport(((min_x, min_y), (max_x, max_y)): R64) -> R64 {
         ((min_x - pad_x), (min_y - pad_y)),
         ((max_x + pad_x), (max_y + pad_y)),
     )
+}
+
+/// Given the size of a box where a chart has to fit and bounds in the
+/// chart-internal coordinate system, returns required padding to render the
+/// coordinate system without distortion.
+/// For centering, half of the needed padding should be applied on each respective side.
+pub fn chart_padding(
+    (box_w, box_h): (u32, u32),
+    ((min_x, min_y), (max_x, max_y)): R64,
+) -> (u32, u32) {
+    let (w, h) = (max_x - min_x, max_y - min_y);
+
+    let box_ratio: f64 = box_h as f64 / box_w as f64;
+    let bounds_ratio: f64 = h as f64 / w as f64;
+
+    return if box_ratio > bounds_ratio {
+        // embedded chart is wider
+        let pad_y = box_h as f64 - box_w as f64 * bounds_ratio;
+        (0, pad_y as u32)
+    } else {
+        // embedded chart is taller
+        let pad_x = box_w as f64 - box_h as f64 / bounds_ratio;
+        (pad_x as u32, 0)
+    };
 }

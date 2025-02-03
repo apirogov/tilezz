@@ -13,7 +13,4 @@ pub mod rat;
 
 pub mod prelude;
 
-pub mod plotutils;
-
-#[cfg(feature = "plotters")]
-pub mod plotters;
+pub mod vis;
