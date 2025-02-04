@@ -6,28 +6,37 @@ use super::linalg::{is_between, is_ccw, wedge};
 use super::numtraits::ZSigned;
 use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
-// -----------------
+pub type Line<T> = (T, T, T);
 
 /// Get (a, b, c) for line ax + by + c = 0 based on two points.
 /// y(x) = -(ax + c)/b = -a/b x - c/b = mx + b' with m = -a/b and b' = -c/b
-fn line_through<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real, ZZ::Real) {
+pub fn line_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> Line<ZZ::Real> {
     // (wedge(&ZZ::one(), &(*p1 - *p2)), dot(&ZZ::one(), &(*p2 - *p1)), wedge(&p1, &p2))
     ((*p1 - *p2).im(), (*p2 - *p1).re(), wedge::<ZZ>(&p1, &p2))
 }
 
 /// Return whether the point is on the given line.
-fn is_colinear<ZZ: IsRingOrField + IsComplex>(
-    p: &ZZ,
-    (a, b, c): &(ZZ::Real, ZZ::Real, ZZ::Real),
-) -> bool {
+pub fn is_colinear<ZZ: IsComplex>(p: &ZZ, (a, b, c): &Line<ZZ::Real>) -> bool {
     // ((*a) * dot(&ZZ::one(), p) + (*b) * wedge(&ZZ::one(), p) + *c).is_zero()
     (*a * p.re() + *b * p.im() + *c).is_zero()
+}
+
+/// Return whether two lines are parallel (which includes colinearity).
+pub fn lines_parallel<ZZ: IsComplex>(l1: &Line<ZZ::Real>, l2: &Line<ZZ::Real>) -> bool {
+    let ((a1, b1, _), (a2, b2, _)) = (l1, l2);
+    (*a1 * *b2 - *a2 * *b1).is_zero()
+}
+
+/// Return whether two lines are perpendicular.
+pub fn lines_perp<ZZ: IsComplex>(l1: &Line<ZZ::Real>, l2: &Line<ZZ::Real>) -> bool {
+    let ((a1, b1, _), (a2, b2, _)) = (l1, l2);
+    (*a1 * *a2 + *b1 * *b2).is_zero()
 }
 
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: IsRingOrField + IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
+pub fn intersect<ZZ: IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
         // we ignore touching endpoints
         // (not counting it as proper intersection of _disjoint_ segments)
@@ -43,13 +52,35 @@ pub fn intersect<ZZ: IsRingOrField + IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(Z
     }
 }
 
+/// Given two segments defining a lines,
+/// return that intersection point (if they are not paralel).
+pub fn intersection_point<ZZ: IsComplex + HasZZ4>(
+    &(v, w): &(ZZ, ZZ),
+    &(x, y): &(ZZ, ZZ),
+) -> Option<ZZ::Field>
+where
+    <<ZZ as IsRingOrField>::Real as IsReal>::Field: From<<ZZ as IsRingOrField>::Real>,
+    <ZZ as IsComplex>::Field: From<(
+        <<ZZ as IsRingOrField>::Real as IsReal>::Field,
+        <<ZZ as IsRingOrField>::Real as IsReal>::Field,
+    )>,
+{
+    let l1 @ (a1, b1, c1): Line<ZZ::Real> = line_through(&v, &w);
+    let l2 @ (a2, b2, c2): Line<ZZ::Real> = line_through(&x, &y);
+    if lines_parallel::<ZZ>(&l1, &l2) {
+        None
+    } else {
+        type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
+        let x_numer: RealField<ZZ> = (b1 * c2 - b2 * c1).into();
+        let y_numer: RealField<ZZ> = (c1 * a2 - c2 * a1).into();
+        let denom: RealField<ZZ> = (a1 * b2 - a2 * b1).into();
+        Some((x_numer / denom, y_numer / denom).into())
+    }
+}
+
 /// Return whether a point is inside a rectangle or on its boundary.
 /// If strict is true, will not consider a point on a boundary as inside.
-pub fn point_in_rect<ZZ: IsRingOrField + IsComplex>(
-    p: &ZZ,
-    (pos_min, pos_max): &(ZZ, ZZ),
-    strict: bool,
-) -> bool {
+pub fn point_in_rect<ZZ: IsComplex>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
     let (px, py) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
@@ -108,33 +139,36 @@ mod tests {
     use num_traits::{One, Zero};
 
     use super::super::numtraits::{Ccw, OneImag};
-    use super::super::symnum::SymNum;
     use super::super::types::ZZ12;
     use super::*;
 
     type ZZi = ZZ12;
 
-    #[test]
-    fn test_colinear() {
-        if !ZZi::has_qturn() {
-            return;
-        }
-
-        // Test point layout:
-        // -------
-        // E F
-        //
-        // A B C D
-        // -------
+    /// Return collection of test points.
+    ///
+    /// Test point layout:
+    /// -------
+    /// E F
+    ///
+    /// A B C D
+    /// -------
+    fn get_test_points() -> (ZZi, ZZi, ZZi, ZZi, ZZi, ZZi) {
         let a: ZZi = ZZi::zero();
         let b: ZZi = ZZi::one();
         let c: ZZi = ZZi::from(2);
         let d: ZZi = ZZi::from(3);
         let e: ZZi = ZZi::one_i();
         let f: ZZi = b + e;
+        (a, b, c, d, e, f)
+    }
+
+    #[test]
+    fn test_colinear_parallel_perp() {
+        let (a, b, c, d, e, f) = get_test_points();
 
         let l_ab = line_through(&a, &b);
         let l_ac = line_through(&a, &c);
+        let l_ae = line_through(&a, &e);
         let l_af = line_through(&a, &f);
 
         // colinear, overlap
@@ -151,30 +185,42 @@ mod tests {
         // general case
         assert!(!is_colinear(&b, &l_af));
         assert!(!is_colinear(&d, &l_af));
+
+        assert!(lines_parallel::<ZZi>(&l_ab, &l_ac));
+        assert!(!lines_parallel::<ZZi>(&l_ab, &l_af));
+        assert!(lines_perp::<ZZi>(&l_ab, &l_ae));
+        assert!(!lines_perp::<ZZi>(&l_ab, &l_af));
     }
 
     #[test]
     fn test_intersect() {
-        let a: ZZ12 = ZZ12::zero();
-        let b: ZZ12 = ZZ12::one();
-        let c: ZZ12 = ZZ12::from(2);
-        let d: ZZ12 = ZZ12::from(3);
-        let e: ZZ12 = ZZ12::one_i();
-        let f: ZZ12 = b + e;
+        let (a, b, c, d, e, f) = get_test_points();
 
         // colinear cases:
         // ----
         assert!(!intersect(&(a, b), &(c, d))); // no touch
+        assert!(intersection_point(&(a, b), &(c, d)).is_none());
+
         assert!(!intersect(&(d, c), &(a, b))); // same, permutated
+        assert!(intersection_point(&(d, c), &(a, b)).is_none());
+
         assert!(!intersect(&(a, b), &(b, c))); // touch in an endpoint
+        assert!(intersection_point(&(a, b), &(b, c)).is_none());
+
         assert!(intersect(&(a, c), &(b, d))); // overlap
+        assert!(intersection_point(&(a, c), &(b, d)).is_none());
+
         assert!(intersect(&(a, d), &(b, c))); // overlap (subsuming)
+        assert!(intersection_point(&(a, d), &(b, c)).is_none());
 
         // non-colinear cases:
         // ----
         // parallel
         assert!(!intersect(&(a, b), &(e, f)));
+        assert!(intersection_point(&(a, b), &(e, f)).is_none());
+
         assert!(!intersect(&(a, e), &(b, f)));
+        assert!(intersection_point(&(a, e), &(b, f)).is_none());
 
         // no touch
         assert!(!intersect(&(a, e), &(b, c))); // perp
@@ -182,8 +228,13 @@ mod tests {
 
         // touch in start/end-points
         assert!(!intersect(&(a, e), &(a, b))); // perp
+        assert_eq!(intersection_point(&(a, e), &(a, b)).unwrap(), a.into());
+
         assert!(!intersect(&(a, f), &(a, b))); // non-perp
+        assert_eq!(intersection_point(&(a, f), &(a, b)).unwrap(), a.into());
+
         assert!(!intersect(&(a, e), &(e, e - b))); // non-perp
+        assert_eq!(intersection_point(&(a, e), &(e, e - b)).unwrap(), e.into());
 
         // endpoint of one segment intersects a non-endpoint of other seg
         assert!(intersect(&(b, f), &(a, c))); // perp
@@ -193,6 +244,11 @@ mod tests {
         assert!(intersect(&(a, f), &(b, e))); // perp
         assert!(intersect(&(a, f), &(c, e))); // non-perp
         assert!(intersect(&(a, f), &(d, e))); // non-perp
+
+        // diagonals of unit square intersect at [0.5, 0.5]
+        let expected: <ZZi as IsComplex>::Field =
+            <ZZi as IsComplex>::Field::from(f) / <ZZi as IsComplex>::Field::from(2);
+        assert_eq!(intersection_point(&(a, f), &(b, e)).unwrap(), expected);
     }
 
     #[test]
