@@ -8,11 +8,19 @@ use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
 pub type Line<T> = (T, T, T);
 
+/// Get (a, b) for equivalence class of lines line ax + by = c for all c.
+///
+/// This function is mostly interesting if the constant c does not need to be computed.
+fn line_class_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real) {
+    ((*p1 - *p2).im(), (*p2 - *p1).re())
+}
+
 /// Get (a, b, c) for line ax + by + c = 0 based on two points.
 /// y(x) = -(ax + c)/b = -a/b x - c/b = mx + b' with m = -a/b and b' = -c/b
 pub fn line_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> Line<ZZ::Real> {
     // (wedge(&ZZ::one(), &(*p1 - *p2)), dot(&ZZ::one(), &(*p2 - *p1)), wedge(&p1, &p2))
-    ((*p1 - *p2).im(), (*p2 - *p1).re(), wedge::<ZZ>(&p1, &p2))
+    let (a, b) = line_class_through::<ZZ>(&p1, &p2);
+    (a, b, wedge::<ZZ>(&p1, &p2))
 }
 
 /// Return whether the point is on the given line.
