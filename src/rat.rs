@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use num_traits::ToPrimitive;
 
-use crate::angles::revcomp;
+use crate::angles::{comp, revcomp};
 use crate::cyclotomic::{IsComplex, IsRingOrField};
 use crate::snake::{Snake, Turtle};
 
@@ -95,7 +95,7 @@ fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
     return (len, offset);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Rat<T: IsComplex> {
     /// Even though we don't need to use the underlying complex integer ring,
     /// we parametrize by that type for improved type safety (to not mix incompatible polygons).
@@ -165,10 +165,19 @@ impl<T: IsComplex + IsRingOrField> Rat<T> {
         revcomp(self.slice_from(offset + 1, self.len()))
     }
 
-    /// Return chirally reflected description of the same shape
-    /// (its sequence is equal to the reverse complement)
-    pub fn reflected(&self) -> Self {
+    /// Return chirally reflected description of the **same** shape,
+    /// i.e. tracing the boundary in the opposite direction.
+    /// (the sequence is equal to the reverse complement)
+    pub fn reversed(&self) -> Self {
         Self::from_slice_unchecked(self.revcomp_seq(0).as_slice())
+    }
+
+    /// Return description of the **chirally reflected** shape,
+    /// with the boundary being traced out with same chirality
+    /// (i.e. if it was ccw, the reflected shape is also described ccw).
+    pub fn reflected(&self) -> Self {
+        let refl = comp(self.slice_from(0, self.len()));
+        Self::from_slice_unchecked(&refl).reversed()
     }
 
     // ----
@@ -423,7 +432,7 @@ mod tests {
     fn test_convex() {
         let hex = Rat::from_unchecked(&hexagon::<ZZ12>());
         assert!(hex.is_convex());
-        assert!(hex.reflected().is_convex());
+        assert!(hex.reversed().is_convex());
         assert!(Rat::from_unchecked(&hexagon::<ZZ12>()).is_convex());
         assert!(!Rat::from_unchecked(&spectre::<ZZ12>()).is_convex());
     }
@@ -447,7 +456,7 @@ mod tests {
         assert_eq!(r.len(), spectre_angles.len());
         assert_eq!(r.seq(), spectre_angles);
 
-        let c: Rat<ZZ12> = r.reflected();
+        let c: Rat<ZZ12> = r.reversed();
         assert!(r != c);
 
         // check chirality flipping due to revcomp
@@ -455,22 +464,26 @@ mod tests {
         assert_eq!(c.chirality(), -1);
 
         // twice revcomp = original
-        let cc: Rat<ZZ12> = c.reflected();
+        let cc: Rat<ZZ12> = c.reversed();
         assert_eq!(r, cc);
     }
 
     #[test]
-    fn test_reflected() {
+    fn test_reversed_reflected() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
+        assert!(r != r.reversed());
         assert!(r != r.reflected());
 
-        // twice reflect -> restores original sequence + offset
+        // twice reverse -> restores original sequence + offset
+        assert_eq!(r.reversed().reversed().seq(), r.seq());
+
+        // twice reflect = same sequence
         assert_eq!(r.reflected().reflected().seq(), r.seq());
 
         // reflecting the sequence keeps the current node constant
         // (needs off-by-one offset in implementation)
         let exp: &[i8] = &[-3, 2, -3, 2, -3, -2, 3, -2, -3, -2, 3, -2, 0, -2];
-        assert_eq!(r.reflected().seq(), exp);
+        assert_eq!(r.reversed().seq(), exp);
     }
 
     #[test]
@@ -495,7 +508,7 @@ mod tests {
         assert_eq!(r, r.cycled(2));
 
         // revcomp works respecting the current start offset
-        assert_eq!(r.cycled(2), r.cycled(2).reflected().reflected());
+        assert_eq!(r.cycled(2), r.cycled(2).reversed().reversed());
     }
 
     #[test]
