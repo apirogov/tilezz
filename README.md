@@ -29,6 +29,8 @@ Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 
 ## Demonstration
 
+*To be able to execute the demos on your computer, make sure to build the crate with the `examples` feature enabled.*
+
 ### Exploring the cyclotomic ring ZZ12
 
 <img src="https://github.com/user-attachments/assets/a7d1d698-8e7c-41a8-b2a8-49a8fed80c2e" width="45%" />
@@ -36,8 +38,15 @@ Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 
 Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square. Each image shows the new points discovered in the corresponding round.
 
-To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore.rs) example (to be able to run
-it, make sure to build the crate with the `examples` feature enabled).
+To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore.rs) example.
+
+### Enumerating simple polygons constructible over cyclotomic rings
+
+<img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
+
+All 965 distinct polyominos with boundary length up to 16, computed over ZZ4 (a few minutes with 1 thread on an old Thinkpad T460).
+
+To generate images like these, check out the [rat_enum](./src/bin/rat_enum.rs) example.
 
 ## Usage
 
