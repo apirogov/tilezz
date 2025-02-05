@@ -1,11 +1,12 @@
 //! Core linear algebra utils
-use super::traits::{IsComplex, IsRingOrField};
-use num_traits::Zero;
+use num_traits::{One, Zero};
 
 use super::numtraits::ZSigned;
+use super::symnum::SymNum;
+use super::traits::{IsComplex, IsReal, IsRingOrField};
 
 /// Dot product between two values, i.e. a dot b = |a||b|cos(ab).
-pub fn dot<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
+pub fn dot<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
     let (p1x, p1y) = p1.re_im();
     let (p2x, p2y) = p2.re_im();
     (p1x * p2x) + (p1y * p2y)
@@ -13,19 +14,19 @@ pub fn dot<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
 
 /// 2D "cross" product (wedge is the general name),
 /// i.e. a wedge b = |a|b|sin(ab).
-pub fn wedge<ZZ: IsRingOrField + IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
+pub fn wedge<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
     let (p1x, p1y) = p1.re_im();
     let (p2x, p2y) = p2.re_im();
     (p1x * p2y) - (p1y * p2x)
 }
 
 /// Squared norm square of a value, i.e. dot product of the value with itself.
-pub fn norm_sq<ZZ: IsRingOrField + IsComplex>(p: &ZZ) -> ZZ::Real {
+pub fn norm_sq<ZZ: IsComplex>(p: &ZZ) -> ZZ::Real {
     dot::<ZZ>(&p, &p)
 }
 
 /// Projection of v onto u, i.e. dot(u,v)/|u|^2 * u
-pub fn project<ZZ: IsRingOrField + IsComplex + From<ZZ::Real>>(v: &ZZ, u: &ZZ) -> ZZ::Field
+pub fn project<ZZ: IsComplex + From<ZZ::Real>>(v: &ZZ, u: &ZZ) -> ZZ::Field
 where
     ZZ::Field: From<ZZ>,
 {
@@ -56,6 +57,108 @@ pub fn is_between<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> 
 pub fn is_ccw<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     wedge(&(*a - *p), &(*b - *p)).is_positive()
     // NOTE: wedge(*a - *p, *p - *b).is_zero() is subexp. of is_between... interesting symmetry
+}
+
+pub type Angle<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
+
+/// Pseudo-sinus (in Wilderberger, this quantity is called "spread").
+/// The value is between [-1, 1] for |p|>=1 and is 0 iff p is on the real axis.
+/// For any rational n, pseudo_sin(n*p) = pseudo_sin(p) / n
+pub fn pseudo_sin<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
+where
+    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+{
+    type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
+    let numer: RealField<ZZ> = wedge(&ZZ::one(), p).into();
+    let denom: RealField<ZZ> = norm_sq(p).into();
+    numer / denom
+}
+
+/// Pseudo-cosinus (in Wilderberger, this quantity is called "cross").
+/// The value is between [-1, 1] for |p|>=1 and is 0 iff p is on the imaginary axis.
+/// For any rational n, pseudo_cos(n*p) = pseudo_cos(p) / n
+pub fn pseudo_cos<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
+where
+    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+{
+    type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
+    let numer: RealField<ZZ> = dot(&ZZ::one(), p).into();
+    let denom: RealField<ZZ> = norm_sq(p).into();
+    numer / denom
+}
+
+/// Returns information about the quadrant where a point is located in,
+/// based on its pseudo-angles s, c.
+///       3
+///     4   2
+///   5   0   1
+///     6   8
+///       7
+/// where 0 indicates location of the origin.
+fn quadrant<ZZ: IsComplex>(s: &Angle<ZZ>, c: &Angle<ZZ>) -> i8
+where
+    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+{
+    // if p.is_zero() {
+    //     return 0;
+    // }
+    // s = 0 <=> parallel to x axis ^ c = 0 <=> perp to x axis
+    // s > 0 <=> positive y axis ^ c > 0 <=> positive x axis
+    let (s_sign, c_sign) = (s.signum(), c.signum());
+    if s_sign.is_zero() {
+        if c_sign.is_one() {
+            1
+        } else {
+            5
+        }
+    } else if c_sign.is_zero() {
+        if s_sign.is_one() {
+            3
+        } else {
+            7
+        }
+    } else if s_sign.is_one() {
+        if c_sign.is_one() {
+            2
+        } else {
+            4
+        }
+    } else {
+        // s_sign = -1
+        if c_sign.is_one() {
+            8
+        } else {
+            6
+        }
+    }
+}
+
+/// Pseudo-atan2, returns a rational pseudo-angle of p between [0, 4),
+/// where
+/// * 0 means that p is on the positive real axis,
+/// * 1 means that p is on the positive imaginary axis,
+/// * 2 means that p is on the negative real axis,
+/// * 3 means that p is on the negative imaginary axis.
+///
+/// **NOTE:** The pseudo-angle is **not norm-invariant**, i.e. it can only be
+/// used to compare angles of points with the *same* (squared) norm!
+pub fn pseudo_angle<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
+where
+    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+{
+    let (s, c) = (pseudo_sin::<ZZ>(&p), pseudo_cos::<ZZ>(&p));
+    let one = Angle::<ZZ>::one();
+    match quadrant::<ZZ>(&s, &c) {
+        1 => Angle::<ZZ>::zero(),
+        2 => s,
+        3 => one,
+        4 => one + (one - s),
+        5 => one.scale(2),
+        6 => one.scale(2) - s,
+        7 => one.scale(3),
+        8 => one.scale(3) + (s + one),
+        _ => panic!("Something unexpected happened!"),
+    }
 }
 
 #[cfg(test)]
@@ -109,6 +212,18 @@ mod tests {
         assert!(d2.re < 0.0);
         assert_eq!(d2.im, 0.0);
         assert_eq!(ZZ12::from(dot(&pm60, &pi).pow(2_u8)).complex64().re, 0.75);
+    }
+
+    #[test]
+    fn test_norm_sq() {
+        let one_half: <ZZ12 as IsComplex>::Field =
+            <ZZ12 as IsComplex>::Field::from(1) / <ZZ12 as IsComplex>::Field::from(2);
+        assert_eq!(ZZ12::from(norm_sq(&ZZ12::unit(1))), 1.into());
+        assert_eq!(ZZ12::from(norm_sq(&ZZ12::unit(1).scale(2))), 4.into());
+        assert_eq!(
+            <ZZ12 as IsComplex>::Field::from(norm_sq(&(one_half * ZZ12::unit(1).into()))),
+            one_half * one_half
+        );
     }
 
     #[test]
@@ -167,5 +282,106 @@ mod tests {
         let im = project(&r.into(), &QQ::one_i());
         println!("{r}\n{re}\n{im}\n{}", re + im);
         assert_eq!(re + im, r.into());
+    }
+
+    #[test]
+    fn test_sin_cos() {
+        use crate::prelude::constants::sqrt3;
+
+        type Field<ZZ> = <ZZ as IsComplex>::Field;
+
+        let one_half = Angle::<ZZ12>::from(1) / Angle::<ZZ12>::from(2);
+        let one_half_sqrt3 = Field::<ZZ12>::from(sqrt3::<ZZ12>()) / Field::<ZZ12>::from(2);
+
+        // pseudo-sin behaves like sin for unit vectors
+        assert_eq!(pseudo_sin(&ZZ12::unit(0)), 0.into());
+        assert_eq!(pseudo_sin(&ZZ12::unit(1)), one_half);
+        assert_eq!(
+            Field::<ZZ12>::from(pseudo_sin(&ZZ12::unit(2))),
+            one_half_sqrt3
+        );
+        assert_eq!(pseudo_sin(&ZZ12::unit(3)), 1.into());
+        assert_eq!(pseudo_sin(&ZZ12::unit(6)), 0.into());
+        assert_eq!(pseudo_sin(&ZZ12::unit(9)), (-1).into());
+
+        // pseudo-cos behaves like cos for unit vectors
+        assert_eq!(pseudo_cos(&ZZ12::unit(0)), 1.into());
+        assert_eq!(
+            Field::<ZZ12>::from(pseudo_cos(&ZZ12::unit(1))),
+            one_half_sqrt3
+        );
+        assert_eq!(pseudo_cos(&ZZ12::unit(2)), one_half);
+        assert_eq!(pseudo_cos(&ZZ12::unit(3)), 0.into());
+        assert_eq!(pseudo_cos(&ZZ12::unit(6)), (-1).into());
+        assert_eq!(pseudo_cos(&ZZ12::unit(9)), 0.into());
+
+        // check invariant between pseudo sin/cos of different scalings of same point
+        for i in 1..ZZ12::turn() {
+            for j in 1..ZZ12::turn() {
+                let p = ZZ12::unit(i).scale(5) + ZZ12::unit(j).scale(7);
+                let p3 = p.scale(3);
+                let (sp, s3p) = (pseudo_sin::<ZZ12>(&p), pseudo_sin::<ZZ12>(&p3));
+                let (cp, c3p) = (pseudo_cos::<ZZ12>(&p), pseudo_cos::<ZZ12>(&p3));
+                assert_eq!(s3p, sp / Angle::<ZZ12>::from(3));
+                assert_eq!(c3p, cp / Angle::<ZZ12>::from(3));
+            }
+        }
+    }
+
+    #[test]
+    fn test_pseudo_angle() {
+        // check behavior on units
+        let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
+            .into_iter()
+            .map(|i| pseudo_angle(&ZZ12::unit(i)))
+            .collect();
+        assert_eq!(angles[0], 0.into());
+        assert_eq!(angles[3], 1.into());
+        assert_eq!(angles[6], 2.into());
+        assert_eq!(angles[9], 3.into());
+
+        for i in 1..ZZ12::turn() {
+            let ii = i as usize;
+            assert!(angles[ii - 1] < angles[ii]);
+            assert!(angles[ii] >= 0.into());
+            assert!(angles[ii] < 4.into());
+        }
+
+        // check behavior on a non-unit that is rotated
+        let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
+            .into_iter()
+            .map(|i| pseudo_angle(&((ZZ12::one().scale(2) + ZZ12::unit(1)) * ZZ12::unit(i))))
+            .collect();
+        for i in 1..ZZ12::turn() {
+            let ii = i as usize;
+            assert!(angles[ii - 1] < angles[ii]);
+            assert!(angles[ii] >= 0.into());
+            assert!(angles[ii] < 4.into());
+        }
+
+        // check behavior on field element
+        // TODO: FIXME - make pseudoangle also work correctly for points with abs < 1
+        // (compute sin/cos of the multiplicative inverse of the point instead)
+        /*
+        type Field<ZZ> = <ZZ as IsComplex>::Field;
+        let points: Vec<_> = (0..ZZ12::turn())
+            .into_iter()
+            .map(|i| {
+                Field::<ZZ12>::from((ZZ12::one().scale(2) + ZZ12::unit(1)) * ZZ12::unit(i))
+                    / Field::<ZZ12>::from(100)
+            })
+            .collect();
+        let angles: Vec<_> = points
+            .iter()
+            .map(|p: &Field<ZZ12>| pseudo_angle(p))
+            .collect();
+        for i in 1..ZZ12::turn() {
+            let ii = i as usize;
+            println!("{} -> {}", points[ii], angles[ii]);
+            assert!(angles[ii - 1] < angles[ii]);
+            assert!(angles[ii] >= 0.into());
+            assert!(angles[ii] < 4.into());
+        }
+        */
     }
 }
