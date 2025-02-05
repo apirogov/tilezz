@@ -2,6 +2,11 @@
 
 use crate::cyclotomic::SymNum;
 
+/// Get complement of an angle sequence, i.e. with flipped sign.
+pub fn comp(angles: &[i8]) -> Vec<i8> {
+    angles.iter().map(|a| -a).collect()
+}
+
 /// Get reverse complement of an angle sequence,
 /// i.e. with reversed order and sign.
 pub fn revcomp(angles: &[i8]) -> Vec<i8> {

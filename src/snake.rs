@@ -127,7 +127,7 @@ impl<T: IsComplex + IsRingOrField> Snake<T> {
         }
     }
 
-    /// Return a new empty snake that allows self-intersecting segment chains
+    /// Return a snake that allows self-intersecting segment chains
     /// from a given sequence of angles.
     pub fn from_slice_unchecked<I: ToPrimitive>(angles: &[I]) -> Self {
         let mut result = Self::new_unchecked();

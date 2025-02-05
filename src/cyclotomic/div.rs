@@ -2,15 +2,15 @@
 
 use num_traits::{One, Zero};
 
+use super::numtraits::Conj;
 use super::symnum::SymNum;
-use super::traits::IsRing;
 
 /// Compute inverse by repeated rationalizing of the denominator.
 ///
 /// IMPORTANT: This only works correctly if there are no nested roots in
 /// the representation of the cyclotomic field
 // FIXME: resolve this and unlock the other fields, if possible.
-pub fn zz_inv<Z: SymNum + IsRing + One>(val: &Z) -> Z {
+pub fn zz_inv<Z: SymNum + Conj + One + Zero>(val: &Z) -> Z {
     // for x/y where y = a + b, b being a single (scaled) square root,
     // we compute y' = a - b and produce x*y'/(a+b)(a-b) = x*y'/a^2-b^2
     // where a^2 is a simpler term and b is rational.
@@ -24,6 +24,7 @@ pub fn zz_inv<Z: SymNum + IsRing + One>(val: &Z) -> Z {
     let mut denom = val.clone();
 
     // first ensure that the denominator is real
+    // FIXME: this can lead to integer overflow far quicker (squaring = double the bits)
     let denom_conj = denom.conj();
     numer = numer * denom_conj;
     denom = denom * denom_conj;

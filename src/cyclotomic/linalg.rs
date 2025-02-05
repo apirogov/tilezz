@@ -1,9 +1,10 @@
 //! Core linear algebra utils
 use num_traits::{One, Zero};
+use std::ops::Div;
 
 use super::numtraits::ZSigned;
 use super::symnum::SymNum;
-use super::traits::{IsComplex, IsReal, IsRingOrField};
+use super::traits::{IsComplex, IsRingOrField};
 
 /// Dot product between two values, i.e. a dot b = |a||b|cos(ab).
 pub fn dot<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
@@ -59,18 +60,28 @@ pub fn is_ccw<ZZ: IsRingOrField + IsComplex>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool
     // NOTE: wedge(*a - *p, *p - *b).is_zero() is subexp. of is_between... interesting symmetry
 }
 
-pub type Angle<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
+pub type Angle<ZZ> = <<ZZ as IsComplex>::Field as IsRingOrField>::Real;
+
+fn pseudo_sin_cos_prepare<ZZ: IsComplex>(p: &ZZ) -> (ZZ::Field, Angle<ZZ>)
+where
+    <ZZ as IsComplex>::Field: From<ZZ>,
+    Angle<ZZ>: Div<Output = Angle<ZZ>>,
+{
+    let pp = <ZZ as IsComplex>::Field::from(*p);
+    let denom = norm_sq(&pp);
+    (pp, denom)
+}
 
 /// Pseudo-sinus (in Wilderberger, this quantity is called "spread").
 /// The value is between [-1, 1] for |p|>=1 and is 0 iff p is on the real axis.
 /// For any rational n, pseudo_sin(n*p) = pseudo_sin(p) / n
 pub fn pseudo_sin<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
 where
-    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+    <ZZ as IsComplex>::Field: From<ZZ>,
+    Angle<ZZ>: Div<Output = Angle<ZZ>>,
 {
-    type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
-    let numer: RealField<ZZ> = wedge(&ZZ::one(), p).into();
-    let denom: RealField<ZZ> = norm_sq(p).into();
+    let (pp, denom) = pseudo_sin_cos_prepare(p);
+    let numer = wedge(&1.into(), &pp);
     numer / denom
 }
 
@@ -79,11 +90,11 @@ where
 /// For any rational n, pseudo_cos(n*p) = pseudo_cos(p) / n
 pub fn pseudo_cos<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
 where
-    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+    <ZZ as IsComplex>::Field: From<ZZ>,
+    Angle<ZZ>: Div<Output = Angle<ZZ>>,
 {
-    type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
-    let numer: RealField<ZZ> = dot(&ZZ::one(), p).into();
-    let denom: RealField<ZZ> = norm_sq(p).into();
+    let (pp, denom) = pseudo_sin_cos_prepare(p);
+    let numer = dot(&1.into(), &pp);
     numer / denom
 }
 
@@ -97,7 +108,8 @@ where
 /// where 0 indicates location of the origin.
 fn quadrant<ZZ: IsComplex>(s: &Angle<ZZ>, c: &Angle<ZZ>) -> i8
 where
-    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+    <ZZ as IsComplex>::Field: From<ZZ>,
+    Angle<ZZ>: Div<Output = Angle<ZZ>>,
 {
     // if p.is_zero() {
     //     return 0;
@@ -144,7 +156,8 @@ where
 /// used to compare angles of points with the *same* (squared) norm!
 pub fn pseudo_angle<ZZ: IsComplex>(p: &ZZ) -> Angle<ZZ>
 where
-    Angle<ZZ>: From<<ZZ as IsRingOrField>::Real>,
+    <ZZ as IsComplex>::Field: From<ZZ>,
+    Angle<ZZ>: Div<Output = Angle<ZZ>>,
 {
     let (s, c) = (pseudo_sin::<ZZ>(&p), pseudo_cos::<ZZ>(&p));
     let one = Angle::<ZZ>::one();
@@ -362,6 +375,7 @@ mod tests {
         // check behavior on field element
         // TODO: FIXME - make pseudoangle also work correctly for points with abs < 1
         // (compute sin/cos of the multiplicative inverse of the point instead)
+        // naive approach causes overlows during mul/div :(
         /*
         type Field<ZZ> = <ZZ as IsComplex>::Field;
         let points: Vec<_> = (0..ZZ12::turn())
