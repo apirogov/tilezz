@@ -4,6 +4,7 @@ use clap::Parser;
 
 use std::collections::BTreeSet;
 
+use itertools::Itertools;
 use plotters::prelude::*;
 
 use tilezz::cyclotomic::linalg::norm_sq;
@@ -16,17 +17,104 @@ static VERBOSE: Mutex<bool> = Mutex::new(false);
 
 // --------
 
+// this seems to be slower... maybe should optimize by using a trie of snakes
+// if one shorter snake does not work, no point using one with same prefix!
 pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
+
+    // simple snakes of a fixed length (initialized with length 0 (dummy) and 1 (start))
+    let mut k_snakes: Vec<Vec<Vec<i8>>> = vec![vec![vec![]]];
+    k_snakes.push(((-ZZ::hturn() + 1)..ZZ::hturn()).map(|i| vec![i]).collect());
+    let mut total_snakes: usize = (ZZ::turn() - 1) as usize;
+
+    println!("-------- enumeration started --------");
+    let status_log = |step, num_snakes: usize, result: &BTreeSet<_>| {
+        println!(
+            "round {}: {} snakes, {} rats",
+            step,
+            num_snakes,
+            result.len()
+        );
+    };
+
+    status_log(1, total_snakes, &result);
+    for len in 2..=max_steps {
+        let remaining = (max_steps - len) as i64;
+        let remaining_steps_sq = norm_sq(&ZZ::from(remaining));
+
+        let mut next: Vec<Vec<i8>> = Vec::new();
+
+        // for snakes of length n, we use length x=floor(n/2) and y=n-x
+        // that way we have confirmed simple snakes to combine,
+        // instead of naively recomputing all possibilities stepwise
+        let i1 = len / 2;
+        let i2 = len - i1;
+        for (s1, s2) in k_snakes[i1].iter().cartesian_product(k_snakes[i2].iter()) {
+            // load first half without checks, then trace out second half with checks
+            let mut s = Snake::<ZZ>::from_slice_unsafe(s1);
+            let r = s.extend_from_slice(s2);
+            if r.is_err() {
+                continue; // self-crossing
+            }
+
+            if s.is_closed() {
+                // polygon completed -> get canonical ccw description
+                let r = {
+                    let tmp = Rat::from_unchecked(&s);
+                    if tmp.chirality() > 0 {
+                        tmp
+                    } else {
+                        tmp.reversed()
+                    }
+                    .canonical()
+                };
+                let seq = r.seq().to_vec();
+                if result.insert(seq.clone()) {
+                    total_snakes += 1;
+                    println!("RAT {seq:?}");
+                }
+            }
+
+            // heuristic - path must not be too far from origin,
+            // i.e. the way back to origin must be doable
+            // within the remaining number of steps.
+            if norm_sq(&s.head().pos) > remaining_steps_sq {
+                continue; // no way to close path
+            }
+
+            // add the prolonged path
+
+            next.push(s.angles().to_vec());
+            println!("SNAKE {:?}", s.angles());
+        }
+
+        k_snakes.push(next);
+        status_log(len, total_snakes, &result);
+    }
+    println!("-------- enumeration completed --------");
+
+    let mut result: Vec<Vec<i8>> = result.into_iter().collect();
+    result.sort_by(|x, y| x.len().cmp(&y.len()));
+    result
+}
+
+pub fn rat_enum1<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+    let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
+
     let mut snakes: Vec<Vec<i8>> = vec![vec![]];
 
-    for step in 0..max_steps {
+    println!("-------- enumeration started --------");
+    let status_log = |step, snakes: &Vec<_>, result: &BTreeSet<_>| {
         println!(
-            "{}: {} alive snakes, {} unique rats",
+            "round {}: {} alive snakes, {} unique rats",
             step,
             snakes.len(),
             result.len()
         );
+    };
+
+    for step in 0..max_steps {
+        status_log(step, &snakes, &result);
 
         let remaining = (max_steps - step) as i64;
         let remaining_steps_sq = norm_sq(&ZZ::from(remaining));
@@ -49,7 +137,10 @@ pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
                         }
                         .canonical()
                     };
-                    result.insert(r.seq().to_vec());
+                    let seq = r.seq().to_vec();
+                    if result.insert(seq.clone()) {
+                        println!("RAT {seq:?}");
+                    }
                 }
 
                 // heuristic - path must not be too far from origin,
@@ -65,6 +156,8 @@ pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
         }
         snakes = next;
     }
+    status_log(max_steps, &snakes, &result);
+    println!("-------- enumeration completed --------");
 
     let mut result: Vec<Vec<i8>> = result.into_iter().collect();
     result.sort_by(|x, y| x.len().cmp(&y.len()));
@@ -128,12 +221,13 @@ fn main() {
     let mut root = BitMapBackend::gif(filename, (500, 500), 500)
         .unwrap()
         .into_drawing_area();
+    let style = TileStyle::default();
 
     for (ix, tile) in rats.iter().enumerate() {
         println!("plotting tile {}/{}", ix + 1, rats.len());
 
         let _ = root.fill(&WHITE);
-        plot_tile(&mut root, &tile, &TileStyle::default());
+        plot_tile(&mut root, &tile, &style);
         root.present().unwrap();
     }
 }

@@ -127,11 +127,21 @@ impl<T: IsComplex + IsRingOrField> Snake<T> {
         }
     }
 
-    /// Return a snake that allows self-intersecting segment chains
+    /// Return a snake that *allows* self-intersecting segment chains
     /// from a given sequence of angles.
     pub fn from_slice_unchecked<I: ToPrimitive>(angles: &[I]) -> Self {
         let mut result = Self::new_unchecked();
         result.extend_from_slice(angles).unwrap(); // Err will not happen with unchecked
+        result
+    }
+
+    /// Return a snake that is guaranteed to be free of self-intersections
+    /// from a trusted sequence of angles (that will **not** be verified).
+    ///
+    /// To be used for performance optimizations on already checked sequences.
+    pub fn from_slice_unsafe<I: ToPrimitive>(angles: &[I]) -> Self {
+        let mut result = Self::from_slice_unchecked(angles);
+        result.allow_intersections = false;
         result
     }
 
@@ -227,6 +237,16 @@ impl<T: IsComplex + IsRingOrField> Snake<T> {
             .add(UnitSquareGrid::cell_of(new_pt), self.points.len());
         // add point to representative polyline
         self.points.push(new_pt);
+
+        // if the snake is closed, we need to fix up the start angle
+        if self.is_closed() {
+            // the missing angle must complete one full turn
+            // clockwise or counter-clockwise (simple polygon property)
+            let target = (T::turn() as i64) * self.ang_sum.signum();
+            let missing = target - (self.ang_sum - self.angles[0] as i64);
+            self.angles[0] = missing as i8;
+            self.ang_sum = target;
+        }
     }
 
     /// Return a polyline by tracing out snake with given turtle.
@@ -329,16 +349,6 @@ impl<T: IsComplex + IsRingOrField> Snake<T> {
 
         // everything is ok -> add new segment
         self.add_unsafe(a);
-
-        // if the snake is closed, we need to fix up the start angle
-        if self.is_closed() {
-            // the missing angle must complete one full turn
-            // clockwise or counter-clockwise (simple polygon property)
-            let target = (T::turn() as i64) * self.ang_sum.signum();
-            let missing = target - (self.ang_sum - self.angles[0] as i64);
-            self.angles[0] = missing as i8;
-            self.ang_sum = target;
-        }
         return true;
     }
 
@@ -668,6 +678,14 @@ mod tests {
         assert!(s4 < s1);
         assert!(s4 < s2);
         assert!(s4 < s3);
+
+        // check natural lexicographic sorting order:
+        // compare prefix of length of the shorter sequence
+        // the lexicographically smaller is smaller
+        // if they are equal on the prefix, the shorter is smaller
+        assert!(vec![1, 2] < vec![1, 2, -1]);
+        assert!(vec![-1, 2, 3] < vec![1, 2]);
+        assert!(vec![-1, 2] < vec![1, 2, 3]);
     }
 
     #[test]
