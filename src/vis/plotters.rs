@@ -239,10 +239,10 @@ pub fn plot_tiles<'a, DB: DrawingBackend>(
 }
 
 /// Plot a single tile into a bare-bones chart. Check the other plotting functions for more flexibility.
-pub fn plot_tile<'a, DB: DrawingBackend>(
+pub fn plot_tile<DB: DrawingBackend>(
     da: &DrawingArea<DB, Shift>,
     tile: &[(f64, f64)],
     style: &TileStyle,
 ) {
-    plot_tiles(&mut ChartBuilder::on(&da), &[(tile, style)]);
+    plot_tiles(&mut ChartBuilder::on(&da), &[(tile, &style)]);
 }
