@@ -5,9 +5,10 @@ use std::marker::PhantomData;
 
 use num_traits::ToPrimitive;
 
-use crate::angles::{comp, revcomp};
 use crate::cyclotomic::{IsComplex, IsRingOrField};
-use crate::snake::{Snake, Turtle};
+
+use super::angles::{comp, revcomp};
+use super::snake::{Snake, Turtle};
 
 /// Booth's lexicographically minimal string rotation algorithm.
 /// Returns index of the beginning of the lex. minimal rotation of given sequence in O(n).
@@ -390,9 +391,9 @@ impl<T: IsComplex> Display for Rat<T> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::tiles::{hexagon, spectre};
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::snake::constants::{hexagon, spectre};
 
     #[test]
     fn test_lex_min_rot() {

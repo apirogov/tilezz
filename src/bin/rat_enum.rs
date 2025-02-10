@@ -9,8 +9,8 @@ use plotters::prelude::*;
 
 use tilezz::cyclotomic::linalg::norm_sq;
 use tilezz::cyclotomic::*;
-use tilezz::rat::Rat;
-use tilezz::snake::{Snake, Turtle};
+use tilezz::intgeom::rat::Rat;
+use tilezz::intgeom::snake::{Snake, Turtle};
 use tilezz::vis::plotutils::P64;
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
