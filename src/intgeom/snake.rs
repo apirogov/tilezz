@@ -6,11 +6,11 @@ use num_complex::Complex;
 use num_traits::ToPrimitive;
 use num_traits::Zero;
 
-use crate::angles::{normalize_angle, upscale_angles};
+use super::angles::normalize_angle;
+use super::grid::UnitSquareGrid;
 use crate::cyclotomic::geometry::intersect;
 use crate::cyclotomic::linalg::wedge;
-use crate::cyclotomic::{HasZZ12, HasZZ4, HasZZ6, IsComplex, IsRingOrField};
-use crate::grid::UnitSquareGrid;
+use crate::cyclotomic::{IsComplex, IsRingOrField};
 
 /// Representation of a turtle (i.e. an oriented point).
 pub struct Turtle<T: IsComplex> {
@@ -433,48 +433,13 @@ impl<T: IsComplex> Display for Snake<T> {
     }
 }
 
-pub mod constants {
-    use super::*;
-
-    /// Return sequence of a square tile over a compatible ring (divisible by 4).
-    pub fn square<T: IsComplex + HasZZ4>() -> Snake<T> {
-        Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
-    }
-
-    /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
-    pub fn triangle<T: IsComplex + HasZZ6>() -> Snake<T> {
-        Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
-    }
-
-    /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
-    pub fn hexagon<T: IsComplex + HasZZ6>() -> Snake<T> {
-        Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
-    }
-
-    /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-    pub fn spectre<T: IsComplex + HasZZ12>() -> Snake<T> {
-        Snake::try_from(
-            upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
-        )
-        .unwrap()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::tiles::{hexagon, square, triangle};
     use super::*;
-    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12, ZZ24};
-    use constants::{hexagon, spectre, square, triangle};
+    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12};
     use num_rational::Ratio;
     use num_traits::{One, Zero};
-
-    #[test]
-    fn test_spectre() {
-        // test adaptive scaling dependent on chosen ring
-        let seq_zz24: Vec<i8> = vec![6, 4, 0, 4, -6, 4, 6, 4, -6, 4, 6, -4, 6, -4];
-        let s: Snake<ZZ24> = spectre();
-        assert_eq!(s.angles(), seq_zz24);
-    }
 
     #[test]
     #[should_panic]

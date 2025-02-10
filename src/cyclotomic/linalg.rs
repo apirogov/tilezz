@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_sin_cos() {
-        use crate::prelude::constants::sqrt3;
+        use super::super::constants::sqrt3;
 
         type Field<ZZ> = <ZZ as IsComplex>::Field;
 

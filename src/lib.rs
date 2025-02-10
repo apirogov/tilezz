@@ -3,14 +3,8 @@ extern crate arrayref;
 
 pub mod cyclotomic;
 
-pub mod angles;
-
-pub mod grid;
-
-pub mod snake;
-
-pub mod rat;
-
-pub mod prelude;
+pub mod intgeom;
 
 pub mod vis;
+
+pub mod prelude;
