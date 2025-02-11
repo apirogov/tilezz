@@ -36,15 +36,19 @@ Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 <img src="https://github.com/user-attachments/assets/a7d1d698-8e7c-41a8-b2a8-49a8fed80c2e" width="45%" />
 <img src="https://github.com/user-attachments/assets/d246fd60-bfed-4ff8-9393-2ae14e77e4d2" width="45%" />
 
-Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square. Each image shows the new points discovered in the corresponding round.
+Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square.
+Each image shows the new points discovered in the corresponding round.
 
 To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore.rs) example.
 
 ### Enumerating simple polygons constructible over cyclotomic rings
 
 <img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
+<img src="https://github.com/user-attachments/assets/198814da-471f-49f3-81e1-784c4252c388" width="45%" />
 
-All 965 distinct polyominos with boundary length up to 16, computed over ZZ4 (a few minutes with 1 thread on an old Thinkpad T460).
+Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: a few minutes),
+Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: around 2,5h).
+The polygon sets were computed using a naive brute-force approach with a single thread on an old Thinkpad T460.
 
 To generate images like these, check out the [rat_enum](./src/bin/rat_enum.rs) example.
 
