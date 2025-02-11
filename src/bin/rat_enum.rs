@@ -19,7 +19,7 @@ static VERBOSE: Mutex<bool> = Mutex::new(false);
 
 // this seems to be slower... maybe should optimize by using a trie of snakes
 // if one shorter snake does not work, no point using one with same prefix!
-pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum_alt<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
 
     // simple snakes of a fixed length (initialized with length 0 (dummy) and 1 (start))
@@ -98,7 +98,7 @@ pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     result
 }
 
-pub fn rat_enum1<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
 
     let mut snakes: Vec<Vec<i8>> = vec![vec![]];
@@ -218,16 +218,38 @@ fn main() {
     }
     let filename = cli.filename.unwrap();
 
-    let mut root = BitMapBackend::gif(filename, (500, 500), 500)
+    let w = 500;
+    // let root = BitMapBackend::new(&filename, (w, w)).into_drawing_area();
+    let root = BitMapBackend::gif(filename, (w, w), 500)
         .unwrap()
         .into_drawing_area();
-    let style = TileStyle::default();
 
+    let _ = root.fill(&WHITE);
+
+    // GIF
+    let grid = (1, 1);
+    // PNG
+    // let row = 3;
+    // let grid = ((rats.len() / row + rats.len() % row) as usize, row as usize);
+
+    let areas: Vec<_> = root.split_evenly(grid);
+
+    let mut style = TileStyle::default();
+    style.node_size = 0;
+    style.node_labels = false;
     for (ix, tile) in rats.iter().enumerate() {
         println!("plotting tile {}/{}", ix + 1, rats.len());
 
-        let _ = root.fill(&WHITE);
-        plot_tile(&mut root, &tile, &style);
-        root.present().unwrap();
+        // let area = &areas[ix]; // PNG
+        let area = &areas[0]; // GIF
+
+        let _ = area.fill(&WHITE);
+
+        let pad = w * 2 / 100;
+        let mut area = area.margin(pad, pad, pad, pad);
+
+        plot_tile(&mut area, &tile, &style);
+
+        area.present().unwrap();
     }
 }
