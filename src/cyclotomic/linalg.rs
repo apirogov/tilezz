@@ -180,6 +180,7 @@ mod tests {
 
     use super::super::constants::zz_units_sum;
     use super::super::symnum::SymNum;
+    use super::super::units::Units;
     use super::super::types::{Z12, ZZ12};
     use super::*;
 
@@ -195,7 +196,7 @@ mod tests {
         // and it is real-valued.
         let q: ZZi = norm_sq(&p).into();
         for i in 1..ZZi::turn() {
-            let pi = p * ZZi::unit(i);
+            let pi = p * <ZZi as Units>::unit(i);
             let qi: ZZi = norm_sq(&pi).into();
             assert_eq!(qi, q);
         }
@@ -206,9 +207,9 @@ mod tests {
         let p1 = ZZ12::one();
         let p2 = ZZ12::from(2);
         let p3 = ZZ12::from(3);
-        let pi = ZZ12::unit(3); // i
-        let p60 = ZZ12::unit(2);
-        let pm60 = ZZ12::unit(-2);
+        let pi = <ZZ12 as Units>::unit(3); // i
+        let p60 = <ZZ12 as Units>::unit(2);
+        let pm60 = <ZZ12 as Units>::unit(-2);
 
         assert_eq!(dot(&p1, &pi), Z12::zero());
         assert_eq!(dot(&0.into(), &pi), Z12::zero());
@@ -231,10 +232,10 @@ mod tests {
     fn test_norm_sq() {
         let one_half: <ZZ12 as IsComplex>::Field =
             <ZZ12 as IsComplex>::Field::from(1) / <ZZ12 as IsComplex>::Field::from(2);
-        assert_eq!(ZZ12::from(norm_sq(&ZZ12::unit(1))), 1.into());
-        assert_eq!(ZZ12::from(norm_sq(&ZZ12::unit(1).scale(2))), 4.into());
+        assert_eq!(ZZ12::from(norm_sq(&<ZZ12 as Units>::unit(1))), 1.into());
+        assert_eq!(ZZ12::from(norm_sq(&<ZZ12 as Units>::unit(1).scale(2))), 4.into());
         assert_eq!(
-            <ZZ12 as IsComplex>::Field::from(norm_sq(&(one_half * ZZ12::unit(1).into()))),
+            <ZZ12 as IsComplex>::Field::from(norm_sq(&(one_half * <ZZ12 as Units>::unit(1).into()))),
             one_half * one_half
         );
     }
@@ -244,9 +245,9 @@ mod tests {
         let a: ZZi = ZZi::zero();
         let b: ZZi = ZZi::one();
         let c: ZZi = ZZi::from(2);
-        let e: ZZi = ZZi::unit(ZZi::hturn() / 2);
+        let e: ZZi = <ZZi as Units>::unit(ZZi::hturn() / 2);
         let f: ZZi = b + e;
-        let g: ZZi = ZZi::unit(1) + ZZi::unit(-1) - ZZi::one();
+        let g: ZZi = <ZZi as Units>::unit(1) + <ZZi as Units>::unit(-1) - ZZi::one();
 
         // is actually in between
         assert!(is_between(&b, (&a, &c)));
@@ -263,25 +264,25 @@ mod tests {
     #[test]
     fn test_is_ccw() {
         type ZZ = ZZ12;
-        assert!(is_ccw(&ZZ::zero(), (&ZZ::unit(0), &ZZ::unit(1))));
-        assert!(is_ccw(&ZZ::zero(), (&ZZ::unit(2), &ZZ::unit(3))));
-        assert!(!is_ccw(&ZZ::zero(), (&ZZ::unit(0), &ZZ::unit(0))));
-        assert!(!is_ccw(&ZZ::zero(), (&ZZ::unit(1), &ZZ::unit(1))));
-        assert!(!is_ccw(&ZZ::zero(), (&ZZ::unit(1), &ZZ::unit(0))));
-        assert!(!is_ccw(&ZZ::zero(), (&ZZ::unit(6), &ZZ::unit(5))));
+        assert!(is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(1))));
+        assert!(is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(2), &<ZZ as Units>::unit(3))));
+        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(0))));
+        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(1))));
+        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(0))));
+        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(6), &<ZZ as Units>::unit(5))));
     }
 
     #[test]
     fn test_angle_between() {
         type ZZ = ZZ12;
         // test inside
-        assert!(angle_between(&ZZ::unit(1), (&ZZ::unit(0), &ZZ::unit(2))));
-        assert!(angle_between(&ZZ::unit(-2), (&ZZ::unit(-3), &ZZ::unit(1))));
+        assert!(angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(2))));
+        assert!(angle_between(&<ZZ as Units>::unit(-2), (&<ZZ as Units>::unit(-3), &<ZZ as Units>::unit(1))));
         // test outside
-        assert!(!angle_between(&ZZ::unit(1), (&ZZ::unit(-1), &ZZ::unit(0))));
+        assert!(!angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(-1), &<ZZ as Units>::unit(0))));
         // bound inclusive
-        assert!(angle_between(&ZZ::unit(1), (&ZZ::unit(1), &ZZ::unit(2))));
-        assert!(angle_between(&ZZ::unit(2), (&ZZ::unit(1), &ZZ::unit(2))));
+        assert!(angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))));
+        assert!(angle_between(&<ZZ as Units>::unit(2), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))));
     }
 
     #[test]
@@ -307,31 +308,31 @@ mod tests {
         let one_half_sqrt3 = Field::<ZZ12>::from(sqrt3::<ZZ12>()) / Field::<ZZ12>::from(2);
 
         // pseudo-sin behaves like sin for unit vectors
-        assert_eq!(pseudo_sin(&ZZ12::unit(0)), 0.into());
-        assert_eq!(pseudo_sin(&ZZ12::unit(1)), one_half);
+        assert_eq!(pseudo_sin(&<ZZ12 as Units>::unit(0)), 0.into());
+        assert_eq!(pseudo_sin(&<ZZ12 as Units>::unit(1)), one_half);
         assert_eq!(
-            Field::<ZZ12>::from(pseudo_sin(&ZZ12::unit(2))),
+            Field::<ZZ12>::from(pseudo_sin(&<ZZ12 as Units>::unit(2))),
             one_half_sqrt3
         );
-        assert_eq!(pseudo_sin(&ZZ12::unit(3)), 1.into());
-        assert_eq!(pseudo_sin(&ZZ12::unit(6)), 0.into());
-        assert_eq!(pseudo_sin(&ZZ12::unit(9)), (-1).into());
+        assert_eq!(pseudo_sin(&<ZZ12 as Units>::unit(3)), 1.into());
+        assert_eq!(pseudo_sin(&<ZZ12 as Units>::unit(6)), 0.into());
+        assert_eq!(pseudo_sin(&<ZZ12 as Units>::unit(9)), (-1).into());
 
         // pseudo-cos behaves like cos for unit vectors
-        assert_eq!(pseudo_cos(&ZZ12::unit(0)), 1.into());
+        assert_eq!(pseudo_cos(&<ZZ12 as Units>::unit(0)), 1.into());
         assert_eq!(
-            Field::<ZZ12>::from(pseudo_cos(&ZZ12::unit(1))),
+            Field::<ZZ12>::from(pseudo_cos(&<ZZ12 as Units>::unit(1))),
             one_half_sqrt3
         );
-        assert_eq!(pseudo_cos(&ZZ12::unit(2)), one_half);
-        assert_eq!(pseudo_cos(&ZZ12::unit(3)), 0.into());
-        assert_eq!(pseudo_cos(&ZZ12::unit(6)), (-1).into());
-        assert_eq!(pseudo_cos(&ZZ12::unit(9)), 0.into());
+        assert_eq!(pseudo_cos(&<ZZ12 as Units>::unit(2)), one_half);
+        assert_eq!(pseudo_cos(&<ZZ12 as Units>::unit(3)), 0.into());
+        assert_eq!(pseudo_cos(&<ZZ12 as Units>::unit(6)), (-1).into());
+        assert_eq!(pseudo_cos(&<ZZ12 as Units>::unit(9)), 0.into());
 
         // check invariant between pseudo sin/cos of different scalings of same point
         for i in 1..ZZ12::turn() {
             for j in 1..ZZ12::turn() {
-                let p = ZZ12::unit(i).scale(5) + ZZ12::unit(j).scale(7);
+                let p = <ZZ12 as Units>::unit(i).scale(5) + <ZZ12 as Units>::unit(j).scale(7);
                 let p3 = p.scale(3);
                 let (sp, s3p) = (pseudo_sin::<ZZ12>(&p), pseudo_sin::<ZZ12>(&p3));
                 let (cp, c3p) = (pseudo_cos::<ZZ12>(&p), pseudo_cos::<ZZ12>(&p3));
@@ -346,7 +347,7 @@ mod tests {
         // check behavior on units
         let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
             .into_iter()
-            .map(|i| pseudo_angle(&ZZ12::unit(i)))
+            .map(|i| pseudo_angle(&<ZZ12 as Units>::unit(i)))
             .collect();
         assert_eq!(angles[0], 0.into());
         assert_eq!(angles[3], 1.into());
@@ -363,7 +364,7 @@ mod tests {
         // check behavior on a non-unit that is rotated
         let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
             .into_iter()
-            .map(|i| pseudo_angle(&((ZZ12::one().scale(2) + ZZ12::unit(1)) * ZZ12::unit(i))))
+            .map(|i| pseudo_angle(&((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i))))
             .collect();
         for i in 1..ZZ12::turn() {
             let ii = i as usize;
@@ -381,7 +382,7 @@ mod tests {
         let points: Vec<_> = (0..ZZ12::turn())
             .into_iter()
             .map(|i| {
-                Field::<ZZ12>::from((ZZ12::one().scale(2) + ZZ12::unit(1)) * ZZ12::unit(i))
+                Field::<ZZ12>::from((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i))
                     / Field::<ZZ12>::from(100)
             })
             .collect();

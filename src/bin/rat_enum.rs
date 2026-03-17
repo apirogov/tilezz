@@ -20,7 +20,7 @@ static VERBOSE: Mutex<bool> = Mutex::new(false);
 
 // this seems to be slower... maybe should optimize by using a trie of snakes
 // if one shorter snake does not work, no point using one with same prefix!
-pub fn rat_enum_alt<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
 
     // simple snakes of a fixed length (initialized with length 0 (dummy) and 1 (start))
@@ -98,7 +98,7 @@ pub fn rat_enum_alt<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     result
 }
 
-pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
 
     let mut snakes: Vec<Vec<i8>> = vec![vec![]];
@@ -164,7 +164,7 @@ pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     result
 }
 
-fn polygons<ZZ: ZZType>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
+fn polygons<ZZ: ZZType + Units>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
     rats.into_iter()
         .map(|seq| Rat::<ZZ>::from_slice_unchecked(&seq).to_polyline_f64(Turtle::default()))
         .collect()
