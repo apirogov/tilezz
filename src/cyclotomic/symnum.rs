@@ -10,7 +10,7 @@ use num_traits::{FromPrimitive, One, PrimInt, ToPrimitive, Zero};
 
 use super::gaussint::GaussInt;
 use super::numtraits::{IntField, IntRing, ZSigned};
-use super::traits::{IsComplex, IsRingOrField};
+use super::traits::IsRingOrField;
 
 /// We fix a general-purpose signed primitive integer size here. i64 is a natural choice.
 // NOTE: If the need arises, everything could be refactored to parametrize over this type.
@@ -111,15 +111,6 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
 
     // --------
 
-    /// Return unit length vector pointing in direction of given angle.
-    #[inline]
-    fn unit(angle: i8) -> Self
-    where
-        Self: IsComplex + IsRingOrField,
-    {
-        Self::one() * Self::ccw().zz_pow(angle.rem_euclid(Self::turn()) as u8)
-    }
-
     /// Scalar multiplication (mostly used to implement From<integer>).
     #[inline]
     fn scale<I: Integer + ToPrimitive>(&self, scalar: I) -> Self
@@ -198,11 +189,21 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     where
         Self: IsRingOrField,
     {
-        let mut x = Self::one();
-        for _ in 0..i {
-            x = x * (*self);
+        // Exponentiation by squaring. This is notably faster than repeated
+        // multiplication even for small exponents, and `unit(angle)` calls this a lot.
+        let mut base = *self;
+        let mut exp = i;
+        let mut acc = Self::one();
+        while exp != 0 {
+            if (exp & 1) == 1 {
+                acc = acc * base;
+            }
+            exp >>= 1;
+            if exp != 0 {
+                base = base * base;
+            }
         }
-        return x;
+        acc
     }
 }
 
@@ -364,22 +365,11 @@ macro_rules! impl_symnum {
             }
 
             fn complex64(&self) -> Complex64 {
-                let nums: Vec<Complex64> = self
-                    .zz_coeffs()
-                    .into_iter()
-                    .map(|x| {
-                        let re = x.to_f64().unwrap();
-                        Complex64::new(re, 0.0)
-                    })
-                    .collect();
-                let units: Vec<Complex64> = Self::zz_params()
-                    .sym_roots_sqs
-                    .into_iter()
-                    .map(|x| Complex64::new(x.sqrt(), 0.0))
-                    .collect();
+                // Avoid heap allocations: compute sum directly.
                 let mut ret = Complex64::zero();
-                for (n, u) in nums.iter().zip(units.iter()) {
-                    ret += n * u;
+                for (c, root_sq) in self.zz_coeffs().iter().zip(Self::zz_params().sym_roots_sqs.iter()) {
+                    let re = c.to_f64().unwrap();
+                    ret += Complex64::new(re * root_sq.sqrt(), 0.0);
                 }
                 ret
             }
@@ -423,23 +413,13 @@ macro_rules! impl_symnum {
             }
 
             fn complex64(&self) -> Complex64 {
-                let nums: Vec<Complex64> = self
-                    .zz_coeffs()
-                    .into_iter()
-                    .map(|x| {
-                        let re = x.real.to_f64().unwrap();
-                        let im = x.imag.to_f64().unwrap();
-                        Complex64::new(re, im)
-                    })
-                    .collect();
-                let units: Vec<Complex64> = Self::zz_params()
-                    .sym_roots_sqs
-                    .into_iter()
-                    .map(|x| Complex64::new(x.sqrt(), 0.0))
-                    .collect();
+                // Avoid heap allocations: compute sum directly.
                 let mut ret = Complex64::zero();
-                for (n, u) in nums.iter().zip(units.iter()) {
-                    ret += n * u;
+                for (c, root_sq) in self.zz_coeffs().iter().zip(Self::zz_params().sym_roots_sqs.iter()) {
+                    let re = c.real.to_f64().unwrap();
+                    let im = c.imag.to_f64().unwrap();
+                    let u = root_sq.sqrt();
+                    ret += Complex64::new(re * u, im * u);
                 }
                 ret
             }
@@ -941,13 +921,13 @@ macro_rules! zz_test {
                 assert_eq!(x, ZZi::one());
 
                 // test unit()
-                assert_eq!(ZZi::unit(0), ZZi::one());
-                assert_eq!(ZZi::unit(-1), ZZi::unit(ZZi::turn() - 1));
-                assert_eq!(ZZi::unit(1), ZZi::unit(ZZi::turn() + 1));
-                assert_eq!(ZZi::unit(-ZZi::hturn()), ZZi::unit(ZZi::hturn()));
-                assert_eq!(ZZi::unit(ZZi::hturn()), -ZZi::one());
+                assert_eq!(<ZZi as Units>::unit(0), ZZi::one());
+                assert_eq!(<ZZi as Units>::unit(-1), <ZZi as Units>::unit(ZZi::turn() - 1));
+                assert_eq!(<ZZi as Units>::unit(1), <ZZi as Units>::unit(ZZi::turn() + 1));
+                assert_eq!(<ZZi as Units>::unit(-ZZi::hturn()), <ZZi as Units>::unit(ZZi::hturn()));
+                assert_eq!(<ZZi as Units>::unit(ZZi::hturn()), -ZZi::one());
                 if ZZi::has_qturn() {
-                    assert_eq!(ZZi::unit(ZZi::qturn()).zz_coeffs()[0], GIntT::from((0, 1)));
+                    assert_eq!(<ZZi as Units>::unit(ZZi::qturn()).zz_coeffs()[0], GIntT::from((0, 1)));
                 }
 
                 // test powi()
@@ -970,7 +950,7 @@ macro_rules! zz_test {
                 let sc_fac = ZZi::zz_params().scaling_fac;
                 let mut max_fac: i64 = 0;
                 for i in 0..ZZi::turn() {
-                    let x = ZZi::unit(i);
+                    let x = <ZZi as Units>::unit(i);
                     println!("{x}");
                     for c in x.zz_coeffs() {
                         assert_eq!(sc_fac % c.real.denom(), 0);
@@ -990,9 +970,9 @@ macro_rules! zz_test {
 
                 // test correctness of splitting and reconstruction
                 for a in 0..ZZi::hturn() {
-                    let p = ZZi::unit(a);
+                    let p = <ZZi as Units>::unit(a);
                     let (x, y) = p.re_im();
-                    assert_eq!(p, ZZi::from(x) + ZZi::from(y) * ZZi::unit(ZZi::qturn()));
+                    assert_eq!(p, ZZi::from(x) + ZZi::from(y) * <ZZi as Units>::unit(ZZi::qturn()));
                 }
             }
 
@@ -1014,7 +994,7 @@ macro_rules! zz_test {
                 }
 
                 if ZZi::has_qturn() {
-                    let imag_unit = ZZi::unit(ZZi::qturn());
+                    let imag_unit = <ZZi as Units>::unit(ZZi::qturn());
                     assert!(!imag_unit.is_real());
                     assert!(imag_unit.is_imag());
                     assert!((-imag_unit).is_imag());

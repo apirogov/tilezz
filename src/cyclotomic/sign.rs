@@ -140,15 +140,22 @@ pub fn zz_partial_signum_2_sym<Z: IsReal>(val: &Z) -> Z {
 }
 
 pub fn zz_partial_signum_4_sym<Z: IsReal>(val: &Z) -> Z {
-    let cs: Vec<Z::Scalar> = val.zz_coeffs().to_vec();
-    let rs: Vec<Z::Scalar> = Z::zz_params()
-        .sym_roots_sqs
-        .iter()
-        .map(|r| Z::Scalar::from_f64(*r).unwrap())
-        .collect();
+    // Avoid heap allocations: we know this is only used for rings with exactly 4 symbolic roots.
+    let cs = val.zz_coeffs();
+    debug_assert!(cs.len() == 4);
+
+    // NOTE: sym_roots_sqs are f64 parameters, but they are compile-time constants.
+    // Convert them directly without allocating a Vec.
+    let rs = Z::zz_params().sym_roots_sqs;
+    debug_assert!(rs.len() == 4);
 
     let (a, b, c, d) = (cs[0], cs[1], cs[2], cs[3]);
-    let (k, m, n, l) = (rs[0], rs[1], rs[2], rs[3]);
+    let (k, m, n, l) = (
+        Z::Scalar::from_f64(rs[0]).unwrap(),
+        Z::Scalar::from_f64(rs[1]).unwrap(),
+        Z::Scalar::from_f64(rs[2]).unwrap(),
+        Z::Scalar::from_f64(rs[3]).unwrap(),
+    );
 
     let sgn = signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l);
 
