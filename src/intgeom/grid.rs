@@ -105,39 +105,39 @@ impl UnitSquareGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{SymNum, ZZ12};
+    use crate::cyclotomic::{SymNum, Units, ZZ12};
     use num_traits::{One, Zero};
 
     #[test]
     fn test_cell_of() {
         assert_eq!(UnitSquareGrid::cell_of(ZZ12::zero()), (0, 0));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(0)), (1, 0));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(1)), (1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(2)), (1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(3)), (0, 1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(4)), (-1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(5)), (-1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(6)), (-1, 0));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(7)), (-1, -1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(8)), (-1, -1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(9)), (0, -1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(10)), (1, -1));
-        assert_eq!(UnitSquareGrid::cell_of(ZZ12::unit(11)), (1, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(0)), (1, 0));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(1)), (1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(2)), (1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(3)), (0, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(4)), (-1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(5)), (-1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(6)), (-1, 0));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(7)), (-1, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(8)), (-1, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(9)), (0, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(10)), (1, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(11)), (1, -1));
     }
 
     #[test]
     fn test_seg_neighborhood_of() {
         // segment fully contained in one cell
-        let tmp1 = (ZZ12::one().scale(2) - ZZ12::unit(2) - ZZ12::unit(-1).scale(2)) * ZZ12::unit(1);
-        let tmp2 = (ZZ12::one().scale(3) - ZZ12::unit(2) - ZZ12::unit(-1).scale(3)) * ZZ12::unit(2);
-        let p1 = (tmp1 - tmp2) * ZZ12::unit(-2);
-        let p2 = p1 + ZZ12::unit(2);
+        let tmp1 = (ZZ12::one().scale(2) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(2)) * <ZZ12 as Units>::unit(1);
+        let tmp2 = (ZZ12::one().scale(3) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(3)) * <ZZ12 as Units>::unit(2);
+        let p1 = (tmp1 - tmp2) * <ZZ12 as Units>::unit(-2);
+        let p2 = p1 + <ZZ12 as Units>::unit(2);
         let n0 = UnitSquareGrid::seg_neighborhood_of(p1, p2);
         let n0_exp = &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)];
         assert_eq!(n0, n0_exp);
 
         // segment touches 2 cells (horizontal)
-        let n1 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(0));
+        let n1 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(0));
         let n1_exp = &[
             (-1, 0),
             (0, -1),
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(n1, n1_exp);
 
         // segment touches 2 cells (vertical)
-        let n2 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(3));
+        let n2 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(3));
         let n2_exp = &[
             (-1, 0),
             (-1, 1),
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(n2, n2_exp);
 
         // segment touches 2 cells (diagonal)
-        let n3 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), ZZ12::unit(1));
+        let n3 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(1));
         let n3_exp = &[
             (-1, 0),
             (0, -1),

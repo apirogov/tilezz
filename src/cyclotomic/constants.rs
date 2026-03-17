@@ -2,15 +2,15 @@
 
 use num_traits::One;
 
-use super::symnum::SymNum;
+use super::units::Units;
 use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsComplex, IsRingOrField};
 use super::types::{ZZ10, ZZ20, ZZ6};
 
 // Returns the sum of all units of a complex integer ring.
-pub fn zz_units_sum<T: IsRingOrField + IsComplex>() -> T {
+pub fn zz_units_sum<T: IsRingOrField + IsComplex + Units>() -> T {
     let mut p = T::zero();
     for i in 0..T::turn() {
-        p = p + T::unit(i).scale(i as i64);
+        p = p + <T as Units>::unit(i).scale(i as i64);
     }
     p
 }
@@ -19,40 +19,41 @@ pub fn zz_units_sum<T: IsRingOrField + IsComplex>() -> T {
 // it means that we can represent any linear combination
 // in a ring that supports quarter turn rotation (i.e. ZZDiv4).
 
-pub fn sqrt2<T: IsComplex + HasZZ8>() -> T {
+pub fn sqrt2<T: IsComplex + HasZZ8 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 8;
-    T::unit(sc) + T::unit(-sc)
+    <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
-pub fn sqrt3<T: IsComplex + HasZZ12>() -> T {
+pub fn sqrt3<T: IsComplex + HasZZ12 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 12;
-    T::unit(sc) + T::unit(-sc)
+    <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
-pub fn sqrt5<T: IsComplex + HasZZ10>() -> T {
+pub fn sqrt5<T: IsComplex + HasZZ10 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 10;
-    (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - T::one()
+    (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - T::one()
 }
 
-pub fn sqrt6<T: IsComplex + HasZZ8 + HasZZ12>() -> T {
+pub fn sqrt6<T: IsComplex + HasZZ8 + HasZZ12 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 24;
-    (T::unit(sc) + T::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
+    (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
 }
 
 // misc. irregular
 pub fn isqrt3() -> ZZ6 {
-    ZZ6::unit(1) + ZZ6::unit(2)
+    <ZZ6 as Units>::unit(1) + <ZZ6 as Units>::unit(2)
 }
 pub fn zz10_isqrt_penta() -> ZZ10 {
-    ZZ10::unit(1) * ZZ10::from(4) - ZZ10::one() - sqrt5()
+    <ZZ10 as Units>::unit(1) * ZZ10::from(4) - ZZ10::one() - sqrt5()
 }
 pub fn zz20_half_sqrt_penta() -> ZZ20 {
-    ZZ20::unit(3) + ZZ20::unit(-3)
+    <ZZ20 as Units>::unit(3) + <ZZ20 as Units>::unit(-3)
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::params::ZZ10_Y;
+    use super::super::symnum::SymNum;
     use super::super::types::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ30, ZZ32, ZZ60, ZZ8};
     use super::*;
 

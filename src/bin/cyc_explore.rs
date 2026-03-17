@@ -12,13 +12,14 @@ use plotters::prelude::*;
 
 use tilezz::cyclotomic::geometry::point_mod_rect;
 use tilezz::cyclotomic::*;
+use tilezz::cyclotomic::Units;
 use tilezz::vis::plotters::{plot_points, rainbow};
 use tilezz::vis::plotutils::{chart_padding, tiles_bounds, P64, R64};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
 /// Compute the levels of points reachable within the unit square from any Gaussian integer in n steps.
-fn explore<ZZ: ZZType + HasZZ4 + Send + Sync>(
+fn explore<ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync>(
     n: usize,
     mod_unit_square: bool,
     num_threads: usize,
@@ -60,7 +61,7 @@ where
                 s.spawn(move |_| {
                     for p in chunk.iter() {
                         for i in 0..ZZ::turn() {
-                            let mut p_dest: ZZ = *p + ZZ::unit(i);
+                            let mut p_dest: ZZ = *p + <ZZ as Units>::unit(i);
                             if mod_unit_square {
                                 // normalize back into unit square (if enabled)
                                 p_dest = point_mod_rect(&p_dest, &unit_square).coerce_ring();
@@ -150,7 +151,7 @@ fn get_styles(n: usize, pt_sz: i32, pt_sz_const: bool) -> Vec<(i32, ShapeStyle)>
         .collect()
 }
 
-fn prepare_render<ZZ: ZZType + HasZZ4 + Send + Sync>(
+fn prepare_render<ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync>(
     num_rounds: usize,
     mod_unit_square: bool,
     chart_width: u32,
