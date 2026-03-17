@@ -9,6 +9,11 @@ mod symnum;
 
 mod sign;
 
+#[cfg(test)]
+mod sign_extra_tests;
+#[cfg(test)]
+mod unit_tests;
+
 mod div;
 
 mod params;
@@ -17,6 +22,8 @@ mod traits;
 
 #[macro_use]
 mod types;
+
+mod units;
 
 // --------
 
@@ -31,6 +38,7 @@ pub use num_traits::{One, Pow, Zero};
 pub use numtraits::{Ccw, Conj, IntField, IntRing, OneImag};
 
 pub use symnum::{SymNum, ZZComplex};
+pub use units::Units;
 
 pub use traits::{ComplexTraits, FieldTraits, RealTraits, RingTraits};
 pub use traits::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
