@@ -10,7 +10,7 @@ use super::angles::normalize_angle;
 use super::grid::UnitSquareGrid;
 use crate::cyclotomic::geometry::intersect;
 use crate::cyclotomic::linalg::wedge;
-use crate::cyclotomic::{IsComplex, IsRingOrField};
+use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 
 /// Representation of a turtle (i.e. an oriented point).
 pub struct Turtle<T: IsComplex> {
@@ -84,7 +84,7 @@ pub struct Snake<T: IsRingOrField + IsComplex> {
     allow_intersections: bool,
 }
 
-impl<I: ToPrimitive, T: IsComplex> TryFrom<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
     type Error = &'static str;
 
     /// Create a snake from an angle sequence.
@@ -97,7 +97,7 @@ impl<I: ToPrimitive, T: IsComplex> TryFrom<&[I]> for Snake<T> {
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsComplex> TryFrom<&[I; N]> for Snake<T> {
+impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I; N]> for Snake<T> {
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
@@ -105,7 +105,7 @@ impl<const N: usize, I: ToPrimitive, T: IsComplex> TryFrom<&[I; N]> for Snake<T>
     }
 }
 
-impl<T: IsComplex + IsRingOrField> Snake<T> {
+impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
@@ -218,7 +218,7 @@ impl<T: IsComplex + IsRingOrField> Snake<T> {
     fn next_seg(&self, angle: i8) -> (T, T) {
         let old_direction = self.direction();
         let last = *self.points.last().unwrap();
-        let new_pt = last + (T::unit(old_direction) * T::unit(angle));
+        let new_pt = last + (<T as Units>::unit(old_direction) * <T as Units>::unit(angle));
         (last, new_pt)
     }
 
@@ -477,7 +477,7 @@ mod tests {
         assert!(!s.is_closed());
         assert_eq!(*s.angles().last().unwrap(), 3);
         assert_eq!(s.direction(), 3);
-        assert_eq!(s.offset(), ZZ12::unit(3));
+        assert_eq!(s.offset(), <ZZ12 as Units>::unit(3));
 
         s.add(2);
         s.add(2);
@@ -514,7 +514,7 @@ mod tests {
         };
         let l2_exp: Vec<ZZ12> = l_exp
             .iter()
-            .map(|pt| (*pt * ZZ12::unit(t.dir)) + t.pos)
+            .map(|pt| (*pt * <ZZ12 as Units>::unit(t.dir)) + t.pos)
             .collect();
         let l2 = s.to_polyline(t);
         assert_eq!(l2, l2_exp);

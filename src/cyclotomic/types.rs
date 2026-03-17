@@ -19,6 +19,7 @@ use super::sign::{
     zz_partial_signum_fallback,
 };
 use super::symnum::{GIntT, RatioT, SymNum, ZZComplex, ZZParams};
+use super::units::Units;
 use super::traits::{
     ComplexTraits, FieldTraits, HasZZ10Impl, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, HasZZ8Impl,
     IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, QQType, QType, RealTraits,
@@ -83,6 +84,32 @@ macro_rules! impl_from_real_pair {
 }
 
 impl_symnum_struct_for!(4 6 8 10 12 16 20 24 30 32 60);
+
+// cached unit lookup per concrete complex type
+super::units::impl_units_for!(ZZ4);
+super::units::impl_units_for!(ZZ6);
+super::units::impl_units_for!(ZZ8);
+super::units::impl_units_for!(ZZ10);
+super::units::impl_units_for!(ZZ12);
+super::units::impl_units_for!(ZZ16);
+super::units::impl_units_for!(ZZ20);
+super::units::impl_units_for!(ZZ24);
+super::units::impl_units_for!(ZZ30);
+super::units::impl_units_for!(ZZ32);
+super::units::impl_units_for!(ZZ60);
+
+super::units::impl_units_for!(QQ4);
+super::units::impl_units_for!(QQ6);
+super::units::impl_units_for!(QQ8);
+super::units::impl_units_for!(QQ10);
+super::units::impl_units_for!(QQ12);
+super::units::impl_units_for!(QQ16);
+super::units::impl_units_for!(QQ20);
+super::units::impl_units_for!(QQ24);
+super::units::impl_units_for!(QQ30);
+super::units::impl_units_for!(QQ32);
+super::units::impl_units_for!(QQ60);
+
 impl_functional_traits!(ZZ4, Z4, QQ4, Q4, zz_partial_signum_1_sym);
 impl_functional_traits!(ZZ6, Z6, QQ6, Q6, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ8, Z8, QQ8, Q8, zz_partial_signum_2_sym);
@@ -111,6 +138,7 @@ mod tests {
 
     use super::super::constants::zz_units_sum;
     use super::super::symnum::{GIntT, SymNum};
+    use super::super::units::Units;
 
     macro_rules! zz_tests {
         ($mod: ident, $type: ident, $($n:expr)*) => ($(
@@ -155,7 +183,7 @@ mod tests {
                     // try to invert combinations of units
                     for k in 0..ZZi::turn() {
                         for l in 0..ZZi::turn() {
-                            let val = ZZi::unit(k) + ZZi::unit(l);
+                            let val = <ZZi as Units>::unit(k) + <ZZi as Units>::unit(l);
                             if val.is_zero() {
                                 continue;
                             }
@@ -172,7 +200,7 @@ mod tests {
 
                     // symmetry of dividing by rotation unit
                     // (and testing some operations via QQi types)
-                    assert_eq!(z / ZZi::ccw().into(), z * QQi::unit(-1));
+                    assert_eq!(z / ZZi::ccw().into(), z * <QQi as Units>::unit(-1));
                 }
             }
         };

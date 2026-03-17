@@ -1,6 +1,7 @@
 use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
 use super::symnum::SymNum;
 use super::symnum::{IntT, ZZComplex};
+use super::units::Units;
 
 pub trait RealTraits: ZSigned + Ord {}
 pub trait ComplexTraits: Ccw + ZZComplex {}
@@ -108,9 +109,9 @@ pub trait HasZZ12Impl {}
 pub trait HasZZ12: IsComplex + HasZZ12Impl {}
 impl<T: IsComplex + HasZZ12Impl> HasZZ12 for T {}
 
-impl<T: HasZZ4> OneImag for T {
+impl<T: HasZZ4 + Units> OneImag for T {
     fn one_i() -> Self {
-        Self::unit(Self::qturn())
+        <Self as Units>::unit(Self::qturn())
     }
 
     fn is_one_i(&self) -> bool {

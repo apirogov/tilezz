@@ -2,27 +2,27 @@
 
 use super::angles::upscale_angles;
 use super::snake::Snake;
-use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsComplex};
+use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsComplex, Units};
 
 /// Return sequence of a square tile over a compatible ring (divisible by 4).
-pub fn square<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn square<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
 }
 
 /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
-pub fn triangle<T: IsComplex + HasZZ6>() -> Snake<T> {
+pub fn triangle<T: IsComplex + HasZZ6 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
 }
 
 /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
-pub fn hexagon<T: IsComplex + HasZZ6>() -> Snake<T> {
+pub fn hexagon<T: IsComplex + HasZZ6 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
 }
 
 // ----
 
 /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-pub fn spectre<T: IsComplex + HasZZ12>() -> Snake<T> {
+pub fn spectre<T: IsComplex + HasZZ12 + Units>() -> Snake<T> {
     Snake::try_from(
         upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
     )
@@ -37,7 +37,7 @@ pub fn spectre<T: IsComplex + HasZZ12>() -> Snake<T> {
 // However, P3 (pair of rhombs) have edges of the same length, so it works.
 // The needed edge markings (for proper Penrose tilings) are geometrically encoded as bump/dent pairs.
 
-pub fn penrose_p3_narrow<T: IsComplex + HasZZ10>() -> Snake<T> {
+pub fn penrose_p3_narrow<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
         /* */ 1, 0, -1, 2, -1, 0, 0, // 1+ = N3  [0,7]
@@ -48,7 +48,7 @@ pub fn penrose_p3_narrow<T: IsComplex + HasZZ10>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(10, &seq).as_slice()).unwrap()
 }
 
-pub fn penrose_p3_wide<T: IsComplex + HasZZ10>() -> Snake<T> {
+pub fn penrose_p3_wide<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
         /* */ 2, 0, -1, 2, -1, 0, 0, // 1+ = W3   [0,7]
@@ -62,37 +62,37 @@ pub fn penrose_p3_wide<T: IsComplex + HasZZ10>() -> Snake<T> {
 // ----
 
 #[allow(non_snake_case)]
-pub fn tetromino_O<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_O<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 1, 0, 1, 0, 1, 0, 1]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_I<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_I<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 0, 0, 1, 1, 0, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_T<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_T<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, -1, 1, 1, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_S<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_S<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, -1, 1, 1, 0, 1]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_Z<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_Z<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 0, 1, 1, -1, 1, 0, 1, 1]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_J<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_J<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, 0, 0, 1, 1, 0]).as_slice()).unwrap()
 }
 
 #[allow(non_snake_case)]
-pub fn tetromino_L<T: IsComplex + HasZZ4>() -> Snake<T> {
+pub fn tetromino_L<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 0, 1, 1, 0, 0, 1, 0, 1, 1]).as_slice()).unwrap()
 }
 
