@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod unit_tests {
     use crate::cyclotomic::Units;
     use crate::cyclotomic::*;
