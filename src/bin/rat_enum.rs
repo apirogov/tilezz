@@ -1,17 +1,18 @@
-use std::sync::Mutex;
-
-use clap::Parser;
-
 use std::collections::BTreeSet;
+use std::sync::Mutex;
+use std::time::Instant;
 
+use clap::{Parser, ValueEnum};
 use itertools::Itertools;
-use plotters::prelude::*;
 
 use tilezz::cyclotomic::linalg::norm_sq;
 use tilezz::cyclotomic::*;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::{Snake, Turtle};
 use tilezz::vis::plotutils::P64;
+
+#[cfg(feature = "examples")]
+use plotters::prelude::*;
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
@@ -83,7 +84,6 @@ pub fn rat_enum_alt<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
             }
 
             // add the prolonged path
-
             next.push(s.angles().to_vec());
             println!("SNAKE {:?}", s.angles());
         }
@@ -170,7 +170,7 @@ fn polygons<ZZ: ZZType>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
         .collect()
 }
 
-fn run_rat_enum(ring: u8, max_steps: usize) -> Vec<Vec<P64>> {
+fn run_rat_enum_polylines(ring: u8, max_steps: usize) -> Vec<Vec<P64>> {
     match ring {
         4 => polygons::<ZZ4>(rat_enum::<ZZ4>(max_steps)),
         8 => polygons::<ZZ8>(rat_enum::<ZZ8>(max_steps)),
@@ -183,7 +183,28 @@ fn run_rat_enum(ring: u8, max_steps: usize) -> Vec<Vec<P64>> {
     }
 }
 
+fn run_rat_enum_seqs(ring: u8, max_steps: usize) -> Vec<Vec<i8>> {
+    match ring {
+        4 => rat_enum::<ZZ4>(max_steps),
+        8 => rat_enum::<ZZ8>(max_steps),
+        12 => rat_enum::<ZZ12>(max_steps),
+        16 => rat_enum::<ZZ16>(max_steps),
+        20 => rat_enum::<ZZ20>(max_steps),
+        24 => rat_enum::<ZZ24>(max_steps),
+        60 => rat_enum::<ZZ60>(max_steps),
+        _ => panic!("invalid ring selected"),
+    }
+}
+
 // --------
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Mode {
+    /// Enumerate and render output (GIF)
+    Render,
+    /// Enumerate only and report elapsed time
+    Bench,
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Compute all simple polygons over a ring with a maximal boundary length", long_about = None)]
@@ -194,62 +215,89 @@ struct Cli {
     #[arg(short = 'n', long)]
     max_steps: usize,
 
-    #[arg(short = 'o', long, help = "Output GIF filename")]
+    #[arg(long, value_enum, default_value_t = Mode::Render)]
+    mode: Mode,
+
+    #[arg(short = 'o', long, help = "Output GIF filename (render mode only)")]
     filename: Option<String>,
 
     #[arg(short, long)]
     verbose: bool,
 }
 
-#[cfg(feature = "examples")]
 fn main() {
-    use tilezz::vis::plotters::{plot_tile, TileStyle};
-
     let cli = Cli::parse();
     if cli.verbose {
         let mut verbose = VERBOSE.lock().unwrap();
         *verbose = true;
     }
 
-    let rats: Vec<Vec<P64>> = run_rat_enum(cli.ring, cli.max_steps);
+    match cli.mode {
+        Mode::Bench => {
+            let t0 = Instant::now();
+            let rats: Vec<Vec<i8>> = run_rat_enum_seqs(cli.ring, cli.max_steps);
+            let dt = t0.elapsed();
 
-    if cli.filename.is_none() {
-        return;
-    }
-    let filename = cli.filename.unwrap();
+            // Use the result so it can't be trivially optimized away.
+            let total_boundary_len: usize = rats.iter().map(|s| s.len()).sum();
 
-    let w = 500;
-    // let root = BitMapBackend::new(&filename, (w, w)).into_drawing_area();
-    let root = BitMapBackend::gif(filename, (w, w), 500)
-        .unwrap()
-        .into_drawing_area();
+            println!(
+                "benchmark: ring={} max_steps={} -> {} unique rats (total boundary len={}) in {:?}",
+                cli.ring,
+                cli.max_steps,
+                rats.len(),
+                total_boundary_len,
+                dt
+            );
+        }
+        Mode::Render => {
+            #[cfg(feature = "examples")]
+            {
+                use tilezz::vis::plotters::{plot_tile, TileStyle};
 
-    let _ = root.fill(&WHITE);
+                let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps);
 
-    // GIF
-    let grid = (1, 1);
-    // PNG
-    // let row = 3;
-    // let grid = ((rats.len() / row + rats.len() % row) as usize, row as usize);
+                let Some(filename) = cli.filename else {
+                    return;
+                };
 
-    let areas: Vec<_> = root.split_evenly(grid);
+                let w = 500;
+                let root = BitMapBackend::gif(filename, (w, w), 500)
+                    .unwrap()
+                    .into_drawing_area();
 
-    let mut style = TileStyle::default();
-    style.node_size = 0;
-    style.node_labels = false;
-    for (ix, tile) in rats.iter().enumerate() {
-        println!("plotting tile {}/{}", ix + 1, rats.len());
+                let _ = root.fill(&WHITE);
 
-        // let area = &areas[ix]; // PNG
-        let area = &areas[0]; // GIF
+                // GIF
+                let grid = (1, 1);
+                let areas: Vec<_> = root.split_evenly(grid);
 
-        let _ = area.fill(&WHITE);
+                let mut style = TileStyle::default();
+                style.node_size = 0;
+                style.node_labels = false;
+                for (ix, tile) in rats.iter().enumerate() {
+                    println!("plotting tile {}/{}", ix + 1, rats.len());
 
-        let pad = w * 2 / 100;
-        let mut area = area.margin(pad, pad, pad, pad);
+                    let area = &areas[0]; // GIF
 
-        plot_tile(&mut area, &tile, &style);
+                    let _ = area.fill(&WHITE);
 
-        area.present().unwrap();
+                    let pad = w * 2 / 100;
+                    let mut area = area.margin(pad, pad, pad, pad);
+
+                    plot_tile(&mut area, &tile, &style);
+
+                    area.present().unwrap();
+                }
+            }
+
+            #[cfg(not(feature = "examples"))]
+            {
+                eprintln!(
+                    "render mode requires building with --features examples (plotters backend)"
+                );
+                std::process::exit(2);
+            }
+        }
     }
 }
