@@ -107,6 +107,12 @@ impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFr
     }
 }
 
+impl<T: IsComplex + IsRingOrField + Units> Default for Snake<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
@@ -116,7 +122,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             points: vec![T::zero(); 1],
             angles: Vec::new(),
             ang_sum: 0,
-            grid: grid,
+            grid,
             allow_intersections: false,
         }
     }
@@ -329,7 +335,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
                 return false;
             }
         }
-        return true;
+        true
     }
 
     /// Add a new segment to the snake.
@@ -351,7 +357,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
 
         // everything is ok -> add new segment
         self.add_unsafe(a);
-        return true;
+        true
     }
 
     /// Extend a snake from a sequence of angles in-place.
@@ -382,7 +388,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             Ok(()) => {}
             Err(_) => return Err(errmsg),
         }
-        return Ok(result);
+        Ok(result)
     }
 
     /// Return twice the area of the represented polygon, computed using the shoelace formula.
@@ -398,7 +404,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             result = result + wedge(&self.points[self.len() - 1], &self.points[0]);
         }
 
-        return result;
+        result
     }
 
     /// Point-in-polygon check using raycasting.
@@ -407,7 +413,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             return false;
         }
 
-        return true;
+        true
     }
 }
 
@@ -421,7 +427,7 @@ impl<T: IsComplex> PartialEq for Snake<T> {
 impl<T: IsComplex> Eq for Snake<T> {}
 impl<T: IsComplex> PartialOrd for Snake<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.angles.partial_cmp(&other.angles)
+        Some(self.cmp(other))
     }
 }
 impl<T: IsComplex> Ord for Snake<T> {

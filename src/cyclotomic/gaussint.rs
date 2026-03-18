@@ -65,10 +65,10 @@ where
 
 impl<T: IntRing + FromPrimitive> FromPrimitive for GaussInt<T> {
     fn from_i64(n: i64) -> Option<Self> {
-        T::from_i64(n).and_then(|num| Some(Self::new(num, T::zero())))
+        T::from_i64(n).map(|num| Self::new(num, T::zero()))
     }
     fn from_u64(n: u64) -> Option<Self> {
-        T::from_u64(n).and_then(|num| Some(Self::new(num, T::zero())))
+        T::from_u64(n).map(|num| Self::new(num, T::zero()))
     }
 }
 
@@ -153,7 +153,7 @@ impl<
         for _ in 0..other {
             x = x * self;
         }
-        return x;
+        x
     }
 }
 impl<
@@ -191,6 +191,7 @@ impl<T: IntField> Div<GaussInt<T>> for GaussInt<T> {
     type Output = Self;
 
     fn div(self, other: Self) -> Self {
+        // Division is defined via multiplication with the inverse.
         self * other.inv()
     }
 }
@@ -211,7 +212,7 @@ impl<T: Display + IntRing + PartialOrd> Display for GaussInt<T> {
                 format!("{}i", self.imag)
             });
         }
-        return write!(
+        write!(
             f,
             "{}",
             if terms.is_empty() {
@@ -223,7 +224,7 @@ impl<T: Display + IntRing + PartialOrd> Display for GaussInt<T> {
                     "+"
                 })
             }
-        );
+        )
     }
 }
 
@@ -261,13 +262,13 @@ impl<T: IntRing + ZSigned> ZSigned for GaussInt<T> {
 impl<T: IntRing + Integer> Add<GaussInt<Ratio<T>>> for (T,) {
     type Output = GaussInt<Ratio<T>>;
     fn add(self, other: GaussInt<Ratio<T>>) -> GaussInt<Ratio<T>> {
-        return GaussInt::<Ratio<T>>::from(self) + other;
+        GaussInt::<Ratio<T>>::from(self) + other
     }
 }
 impl<T: IntRing + Integer> Mul<GaussInt<Ratio<T>>> for (T,) {
     type Output = GaussInt<Ratio<T>>;
     fn mul(self, other: GaussInt<Ratio<T>>) -> GaussInt<Ratio<T>> {
-        return GaussInt::<Ratio<T>>::from(self) * other;
+        GaussInt::<Ratio<T>>::from(self) * other
     }
 }
 
@@ -276,19 +277,19 @@ impl<T: IntRing + Integer> Mul<GaussInt<Ratio<T>>> for (T,) {
 impl<T: IntRing + Integer> Add<T> for GaussInt<Ratio<T>> {
     type Output = GaussInt<Ratio<T>>;
     fn add(self, other: T) -> GaussInt<Ratio<T>> {
-        return self + GaussInt::<Ratio<T>>::from(other);
+        self + GaussInt::<Ratio<T>>::from(other)
     }
 }
 impl<T: IntRing + Integer> Mul<T> for GaussInt<Ratio<T>> {
     type Output = GaussInt<Ratio<T>>;
     fn mul(self, other: T) -> GaussInt<Ratio<T>> {
-        return self * GaussInt::<Ratio<T>>::from(other);
+        self * GaussInt::<Ratio<T>>::from(other)
     }
 }
 impl<T: IntField + Integer> Div<T> for GaussInt<Ratio<T>> {
     type Output = GaussInt<Ratio<T>>;
     fn div(self, other: T) -> GaussInt<Ratio<T>> {
-        return self / GaussInt::<Ratio<T>>::from(other);
+        self / GaussInt::<Ratio<T>>::from(other)
     }
 }
 

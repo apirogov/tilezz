@@ -19,8 +19,8 @@ fn line_class_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real) {
 /// y(x) = -(ax + c)/b = -a/b x - c/b = mx + b' with m = -a/b and b' = -c/b
 pub fn line_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> Line<ZZ::Real> {
     // (wedge(&ZZ::one(), &(*p1 - *p2)), dot(&ZZ::one(), &(*p2 - *p1)), wedge(&p1, &p2))
-    let (a, b) = line_class_through::<ZZ>(&p1, &p2);
-    (a, b, wedge::<ZZ>(&p1, &p2))
+    let (a, b) = line_class_through::<ZZ>(p1, p2);
+    (a, b, wedge::<ZZ>(p1, p2))
 }
 
 /// Return whether the point is on the given line.
@@ -137,8 +137,8 @@ where
     let (p_x, p_y) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
-    let ret_x: <ZZ as IsRingOrField>::Real = mod_bound(&p_x, &x_min..&x_max).into();
-    let ret_y: <ZZ as IsRingOrField>::Real = mod_bound(&p_y, &y_min..&y_max).into();
+    let ret_x: <ZZ as IsRingOrField>::Real = mod_bound(&p_x, &x_min..&x_max);
+    let ret_y: <ZZ as IsRingOrField>::Real = mod_bound(&p_y, &y_min..&y_max);
     (ret_x, ret_y).into()
 }
 

@@ -47,7 +47,7 @@ impl ZZParams<'static> {
     pub fn ccw_unit<T: PrimInt + Integer + IntRing>(&self) -> Vec<GaussInt<Ratio<T>>> {
         let sc = T::from(self.scaling_fac).unwrap();
         self.ccw_unit_coeffs
-            .into_iter()
+            .iter()
             .map(|x| {
                 GaussInt::new(
                     Ratio::<T>::new_raw(T::from(x[0]).unwrap(), sc),
@@ -238,7 +238,7 @@ macro_rules! impl_symnum_q_from_z {
                 let nums: Vec<String> = self.coeffs.into_iter().map(|x| format!("{x}")).collect();
                 let units: Vec<String> = <$z>::zz_params()
                     .sym_roots_lbls
-                    .into_iter()
+                    .iter()
                     .map(|x| format!("sqrt({x})"))
                     .collect();
                 let parts: Vec<String> = nums

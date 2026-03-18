@@ -10,6 +10,12 @@ pub struct UnitSquareGrid {
     cols_rows: BTreeMap<i64, BTreeMap<i64, Vec<usize>>>,
 }
 
+impl Default for UnitSquareGrid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnitSquareGrid {
     /// Return coordinates of closest unit square lattice cell
     /// that a complex integer falls in. The cells are centered

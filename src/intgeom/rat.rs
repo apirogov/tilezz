@@ -38,7 +38,7 @@ fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
             f[(j - k) as usize] = i + 1;
         }
     }
-    return k as usize;
+    k as usize
 }
 
 /// Given an angle sequence, computes its lexicographically
@@ -93,10 +93,10 @@ fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
             break;
         }
     }
-    return (len, offset);
+    (len, offset)
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct Rat<T: IsComplex> {
     /// Even though we don't need to use the underlying complex integer ring,
     /// we parametrize by that type for improved type safety (to not mix incompatible polygons).
@@ -151,7 +151,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         Self {
             phantom: PhantomData,
             angles: seq,
-            angle_sum: angle_sum,
+            angle_sum,
             cyc: (angles.len() - offset) % angles.len(),
         }
     }
@@ -338,7 +338,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         if unchecked {
             Ok(Self::from_slice_unchecked(glued_seq.as_slice()))
         } else {
-            Snake::try_from(glued_seq.as_slice()).and_then(|s| Ok(Self::from_unchecked(&s)))
+            Snake::try_from(glued_seq.as_slice()).map(|s| Self::from_unchecked(&s))
         }
     }
 
@@ -377,7 +377,7 @@ impl<T: IsComplex + IsRingOrField + Units> PartialEq for Rat<T> {
 impl<T: IsComplex + IsRingOrField + Units> Eq for Rat<T> {}
 impl<T: IsComplex + IsRingOrField + Units> PartialOrd for Rat<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.angles.partial_cmp(&other.angles)
+        Some(self.cmp(other))
     }
 }
 impl<T: IsComplex + IsRingOrField + Units> Ord for Rat<T> {
