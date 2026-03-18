@@ -63,7 +63,7 @@ impl<'a> Default for TileStyle<'a> {
             fill_style: YELLOW.mix(0.2).into(),
             border_style: BLACK.into(),
 
-            node_style: RED.filled().into(),
+            node_style: RED.filled(),
             node_size: 10,
 
             node_labels: true,
@@ -87,7 +87,7 @@ pub fn plot_points<'a, DB: DrawingBackend, F: Fn((f64, f64)) -> String>(
     style: ShapeStyle,
 ) {
     let node_func = |c: (f64, f64), s: i32, st: ShapeStyle| {
-        EmptyElement::at(c) + Circle::<(i32, i32), i32>::new((0.into(), 0.into()), s.into(), st)
+        EmptyElement::at(c) + Circle::<(i32, i32), i32>::new((0, 0), s, st)
     };
     let nodes = PointSeries::of_element(pts.to_vec(), size, style, &node_func);
     chart.draw_series(nodes).unwrap();
@@ -98,7 +98,7 @@ pub fn plot_points<'a, DB: DrawingBackend, F: Fn((f64, f64)) -> String>(
     txtstyle = txtstyle.color(&WHITE);
     txtstyle = txtstyle.pos(centered);
     let node_lbl_func = |c: (f64, f64), _: i32, _: ShapeStyle| {
-        EmptyElement::at(c) + Text::new(format!("{}", label_func(c)), (0, 0), &txtstyle)
+        EmptyElement::at(c) + Text::new(label_func(c).to_string(), (0, 0), &txtstyle)
     };
     let node_lbls = PointSeries::of_element(pts.to_vec(), size, style, &node_lbl_func);
     chart.draw_series(node_lbls).unwrap();
@@ -156,12 +156,8 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
         let node_lbl_func = |(idx, c): (usize, (f64, f64)), _: i32, _: ShapeStyle| {
             EmptyElement::at(c) + Text::new(format!("{idx}"), (0, 0), &node_lbl_style)
         };
-        let node_lbls = PointSeries::of_element(
-            ixd_pts,
-            style.node_size.into(),
-            style.node_style,
-            &node_lbl_func,
-        );
+        let node_lbls =
+            PointSeries::of_element(ixd_pts, style.node_size, style.node_style, &node_lbl_func);
         chart.draw_series(node_lbls).unwrap();
     }
 
@@ -169,14 +165,10 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
     if let Some(tile_lbl) = style.label.as_ref() {
         let tile_lbl_style: TextStyle = style.label_font.pos(centered);
         let tile_lbl_func = |c, _, _| {
-            return EmptyElement::at(c) + Text::new(format!("{tile_lbl}"), (0, 0), &tile_lbl_style);
+            EmptyElement::at(c) + Text::new(tile_lbl.to_string(), (0, 0), &tile_lbl_style)
         };
-        let tile_lbl_series = PointSeries::of_element(
-            vec![tile_centroid(tile.into_iter())],
-            20,
-            BLACK,
-            &tile_lbl_func,
-        );
+        let tile_lbl_series =
+            PointSeries::of_element(vec![tile_centroid(tile.iter())], 20, BLACK, &tile_lbl_func);
         chart.draw_series(tile_lbl_series).unwrap();
     }
 }
@@ -184,15 +176,16 @@ fn plot_tile_into<'a, DB: DrawingBackend>(
 /// Prepare a chart with a coordinate system of sufficient size for the given tiles.
 /// Returns the chart and a callback function to render the tiles.
 /// This can be used to e.g. customize how the mesh is rendered.
+#[allow(clippy::type_complexity)]
 pub fn tile_chart<'a, DB: DrawingBackend>(
     cb: &mut ChartBuilder<DB>,
     tiles: &'a [(&[(f64, f64)], &TileStyle)],
 ) -> (
     ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>,
-    impl FnOnce(&mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>) -> (),
+    impl FnOnce(&mut ChartContext<'a, DB, Cartesian2d<RangedCoordf64, RangedCoordf64>>),
 ) {
     // compute square view centered on tile(s)
-    let all_points = tiles.iter().map(|(tile, _)| *tile).flatten();
+    let all_points = tiles.iter().flat_map(|(tile, _)| *tile);
     let ((min_x, min_y), (max_x, max_y)) = tile_viewport(tile_bounds(all_points));
 
     let chart = cb.build_cartesian_2d(min_x..max_x, min_y..max_y).unwrap();
@@ -244,5 +237,5 @@ pub fn plot_tile<DB: DrawingBackend>(
     tile: &[(f64, f64)],
     style: &TileStyle,
 ) {
-    plot_tiles(&mut ChartBuilder::on(&da), &[(tile, &style)]);
+    plot_tiles(&mut ChartBuilder::on(da), &[(tile, style)]);
 }

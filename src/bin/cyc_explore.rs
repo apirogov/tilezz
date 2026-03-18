@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
-use crossbeam;
 use plotters::coord::Shift;
 use plotters::prelude::*;
 
@@ -37,7 +36,7 @@ where
     // FIXME: as distributing chunks alone does not make it as fast as expected,
     // it seems like access to the visited map is the bottleneck!
     let protected_visited: Arc<Mutex<HashSet<ZZ>>> = {
-        let visited: HashSet<ZZ> = HashSet::from_iter(start_pts.to_vec().into_iter());
+        let visited: HashSet<ZZ> = HashSet::from_iter(start_pts.to_vec());
         Arc::new(Mutex::new(visited))
     };
     let mut round_pts: Vec<Vec<ZZ>> = Vec::new();
@@ -94,11 +93,11 @@ where
     }
     let num_pts: usize = round_pts.iter().map(|v| v.len()).sum();
     println!("\n= {num_pts}");
-    return round_pts;
+    round_pts
 }
 
 /// Helper function to plot the points with given settings into a drawing area.
-pub fn render<'a, DB: DrawingBackend>(
+pub fn render<DB: DrawingBackend>(
     da: &DrawingArea<DB, Shift>,
     bounds @ ((x_min, y_min), (x_max, y_max)): R64,
     point_levels: &[Vec<P64>],
@@ -119,10 +118,10 @@ pub fn render<'a, DB: DrawingBackend>(
     chart.configure_mesh().draw().unwrap();
     // plot points level by level with the correct style
     for i in (0..point_levels.len()).step_by(stride as usize).rev() {
-        let (sz, st) = level_styles[i as usize];
+        let (sz, st) = level_styles[i];
         plot_points(
             &mut chart,
-            point_levels[i as usize].as_slice(),
+            point_levels[i].as_slice(),
             |_| format!("{}", i + offset),
             sz,
             st,
@@ -145,7 +144,7 @@ fn get_styles(n: usize, pt_sz: i32, pt_sz_const: bool) -> Vec<(i32, ShapeStyle)>
                     } else {
                         0.98_f64.powi(*i as i32)
                     })) as i32,
-                colors[*i as usize].filled().into(),
+                colors[*i].filled(),
             )
         })
         .collect()
@@ -316,10 +315,7 @@ fn main() {
     // frame chart of GIF <-> cell of a grid of plots in PNG
     let grid = match output_format {
         OutputFormat::Gif => (1, 1),
-        OutputFormat::Png => (
-            (points.len() / cli.row + points.len() % cli.row) as usize,
-            cli.row as usize,
-        ),
+        OutputFormat::Png => ((points.len() / cli.row + points.len() % cli.row), cli.row),
     };
     let areas: Vec<_> = root.split_evenly(grid);
 

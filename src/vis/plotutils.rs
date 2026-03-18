@@ -49,10 +49,9 @@ where
 {
     let pts: Vec<P64> = ptss
         .into_iter()
-        .map(|p| <(P64, P64) as Into<[P64; 2]>>::into(tile_bounds(p.into_iter())).into_iter())
-        .flatten()
+        .flat_map(|p| <(P64, P64) as Into<[P64; 2]>>::into(tile_bounds(p)).into_iter())
         .collect::<Vec<P64>>();
-    return tile_bounds(&pts);
+    tile_bounds(&pts)
 }
 
 /// Given the bounds of a tile, adjust them to a square
@@ -81,9 +80,9 @@ pub fn chart_padding(
     let (w, h) = (max_x - min_x, max_y - min_y);
 
     let box_ratio: f64 = box_h as f64 / box_w as f64;
-    let bounds_ratio: f64 = h as f64 / w as f64;
+    let bounds_ratio: f64 = h / w;
 
-    return if box_ratio > bounds_ratio {
+    if box_ratio > bounds_ratio {
         // embedded chart is wider
         let pad_y = box_h as f64 - box_w as f64 * bounds_ratio;
         (0, pad_y as u32)
@@ -91,5 +90,5 @@ pub fn chart_padding(
         // embedded chart is taller
         let pad_x = box_w as f64 - box_h as f64 / bounds_ratio;
         (pad_x as u32, 0)
-    };
+    }
 }
