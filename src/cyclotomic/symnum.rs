@@ -367,7 +367,11 @@ macro_rules! impl_symnum {
             fn complex64(&self) -> Complex64 {
                 // Avoid heap allocations: compute sum directly.
                 let mut ret = Complex64::zero();
-                for (c, root_sq) in self.zz_coeffs().iter().zip(Self::zz_params().sym_roots_sqs.iter()) {
+                for (c, root_sq) in self
+                    .zz_coeffs()
+                    .iter()
+                    .zip(Self::zz_params().sym_roots_sqs.iter())
+                {
                     let re = c.to_f64().unwrap();
                     ret += Complex64::new(re * root_sq.sqrt(), 0.0);
                 }
@@ -415,7 +419,11 @@ macro_rules! impl_symnum {
             fn complex64(&self) -> Complex64 {
                 // Avoid heap allocations: compute sum directly.
                 let mut ret = Complex64::zero();
-                for (c, root_sq) in self.zz_coeffs().iter().zip(Self::zz_params().sym_roots_sqs.iter()) {
+                for (c, root_sq) in self
+                    .zz_coeffs()
+                    .iter()
+                    .zip(Self::zz_params().sym_roots_sqs.iter())
+                {
                     let re = c.real.to_f64().unwrap();
                     let im = c.imag.to_f64().unwrap();
                     let u = root_sq.sqrt();
@@ -922,12 +930,24 @@ macro_rules! zz_test {
 
                 // test unit()
                 assert_eq!(<ZZi as Units>::unit(0), ZZi::one());
-                assert_eq!(<ZZi as Units>::unit(-1), <ZZi as Units>::unit(ZZi::turn() - 1));
-                assert_eq!(<ZZi as Units>::unit(1), <ZZi as Units>::unit(ZZi::turn() + 1));
-                assert_eq!(<ZZi as Units>::unit(-ZZi::hturn()), <ZZi as Units>::unit(ZZi::hturn()));
+                assert_eq!(
+                    <ZZi as Units>::unit(-1),
+                    <ZZi as Units>::unit(ZZi::turn() - 1)
+                );
+                assert_eq!(
+                    <ZZi as Units>::unit(1),
+                    <ZZi as Units>::unit(ZZi::turn() + 1)
+                );
+                assert_eq!(
+                    <ZZi as Units>::unit(-ZZi::hturn()),
+                    <ZZi as Units>::unit(ZZi::hturn())
+                );
                 assert_eq!(<ZZi as Units>::unit(ZZi::hturn()), -ZZi::one());
                 if ZZi::has_qturn() {
-                    assert_eq!(<ZZi as Units>::unit(ZZi::qturn()).zz_coeffs()[0], GIntT::from((0, 1)));
+                    assert_eq!(
+                        <ZZi as Units>::unit(ZZi::qturn()).zz_coeffs()[0],
+                        GIntT::from((0, 1))
+                    );
                 }
 
                 // test powi()
@@ -972,7 +992,10 @@ macro_rules! zz_test {
                 for a in 0..ZZi::hturn() {
                     let p = <ZZi as Units>::unit(a);
                     let (x, y) = p.re_im();
-                    assert_eq!(p, ZZi::from(x) + ZZi::from(y) * <ZZi as Units>::unit(ZZi::qturn()));
+                    assert_eq!(
+                        p,
+                        ZZi::from(x) + ZZi::from(y) * <ZZi as Units>::unit(ZZi::qturn())
+                    );
                 }
             }
 

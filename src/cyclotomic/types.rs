@@ -19,12 +19,12 @@ use super::sign::{
     zz_partial_signum_fallback,
 };
 use super::symnum::{GIntT, RatioT, SymNum, ZZComplex, ZZParams};
-use super::units::Units;
 use super::traits::{
     ComplexTraits, FieldTraits, HasZZ10Impl, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, HasZZ8Impl,
     IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, QQType, QType, RealTraits,
     RingTraits, ZType, ZZType,
 };
+use super::units::Units;
 
 // generate boilerplate implementations
 

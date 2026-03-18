@@ -131,7 +131,9 @@ impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Rat
         Snake::try_from(value).and_then(|s| Rat::try_from(&s))
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I; N]> for Rat<T> {
+impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I; N]>
+    for Rat<T>
+{
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {

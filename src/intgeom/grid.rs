@@ -128,8 +128,12 @@ mod tests {
     #[test]
     fn test_seg_neighborhood_of() {
         // segment fully contained in one cell
-        let tmp1 = (ZZ12::one().scale(2) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(2)) * <ZZ12 as Units>::unit(1);
-        let tmp2 = (ZZ12::one().scale(3) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(3)) * <ZZ12 as Units>::unit(2);
+        let tmp1 =
+            (ZZ12::one().scale(2) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(2))
+                * <ZZ12 as Units>::unit(1);
+        let tmp2 =
+            (ZZ12::one().scale(3) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(3))
+                * <ZZ12 as Units>::unit(2);
         let p1 = (tmp1 - tmp2) * <ZZ12 as Units>::unit(-2);
         let p2 = p1 + <ZZ12 as Units>::unit(2);
         let n0 = UnitSquareGrid::seg_neighborhood_of(p1, p2);

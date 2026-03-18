@@ -11,8 +11,8 @@ use plotters::coord::Shift;
 use plotters::prelude::*;
 
 use tilezz::cyclotomic::geometry::point_mod_rect;
-use tilezz::cyclotomic::*;
 use tilezz::cyclotomic::Units;
+use tilezz::cyclotomic::*;
 use tilezz::vis::plotters::{plot_points, rainbow};
 use tilezz::vis::plotutils::{chart_padding, tiles_bounds, P64, R64};
 
