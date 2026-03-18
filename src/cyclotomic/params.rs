@@ -19,11 +19,11 @@ pub const ZZ16_Y: f64 = 2.0 + SQRT_2;
 
 // NOTE: sqrt(2+sqrt(2+sqrt(2))) = ( 1 + sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2-sqrt(2+sqrt(2)))
 // and   sqrt(2-sqrt(2+sqrt(2))) = (-1 - sqrt(2) + sqrt(2(2+sqrt(2)))) sqrt(2+sqrt(2+sqrt(2)))
-pub const ZZ32_Z: f64 = 2.0 + 1.84775906502257351225; // 2+sqrt(2+sqrt(2))
+pub const ZZ32_Z: f64 = 2.0 + 1.847_759_065_022_573_5; // 2+sqrt(2+sqrt(2))
 
 // NOTE: Let x = sqrt(5-sqrt(5)), y = sqrt(5), z = sqrt(5+sqrt(5))
 // Then:     x = 1/2z(y-1),       y = 1/2(xz), z = 1/2x(y+1)
-pub const SQRT_5: f64 = 2.23606797749978969;
+pub const SQRT_5: f64 = 2.236_067_977_499_79;
 pub const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 
 // NOTE: could construct ZZ120 and ZZ240 as well, using only the roots we already use:
@@ -55,7 +55,6 @@ pub const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
 /// This conceptual 3D symbolic vector multiplication matrix is not implemented
 /// explicitly, instead the resulting coefficients are manually collected and
 /// simplified for each ring separately, which is more efficient.
-
 // ----------------
 /// Gauss integers
 pub const ZZ4_PARAMS: ZZParams = ZZParams {
@@ -158,7 +157,7 @@ pub const ZZ12_PARAMS: ZZParams = ZZParams {
     ccw_unit_coeffs: &[[0, 1], [1, 0]],
 };
 pub fn zz12_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    return zz6_mul(x, y);
+    zz6_mul(x, y)
 }
 
 // ----------------
