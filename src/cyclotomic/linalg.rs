@@ -180,8 +180,8 @@ mod tests {
 
     use super::super::constants::zz_units_sum;
     use super::super::symnum::SymNum;
-    use super::super::units::Units;
     use super::super::types::{Z12, ZZ12};
+    use super::super::units::Units;
     use super::*;
 
     type ZZi = ZZ12;
@@ -233,9 +233,14 @@ mod tests {
         let one_half: <ZZ12 as IsComplex>::Field =
             <ZZ12 as IsComplex>::Field::from(1) / <ZZ12 as IsComplex>::Field::from(2);
         assert_eq!(ZZ12::from(norm_sq(&<ZZ12 as Units>::unit(1))), 1.into());
-        assert_eq!(ZZ12::from(norm_sq(&<ZZ12 as Units>::unit(1).scale(2))), 4.into());
         assert_eq!(
-            <ZZ12 as IsComplex>::Field::from(norm_sq(&(one_half * <ZZ12 as Units>::unit(1).into()))),
+            ZZ12::from(norm_sq(&<ZZ12 as Units>::unit(1).scale(2))),
+            4.into()
+        );
+        assert_eq!(
+            <ZZ12 as IsComplex>::Field::from(norm_sq(
+                &(one_half * <ZZ12 as Units>::unit(1).into())
+            )),
             one_half * one_half
         );
     }
@@ -264,25 +269,58 @@ mod tests {
     #[test]
     fn test_is_ccw() {
         type ZZ = ZZ12;
-        assert!(is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(1))));
-        assert!(is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(2), &<ZZ as Units>::unit(3))));
-        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(0))));
-        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(1))));
-        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(0))));
-        assert!(!is_ccw(&ZZ::zero(), (&<ZZ as Units>::unit(6), &<ZZ as Units>::unit(5))));
+        assert!(is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(1))
+        ));
+        assert!(is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(2), &<ZZ as Units>::unit(3))
+        ));
+        assert!(!is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(0))
+        ));
+        assert!(!is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(1))
+        ));
+        assert!(!is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(0))
+        ));
+        assert!(!is_ccw(
+            &ZZ::zero(),
+            (&<ZZ as Units>::unit(6), &<ZZ as Units>::unit(5))
+        ));
     }
 
     #[test]
     fn test_angle_between() {
         type ZZ = ZZ12;
         // test inside
-        assert!(angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(2))));
-        assert!(angle_between(&<ZZ as Units>::unit(-2), (&<ZZ as Units>::unit(-3), &<ZZ as Units>::unit(1))));
+        assert!(angle_between(
+            &<ZZ as Units>::unit(1),
+            (&<ZZ as Units>::unit(0), &<ZZ as Units>::unit(2))
+        ));
+        assert!(angle_between(
+            &<ZZ as Units>::unit(-2),
+            (&<ZZ as Units>::unit(-3), &<ZZ as Units>::unit(1))
+        ));
         // test outside
-        assert!(!angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(-1), &<ZZ as Units>::unit(0))));
+        assert!(!angle_between(
+            &<ZZ as Units>::unit(1),
+            (&<ZZ as Units>::unit(-1), &<ZZ as Units>::unit(0))
+        ));
         // bound inclusive
-        assert!(angle_between(&<ZZ as Units>::unit(1), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))));
-        assert!(angle_between(&<ZZ as Units>::unit(2), (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))));
+        assert!(angle_between(
+            &<ZZ as Units>::unit(1),
+            (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))
+        ));
+        assert!(angle_between(
+            &<ZZ as Units>::unit(2),
+            (&<ZZ as Units>::unit(1), &<ZZ as Units>::unit(2))
+        ));
     }
 
     #[test]
@@ -364,7 +402,11 @@ mod tests {
         // check behavior on a non-unit that is rotated
         let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
             .into_iter()
-            .map(|i| pseudo_angle(&((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i))))
+            .map(|i| {
+                pseudo_angle(
+                    &((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i)),
+                )
+            })
             .collect();
         for i in 1..ZZ12::turn() {
             let ii = i as usize;
