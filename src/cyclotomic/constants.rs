@@ -2,9 +2,9 @@
 
 use num_traits::One;
 
-use super::units::Units;
 use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsComplex, IsRingOrField};
 use super::types::{ZZ10, ZZ20, ZZ6};
+use super::units::Units;
 
 // Returns the sum of all units of a complex integer ring.
 pub fn zz_units_sum<T: IsRingOrField + IsComplex + Units>() -> T {
