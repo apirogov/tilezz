@@ -26,7 +26,7 @@ pub fn unit_idx<T: SymNum>(angle: i8) -> i8 {
     if a > 0 {
         return a + 1;
     }
-    return -(half + a) - 1;
+    -(half + a) - 1
 }
 
 /// Convert a normalized relative polygon angle sequence to an absolute angle sequence.
@@ -37,7 +37,7 @@ pub fn to_abs_seq<T: SymNum>(angles: &[i8]) -> Vec<i8> {
     let mut currdir: i8 = 0;
     let mut result: Vec<i8> = Vec::new();
     for a in angles {
-        currdir = currdir + a;
+        currdir += a;
         result.push(unit_idx::<T>(currdir));
     }
     result

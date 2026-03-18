@@ -31,6 +31,7 @@ pub fn signum_sum_sqrt_expr_2<T: IntRing + ZSigned>(a: T, m: T, b: T, n: T) -> T
 /// a + b*sqrt(m) + c*sqrt(n) + d*sqrt(m*n)
 /// where a,b,c,m,n are all integers
 /// and m,n are squarefree coprime constants > 1.
+#[allow(clippy::too_many_arguments)]
 pub fn signum_sum_sqrt_expr_4<T: IntRing + ZSigned + FromPrimitive>(
     a: T,
     k: T,
@@ -121,7 +122,7 @@ pub fn zz_partial_signum_1_sym<Z: IsReal>(val: &Z) -> Z {
     let cs = val.zz_coeffs();
 
     let mut result = Z::zero();
-    result.zz_coeffs_mut()[0] = Z::Scalar::from(cs[0].signum());
+    result.zz_coeffs_mut()[0] = cs[0].signum();
     result
 }
 
@@ -135,7 +136,7 @@ pub fn zz_partial_signum_2_sym<Z: IsReal>(val: &Z) -> Z {
     let sgn = signum_sum_sqrt_expr_2(a, m, b, n);
 
     let mut result = Z::zero();
-    result.zz_coeffs_mut()[0] = Z::Scalar::from(sgn);
+    result.zz_coeffs_mut()[0] = sgn;
     result
 }
 
@@ -160,7 +161,7 @@ pub fn zz_partial_signum_4_sym<Z: IsReal>(val: &Z) -> Z {
     let sgn = signum_sum_sqrt_expr_4(a, k, b, m, c, n, d, l);
 
     let mut result = Z::zero();
-    result.zz_coeffs_mut()[0] = Z::Scalar::from(sgn);
+    result.zz_coeffs_mut()[0] = sgn;
     result
 }
 

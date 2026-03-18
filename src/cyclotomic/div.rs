@@ -21,7 +21,7 @@ pub fn zz_inv<Z: SymNum + Conj + One + Zero>(val: &Z) -> Z {
     let num_terms = Z::zz_params().sym_roots_num;
 
     let mut numer = Z::one();
-    let mut denom = val.clone();
+    let mut denom = *val;
 
     // first ensure that the denominator is real
     // FIXME: this can lead to integer overflow far quicker (squaring = double the bits)
@@ -61,7 +61,7 @@ pub fn zz_inv<Z: SymNum + Conj + One + Zero>(val: &Z) -> Z {
         // compute y' = a - b
         let denom_conj = {
             let curr_root_coeff = denom.zz_coeffs()[root_ix];
-            let mut yy = denom.clone();
+            let mut yy = denom;
             yy.zz_coeffs_mut()[root_ix] = -curr_root_coeff;
             yy
         };
@@ -80,5 +80,5 @@ pub fn zz_inv<Z: SymNum + Conj + One + Zero>(val: &Z) -> Z {
     inv_denom.zz_coeffs_mut()[non_root_ix] = Z::Scalar::one() / denom.zz_coeffs()[non_root_ix];
     let inv_denom = inv_denom;
 
-    return numer * inv_denom;
+    numer * inv_denom
 }

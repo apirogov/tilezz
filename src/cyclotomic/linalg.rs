@@ -23,7 +23,7 @@ pub fn wedge<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> ZZ::Real {
 
 /// Squared norm square of a value, i.e. dot product of the value with itself.
 pub fn norm_sq<ZZ: IsComplex>(p: &ZZ) -> ZZ::Real {
-    dot::<ZZ>(&p, &p)
+    dot::<ZZ>(p, p)
 }
 
 /// Projection of v onto u, i.e. dot(u,v)/|u|^2 * u
@@ -159,7 +159,7 @@ where
     <ZZ as IsComplex>::Field: From<ZZ>,
     Angle<ZZ>: Div<Output = Angle<ZZ>>,
 {
-    let (s, c) = (pseudo_sin::<ZZ>(&p), pseudo_cos::<ZZ>(&p));
+    let (s, c) = (pseudo_sin::<ZZ>(p), pseudo_cos::<ZZ>(p));
     let one = Angle::<ZZ>::one();
     match quadrant::<ZZ>(&s, &c) {
         1 => Angle::<ZZ>::zero(),
@@ -384,7 +384,6 @@ mod tests {
     fn test_pseudo_angle() {
         // check behavior on units
         let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
-            .into_iter()
             .map(|i| pseudo_angle(&<ZZ12 as Units>::unit(i)))
             .collect();
         assert_eq!(angles[0], 0.into());
@@ -401,7 +400,6 @@ mod tests {
 
         // check behavior on a non-unit that is rotated
         let angles: Vec<Angle<ZZ12>> = (0..ZZ12::turn())
-            .into_iter()
             .map(|i| {
                 pseudo_angle(
                     &((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i)),
@@ -422,7 +420,6 @@ mod tests {
         /*
         type Field<ZZ> = <ZZ as IsComplex>::Field;
         let points: Vec<_> = (0..ZZ12::turn())
-            .into_iter()
             .map(|i| {
                 Field::<ZZ12>::from((ZZ12::one().scale(2) + <ZZ12 as Units>::unit(1)) * <ZZ12 as Units>::unit(i))
                     / Field::<ZZ12>::from(100)
