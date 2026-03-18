@@ -191,6 +191,10 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         self.angles.len() / 2
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Returns the chirality (1 = ccw, -1 = cw).
     pub fn chirality(&self) -> i8 {
         self.angle_sum.signum() as i8

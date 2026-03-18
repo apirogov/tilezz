@@ -94,7 +94,7 @@ pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     println!("-------- enumeration completed --------");
 
     let mut result: Vec<Vec<i8>> = result.into_iter().collect();
-    result.sort_by(|x, y| x.len().cmp(&y.len()));
+    result.sort_by_key(|x| x.len());
     result
 }
 
@@ -160,7 +160,7 @@ pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     println!("-------- enumeration completed --------");
 
     let mut result: Vec<Vec<i8>> = result.into_iter().collect();
-    result.sort_by(|x, y| x.len().cmp(&y.len()));
+    result.sort_by_key(|x| x.len());
     result
 }
 
@@ -272,9 +272,11 @@ fn main() {
                 let grid = (1, 1);
                 let areas: Vec<_> = root.split_evenly(grid);
 
-                let mut style = TileStyle::default();
-                style.node_size = 0;
-                style.node_labels = false;
+                let style = TileStyle {
+                    node_size: 0,
+                    node_labels: false,
+                    ..Default::default()
+                };
                 for (ix, tile) in rats.iter().enumerate() {
                     println!("plotting tile {}/{}", ix + 1, rats.len());
 
@@ -283,9 +285,9 @@ fn main() {
                     let _ = area.fill(&WHITE);
 
                     let pad = w * 2 / 100;
-                    let mut area = area.margin(pad, pad, pad, pad);
+                    let area = area.margin(pad, pad, pad, pad);
 
-                    plot_tile(&mut area, &tile, &style);
+                    plot_tile(&area, tile, &style);
 
                     area.present().unwrap();
                 }

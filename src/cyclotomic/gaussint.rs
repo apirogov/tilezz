@@ -190,6 +190,7 @@ impl<T: IntField> GaussInt<T> {
 impl<T: IntField> Div<GaussInt<T>> for GaussInt<T> {
     type Output = Self;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, other: Self) -> Self {
         // Division is defined via multiplication with the inverse.
         self * other.inv()

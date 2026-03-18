@@ -45,7 +45,7 @@ pub fn penrose_p3_narrow<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
         /* */ 1, 0, 1, -2, 1, 0, 0, //  2- = N17 [14,21]
         /* */ 4, 0, 0, 1, -2, 1, 0, //  1- = N25 [21,28]
     ];
-    Snake::try_from(upscale_angles::<T>(10, &seq).as_slice()).unwrap()
+    Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
 
 pub fn penrose_p3_wide<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
@@ -56,7 +56,7 @@ pub fn penrose_p3_wide<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
         /* */ 2, 0, 0, -1, 2, -1, 0, // 2+ = W18  [14,21]
         /* */ 3, 0, 1, -2, 1, 0, 0, //  2- = W24  [21,28]
     ];
-    Snake::try_from(upscale_angles::<T>(10, &seq).as_slice()).unwrap()
+    Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
 
 // ----
