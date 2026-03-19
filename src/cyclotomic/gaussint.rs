@@ -149,11 +149,20 @@ impl<
     type Output = Self;
 
     fn pow(self, other: u8) -> Self {
-        let mut x = Self::one();
-        for _ in 0..other {
-            x = x * self;
+        // Binary (exponentiation by squaring): O(log n) multiplications.
+        let mut base = self;
+        let mut exp = other;
+        let mut acc = Self::one();
+        while exp != 0 {
+            if (exp & 1) == 1 {
+                acc = acc * base;
+            }
+            exp >>= 1;
+            if exp != 0 {
+                base = base * base;
+            }
         }
-        x
+        acc
     }
 }
 impl<
