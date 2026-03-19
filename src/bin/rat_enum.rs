@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -21,7 +21,7 @@ static VERBOSE: Mutex<bool> = Mutex::new(false);
 // this seems to be slower... maybe should optimize by using a trie of snakes
 // if one shorter snake does not work, no point using one with same prefix!
 pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
-    let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
+    let mut result: HashSet<Vec<i8>> = HashSet::new();
 
     // simple snakes of a fixed length (initialized with length 0 (dummy) and 1 (start))
     let mut k_snakes: Vec<Vec<Vec<i8>>> = vec![vec![vec![]]];
@@ -29,7 +29,7 @@ pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut total_snakes: usize = (ZZ::turn() - 1) as usize;
 
     println!("-------- enumeration started --------");
-    let status_log = |step, num_snakes: usize, result: &BTreeSet<_>| {
+    let status_log = |step, num_snakes: usize, result: &HashSet<_>| {
         println!(
             "round {}: {} snakes, {} rats",
             step,
@@ -69,8 +69,10 @@ pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
                     }
                     .canonical()
                 };
+
                 let seq = r.seq().to_vec();
-                if result.insert(seq.clone()) {
+                let is_new = result.insert(seq.clone());
+                if is_new {
                     total_snakes += 1;
                     println!("RAT {seq:?}");
                 }
@@ -85,7 +87,10 @@ pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
 
             // add the prolonged path
             next.push(s.angles().to_vec());
-            println!("SNAKE {:?}", s.angles());
+
+            if *VERBOSE.lock().unwrap() {
+                println!("SNAKE {:?}", s.angles());
+            }
         }
 
         k_snakes.push(next);
@@ -99,12 +104,12 @@ pub fn rat_enum_alt<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
 }
 
 pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
-    let mut result: BTreeSet<Vec<i8>> = BTreeSet::new();
+    let mut result: HashSet<Vec<i8>> = HashSet::new();
 
     let mut snakes: Vec<Vec<i8>> = vec![vec![]];
 
     println!("-------- enumeration started --------");
-    let status_log = |step, snakes: &Vec<_>, result: &BTreeSet<_>| {
+    let status_log = |step, snakes: &Vec<Vec<i8>>, result: &HashSet<_>| {
         println!(
             "round {}: {} alive snakes, {} unique rats",
             step,
@@ -120,9 +125,13 @@ pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
         let remaining_steps_sq = norm_sq(&ZZ::from(remaining));
 
         let mut next: Vec<Vec<i8>> = Vec::new();
+
         for seq in snakes.iter() {
+            let parent: Snake<ZZ> = Snake::from_slice_unsafe(seq);
+
             for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
-                let mut s: Snake<ZZ> = Snake::try_from(seq.as_slice()).unwrap();
+                // O(1): clone parent (full Snake state) and add one step.
+                let mut s = parent.clone();
                 if !s.add(direction) {
                     continue; // invalid step (self-crossing)
                 }
@@ -137,8 +146,10 @@ pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
                         }
                         .canonical()
                     };
+
                     let seq = r.seq().to_vec();
-                    if result.insert(seq.clone()) {
+                    let is_new = result.insert(seq.clone());
+                    if is_new {
                         println!("RAT {seq:?}");
                     }
                 }
