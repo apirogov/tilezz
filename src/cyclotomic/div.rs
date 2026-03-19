@@ -71,6 +71,10 @@ pub fn zz_inv<Z: SymNum + Conj + One + Zero>(val: &Z) -> Z {
         numer = numer * denom_conj;
         // update denominator (= (a + b)(a - b) = a^2 - b^2)
         denom = denom * denom_conj;
+        debug_assert!(
+            !denom.zz_coeffs().iter().all(|c| c.is_zero()),
+            "zz_inv: denominator collapsed to zero; likely i64 overflow in rationalization"
+        );
     }
 
     // now we have a rational denominator (i.e. no square root terms)
