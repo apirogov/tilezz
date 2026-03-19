@@ -115,10 +115,14 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     #[inline]
     fn scale<I: Integer + ToPrimitive>(&self, scalar: I) -> Self
     where
-        Self: Sized,
+        Self: Sized + Copy,
     {
-        let cs: Vec<Self::Scalar> = Self::zz_mul_scalar(self.zz_coeffs(), scalar.to_i64().unwrap());
-        Self::new(&cs)
+        let sc = Self::Scalar::from_i64(scalar.to_i64().unwrap()).unwrap();
+        let mut ret = *self;
+        for c in ret.zz_coeffs_mut().iter_mut() {
+            *c = *c * sc;
+        }
+        ret
     }
 
     // --------
@@ -156,26 +160,35 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
         ret
     }
 
-    fn zz_add(&self, other: &Self) -> Vec<Self::Scalar> {
-        let mut ret = Self::zz_zero_vec();
-        for (i, (aval, bval)) in self.zz_coeffs().iter().zip(other.zz_coeffs()).enumerate() {
-            ret[i] = *aval + *bval;
+    fn zz_add(&self, other: &Self) -> Self
+    where
+        Self: Sized + Copy,
+    {
+        let mut ret = *self;
+        for (r, b) in ret.zz_coeffs_mut().iter_mut().zip(other.zz_coeffs()) {
+            *r = *r + *b;
         }
         ret
     }
 
-    fn zz_sub(&self, other: &Self) -> Vec<Self::Scalar> {
-        let mut ret = Self::zz_zero_vec();
-        for (i, (aval, bval)) in self.zz_coeffs().iter().zip(other.zz_coeffs()).enumerate() {
-            ret[i] = *aval - *bval;
+    fn zz_sub(&self, other: &Self) -> Self
+    where
+        Self: Sized + Copy,
+    {
+        let mut ret = *self;
+        for (r, b) in ret.zz_coeffs_mut().iter_mut().zip(other.zz_coeffs()) {
+            *r = *r - *b;
         }
         ret
     }
 
-    fn zz_neg(&self) -> Vec<Self::Scalar> {
-        let mut ret = Self::zz_zero_vec();
-        for (i, val) in self.zz_coeffs().iter().enumerate() {
-            ret[i] = -(*val);
+    fn zz_neg(&self) -> Self
+    where
+        Self: Sized + Copy,
+    {
+        let mut ret = *self;
+        for r in ret.zz_coeffs_mut().iter_mut() {
+            *r = -*r;
         }
         ret
     }
@@ -536,13 +549,19 @@ macro_rules! impl_complex_traits {
             }
 
             fn re(&self) -> <Self as IsRingOrField>::Real {
-                let cs: Vec<RatioT> = self.zz_coeffs().iter().map(|c| c.real).collect();
-                <Self as IsRingOrField>::Real::new(cs.as_slice())
+                let mut ret = <Self as IsRingOrField>::Real::zero();
+                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(self.zz_coeffs()) {
+                    *r = c.real;
+                }
+                ret
             }
 
             fn im(&self) -> <Self as IsRingOrField>::Real {
-                let cs: Vec<RatioT> = self.zz_coeffs().iter().map(|c| c.imag).collect();
-                <Self as IsRingOrField>::Real::new(cs.as_slice())
+                let mut ret = <Self as IsRingOrField>::Real::zero();
+                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(self.zz_coeffs()) {
+                    *r = c.imag;
+                }
+                ret
             }
         }
 
@@ -561,8 +580,11 @@ macro_rules! impl_conj {
         }
         impl Conj for $name {
             fn conj(&self) -> Self {
-                let cs: Vec<GIntT> = self.zz_coeffs().iter().map(|c| c.conj()).collect();
-                Self::new(&cs)
+                let mut ret = *self;
+                for c in ret.zz_coeffs_mut().iter_mut() {
+                    *c = c.conj();
+                }
+                ret
             }
         }
     };
@@ -574,19 +596,19 @@ macro_rules! impl_intring_traits {
         impl Neg for $t {
             type Output = Self;
             fn neg(self) -> Self {
-                Self::new(&Self::zz_neg(&self))
+                self.zz_neg()
             }
         }
         impl Add<$t> for $t {
             type Output = Self;
             fn add(self, other: Self) -> Self {
-                Self::new(&Self::zz_add(&self, &other))
+                self.zz_add(&other)
             }
         }
         impl Sub<$t> for $t {
             type Output = Self;
             fn sub(self, other: Self) -> Self {
-                Self::new(&Self::zz_sub(&self, &other))
+                self.zz_sub(&other)
             }
         }
         impl Mul<$t> for $t {
@@ -614,7 +636,7 @@ macro_rules! impl_intring_traits {
                 Self::new(&Self::zz_zero_vec())
             }
             fn is_zero(&self) -> bool {
-                self.zz_coeffs().to_vec() == Self::zz_zero_vec()
+                self.zz_coeffs().iter().all(|c| c.is_zero())
             }
         }
         impl One for $t {
@@ -622,7 +644,8 @@ macro_rules! impl_intring_traits {
                 Self::new(&Self::zz_one_vec())
             }
             fn is_one(&self) -> bool {
-                self.zz_coeffs().to_vec() == Self::zz_one_vec()
+                let cs = self.zz_coeffs();
+                cs[0].is_one() && cs[1..].iter().all(|c| c.is_zero())
             }
         }
 
@@ -784,25 +807,31 @@ macro_rules! impl_conversions {
         impl From<$z> for $zz {
             /// Lift real-valued ring value into the corresponding cyclomatic ring
             fn from(value: $z) -> Self {
-                let cs: Vec<<$zz as SymNum>::Scalar> =
-                    value.zz_coeffs().iter().map(|z| (*z).into()).collect();
-                Self::new(cs.as_slice())
+                let mut ret = Self::zero();
+                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
+                    *r = (*c).into();
+                }
+                ret
             }
         }
         impl From<$z> for $qq {
             /// Lift real-valued ring value into the corresponding cyclomatic ring
             fn from(value: $z) -> Self {
-                let cs: Vec<<$zz as SymNum>::Scalar> =
-                    value.zz_coeffs().iter().map(|z| (*z).into()).collect();
-                Self::new(cs.as_slice())
+                let mut ret = Self::zero();
+                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
+                    *r = (*c).into();
+                }
+                ret
             }
         }
         impl From<$q> for $qq {
             /// Lift real-valued ring value into the corresponding cyclomatic ring
             fn from(value: $q) -> Self {
-                let cs: Vec<<$qq as SymNum>::Scalar> =
-                    value.zz_coeffs().iter().map(|z| (*z).into()).collect();
-                Self::new(cs.as_slice())
+                let mut ret = Self::zero();
+                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
+                    *r = (*c).into();
+                }
+                ret
             }
         }
 
