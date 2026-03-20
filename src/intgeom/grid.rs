@@ -27,13 +27,9 @@ impl UnitSquareGrid {
 
     /// Given a complex integer point, return the 5 unit square lattice cells
     /// that make up the neighborhood of the cell of the point.
-    pub fn neighborhood_of<T: SymNum>(zz: T) -> Vec<(i64, i64)> {
-        let c @ (x, y) = Self::cell_of(zz);
-        let r = (x + 1, y);
-        let l = (x - 1, y);
-        let u = (x, y + 1);
-        let d = (x, y - 1);
-        vec![l, d, c, u, r] // sorted by first x, then y
+    pub fn neighborhood_of<T: SymNum>(zz: T) -> [(i64, i64); 5] {
+        let (x, y) = Self::cell_of(zz);
+        [(x - 1, y), (x, y - 1), (x, y), (x, y + 1), (x + 1, y)]
     }
 
     /// Given endpoints of a unit length line segment,
@@ -41,9 +37,10 @@ impl UnitSquareGrid {
     /// 1. the line segment is guaranteed to be fully contained inside, and
     /// 2. all intersecting unit length segments also have at least one point in it.
     pub fn seg_neighborhood_of<T: SymNum>(p1: T, p2: T) -> Vec<(i64, i64)> {
-        let mut result = Self::neighborhood_of(p1);
-        result.extend(Self::neighborhood_of(p2));
-        result.sort();
+        let mut result = Vec::with_capacity(8);
+        result.extend_from_slice(&Self::neighborhood_of(p1));
+        result.extend_from_slice(&Self::neighborhood_of(p2));
+        result.sort_unstable();
         result.dedup();
         result
     }
@@ -69,24 +66,39 @@ impl UnitSquareGrid {
     }
 
     /// Get all values attached to the given grid cell.
-    pub fn get(&self, (x, y): (i64, i64)) -> Vec<usize> {
-        match self.cols_rows.get(&x) {
-            None => vec![],
-            Some(col) => match col.get(&y) {
-                None => vec![],
-                Some(vals) => vals.clone(),
-            },
-        }
+    ///
+    /// Returns a reference to the indices stored in this cell, or an empty slice.
+    pub fn get(&self, (x, y): (i64, i64)) -> &[usize] {
+        self.cols_rows
+            .get(&x)
+            .and_then(|col| col.get(&y))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     /// Returns indices of all points in the given unit square lattice
     /// that are located inside one of the given cells.
     ///
-    /// Note that this does neither sort not deduplicate points.
+    /// Note that this does neither sort nor deduplicate points.
     pub fn get_cells(&self, cells: &[(i64, i64)]) -> Vec<usize> {
-        let mut pt_indices: Vec<usize> = Vec::new();
-        for cell in cells {
-            pt_indices.extend(self.get(*cell));
+        let total_entries: usize = cells
+            .iter()
+            .map(|&(x, y)| {
+                self.cols_rows
+                    .get(&x)
+                    .and_then(|col| col.get(&y))
+                    .map(Vec::len)
+                    .unwrap_or(0)
+            })
+            .sum();
+
+        let mut pt_indices = Vec::with_capacity(total_entries);
+        for &(x, y) in cells {
+            if let Some(col) = self.cols_rows.get(&x) {
+                if let Some(vals) = col.get(&y) {
+                    pt_indices.extend(vals);
+                }
+            }
         }
         pt_indices
     }
@@ -98,9 +110,10 @@ impl UnitSquareGrid {
         x_range: (Bound<i64>, Bound<i64>),
         y_range: (Bound<i64>, Bound<i64>),
     ) -> Vec<usize> {
-        let mut pt_indices: Vec<usize> = Vec::new();
+        let mut pt_indices = Vec::new();
         for (_, col) in self.cols_rows.range(x_range) {
             for (_, cell) in col.range(y_range) {
+                pt_indices.reserve(cell.len());
                 pt_indices.extend(cell);
             }
         }
@@ -198,6 +211,9 @@ mod tests {
         grid.add((1, 0), 0);
 
         // sanity-check
+        assert_eq!(grid.get((0, 0)), &[0, 1]);
+        assert_eq!(grid.get((1, 0)), &[2, 0]);
+        assert_eq!(grid.get((2, 0)), &[]);
         assert_eq!(grid.get_cells(&[(0, 0)]), &[0, 1]);
         assert_eq!(grid.get_cells(&[(1, 0)]), &[2, 0]);
         assert_eq!(UnitSquareGrid::get_cells(&grid, &[(2, 0)]), &[]);
