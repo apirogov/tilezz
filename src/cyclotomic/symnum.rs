@@ -366,7 +366,11 @@ macro_rules! impl_symnum {
             #[inline]
             fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
                 let sc: Self::Scalar = Self::Scalar::from(scalar);
-                x.into_iter().map(|c| *c * sc).collect()
+                let mut ret = [Self::Scalar::zero(); $params.sym_roots_num];
+                for (r, c) in ret.iter_mut().zip(x.iter()) {
+                    *r = *c * sc;
+                }
+                ret.to_vec()
             }
 
             fn new(coeffs: &[Self::Scalar]) -> Self {
@@ -378,15 +382,13 @@ macro_rules! impl_symnum {
             }
 
             fn complex64(&self) -> Complex64 {
-                // Avoid heap allocations: compute sum directly.
+                static SYM_ROOTS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+                let roots = SYM_ROOTS
+                    .get_or_init(|| $params.sym_roots_sqs.iter().map(|sq| sq.sqrt()).collect());
                 let mut ret = Complex64::zero();
-                for (c, root_sq) in self
-                    .zz_coeffs()
-                    .iter()
-                    .zip(Self::zz_params().sym_roots_sqs.iter())
-                {
+                for (c, root) in self.zz_coeffs().iter().zip(roots.iter()) {
                     let re = c.to_f64().unwrap();
-                    ret += Complex64::new(re * root_sq.sqrt(), 0.0);
+                    ret += Complex64::new(re * root, 0.0);
                 }
                 ret
             }
@@ -418,7 +420,11 @@ macro_rules! impl_symnum {
             #[inline]
             fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
                 let sc: Self::Scalar = Self::Scalar::from(scalar);
-                x.into_iter().map(|c| *c * sc).collect()
+                let mut ret = [Self::Scalar::zero(); $params.sym_roots_num];
+                for (r, c) in ret.iter_mut().zip(x.iter()) {
+                    *r = *c * sc;
+                }
+                ret.to_vec()
             }
 
             fn new(coeffs: &[Self::Scalar]) -> Self {
@@ -430,17 +436,14 @@ macro_rules! impl_symnum {
             }
 
             fn complex64(&self) -> Complex64 {
-                // Avoid heap allocations: compute sum directly.
+                static SYM_ROOTS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+                let roots = SYM_ROOTS
+                    .get_or_init(|| $params.sym_roots_sqs.iter().map(|sq| sq.sqrt()).collect());
                 let mut ret = Complex64::zero();
-                for (c, root_sq) in self
-                    .zz_coeffs()
-                    .iter()
-                    .zip(Self::zz_params().sym_roots_sqs.iter())
-                {
+                for (c, root) in self.zz_coeffs().iter().zip(roots.iter()) {
                     let re = c.real.to_f64().unwrap();
                     let im = c.imag.to_f64().unwrap();
-                    let u = root_sq.sqrt();
-                    ret += Complex64::new(re * u, im * u);
+                    ret += Complex64::new(re * root, im * root);
                 }
                 ret
             }
