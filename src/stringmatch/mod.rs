@@ -4,6 +4,8 @@ mod maximal;
 mod rmq;
 mod sais;
 
+pub use cyclic::{CyclicMatch, CyclicMatchIndex};
+
 use std::collections::HashMap;
 
 pub struct Interval {
