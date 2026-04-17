@@ -1,6 +1,21 @@
 use crate::stringmatch::{Match, MatchIndex};
 
 pub fn find_maximal_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match> {
+    find_matches_with_filter(index, i, j, |index, pos_a, local_a, pos_b, local_b| {
+        is_left_maximal(index, pos_a, local_a, pos_b, local_b)
+    })
+}
+
+pub fn find_all_positive_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match> {
+    find_matches_with_filter(index, i, j, |_, _, _, _, _| true)
+}
+
+fn find_matches_with_filter(
+    index: &MatchIndex,
+    i: usize,
+    j: usize,
+    accept: impl Fn(&MatchIndex, usize, usize, usize, usize) -> bool,
+) -> Vec<Match> {
     let mut matches = Vec::new();
 
     let start_i = index.boundaries[i];
@@ -18,6 +33,7 @@ pub fn find_maximal_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match
             local_a,
             (0..r).rev(),
             |k| index.lcp[k + 1],
+            &accept,
             &mut matches,
         );
 
@@ -29,6 +45,7 @@ pub fn find_maximal_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match
             local_a,
             (r + 1)..index.concat.len(),
             |k| index.lcp[k],
+            &accept,
             &mut matches,
         );
     }
@@ -47,6 +64,7 @@ fn scan_side(
     local_a: usize,
     range: impl Iterator<Item = usize>,
     lcp_at: impl Fn(usize) -> usize,
+    accept: &dyn Fn(&MatchIndex, usize, usize, usize, usize) -> bool,
     matches: &mut Vec<Match>,
 ) {
     let mut running_min = usize::MAX;
@@ -64,7 +82,7 @@ fn scan_side(
         if string_i == string_j && local_a == local_b {
             continue;
         }
-        if is_left_maximal(index, pos_a, local_a, pos_b, local_b) {
+        if accept(index, pos_a, local_a, pos_b, local_b) {
             matches.push(Match::new(
                 string_i,
                 string_j,
