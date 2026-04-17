@@ -44,11 +44,14 @@ The core `MatchIndex` is agnostic to domain semantics. Domain concerns (cyclicit
 - [x] Self-match handling (i == j): normalized deduplication
 - [x] Tests: hand-computed examples, verify against brute-force for small inputs, random stress
 
-### Phase 6: Integration & Polish
+### Phase 6: Integration & Polish — DONE
 
-- [ ] End-to-end tests with realistic tile-matching inputs
-- [ ] Benchmark against brute-force to validate performance
-- [ ] Doc examples, final API ergonomics
+- [x] End-to-end tests with realistic tile-matching inputs (spectre, hexagon, tetrominos, penrose rhombs)
+- [x] Match content verification (RC relationship checked for every match)
+- [x] Naive brute-force cross-validation for all e2e test cases
+- [x] Public API: `CyclicMatchIndex` and `CyclicMatch` re-exported from `stringmatch` module
+- [x] Doc comments on all public types and methods
+- [ ] Benchmark against brute-force to validate performance (optional, scale is small)
 
 ## Key Invariants
 
