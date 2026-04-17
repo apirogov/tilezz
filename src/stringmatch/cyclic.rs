@@ -1,5 +1,12 @@
 use crate::stringmatch::MatchIndex;
 
+/// A maximal reverse-complementary match between two cyclic angle sequences.
+///
+/// Represents a shared boundary segment between two polygonal tiles:
+/// tile A's subsequence starting at `pos_a` matches tile B's subsequence
+/// traced in reverse (CW direction) starting at `pos_b`, for `len` edges.
+///
+/// The match is maximal: it cannot be extended in either direction cyclically.
 pub struct CyclicMatch {
     pub tile_a: usize,
     pub pos_a: usize,
@@ -18,6 +25,35 @@ impl std::fmt::Debug for CyclicMatch {
     }
 }
 
+/// Index for finding all maximal reverse-complementary matches across
+/// a collection of cyclic angle sequences (polygonal tile boundaries).
+///
+/// Each input sequence represents the exterior angles of a closed polygon.
+/// The index finds all maximal-length boundary segments shared between any
+/// pair of tiles, where one tile's segment is the reverse complement of the other's
+/// (representing the same geometric boundary traced in opposite directions).
+///
+/// # Construction
+///
+/// Internally, each sequence is doubled (for cyclic wraparound) and its reverse
+/// complement is also indexed. A single `MatchIndex` is built over all 2n sequences.
+///
+/// # Usage
+///
+/// ```ignore
+/// use tilezz::stringmatch::CyclicMatchIndex;
+///
+/// let tiles: Vec<Vec<i8>> = vec![
+///     vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2],
+///     vec![1, 2, 3, 4],
+/// ];
+/// let idx = CyclicMatchIndex::new(&tiles);
+/// let matches = idx.maximal_rc_matches(0, 1);
+/// for m in &matches {
+///     println!("tile {} pos {} <-> tile {} pos {}, len {}",
+///              m.tile_a, m.pos_a, m.tile_b, m.pos_b, m.len);
+/// }
+/// ```
 pub struct CyclicMatchIndex {
     originals: Vec<Vec<i8>>,
     n: usize,
@@ -25,6 +61,11 @@ pub struct CyclicMatchIndex {
 }
 
 impl CyclicMatchIndex {
+    /// Build a cyclic match index over the given angle sequences.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `strings` is empty.
     pub fn new(strings: &[Vec<i8>]) -> Self {
         assert!(!strings.is_empty(), "need at least one string");
 
@@ -54,14 +95,21 @@ impl CyclicMatchIndex {
         }
     }
 
+    /// Number of tiles in the index.
     pub fn num_tiles(&self) -> usize {
         self.n
     }
 
+    /// Length (number of angles) of tile `i`.
     pub fn tile_len(&self, i: usize) -> usize {
         self.originals[i].len()
     }
 
+    /// Find all maximal reverse-complementary matches between tiles `i` and `j`.
+    ///
+    /// Each `CyclicMatch` describes a shared boundary segment where tile A's
+    /// angles at positions `pos_a..pos_a+len` (cyclically) match the reverse
+    /// complement of tile B's angles at positions `pos_b-len+1..=pos_b` (cyclically).
     pub fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<CyclicMatch> {
         let raw = self.index.all_positive_matches(i, self.n + j);
 
@@ -288,6 +336,184 @@ mod tests {
                 for j in 0..tiles.len() {
                     check_rc(&tiles, i, j);
                 }
+            }
+        }
+    }
+
+    fn verify_rc_content(a: &[i8], b: &[i8], pos_a: usize, pos_b: usize, len: usize) {
+        let n_a = a.len();
+        let n_b = b.len();
+        assert!(len > 0, "match length must be positive");
+        assert!(len <= n_a && len <= n_b, "match length exceeds tile size");
+        for i in 0..len {
+            let pa = (pos_a + i) % n_a;
+            let pb = (n_b + pos_b - i) % n_b;
+            assert_eq!(
+                a[pa], -b[pb],
+                "RC content mismatch at offset {i}: a[{pa}]={} vs -b[{pb}]={}",
+                a[pa], -b[pb],
+            );
+        }
+    }
+
+    fn verify_all_matches(idx: &CyclicMatchIndex, i: usize, j: usize) {
+        let matches = idx.maximal_rc_matches(i, j);
+        let a = &idx.originals[i];
+        let b = &idx.originals[j];
+        for m in &matches {
+            assert_eq!(m.tile_a, i);
+            assert_eq!(m.tile_b, j);
+            assert!(m.pos_a < a.len());
+            assert!(m.pos_b < b.len());
+            assert!(m.len > 0);
+            verify_rc_content(a, b, m.pos_a, m.pos_b, m.len);
+        }
+    }
+
+    #[test]
+    fn e2e_spectre_self_match() {
+        let angles: Vec<i8> = vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+        let tiles = vec![angles.clone(), angles.clone()];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        check_rc(&tiles, 0, 1);
+        verify_all_matches(&idx, 0, 1);
+
+        let matches = idx.maximal_rc_matches(0, 1);
+        assert!(!matches.is_empty(), "spectre should have self-matches");
+
+        let max_len = matches.iter().map(|m| m.len).max().unwrap();
+        assert_eq!(max_len, 3, "spectre max RC self-match should be 3");
+    }
+
+    #[test]
+    fn e2e_spectre_pairwise() {
+        let a: Vec<i8> = vec![3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+        let b: Vec<i8> = vec![0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2, 3, 2];
+        let tiles = vec![a, b];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        for i in 0..2 {
+            for j in 0..2 {
+                check_rc(&tiles, i, j);
+                verify_all_matches(&idx, i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_tetrominos() {
+        let t_o: Vec<i8> = vec![0, 1, 0, 1, 0, 1, 0, 1];
+        let t_i: Vec<i8> = vec![0, 0, 0, 1, 1, 0, 0, 0, 1, 1];
+        let t_t: Vec<i8> = vec![-1, 1, 1, -1, 1, 1, 0, 0, 1, 1];
+        let tiles = vec![t_o, t_i, t_t];
+
+        let idx = CyclicMatchIndex::new(&tiles);
+        for i in 0..tiles.len() {
+            for j in 0..tiles.len() {
+                check_rc(&tiles, i, j);
+                verify_all_matches(&idx, i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_tetromino_self_matches() {
+        let t_s: Vec<i8> = vec![-1, 1, 1, 0, 1, -1, 1, 1, 0, 1];
+        let tiles = vec![t_s];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        let matches = idx.maximal_rc_matches(0, 0);
+        verify_all_matches(&idx, 0, 0);
+        assert!(!matches.is_empty(), "S-tetromino should have self-matches");
+    }
+
+    #[test]
+    fn e2e_hexagons_no_rc_match() {
+        let hex: Vec<i8> = vec![1, 1, 1, 1, 1, 1];
+        let tiles = vec![hex.clone(), hex.clone()];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        let matches = idx.maximal_rc_matches(0, 1);
+        assert!(
+            matches.is_empty(),
+            "identical hexagons have no RC matches (all positive vs all negative)"
+        );
+    }
+
+    #[test]
+    fn e2e_hexagon_vs_reversed_hexagon() {
+        let hex: Vec<i8> = vec![1, 1, 1, 1, 1, 1];
+        let hex_rev: Vec<i8> = vec![-1, -1, -1, -1, -1, -1];
+        let tiles = vec![hex, hex_rev];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        let matches = idx.maximal_rc_matches(0, 1);
+        verify_all_matches(&idx, 0, 1);
+
+        let max_len = matches.iter().map(|m| m.len).max().unwrap_or(0);
+        assert_eq!(
+            max_len, 6,
+            "hexagon and reversed hexagon should fully match"
+        );
+    }
+
+    #[test]
+    fn e2e_penrose_rhombs() {
+        let wide: Vec<i8> = vec![
+            2, 0, -1, 2, -1, 0, 0, 3, 0, 0, 1, -2, 1, 0, 0, 2, 0, 0, -1, 2, -1, 0, 0, 3, 0, 1, -2,
+            1, 0,
+        ];
+        let narrow: Vec<i8> = vec![
+            1, 0, -1, 2, -1, 0, 0, 4, 0, 0, -1, 2, -1, 0, 0, 1, 0, 1, -2, 1, 0, 0, 4, 0, 0, 1, -2,
+            1, 0,
+        ];
+        let tiles = vec![wide, narrow];
+        let idx = CyclicMatchIndex::new(&tiles);
+
+        for i in 0..2 {
+            for j in 0..2 {
+                check_rc(&tiles, i, j);
+                verify_all_matches(&idx, i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_mixed_shapes() {
+        let square: Vec<i8> = vec![1, 1, 1, 1];
+        let triangle: Vec<i8> = vec![2, 2, 2];
+        let rect: Vec<i8> = vec![0, 0, 1, 1, 0, 0, 1, 1];
+        let tiles = vec![square, triangle, rect];
+
+        let idx = CyclicMatchIndex::new(&tiles);
+        for i in 0..tiles.len() {
+            for j in 0..tiles.len() {
+                check_rc(&tiles, i, j);
+                verify_all_matches(&idx, i, j);
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_many_tiles_exhaustive() {
+        let mut seed: u64 = 99999;
+        let mut next_angle = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed % 7) as i8) - 3
+        };
+
+        let tiles: Vec<Vec<i8>> = (0..8)
+            .map(|_| (0..10).map(|_| next_angle()).collect())
+            .collect();
+
+        let idx = CyclicMatchIndex::new(&tiles);
+        for i in 0..tiles.len() {
+            for j in 0..tiles.len() {
+                check_rc(&tiles, i, j);
+                verify_all_matches(&idx, i, j);
             }
         }
     }
