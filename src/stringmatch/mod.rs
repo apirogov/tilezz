@@ -1,3 +1,4 @@
+mod cyclic;
 mod lcp;
 mod maximal;
 mod rmq;
@@ -129,6 +130,10 @@ impl MatchIndex {
 
     pub fn maximal_matches(&self, i: usize, j: usize) -> Vec<Match> {
         maximal::find_maximal_matches(self, i, j)
+    }
+
+    pub(crate) fn all_positive_matches(&self, i: usize, j: usize) -> Vec<Match> {
+        maximal::find_all_positive_matches(self, i, j)
     }
 
     pub fn lcp_between(&self, a: usize, b: usize) -> usize {
