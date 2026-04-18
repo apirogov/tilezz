@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use clap::Parser;
-use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
+use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12, ZZ4};
 use tilezz::intgeom::growing::grow_redelmeier;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
@@ -23,6 +23,10 @@ struct Args {
     /// Tile shape
     #[arg(long, value_enum, default_value = "hexagon")]
     tile: TileShape,
+
+    /// Cyclotomic ring
+    #[arg(long, value_enum, default_value = "zz12")]
+    ring: RingChoice,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -40,7 +44,26 @@ enum TileShape {
     Spectre,
 }
 
-fn make_seed(shape: &TileShape) -> Rat<ZZ12> {
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum RingChoice {
+    ZZ4,
+    ZZ12,
+}
+
+fn make_seed_zz4(shape: &TileShape) -> Rat<ZZ4> {
+    match shape {
+        TileShape::Square => Rat::from_unchecked(&tiles::square::<ZZ4>()),
+        _ => {
+            eprintln!(
+                "error: {:?} tile not supported with --ring zz4 (only square)",
+                shape
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+fn make_seed_zz12(shape: &TileShape) -> Rat<ZZ12> {
     let snake: Snake<ZZ12> = match shape {
         TileShape::Hexagon => tiles::hexagon(),
         TileShape::Square => tiles::square(),
@@ -86,9 +109,75 @@ where
     grow_redelmeier(&seed, max_size)
 }
 
-fn print_results(
+fn run_and_print<T>(
     label: &str,
-    results: &BTreeMap<usize, BTreeSet<Rat<ZZ12>>>,
+    seed: Rat<T>,
+    max_size: usize,
+    approach: &Approach,
+) -> BTreeMap<usize, BTreeSet<Rat<T>>>
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    match approach {
+        Approach::Old => {
+            let t0 = Instant::now();
+            let results = run_old(seed, max_size);
+            let elapsed = t0.elapsed();
+            print_results_generic(label, &results, elapsed);
+            results
+        }
+        Approach::New => {
+            let t0 = Instant::now();
+            let results = run_new(seed, max_size);
+            let elapsed = t0.elapsed();
+            print_results_generic(label, &results, elapsed);
+            results
+        }
+        Approach::Both => {
+            let t0 = Instant::now();
+            let old_results = run_old(seed.clone(), max_size);
+            let old_elapsed = t0.elapsed();
+
+            let t0 = Instant::now();
+            let new_results = run_new(seed, max_size);
+            let new_elapsed = t0.elapsed();
+
+            println!();
+            print_results_generic(
+                &format!("Old (TileSet) - {label}"),
+                &old_results,
+                old_elapsed,
+            );
+            println!();
+            print_results_generic(
+                &format!("New (Redelmeier) - {label}"),
+                &new_results,
+                new_elapsed,
+            );
+
+            println!("\n=== Comparison ===");
+            let matches = old_results == new_results;
+            println!("Results match: {}", if matches { "YES" } else { "NO" });
+            if !matches {
+                for k in 1..=max_size {
+                    let old_count = old_results.get(&k).map(|s| s.len()).unwrap_or(0);
+                    let new_count = new_results.get(&k).map(|s| s.len()).unwrap_or(0);
+                    if old_count != new_count {
+                        eprintln!("  size {k}: old={old_count} new={new_count}");
+                    }
+                }
+            }
+            let speedup = old_elapsed.as_secs_f64() / new_elapsed.as_secs_f64().max(1e-9);
+            println!("Speedup: {speedup:.2}x");
+
+            new_results
+        }
+    }
+}
+
+fn print_results_generic<T: IsComplex + IsRingOrField + Units>(
+    label: &str,
+    results: &BTreeMap<usize, BTreeSet<Rat<T>>>,
     elapsed: std::time::Duration,
 ) {
     println!("=== {label} ===");
@@ -109,62 +198,26 @@ fn main() {
         std::process::exit(1);
     }
 
-    let seed = make_seed(&args.tile);
     let tile_label = format!("{:?}", args.tile);
 
-    match args.approach {
-        Approach::Old => {
-            let t0 = Instant::now();
-            let results = run_old(seed, args.max_size);
-            let elapsed = t0.elapsed();
-            print_results(&format!("Old (TileSet) - {tile_label}"), &results, elapsed);
-        }
-        Approach::New => {
-            let t0 = Instant::now();
-            let results = run_new(seed, args.max_size);
-            let elapsed = t0.elapsed();
-            print_results(
-                &format!("New (Redelmeier) - {tile_label}"),
-                &results,
-                elapsed,
+    match args.ring {
+        RingChoice::ZZ4 => {
+            let seed = make_seed_zz4(&args.tile);
+            run_and_print(
+                &format!("{tile_label} [ZZ4]"),
+                seed,
+                args.max_size,
+                &args.approach,
             );
         }
-        Approach::Both => {
-            let t0 = Instant::now();
-            let old_results = run_old(seed.clone(), args.max_size);
-            let old_elapsed = t0.elapsed();
-
-            let t0 = Instant::now();
-            let new_results = run_new(seed, args.max_size);
-            let new_elapsed = t0.elapsed();
-
-            println!();
-            print_results(
-                &format!("Old (TileSet) - {tile_label}"),
-                &old_results,
-                old_elapsed,
+        RingChoice::ZZ12 => {
+            let seed = make_seed_zz12(&args.tile);
+            run_and_print(
+                &format!("{tile_label} [ZZ12]"),
+                seed,
+                args.max_size,
+                &args.approach,
             );
-            println!();
-            print_results(
-                &format!("New (Redelmeier) - {tile_label}"),
-                &new_results,
-                new_elapsed,
-            );
-
-            println!("\n=== Comparison ===");
-            let matches = old_results == new_results;
-            println!("Results match: {}", if matches { "YES" } else { "NO" });
-            if !matches {
-                for k in 1..=args.max_size {
-                    let old_count = old_results.get(&k).map(|s| s.len()).unwrap_or(0);
-                    let new_count = new_results.get(&k).map(|s| s.len()).unwrap_or(0);
-                    if old_count != new_count {
-                        eprintln!("  size {k}: old={old_count} new={new_count}");
-                    }
-                }
-            }
-            let speedup = old_elapsed.as_secs_f64() / new_elapsed.as_secs_f64().max(1e-9);
-            println!("Speedup: {speedup:.2}x");
         }
     }
 }
