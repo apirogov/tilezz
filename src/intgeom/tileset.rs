@@ -62,22 +62,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         self.cmi.maximal_rc_matches(i, j)
     }
 
-    fn get_new_match(
-        a: &Rat<T>,
-        b: &Rat<T>,
-        ia: i64,
-        ib: i64,
-        seen: &mut HashSet<(i64, usize, i64)>,
-    ) -> Option<(i64, usize, i64)> {
-        let (ns, len, ne) = a.get_match((ia, ib), b);
-        if len > 0 && seen.insert((ns, len, ne)) {
-            Some((ns, len, ne))
-        } else {
-            None
-        }
-    }
-
-    fn try_add_glue(
+    fn try_glue_if_new(
         a: &Rat<T>,
         b: &Rat<T>,
         ia: i64,
@@ -86,19 +71,21 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         j: usize,
         seen: &mut HashSet<(i64, usize, i64)>,
     ) -> Option<GlueOp<T>> {
-        let match_info = Self::get_new_match(a, b, ia, ib, seen)?;
-        let (ns, mlen, ne) = match_info;
-        if !junction_gap_positive(a.seq(), ns as usize, mlen, b.seq(), ne as usize) {
+        let (ns, len, ne) = a.get_match((ia, ib), b);
+        if len == 0 || !seen.insert((ns, len, ne)) {
             return None;
         }
-        a.try_glue_precomputed(match_info, b)
+        if !junction_gap_positive(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+            return None;
+        }
+        a.try_glue_precomputed((ns, len, ne), b)
             .ok()
             .map(|glued| GlueOp {
                 tile_a: i,
                 tile_b: j,
                 start_a: ns,
                 end_b: ne,
-                match_len: mlen,
+                match_len: len,
                 result: glued,
             })
     }
@@ -113,18 +100,22 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
 
     /// Find all valid glue operations between tiles `i` and `j`.
     ///
-    /// Uses a two-phase approach:
+    /// Uses a two-phase approach with a shared `seen` set to deduplicate
+    /// normalized matches across phases:
     ///
-    /// **Phase 1 (multi-edge):** Seeds from the CMI index find maximal
-    /// reverse-complement matches. Each CMI match position is also shifted
-    /// by one edge to catch boundary extensions where `Rat::get_match`
-    /// extends beyond the CMI match (since `Rat` starts unconditionally at
-    /// length 1 while CMI requires angle equality at every position).
+    /// **Phase 1 (multi-edge, CMI-seeded):** The Cyclic Match Index finds
+    /// maximal reverse-complement matches. For each CMI match, seeds at
+    /// both endpoints (k=0, k=len) are tried. Overlapping CMI matches can
+    /// produce the same normalized match, so the `seen` set deduplicates.
     ///
-    /// **Phase 2 (single-edge):** Enumerates all position pairs and applies
-    /// the interior-angle overflow heuristic (`is_single_edge_candidate`)
-    /// to reject locally inconsistent candidates before the global
-    /// self-intersection check via `try_glue`.
+    /// **Phase 2 (single-edge scan):** Enumerates all `(ia, ib)` pairs and
+    /// applies the interior-angle overflow heuristic to reject infeasible
+    /// candidates before calling `get_match`. The `seen` set skips matches
+    /// already found by phase 1.
+    ///
+    /// Both phases filter through `junction_gap_positive` (cheap geometric
+    /// pre-filter checking junction vertex gaps) before the expensive
+    /// Snake self-intersection validation in `try_glue`.
     ///
     /// Results are sorted by `(start_a, end_b)` in deterministic order.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
@@ -161,7 +152,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             for k in [0, m.len] {
                 let ka = (pa + k as i64).rem_euclid(n_a as i64);
                 let kb = (pb - k as i64).rem_euclid(n_b as i64);
-                results.extend(Self::try_add_glue(a, b, ka, kb, i, j, &mut seen));
+                results.extend(Self::try_glue_if_new(a, b, ka, kb, i, j, &mut seen));
             }
         }
 
@@ -172,7 +163,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 if use_single_edge_heuristic && !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
                     continue;
                 }
-                results.extend(Self::try_add_glue(
+                results.extend(Self::try_glue_if_new(
                     a, b, ia as i64, ib as i64, i, j, &mut seen,
                 ));
             }
