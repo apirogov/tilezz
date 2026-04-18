@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::ops::Range;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
+use crate::intgeom::snake::Snake;
 use crate::stringmatch::CyclicMatchIndex;
 
 pub struct GlueOp<T: IsComplex> {
@@ -17,48 +19,49 @@ pub struct GlueOp<T: IsComplex> {
 #[derive(Debug, Clone, Default)]
 pub struct GlueStats {
     pub cmi_candidates: usize,
-    pub cmi_geometric: usize,
-    pub cmi_valid: usize,
+    pub cmi_sequences: usize,
     pub se_total_pairs: usize,
     pub se_pass_heuristic: usize,
-    pub se_geometric: usize,
-    pub se_valid: usize,
+    pub se_sequences: usize,
+    pub unique_sequences: usize,
+    pub snake_valid: usize,
 }
 
 impl GlueStats {
-    pub fn total_geometric(&self) -> usize {
-        self.cmi_geometric + self.se_geometric
+    pub fn total_sequences(&self) -> usize {
+        self.cmi_sequences + self.se_sequences
     }
 
-    pub fn total_valid(&self) -> usize {
-        self.cmi_valid + self.se_valid
+    pub fn snake_failures(&self) -> usize {
+        self.unique_sequences - self.snake_valid
     }
 }
 
 impl fmt::Display for GlueStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cmi_pre = self.cmi_candidates.saturating_sub(self.cmi_geometric);
+        let cmi_pre = self.cmi_candidates.saturating_sub(self.cmi_sequences);
         let se_heuristic_rej = self.se_total_pairs.saturating_sub(self.se_pass_heuristic);
-        let se_len_rej = self.se_pass_heuristic.saturating_sub(self.se_geometric);
-        let geometric_fail = self.total_geometric() - self.total_valid();
+        let se_len_rej = self.se_pass_heuristic.saturating_sub(self.se_sequences);
+        let dedup_savings = self.total_sequences().saturating_sub(self.unique_sequences);
         write!(
             f,
-            "cmi: {} seeds → {} pre-filtered, {} geometric ({} valid) | \
-             se: {} pairs → {} heuristic rej, {} len rej, {} geometric ({} valid) | \
-             total: {} geometric attempts, {} failures (accept rate {:.1}%)",
+            "cmi: {} seeds → {} pre-filtered, {} seqs | \
+             se: {} pairs → {} heuristic rej, {} len rej, {} seqs | \
+             {} total seqs → {} unique (dedup saved {}) → {} valid ({} failures, {:.1}% accept)",
             self.cmi_candidates,
             cmi_pre,
-            self.cmi_geometric,
-            self.cmi_valid,
+            self.cmi_sequences,
             self.se_total_pairs,
             se_heuristic_rej,
             se_len_rej,
-            self.se_geometric,
-            self.se_valid,
-            self.total_geometric(),
-            geometric_fail,
-            if self.total_geometric() > 0 {
-                self.total_valid() as f64 / self.total_geometric() as f64 * 100.0
+            self.se_sequences,
+            self.total_sequences(),
+            self.unique_sequences,
+            dedup_savings,
+            self.snake_valid,
+            self.snake_failures(),
+            if self.unique_sequences > 0 {
+                self.snake_valid as f64 / self.unique_sequences as f64 * 100.0
             } else {
                 0.0
             },
@@ -69,12 +72,12 @@ impl fmt::Display for GlueStats {
 impl std::ops::AddAssign for GlueStats {
     fn add_assign(&mut self, other: Self) {
         self.cmi_candidates += other.cmi_candidates;
-        self.cmi_geometric += other.cmi_geometric;
-        self.cmi_valid += other.cmi_valid;
+        self.cmi_sequences += other.cmi_sequences;
         self.se_total_pairs += other.se_total_pairs;
         self.se_pass_heuristic += other.se_pass_heuristic;
-        self.se_geometric += other.se_geometric;
-        self.se_valid += other.se_valid;
+        self.se_sequences += other.se_sequences;
+        self.unique_sequences += other.unique_sequences;
+        self.snake_valid += other.snake_valid;
     }
 }
 
@@ -134,21 +137,36 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         });
     }
 
-    /// Find all valid glue operations between tiles `i` and `j`,
-    /// returning both results and detailed candidate funnel statistics.
-    ///
-    /// See [`valid_glues`] for phase documentation.
-    pub fn valid_glues_with_stats(&self, i: usize, j: usize) -> (Vec<GlueOp<T>>, GlueStats) {
+    fn sort_global(results: &mut [GlueOp<T>]) {
+        results.sort_by(|a, b| {
+            a.tile_a
+                .cmp(&b.tile_a)
+                .then_with(|| a.tile_b.cmp(&b.tile_b))
+                .then_with(|| a.start_a.cmp(&b.start_a))
+                .then_with(|| a.end_b.cmp(&b.end_b))
+        });
+    }
+
+    // --- Layer 1: unchecked candidate generation ---
+
+    /// Generate all glue candidates for tiles `i` and `j`, computing glued
+    /// sequences via unchecked Rats and grouping by canonical form.
+    /// No geometric (Snake) validation is performed.
+    fn valid_glues_unchecked(
+        &self,
+        i: usize,
+        j: usize,
+    ) -> (BTreeMap<Rat<T>, Vec<GlueOp<T>>>, GlueStats) {
         let a = &self.rats[i];
         let b = &self.rats[j];
         let n_a = a.len();
         let n_b = b.len();
 
         let mut stats = GlueStats::default();
-        let mut results: Vec<GlueOp<T>> = Vec::new();
+        let mut groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
 
         if n_a == 0 || n_b == 0 {
-            return (results, stats);
+            return (groups, stats);
         }
 
         let cmi_matches = self.cmi.maximal_rc_matches(i, j);
@@ -162,10 +180,9 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
                 continue;
             }
-            stats.cmi_geometric += 1;
-            if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b) {
-                stats.cmi_valid += 1;
-                results.push(GlueOp {
+            stats.cmi_sequences += 1;
+            if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
+                groups.entry(glued.clone()).or_default().push(GlueOp {
                     tile_a: i,
                     tile_b: j,
                     start_a: ns,
@@ -190,10 +207,9 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 if len != 1 {
                     continue;
                 }
-                stats.se_geometric += 1;
-                if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b) {
-                    stats.se_valid += 1;
-                    results.push(GlueOp {
+                stats.se_sequences += 1;
+                if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
+                    groups.entry(glued.clone()).or_default().push(GlueOp {
                         tile_a: i,
                         tile_b: j,
                         start_a: ns,
@@ -205,6 +221,38 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             }
         }
 
+        (groups, stats)
+    }
+
+    // --- Layer 2: shared geometric validation ---
+
+    /// Validate unique glued sequences via Snake construction.
+    /// For each unique Rat key, runs `Snake::try_from` once.
+    /// Returns all GlueOps whose sequences pass, plus validation counts.
+    fn validate_glue_groups(
+        groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>>,
+        stats: &mut GlueStats,
+    ) -> Vec<GlueOp<T>> {
+        stats.unique_sequences = groups.len();
+        let mut results = Vec::new();
+        for (rat, ops) in groups {
+            if Snake::<T>::try_from(rat.seq()).is_ok() {
+                stats.snake_valid += 1;
+                results.extend(ops);
+            }
+        }
+        results
+    }
+
+    // --- Layer 3: public API ---
+
+    /// Find all valid glue operations between tiles `i` and `j`,
+    /// returning both results and detailed candidate funnel statistics.
+    ///
+    /// See [`valid_glues`] for phase documentation.
+    pub fn valid_glues_with_stats(&self, i: usize, j: usize) -> (Vec<GlueOp<T>>, GlueStats) {
+        let (groups, mut stats) = self.valid_glues_unchecked(i, j);
+        let mut results = Self::validate_glue_groups(groups, &mut stats);
         Self::sort_by_interval(&mut results);
         (results, stats)
     }
@@ -230,22 +278,23 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     }
 
     pub fn all_valid_glues_with_stats(&self) -> (Vec<GlueOp<T>>, GlueStats) {
-        let mut results = Vec::new();
+        let mut all_groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
         let mut stats = GlueStats::default();
         for i in 0..self.rats.len() {
             for j in 0..self.rats.len() {
-                let (glues, s) = self.valid_glues_with_stats(i, j);
-                results.extend(glues);
-                stats += s;
+                let (groups, s) = self.valid_glues_unchecked(i, j);
+                stats.cmi_candidates += s.cmi_candidates;
+                stats.cmi_sequences += s.cmi_sequences;
+                stats.se_total_pairs += s.se_total_pairs;
+                stats.se_pass_heuristic += s.se_pass_heuristic;
+                stats.se_sequences += s.se_sequences;
+                for (rat, ops) in groups {
+                    all_groups.entry(rat).or_default().extend(ops);
+                }
             }
         }
-        results.sort_by(|a, b| {
-            a.tile_a
-                .cmp(&b.tile_a)
-                .then_with(|| a.tile_b.cmp(&b.tile_b))
-                .then_with(|| a.start_a.cmp(&b.start_a))
-                .then_with(|| a.end_b.cmp(&b.end_b))
-        });
+        let mut results = Self::validate_glue_groups(all_groups, &mut stats);
+        Self::sort_global(&mut results);
         (results, stats)
     }
 
@@ -484,7 +533,7 @@ mod tests {
                 if len == 0 || !seen.insert((ns, len, ne)) {
                     continue;
                 }
-                if let Ok(glued) = a.try_glue_precomputed(match_info, b) {
+                if let Ok(glued) = a.try_glue_precomputed(match_info, b, false) {
                     results.push(GlueOp {
                         tile_a: i,
                         tile_b: j,
