@@ -65,9 +65,9 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     patches_a: &[Rat<T>],
     patches_b: &[Rat<T>],
     verbose: bool,
-) -> (BTreeSet<Rat<T>>, usize, GlueStats) {
+) -> (BTreeSet<Rat<T>>, GlueStats) {
     if patches_a.is_empty() || patches_b.is_empty() {
-        return (BTreeSet::new(), 0, GlueStats::default());
+        return (BTreeSet::new(), GlueStats::default());
     }
     let count_a = patches_a.len();
     let count_b = patches_b.len();
@@ -79,13 +79,11 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     let ts = TileSet::new(all_tiles);
 
     let mut results = BTreeSet::new();
-    let mut attempts = 0;
     let mut stats = GlueStats::default();
 
     if self_match {
         let (glues, s) = ts.all_valid_glues_with_stats();
         stats = s;
-        attempts = glues.len();
         for g in &glues {
             results.insert(g.result.clone());
         }
@@ -94,7 +92,6 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
             for j in count_a..(count_a + count_b) {
                 let (glues, s) = ts.valid_glues_with_stats(i, j);
                 stats += s;
-                attempts += glues.len();
                 for g in &glues {
                     results.insert(g.result.clone());
                 }
@@ -104,16 +101,15 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
 
     if verbose {
         eprintln!(
-            "    tileset: {} x {} tiles, {} glue ops, {} distinct",
+            "    tileset: {} x {} tiles, {} distinct",
             count_a,
             count_b,
-            attempts,
             results.len(),
         );
         eprintln!("    {stats}");
     }
 
-    (results, attempts, stats)
+    (results, stats)
 }
 
 // --- Brute-force matching (raw try_glue, no CMI) ---
@@ -150,7 +146,6 @@ fn brute_force_match<T: IsComplex + IsRingOrField + Units>(
 struct RoundResult<T: IsComplex> {
     patches: Vec<Rat<T>>,
     elapsed: std::time::Duration,
-    glue_ops: usize,
     num_tiles_a: usize,
     num_tiles_b: usize,
     stats: GlueStats,
@@ -163,11 +158,11 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
     mode: &Mode,
 ) -> RoundResult<T> {
     let t0 = Instant::now();
-    let (results, glue_ops, stats) = match mode {
+    let (results, stats) = match mode {
         Mode::Fast => tileset_match(pa, pb, verbose),
         Mode::Validate => {
             let t_fast = Instant::now();
-            let (fast, fast_ops, fast_stats) = tileset_match(pa, pb, verbose);
+            let (fast, fast_stats) = tileset_match(pa, pb, verbose);
             let dt_fast = t_fast.elapsed();
 
             let t_bf = Instant::now();
@@ -200,16 +195,15 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
             }
             let speedup = dt_bf.as_secs_f64() / dt_fast.as_secs_f64().max(1e-9);
             eprintln!(
-                "    validate: OK | tileset: {:.2?} ({} ops) | brute_force: {:.2?} ({} ops) | {:.1}x speedup | {} patches",
-                dt_fast, fast_ops, dt_bf, bf_ops, speedup, fast.len(),
+                "    validate: OK | tileset: {:.2?} ({} seqs) | brute_force: {:.2?} ({} ops) | {:.1}x speedup | {} patches",
+                dt_fast, fast_stats.unique_sequences, dt_bf, bf_ops, speedup, fast.len(),
             );
-            (fast, fast_ops, fast_stats)
+            (fast, fast_stats)
         }
     };
     RoundResult {
         patches: results.into_iter().collect(),
         elapsed: t0.elapsed(),
-        glue_ops,
         num_tiles_a: pa.len(),
         num_tiles_b: pb.len(),
         stats,
@@ -262,9 +256,14 @@ fn main() {
         let next = power * 2;
         let r = compute_round(&patches[&power], &patches[&power], args.verbose, &mode);
         eprintln!(
-            "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} glue ops, {} x {} tiles) [{:.2?}]",
-            next, power, power, r.patches.len(), r.glue_ops,
-            r.num_tiles_a, r.num_tiles_b, r.elapsed,
+            "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} x {} tiles) [{:.2?}]",
+            next,
+            power,
+            power,
+            r.patches.len(),
+            r.num_tiles_a,
+            r.num_tiles_b,
+            r.elapsed,
         );
         eprintln!("    {}", r.stats);
         all_stats.insert(next, r.stats);
@@ -292,9 +291,14 @@ fn main() {
 
         let r = compute_round(&patches[&a], &patches[&b], args.verbose, &mode);
         eprintln!(
-            "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} glue ops, {} x {} tiles) [{:.2?}]",
-            k, a, b, r.patches.len(), r.glue_ops,
-            r.num_tiles_a, r.num_tiles_b, r.elapsed,
+            "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} x {} tiles) [{:.2?}]",
+            k,
+            a,
+            b,
+            r.patches.len(),
+            r.num_tiles_a,
+            r.num_tiles_b,
+            r.elapsed,
         );
         eprintln!("    {}", r.stats);
         all_stats.insert(k, r.stats);
