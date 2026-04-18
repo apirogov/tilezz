@@ -149,11 +149,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         for m in &cmi_matches {
             let pa = m.pos_a as i64;
             let pb = m.pos_b as i64;
-            for k in [0, m.len] {
-                let ka = (pa + k as i64).rem_euclid(n_a as i64);
-                let kb = (pb - k as i64).rem_euclid(n_b as i64);
-                results.extend(Self::try_glue_if_new(a, b, ka, kb, i, j, &mut seen));
-            }
+            results.extend(Self::try_glue_if_new(a, b, pa, pb, i, j, &mut seen));
         }
 
         let seq_a = a.seq();
