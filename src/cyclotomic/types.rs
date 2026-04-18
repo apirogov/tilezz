@@ -21,8 +21,8 @@ use super::sign::{
 use super::symnum::{GIntT, RatioT, SymNum, ZZComplex, ZZParams};
 use super::traits::{
     ComplexTraits, FieldTraits, HasZZ10Impl, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, HasZZ8Impl,
-    IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, QQType, QType, RealTraits,
-    RingTraits, ZType, ZZType,
+    IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, IsZZ4Impl, QQType, QType,
+    RealTraits, RingTraits, ZType, ZZType,
 };
 use super::units::Units;
 
@@ -124,6 +124,7 @@ impl_functional_traits!(ZZ60, Z60, QQ60, Q60, zz_partial_signum_fallback);
 impl_conversions_for!(4 6 8 10 12 16 20 24 30 32 60);
 
 zz_triv_impl!(HasZZ4Impl, ZZ4 ZZ8 ZZ12 ZZ16 ZZ20 ZZ24 ZZ32 ZZ60);
+zz_triv_impl!(IsZZ4Impl, ZZ4);
 impl_from_int_pair!(4 8 12 16 20 24 32 60);
 impl_from_real_pair!(QQ4 QQ8 QQ12 QQ16 QQ20 QQ24 QQ32 QQ60);
 

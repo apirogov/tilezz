@@ -87,10 +87,17 @@ pub trait QQType: IsField<Complex = Self> + IsComplex<Field = Self> {
     type Ring: ZZType<Field = Self>;
 }
 
+/// Ring is exactly ZZ4 (all edges are axis-aligned unit segments).
+/// Unlike HasZZ4 (which includes ZZ8, ZZ12, etc.), only ZZ4 itself implements this.
+pub trait IsZZ4Impl {}
+
 /// rings containing ZZ4
 pub trait HasZZ4Impl {}
 pub trait HasZZ4: IsComplex + HasZZ4Impl + From<(IntT, IntT)> {}
 impl<T: IsComplex + HasZZ4Impl + From<(IntT, IntT)>> HasZZ4 for T {}
+
+pub trait IsZZ4: IsComplex + IsZZ4Impl {}
+impl<T: IsComplex + IsZZ4Impl> IsZZ4 for T {}
 
 /// rings containing ZZ6
 pub trait HasZZ6Impl {}

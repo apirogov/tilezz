@@ -1,5 +1,6 @@
 //! Abstract representation of points and polygonal segment chains.
 
+use std::collections::HashSet;
 use std::fmt::{Debug, Display};
 
 use num_complex::Complex;
@@ -82,6 +83,12 @@ pub struct Snake<T: IsRingOrField + IsComplex> {
 
     /// If set to true, the snake will NOT prevent self-intersections.
     allow_intersections: bool,
+
+    /// Set of all visited points for fast vertex-revisit detection.
+    /// Only populated when T::turn() == 4 (i.e. ZZ4), where all edges are
+    /// axis-aligned unit segments and intersection reduces to vertex revisits.
+    /// None for all other ring types (avoiding allocation/insertion overhead).
+    visited: Option<HashSet<T>>,
 }
 
 impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
@@ -118,12 +125,20 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
         grid.add((0, 0), 0);
+        let visited = if T::turn() == 4 {
+            let mut s = HashSet::new();
+            s.insert(T::zero());
+            Some(s)
+        } else {
+            None
+        };
         Self {
             points: vec![T::zero(); 1],
             angles: Vec::new(),
             ang_sum: 0,
             grid,
             allow_intersections: false,
+            visited,
         }
     }
 
@@ -233,18 +248,17 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     /// Add a segment to the snake without checking for
     /// denormalization, degeneracy or self-intersection.
     fn add_unsafe(&mut self, angle: i8) {
-        // compute next representative point (uses current orientation!)
         let (_, new_pt) = self.next_seg(angle);
 
-        // append segment to symbolic angle sequence
         self.angles.push(angle);
         self.ang_sum += angle as i64;
 
-        // register point in the grid
         self.grid
             .add(UnitSquareGrid::cell_of(new_pt), self.points.len());
-        // add point to representative polyline
         self.points.push(new_pt);
+        if let Some(ref mut visited) = self.visited {
+            visited.insert(new_pt);
+        }
 
         // if the snake is closed, we need to fix up the start angle
         if self.is_closed() {
@@ -309,25 +323,24 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     /// on the assumption that all segments have unit length.
     fn can_add(&self, angle: i8) -> bool {
         if self.allow_intersections {
-            return true; // anything goes! WOOHOOO!!!
+            return true;
         }
 
         if self.is_closed() {
-            return false; // already closed -> adding anything makes it non-simple
+            return false;
         }
 
-        // end points of new candidate segment
         let new_seg @ (prev_pt, new_pt) = self.next_seg(angle);
-        // unit square lattice cell neighborhood of new segment
+
+        if let Some(ref visited) = self.visited {
+            return new_pt.is_zero() || !visited.contains(&new_pt);
+        }
+
         let neighborhood = UnitSquareGrid::seg_neighborhood_of(prev_pt, new_pt);
-        // all candidates for segment intersection
         let neighbor_segs = self.cell_segs(&neighborhood);
 
         let new_pt_nz = !new_pt.is_zero();
         for s @ (x, y) in neighbor_segs {
-            // if the new point is NOT the origin (i.e. closes the snake),
-            // explicitly check endpoints for intersection.
-            // (the segment intersection ignores this edge case)
             if new_pt_nz && (new_pt == x || new_pt == y) {
                 return false;
             }
@@ -445,7 +458,7 @@ impl<T: IsComplex> Display for Snake<T> {
 mod tests {
     use super::super::tiles::{hexagon, square, triangle};
     use super::*;
-    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12};
+    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12, ZZ4};
     use num_rational::Ratio;
     use num_traits::{One, Zero};
 
@@ -669,5 +682,28 @@ mod tests {
         }
         s.add(7);
         assert_eq!(format!("{s}"), "[-2, -1, 0, 1, -5]");
+    }
+
+    #[test]
+    fn test_zz4_visited_fast_path() {
+        let mut s: Snake<ZZ4> = Snake::new();
+        assert!(s.visited.is_some());
+        assert!(s.add(0));
+        assert!(s.add(0));
+        assert!(s.add(1));
+        assert!(s.add(1));
+        assert!(!s.add(1));
+    }
+
+    #[test]
+    fn test_zz4_visited_matches_grid() {
+        let mut s_grid: Snake<ZZ12> = Snake::new();
+        let mut s_fast: Snake<ZZ4> = Snake::new();
+        let zz4_angles: &[i8] = &[0, 1, 1, 1];
+        for &a in zz4_angles {
+            assert_eq!(s_grid.add(a * 3), s_fast.add(a), "angle {a}");
+        }
+        assert!(s_fast.is_closed());
+        assert!(s_grid.is_closed());
     }
 }
