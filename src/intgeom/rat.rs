@@ -290,7 +290,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         let (len, offset) = match_length(x_seq, y_seq.as_slice());
 
         let ext_start: i64 = (self_start - offset as i64).rem_euclid(self.len() as i64);
-        let ext_end: i64 = (other_end + offset as i64).rem_euclid(self.len() as i64);
+        let ext_end: i64 = (other_end + offset as i64).rem_euclid(other.len() as i64);
         (ext_start, len, ext_end)
     }
 

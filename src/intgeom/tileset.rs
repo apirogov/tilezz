@@ -87,14 +87,18 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         seen: &mut HashSet<(i64, usize, i64)>,
     ) -> Option<GlueOp<T>> {
         let match_info = Self::get_new_match(a, b, ia, ib, seen)?;
+        let (ns, mlen, ne) = match_info;
+        if !junction_gap_positive(a.seq(), ns as usize, mlen, b.seq(), ne as usize) {
+            return None;
+        }
         a.try_glue_precomputed(match_info, b)
             .ok()
             .map(|glued| GlueOp {
                 tile_a: i,
                 tile_b: j,
-                start_a: match_info.0,
-                end_b: match_info.2,
-                match_len: match_info.1,
+                start_a: ns,
+                end_b: ne,
+                match_len: mlen,
                 result: glued,
             })
     }
@@ -266,6 +270,14 @@ fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     let nb = b.len();
     let left = a[ia] as i32 + b[ib] as i32;
     let right = a[(ia + 1) % na] as i32 + b[(ib + nb - 1) % nb] as i32;
+    left > 0 && right > 0
+}
+
+fn junction_gap_positive(a: &[i8], ns: usize, mlen: usize, b: &[i8], ne: usize) -> bool {
+    let na = a.len();
+    let nb = b.len();
+    let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
+    let right = a[ns] as i32 + b[ne] as i32;
     left > 0 && right > 0
 }
 
