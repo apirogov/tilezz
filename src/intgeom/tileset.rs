@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Range;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -11,6 +12,70 @@ pub struct GlueOp<T: IsComplex> {
     pub end_b: i64,
     pub match_len: usize,
     pub result: Rat<T>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GlueStats {
+    pub cmi_candidates: usize,
+    pub cmi_geometric: usize,
+    pub cmi_valid: usize,
+    pub se_total_pairs: usize,
+    pub se_pass_heuristic: usize,
+    pub se_geometric: usize,
+    pub se_valid: usize,
+}
+
+impl GlueStats {
+    pub fn total_geometric(&self) -> usize {
+        self.cmi_geometric + self.se_geometric
+    }
+
+    pub fn total_valid(&self) -> usize {
+        self.cmi_valid + self.se_valid
+    }
+}
+
+impl fmt::Display for GlueStats {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let cmi_pre = self.cmi_candidates.saturating_sub(self.cmi_geometric);
+        let se_heuristic_rej = self.se_total_pairs.saturating_sub(self.se_pass_heuristic);
+        let se_len_rej = self.se_pass_heuristic.saturating_sub(self.se_geometric);
+        let geometric_fail = self.total_geometric() - self.total_valid();
+        write!(
+            f,
+            "cmi: {} seeds → {} pre-filtered, {} geometric ({} valid) | \
+             se: {} pairs → {} heuristic rej, {} len rej, {} geometric ({} valid) | \
+             total: {} geometric attempts, {} failures (accept rate {:.1}%)",
+            self.cmi_candidates,
+            cmi_pre,
+            self.cmi_geometric,
+            self.cmi_valid,
+            self.se_total_pairs,
+            se_heuristic_rej,
+            se_len_rej,
+            self.se_geometric,
+            self.se_valid,
+            self.total_geometric(),
+            geometric_fail,
+            if self.total_geometric() > 0 {
+                self.total_valid() as f64 / self.total_geometric() as f64 * 100.0
+            } else {
+                0.0
+            },
+        )
+    }
+}
+
+impl std::ops::AddAssign for GlueStats {
+    fn add_assign(&mut self, other: Self) {
+        self.cmi_candidates += other.cmi_candidates;
+        self.cmi_geometric += other.cmi_geometric;
+        self.cmi_valid += other.cmi_valid;
+        self.se_total_pairs += other.se_total_pairs;
+        self.se_pass_heuristic += other.se_pass_heuristic;
+        self.se_geometric += other.se_geometric;
+        self.se_valid += other.se_valid;
+    }
 }
 
 impl<T: IsComplex + IsRingOrField + Units> std::fmt::Debug for GlueOp<T> {
@@ -61,46 +126,87 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         self.cmi.maximal_rc_matches(i, j)
     }
 
-    fn try_glue_at(
-        a: &Rat<T>,
-        b: &Rat<T>,
-        ia: i64,
-        ib: i64,
-        i: usize,
-        j: usize,
-        single_edge_only: bool,
-    ) -> Option<GlueOp<T>> {
-        let (ns, len, ne) = a.get_match((ia, ib), b);
-        if single_edge_only {
-            if len != 1 {
-                return None;
-            }
-        } else {
-            if len <= 1 {
-                return None;
-            }
-            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
-                return None;
-            }
-        }
-        a.try_glue_precomputed((ns, len, ne), b)
-            .ok()
-            .map(|glued| GlueOp {
-                tile_a: i,
-                tile_b: j,
-                start_a: ns,
-                end_b: ne,
-                match_len: len,
-                result: glued,
-            })
-    }
-
     fn sort_by_interval(results: &mut [GlueOp<T>]) {
         results.sort_by(|a, b| {
             a.start_a
                 .cmp(&b.start_a)
                 .then_with(|| a.end_b.cmp(&b.end_b))
         });
+    }
+
+    /// Find all valid glue operations between tiles `i` and `j`,
+    /// returning both results and detailed candidate funnel statistics.
+    ///
+    /// See [`valid_glues`] for phase documentation.
+    pub fn valid_glues_with_stats(&self, i: usize, j: usize) -> (Vec<GlueOp<T>>, GlueStats) {
+        let a = &self.rats[i];
+        let b = &self.rats[j];
+        let n_a = a.len();
+        let n_b = b.len();
+
+        let mut stats = GlueStats::default();
+        let mut results: Vec<GlueOp<T>> = Vec::new();
+
+        if n_a == 0 || n_b == 0 {
+            return (results, stats);
+        }
+
+        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
+        stats.cmi_candidates = cmi_matches.len();
+
+        for m in &cmi_matches {
+            let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
+            if len <= 1 {
+                continue;
+            }
+            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+                continue;
+            }
+            stats.cmi_geometric += 1;
+            if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b) {
+                stats.cmi_valid += 1;
+                results.push(GlueOp {
+                    tile_a: i,
+                    tile_b: j,
+                    start_a: ns,
+                    end_b: ne,
+                    match_len: len,
+                    result: glued,
+                });
+            }
+        }
+
+        let seq_a = a.seq();
+        let seq_b = b.seq();
+        stats.se_total_pairs = n_a * n_b;
+
+        for ia in 0..n_a {
+            for ib in 0..n_b {
+                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                    continue;
+                }
+                stats.se_pass_heuristic += 1;
+                let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
+                if len != 1 {
+                    continue;
+                }
+                stats.se_geometric += 1;
+                if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b) {
+                    stats.se_valid += 1;
+                    results.push(GlueOp {
+                        tile_a: i,
+                        tile_b: j,
+                        start_a: ns,
+                        end_b: ne,
+                        match_len: len,
+                        result: glued,
+                    });
+                }
+            }
+        }
+
+        Self::sort_by_interval(&mut results);
+        (results, stats)
     }
 
     /// Find all valid glue operations between tiles `i` and `j`.
@@ -120,47 +226,17 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     /// The two phases produce disjoint result sets by match length, so no
     /// deduplication is needed.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        let a = &self.rats[i];
-        let b = &self.rats[j];
-        let n_a = a.len();
-        let n_b = b.len();
-
-        if n_a == 0 || n_b == 0 {
-            return vec![];
-        }
-
-        let mut results: Vec<GlueOp<T>> = Vec::new();
-
-        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
-        for m in &cmi_matches {
-            if let Some(glue) = Self::try_glue_at(a, b, m.pos_a as i64, m.pos_b as i64, i, j, false)
-            {
-                results.push(glue);
-            }
-        }
-
-        let seq_a = a.seq();
-        let seq_b = b.seq();
-        for ia in 0..n_a {
-            for ib in 0..n_b {
-                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
-                    continue;
-                }
-                if let Some(glue) = Self::try_glue_at(a, b, ia as i64, ib as i64, i, j, true) {
-                    results.push(glue);
-                }
-            }
-        }
-
-        Self::sort_by_interval(&mut results);
-        results
+        self.valid_glues_with_stats(i, j).0
     }
 
-    pub fn all_valid_glues(&self) -> Vec<GlueOp<T>> {
+    pub fn all_valid_glues_with_stats(&self) -> (Vec<GlueOp<T>>, GlueStats) {
         let mut results = Vec::new();
+        let mut stats = GlueStats::default();
         for i in 0..self.rats.len() {
             for j in 0..self.rats.len() {
-                results.extend(self.valid_glues(i, j));
+                let (glues, s) = self.valid_glues_with_stats(i, j);
+                results.extend(glues);
+                stats += s;
             }
         }
         results.sort_by(|a, b| {
@@ -170,7 +246,11 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 .then_with(|| a.start_a.cmp(&b.start_a))
                 .then_with(|| a.end_b.cmp(&b.end_b))
         });
-        results
+        (results, stats)
+    }
+
+    pub fn all_valid_glues(&self) -> Vec<GlueOp<T>> {
+        self.all_valid_glues_with_stats().0
     }
 
     pub fn valid_glues_containing(
