@@ -336,10 +336,17 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         glued_seq.extend_from_slice(&y[..y.len() - 1]);
 
         // fix glued vertex angles at the transition of the boundaries
-        let a_yx = x[0] + y[y.len() - 1] - T::hturn();
-        let a_xy = y[0] + x[x.len() - 1] - T::hturn();
+        use super::angles::normalize_angle;
+
+        let a_yx = normalize_angle::<T>(x[0] + y[y.len() - 1] - T::hturn());
+        let a_xy = normalize_angle::<T>(y[0] + x[x.len() - 1] - T::hturn());
         glued_seq[0] = a_yx;
         glued_seq[x.len() - 1] = a_xy;
+
+        // a ±hturn junction angle means the path backtracks (degenerate glue)
+        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
+            return Err("Glue produces degenerate ±hturn junction angle");
+        }
 
         if unchecked {
             Ok(Self::from_slice_unchecked(glued_seq.as_slice()))
