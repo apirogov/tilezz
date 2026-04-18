@@ -27,6 +27,10 @@ struct Args {
     #[arg(long, value_enum, default_value = "zz12")]
     ring: RingChoice,
 
+    /// Growth strategy: naive (one-by-one), binary, or both (compare)
+    #[arg(long, value_enum, default_value = "naive")]
+    strategy: Strategy,
+
     /// Print per-pair glue statistics
     #[arg(long)]
     verbose: bool,
@@ -48,6 +52,13 @@ enum TileShape {
 enum RingChoice {
     ZZ4,
     ZZ12,
+}
+
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum Strategy {
+    Naive,
+    Binary,
+    Both,
 }
 
 fn seed_tile_zz4(shape: &TileShape) -> Rat<ZZ4> {
@@ -73,15 +84,6 @@ fn seed_tile_zz12(shape: &TileShape) -> Rat<ZZ12> {
     Rat::from_unchecked(&snake)
 }
 
-fn largest_power_of_2_leq(n: usize) -> usize {
-    assert!(n > 0);
-    1 << (usize::BITS - 1 - n.leading_zeros())
-}
-
-fn is_power_of_2(n: usize) -> bool {
-    n > 0 && (n & (n - 1)) == 0
-}
-
 // --- TileSet-based matching (CMI + heuristic) ---
 
 fn tileset_match<T: IsComplex + IsRingOrField + Units>(
@@ -94,13 +96,13 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     }
     let count_a = patches_a.len();
     let count_b = patches_b.len();
-    let self_match = std::ptr::eq(patches_a.as_ptr(), patches_b.as_ptr());
 
     let mut all_tiles: Vec<Rat<T>> = patches_a.to_vec();
     all_tiles.extend(patches_b.iter().cloned());
 
     let ts = TileSet::new(all_tiles);
 
+    let self_match = std::ptr::eq(patches_a.as_ptr(), patches_b.as_ptr());
     let pairs: Vec<(usize, usize)> = if self_match {
         (0..count_a)
             .flat_map(|i| (0..count_a).map(move |j| (i, j)))
@@ -111,9 +113,7 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
             .collect()
     };
 
-    let (glues, stats) = ts.valid_glues_for_pairs_with_stats(&pairs);
-
-    let results: BTreeSet<Rat<T>> = glues.iter().map(|g| g.result.clone()).collect();
+    let (results, stats) = ts.valid_rats_for_pairs(&pairs);
 
     if verbose {
         eprintln!(
@@ -157,7 +157,7 @@ fn brute_force_match<T: IsComplex + IsRingOrField + Units>(
     (results, attempts)
 }
 
-// --- Binary decomposition engine ---
+// --- Growth strategies ---
 
 struct RoundResult<T: IsComplex> {
     patches: Vec<Rat<T>>,
@@ -231,26 +231,73 @@ enum Mode {
     Validate,
 }
 
-fn run<T: IsComplex + IsRingOrField + Units>(
+fn largest_power_of_2_leq(n: usize) -> usize {
+    assert!(n > 0);
+    1 << (usize::BITS - 1 - n.leading_zeros())
+}
+
+fn is_power_of_2(n: usize) -> bool {
+    n > 0 && (n & (n - 1)) == 0
+}
+
+fn print_summary<T: IsComplex>(
+    patches: &BTreeMap<usize, Vec<Rat<T>>>,
+    all_stats: &BTreeMap<usize, GlueStats>,
+) {
+    eprintln!("\n--- Summary ---");
+    let mut total = 0usize;
+    for (&size, pats) in patches {
+        eprintln!("  size {:>3}: {:>6} patches", size, pats.len());
+        total += pats.len();
+    }
+    eprintln!("  total:   {total:>6} patches");
+
+    let mut aggregate = GlueStats::default();
+    for s in all_stats.values() {
+        aggregate += s.clone();
+    }
+    eprintln!("\n--- Aggregate Stats ---");
+    eprintln!("  {aggregate}");
+}
+
+fn run_naive<T: IsComplex + IsRingOrField + Units>(
     seed: Rat<T>,
     max_size: usize,
     verbose: bool,
     mode: &Mode,
-    ring_label: &str,
-    tile_label: &str,
-) {
-    eprintln!(
-        "Seed: {}, edges: {}, ring: {}, max_size: {}, mode: {}",
-        tile_label,
-        seed.len(),
-        ring_label,
-        max_size,
-        match mode {
-            Mode::Fast => "fast",
-            Mode::Validate => "validate",
-        },
-    );
+) -> BTreeMap<usize, Vec<Rat<T>>> {
+    let mut patches: BTreeMap<usize, Vec<Rat<T>>> = BTreeMap::new();
+    let mut all_stats: BTreeMap<usize, GlueStats> = BTreeMap::new();
+    let seed_vec = vec![seed];
+    patches.insert(1, seed_vec.clone());
 
+    for k in 2..=max_size {
+        let r = compute_round(&patches[&(k - 1)], &seed_vec, verbose, mode);
+        eprintln!(
+            "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} x {} tiles) [{:.2?}]",
+            k,
+            k - 1,
+            1,
+            r.patches.len(),
+            r.num_tiles_a,
+            r.num_tiles_b,
+            r.elapsed,
+        );
+        eprintln!("    {}", r.stats);
+        all_stats.insert(k, r.stats);
+        patches.insert(k, r.patches);
+    }
+
+    print_summary(&patches, &all_stats);
+    patches
+}
+
+fn run_binary<T: IsComplex + IsRingOrField + Units>(
+    seed: Rat<T>,
+    max_size: usize,
+    verbose: bool,
+    mode: &Mode,
+) -> BTreeMap<usize, Vec<Rat<T>>> {
     let mut patches: BTreeMap<usize, Vec<Rat<T>>> = BTreeMap::new();
     let mut all_stats: BTreeMap<usize, GlueStats> = BTreeMap::new();
     patches.insert(1, vec![seed]);
@@ -311,20 +358,61 @@ fn run<T: IsComplex + IsRingOrField + Units>(
         patches.insert(k, r.patches);
     }
 
-    eprintln!("\n--- Summary ---");
-    let mut total = 0usize;
-    for (&size, pats) in &patches {
-        eprintln!("  size {:>3}: {:>6} patches", size, pats.len());
-        total += pats.len();
-    }
-    eprintln!("  total:   {total:>6} patches");
+    print_summary(&patches, &all_stats);
+    patches
+}
 
-    let mut aggregate = GlueStats::default();
-    for s in all_stats.values() {
-        aggregate += s.clone();
+fn run<T: IsComplex + IsRingOrField + Units>(
+    seed: Rat<T>,
+    args: &Args,
+    mode: &Mode,
+    ring_label: &str,
+    tile_label: &str,
+) {
+    eprintln!(
+        "Seed: {}, edges: {}, ring: {}, max_size: {}, strategy: {}, mode: {}",
+        tile_label,
+        seed.len(),
+        ring_label,
+        args.max_size,
+        match args.strategy {
+            Strategy::Naive => "naive",
+            Strategy::Binary => "binary",
+            Strategy::Both => "both",
+        },
+        match mode {
+            Mode::Fast => "fast",
+            Mode::Validate => "validate",
+        },
+    );
+
+    match args.strategy {
+        Strategy::Naive => {
+            run_naive::<T>(seed, args.max_size, args.verbose, mode);
+        }
+        Strategy::Binary => {
+            run_binary::<T>(seed, args.max_size, args.verbose, mode);
+        }
+        Strategy::Both => {
+            eprintln!("\n=== Binary decomposition ===");
+            let binary = run_binary::<T>(seed.clone(), args.max_size, args.verbose, mode);
+            eprintln!("\n=== Naive (one-by-one) ===");
+            let naive = run_naive::<T>(seed, args.max_size, args.verbose, mode);
+
+            eprintln!("\n=== Comparison ===");
+            for k in 2..=args.max_size {
+                let nb = binary.get(&k).map(|v| v.len()).unwrap_or(0);
+                let nn = naive.get(&k).map(|v| v.len()).unwrap_or(0);
+                let missed = nn.saturating_sub(nb);
+                let extra = nb.saturating_sub(nn);
+                let tag = if missed > 0 { " <<< MISSED" } else { "" };
+                eprintln!(
+                    "  size {:>3}: binary={:>6}  naive={:>6}  missed={:>5}  extra={:>5}{}",
+                    k, nb, nn, missed, extra, tag,
+                );
+            }
+        }
     }
-    eprintln!("\n--- Aggregate Stats ---");
-    eprintln!("  {aggregate}");
 }
 
 fn main() {
@@ -351,25 +439,11 @@ fn main() {
     match args.ring {
         RingChoice::ZZ4 => {
             let seed = seed_tile_zz4(&args.tile);
-            run::<ZZ4>(
-                seed,
-                max_size,
-                args.verbose,
-                &mode,
-                &ring_label,
-                &tile_label,
-            );
+            run::<ZZ4>(seed, &args, &mode, &ring_label, &tile_label);
         }
         RingChoice::ZZ12 => {
             let seed = seed_tile_zz12(&args.tile);
-            run::<ZZ12>(
-                seed,
-                max_size,
-                args.verbose,
-                &mode,
-                &ring_label,
-                &tile_label,
-            );
+            run::<ZZ12>(seed, &args, &mode, &ring_label, &tile_label);
         }
     }
 }

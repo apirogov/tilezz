@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
 
@@ -245,6 +245,35 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     }
 
     // --- Layer 3: public API ---
+
+    /// Like [`valid_glues_for_pairs_with_stats`] but returns only distinct
+    /// valid Rat shapes, discarding GlueOps. Uses BTreeSet instead of
+    /// BTreeMap<Rat, Vec<GlueOp>>, dramatically reducing memory for large
+    /// numbers of tile pairs where only the distinct patch shapes matter.
+    pub fn valid_rats_for_pairs(&self, pairs: &[(usize, usize)]) -> (BTreeSet<Rat<T>>, GlueStats) {
+        let mut all_keys: BTreeSet<Rat<T>> = BTreeSet::new();
+        let mut stats = GlueStats::default();
+        for &(i, j) in pairs {
+            let (groups, s) = self.valid_glues_unchecked(i, j);
+            stats.cmi_candidates += s.cmi_candidates;
+            stats.cmi_sequences += s.cmi_sequences;
+            stats.se_total_pairs += s.se_total_pairs;
+            stats.se_pass_heuristic += s.se_pass_heuristic;
+            stats.se_sequences += s.se_sequences;
+            for (rat, _) in groups {
+                all_keys.insert(rat);
+            }
+        }
+        stats.unique_sequences = all_keys.len();
+        let mut valid = BTreeSet::new();
+        for rat in all_keys {
+            if Snake::<T>::try_from(rat.seq()).is_ok() {
+                stats.snake_valid += 1;
+                valid.insert(rat);
+            }
+        }
+        (valid, stats)
+    }
 
     /// Find all valid glue operations for the given pairs of tiles,
     /// collecting unchecked candidates across all pairs, deduplicating
