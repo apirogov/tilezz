@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use clap::Parser;
 
-use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
+use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12, ZZ4};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
@@ -23,6 +23,10 @@ struct Args {
     #[arg(long, default_value_t = 6)]
     max_size: usize,
 
+    /// Cyclotomic ring (ZZ4 only supports square tiles)
+    #[arg(long, value_enum, default_value = "zz12")]
+    ring: RingChoice,
+
     /// Print per-pair glue statistics
     #[arg(long)]
     verbose: bool,
@@ -40,7 +44,26 @@ enum TileShape {
     Spectre,
 }
 
-fn seed_tile(shape: &TileShape) -> Rat<ZZ12> {
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum RingChoice {
+    ZZ4,
+    ZZ12,
+}
+
+fn seed_tile_zz4(shape: &TileShape) -> Rat<ZZ4> {
+    match shape {
+        TileShape::Square => Rat::from_unchecked(&tiles::square::<ZZ4>()),
+        _ => {
+            eprintln!(
+                "error: {:?} tile not supported with --ring zz4 (only square)",
+                shape
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+fn seed_tile_zz12(shape: &TileShape) -> Rat<ZZ12> {
     let snake: Snake<ZZ12> = match shape {
         TileShape::Hexagon => tiles::hexagon(),
         TileShape::Square => tiles::square(),
@@ -208,37 +231,27 @@ enum Mode {
     Validate,
 }
 
-fn main() {
-    let args = Args::parse();
-
-    let max_size = args.max_size;
-    if args.validate && max_size > 4 {
-        eprintln!("note: --validate with max_size > 4 may be slow (brute force scales poorly)");
-    }
-    if max_size < 1 {
-        eprintln!("max_size must be at least 1");
-        std::process::exit(1);
-    }
-
-    let mode = if args.validate {
-        Mode::Validate
-    } else {
-        Mode::Fast
-    };
-
-    let seed = seed_tile(&args.tile);
+fn run<T: IsComplex + IsRingOrField + Units>(
+    seed: Rat<T>,
+    max_size: usize,
+    verbose: bool,
+    mode: &Mode,
+    ring_label: &str,
+    tile_label: &str,
+) {
     eprintln!(
-        "Seed: {:?}, edges: {}, max_size: {}, mode: {}",
-        args.tile,
+        "Seed: {}, edges: {}, ring: {}, max_size: {}, mode: {}",
+        tile_label,
         seed.len(),
+        ring_label,
         max_size,
-        match &mode {
+        match mode {
             Mode::Fast => "fast",
             Mode::Validate => "validate",
         },
     );
 
-    let mut patches: BTreeMap<usize, Vec<Rat<ZZ12>>> = BTreeMap::new();
+    let mut patches: BTreeMap<usize, Vec<Rat<T>>> = BTreeMap::new();
     let mut all_stats: BTreeMap<usize, GlueStats> = BTreeMap::new();
     patches.insert(1, vec![seed]);
 
@@ -247,7 +260,7 @@ fn main() {
     let mut power = 1usize;
     while power < max_power {
         let next = power * 2;
-        let r = compute_round(&patches[&power], &patches[&power], args.verbose, &mode);
+        let r = compute_round(&patches[&power], &patches[&power], verbose, mode);
         eprintln!(
             "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} x {} tiles) [{:.2?}]",
             next,
@@ -282,7 +295,7 @@ fn main() {
             "size {b} not yet computed (needed for size {k})",
         );
 
-        let r = compute_round(&patches[&a], &patches[&b], args.verbose, &mode);
+        let r = compute_round(&patches[&a], &patches[&b], verbose, mode);
         eprintln!(
             "  size {:>3} = {:>3} + {:>3}: {} distinct patches ({} x {} tiles) [{:.2?}]",
             k,
@@ -312,4 +325,51 @@ fn main() {
     }
     eprintln!("\n--- Aggregate Stats ---");
     eprintln!("  {aggregate}");
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let max_size = args.max_size;
+    if args.validate && max_size > 4 {
+        eprintln!("note: --validate with max_size > 4 may be slow (brute force scales poorly)");
+    }
+    if max_size < 1 {
+        eprintln!("max_size must be at least 1");
+        std::process::exit(1);
+    }
+
+    let mode = if args.validate {
+        Mode::Validate
+    } else {
+        Mode::Fast
+    };
+
+    let tile_label = format!("{:?}", args.tile);
+    let ring_label = format!("{:?}", args.ring).to_lowercase();
+
+    match args.ring {
+        RingChoice::ZZ4 => {
+            let seed = seed_tile_zz4(&args.tile);
+            run::<ZZ4>(
+                seed,
+                max_size,
+                args.verbose,
+                &mode,
+                &ring_label,
+                &tile_label,
+            );
+        }
+        RingChoice::ZZ12 => {
+            let seed = seed_tile_zz12(&args.tile);
+            run::<ZZ12>(
+                seed,
+                max_size,
+                args.verbose,
+                &mode,
+                &ring_label,
+                &tile_label,
+            );
+        }
+    }
 }
