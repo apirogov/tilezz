@@ -62,6 +62,48 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         self.cmi.maximal_rc_matches(i, j)
     }
 
+    fn get_new_match(
+        a: &Rat<T>,
+        b: &Rat<T>,
+        ia: i64,
+        ib: i64,
+        seen: &mut HashSet<(i64, usize, i64)>,
+    ) -> Option<(i64, usize, i64)> {
+        let (ns, len, ne) = a.get_match((ia, ib), b);
+        if len > 0 && seen.insert((ns, len, ne)) {
+            Some((ns, len, ne))
+        } else {
+            None
+        }
+    }
+
+    fn build_glue_op(
+        a: &Rat<T>,
+        b: &Rat<T>,
+        ia: i64,
+        ib: i64,
+        i: usize,
+        j: usize,
+        (ns, len, ne): (i64, usize, i64),
+    ) -> Option<GlueOp<T>> {
+        a.try_glue((ia, ib), b).ok().map(|glued| GlueOp {
+            tile_a: i,
+            tile_b: j,
+            start_a: ns,
+            end_b: ne,
+            match_len: len,
+            result: glued,
+        })
+    }
+
+    fn sort_by_interval(results: &mut [GlueOp<T>]) {
+        results.sort_by(|a, b| {
+            a.start_a
+                .cmp(&b.start_a)
+                .then_with(|| a.end_b.cmp(&b.end_b))
+        });
+    }
+
     /// Find all valid glue operations between tiles `i` and `j`.
     ///
     /// Uses a two-phase approach:
@@ -91,36 +133,22 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
         let mut results: Vec<GlueOp<T>> = Vec::new();
 
-        let try_seed = |ia: i64,
-                        ib: i64,
-                        seen: &mut HashSet<(i64, usize, i64)>,
-                        results: &mut Vec<GlueOp<T>>| {
-            let (ns, len, ne) = a.get_match((ia, ib), b);
-            if len > 0 && seen.insert((ns, len, ne)) {
-                if let Ok(glued) = a.try_glue((ia, ib), b) {
-                    results.push(GlueOp {
-                        tile_a: i,
-                        tile_b: j,
-                        start_a: ns,
-                        end_b: ne,
-                        match_len: len,
-                        result: glued,
-                    });
-                }
-            }
-        };
-
         let cmi_matches = self.cmi.maximal_rc_matches(i, j);
         for m in &cmi_matches {
             let pa = m.pos_a as i64;
             let pb = m.pos_b as i64;
-            try_seed(pa, pb, &mut seen, &mut results);
-            try_seed(
-                (pa - 1).rem_euclid(n_a as i64),
-                (pb + 1).rem_euclid(n_b as i64),
-                &mut seen,
-                &mut results,
-            );
+            if let Some((ns, len, ne)) = Self::get_new_match(a, b, pa, pb, &mut seen) {
+                if let Some(glue) = Self::build_glue_op(a, b, pa, pb, i, j, (ns, len, ne)) {
+                    results.push(glue);
+                }
+            }
+            let pa_ext = (pa - 1).rem_euclid(n_a as i64);
+            let pb_ext = (pb + 1).rem_euclid(n_b as i64);
+            if let Some((ns, len, ne)) = Self::get_new_match(a, b, pa_ext, pb_ext, &mut seen) {
+                if let Some(glue) = Self::build_glue_op(a, b, pa_ext, pb_ext, i, j, (ns, len, ne)) {
+                    results.push(glue);
+                }
+            }
         }
 
         let seq_a = a.seq();
@@ -130,15 +158,19 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
                     continue;
                 }
-                try_seed(ia as i64, ib as i64, &mut seen, &mut results);
+                if let Some((ns, len, ne)) =
+                    Self::get_new_match(a, b, ia as i64, ib as i64, &mut seen)
+                {
+                    if let Some(glue) =
+                        Self::build_glue_op(a, b, ia as i64, ib as i64, i, j, (ns, len, ne))
+                    {
+                        results.push(glue);
+                    }
+                }
             }
         }
 
-        results.sort_by(|a, b| {
-            a.start_a
-                .cmp(&b.start_a)
-                .then_with(|| a.end_b.cmp(&b.end_b))
-        });
+        Self::sort_by_interval(&mut results);
         results
     }
 
@@ -178,52 +210,60 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
         let mut results: Vec<GlueOp<T>> = Vec::new();
 
-        let try_seed = |ia: i64,
-                        ib: i64,
-                        seen: &mut HashSet<(i64, usize, i64)>,
-                        results: &mut Vec<GlueOp<T>>| {
-            let (norm_start, len, norm_end) = a.get_match((ia, ib), b);
-            if len == 0 || !seen.insert((norm_start, len, norm_end)) {
-                return;
-            }
-            if !match_covers_range(norm_start, len, &range, n_a) {
-                return;
-            }
-            if let Ok(glued) = a.try_glue((ia, ib), b) {
-                results.push(GlueOp {
-                    tile_a: i,
-                    tile_b: j,
-                    start_a: norm_start,
-                    end_b: norm_end,
-                    match_len: len,
-                    result: glued,
-                });
-            }
-        };
-
         let cmi_matches = self.cmi.maximal_rc_matches(i, j);
         for m in &cmi_matches {
             for offset in 0..=range_len {
                 let seed_ia = (range.start as i64 + offset as i64) % n_a as i64;
                 let seed_ib_fwd = (m.pos_b as i64 + offset as i64) % n_b as i64;
                 let seed_ib_bwd = (m.pos_b as i64 - offset as i64).rem_euclid(n_b as i64);
-                try_seed(seed_ia, seed_ib_fwd, &mut seen, &mut results);
-                try_seed(seed_ia, seed_ib_bwd, &mut seen, &mut results);
+                if let Some((ns, len, ne)) =
+                    Self::get_new_match(a, b, seed_ia, seed_ib_fwd, &mut seen)
+                {
+                    if match_covers_range(ns, len, &range, n_a) {
+                        if let Some(glue) =
+                            Self::build_glue_op(a, b, seed_ia, seed_ib_fwd, i, j, (ns, len, ne))
+                        {
+                            results.push(glue);
+                        }
+                    }
+                }
+                if let Some((ns, len, ne)) =
+                    Self::get_new_match(a, b, seed_ia, seed_ib_bwd, &mut seen)
+                {
+                    if match_covers_range(ns, len, &range, n_a) {
+                        if let Some(glue) =
+                            Self::build_glue_op(a, b, seed_ia, seed_ib_bwd, i, j, (ns, len, ne))
+                        {
+                            results.push(glue);
+                        }
+                    }
+                }
             }
         }
 
+        let seq_a = a.seq();
+        let seq_b = b.seq();
         for ib in 0..n_b {
             for offset in 0..=range_len {
                 let seed_ia = (range.start as i64 + offset as i64) % n_a as i64;
-                try_seed(seed_ia, ib as i64, &mut seen, &mut results);
+                if !is_single_edge_candidate(seq_a, seed_ia as usize, seq_b, ib) {
+                    continue;
+                }
+                if let Some((ns, len, ne)) =
+                    Self::get_new_match(a, b, seed_ia, ib as i64, &mut seen)
+                {
+                    if match_covers_range(ns, len, &range, n_a) {
+                        if let Some(glue) =
+                            Self::build_glue_op(a, b, seed_ia, ib as i64, i, j, (ns, len, ne))
+                        {
+                            results.push(glue);
+                        }
+                    }
+                }
             }
         }
 
-        results.sort_by(|a, b| {
-            a.start_a
-                .cmp(&b.start_a)
-                .then_with(|| a.end_b.cmp(&b.end_b))
-        });
+        Self::sort_by_interval(&mut results);
         results
     }
 }
@@ -280,6 +320,10 @@ mod tests {
     use crate::intgeom::tiles::{hexagon, spectre};
     use std::collections::HashSet;
 
+    const MYSTIC_ZZ12: &[i8] = &[
+        0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
+    ];
+
     #[test]
     fn spectre_self_finds_mystic() {
         let s: Snake<ZZ12> = spectre();
@@ -287,11 +331,8 @@ mod tests {
         let ts = TileSet::new(vec![r.clone()]);
 
         let glues = ts.valid_glues(0, 0);
-        let mystic = &[
-            0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
-        ];
         assert!(
-            glues.iter().any(|g| g.result.seq() == mystic),
+            glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
             "mystic not found in {} glues: {:?}",
             glues.len(),
             glues,
@@ -408,11 +449,8 @@ mod tests {
         let ts = TileSet::new(vec![r]);
 
         let glues = ts.valid_glues_containing(0, 2..3, 0);
-        let mystic = &[
-            0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
-        ];
         assert!(
-            glues.iter().any(|g| g.result.seq() == mystic),
+            glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
             "containing query should find mystic, got {} glues: {:?}",
             glues.len(),
             glues,
@@ -560,11 +598,8 @@ mod tests {
         let bf_glues = brute_force_valid_glues(&r, &r, 0, 1);
         assert_glue_sets_match(&ts_glues, &bf_glues, "spectre pair");
 
-        let mystic = &[
-            0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
-        ];
         assert!(
-            ts_glues.iter().any(|g| g.result.seq() == mystic),
+            ts_glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
             "spectre pair should find mystic, got {} glues",
             ts_glues.len(),
         );
