@@ -96,6 +96,19 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         })
     }
 
+    fn try_add_glue(
+        a: &Rat<T>,
+        b: &Rat<T>,
+        ia: i64,
+        ib: i64,
+        i: usize,
+        j: usize,
+        seen: &mut HashSet<(i64, usize, i64)>,
+    ) -> Option<GlueOp<T>> {
+        let match_info = Self::get_new_match(a, b, ia, ib, seen)?;
+        Self::build_glue_op(a, b, ia, ib, i, j, match_info)
+    }
+
     fn sort_by_interval(results: &mut [GlueOp<T>]) {
         results.sort_by(|a, b| {
             a.start_a
@@ -137,18 +150,16 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         for m in &cmi_matches {
             let pa = m.pos_a as i64;
             let pb = m.pos_b as i64;
-            if let Some((ns, len, ne)) = Self::get_new_match(a, b, pa, pb, &mut seen) {
-                if let Some(glue) = Self::build_glue_op(a, b, pa, pb, i, j, (ns, len, ne)) {
-                    results.push(glue);
-                }
-            }
-            let pa_ext = (pa - 1).rem_euclid(n_a as i64);
-            let pb_ext = (pb + 1).rem_euclid(n_b as i64);
-            if let Some((ns, len, ne)) = Self::get_new_match(a, b, pa_ext, pb_ext, &mut seen) {
-                if let Some(glue) = Self::build_glue_op(a, b, pa_ext, pb_ext, i, j, (ns, len, ne)) {
-                    results.push(glue);
-                }
-            }
+            results.extend(Self::try_add_glue(a, b, pa, pb, i, j, &mut seen));
+            results.extend(Self::try_add_glue(
+                a,
+                b,
+                (pa - 1).rem_euclid(n_a as i64),
+                (pb + 1).rem_euclid(n_b as i64),
+                i,
+                j,
+                &mut seen,
+            ));
         }
 
         let seq_a = a.seq();
@@ -158,15 +169,9 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
                     continue;
                 }
-                if let Some((ns, len, ne)) =
-                    Self::get_new_match(a, b, ia as i64, ib as i64, &mut seen)
-                {
-                    if let Some(glue) =
-                        Self::build_glue_op(a, b, ia as i64, ib as i64, i, j, (ns, len, ne))
-                    {
-                        results.push(glue);
-                    }
-                }
+                results.extend(Self::try_add_glue(
+                    a, b, ia as i64, ib as i64, i, j, &mut seen,
+                ));
             }
         }
 
@@ -197,72 +202,18 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         range: Range<usize>,
         j: usize,
     ) -> Vec<GlueOp<T>> {
-        let a = &self.rats[i];
-        let b = &self.rats[j];
-        let n_a = a.len();
-        let n_b = b.len();
+        let n_a = self.rats[i].len();
+        let n_b = self.rats[j].len();
 
         if n_a == 0 || n_b == 0 || range.is_empty() || range.end > n_a {
             return vec![];
         }
 
-        let range_len = range.end - range.start;
-        let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
-        let mut results: Vec<GlueOp<T>> = Vec::new();
-
-        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
-        for m in &cmi_matches {
-            for offset in 0..=range_len {
-                let seed_ia = (range.start as i64 + offset as i64) % n_a as i64;
-                let seed_ib_fwd = (m.pos_b as i64 + offset as i64) % n_b as i64;
-                let seed_ib_bwd = (m.pos_b as i64 - offset as i64).rem_euclid(n_b as i64);
-                if let Some((ns, len, ne)) =
-                    Self::get_new_match(a, b, seed_ia, seed_ib_fwd, &mut seen)
-                {
-                    if match_covers_range(ns, len, &range, n_a) {
-                        if let Some(glue) =
-                            Self::build_glue_op(a, b, seed_ia, seed_ib_fwd, i, j, (ns, len, ne))
-                        {
-                            results.push(glue);
-                        }
-                    }
-                }
-                if let Some((ns, len, ne)) =
-                    Self::get_new_match(a, b, seed_ia, seed_ib_bwd, &mut seen)
-                {
-                    if match_covers_range(ns, len, &range, n_a) {
-                        if let Some(glue) =
-                            Self::build_glue_op(a, b, seed_ia, seed_ib_bwd, i, j, (ns, len, ne))
-                        {
-                            results.push(glue);
-                        }
-                    }
-                }
-            }
-        }
-
-        let seq_a = a.seq();
-        let seq_b = b.seq();
-        for ib in 0..n_b {
-            for offset in 0..=range_len {
-                let seed_ia = (range.start as i64 + offset as i64) % n_a as i64;
-                if !is_single_edge_candidate(seq_a, seed_ia as usize, seq_b, ib) {
-                    continue;
-                }
-                if let Some((ns, len, ne)) =
-                    Self::get_new_match(a, b, seed_ia, ib as i64, &mut seen)
-                {
-                    if match_covers_range(ns, len, &range, n_a) {
-                        if let Some(glue) =
-                            Self::build_glue_op(a, b, seed_ia, ib as i64, i, j, (ns, len, ne))
-                        {
-                            results.push(glue);
-                        }
-                    }
-                }
-            }
-        }
-
+        let mut results: Vec<GlueOp<T>> = self
+            .valid_glues(i, j)
+            .into_iter()
+            .filter(|g| match_covers_range(g.start_a, g.match_len, &range, n_a))
+            .collect();
         Self::sort_by_interval(&mut results);
         results
     }
@@ -693,6 +644,36 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn containing_query_exhaustive() {
+        let spec = Rat::<ZZ12>::from_unchecked(&spectre());
+        let hexamino =
+            Rat::<ZZ12>::from_unchecked(&hexagon()).glue((0, 0), &Rat::from_unchecked(&hexagon()));
+
+        for (label, rat) in [("spec", &spec), ("hexamino", &hexamino)] {
+            let ts = TileSet::new(vec![rat.clone()]);
+            let all = ts.valid_glues(0, 0);
+            let n = rat.len();
+
+            for edge in 0..n {
+                let containing = ts.valid_glues_containing(0, edge..edge + 1, 0);
+                let expected_intervals: Vec<_> = all
+                    .iter()
+                    .filter(|g| match_covers_range(g.start_a, g.match_len, &(edge..edge + 1), n))
+                    .map(|g| (g.start_a, g.match_len, g.end_b))
+                    .collect();
+                let got_intervals: Vec<_> = containing
+                    .iter()
+                    .map(|g| (g.start_a, g.match_len, g.end_b))
+                    .collect();
+                assert_eq!(
+                    got_intervals, expected_intervals,
+                    "{label}: edge {edge}: containing query mismatch",
+                );
             }
         }
     }
