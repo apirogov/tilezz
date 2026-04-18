@@ -40,7 +40,7 @@ impl std::fmt::Debug for CyclicMatch {
 ///
 /// # Usage
 ///
-/// ```ignore
+/// ```
 /// use tilezz::stringmatch::CyclicMatchIndex;
 ///
 /// let tiles: Vec<Vec<i8>> = vec![
