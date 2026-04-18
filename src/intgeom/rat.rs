@@ -61,7 +61,7 @@ fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
 /// (assuming that we start to match both at index 0)
 /// and possibly a offset to be subtracted from the left side
 /// (if the match can be extended to the left, assuming the sequences are cyclic)
-fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
+pub(crate) fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
     let min_len = x.len().min(y.len());
     if min_len < 2 {
         // at least one sequence has

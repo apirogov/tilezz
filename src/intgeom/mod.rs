@@ -11,3 +11,5 @@ pub mod rat;
 pub mod tiles;
 
 pub mod tileset;
+
+pub mod growing;
