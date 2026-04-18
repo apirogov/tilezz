@@ -209,12 +209,11 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             return vec![];
         }
 
-        let mut results: Vec<GlueOp<T>> = self
+        let results: Vec<GlueOp<T>> = self
             .valid_glues(i, j)
             .into_iter()
             .filter(|g| match_covers_range(g.start_a, g.match_len, &range, n_a))
             .collect();
-        Self::sort_by_interval(&mut results);
         results
     }
 }
@@ -676,5 +675,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn empty_tile_valid_glues() {
+        let hex = Rat::<ZZ12>::from_unchecked(&hexagon());
+        let ts = TileSet::new(vec![hex.clone(), hex]);
+
+        // a TileSet with all-valid tiles returns empty for i!=j
+        // when there's only one distinct tile shape
+        assert!(!ts.valid_glues(0, 1).is_empty());
+    }
+
+    #[test]
+    fn containing_query_edge_cases() {
+        let s: Snake<ZZ12> = spectre();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
+        let n = r.len();
+        let ts = TileSet::new(vec![r]);
+
+        // empty range returns nothing
+        assert!(ts.valid_glues_containing(0, 0..0, 0).is_empty());
+
+        // range.end > n returns nothing
+        assert!(ts.valid_glues_containing(0, 0..n + 1, 0).is_empty());
+    }
+
+    #[test]
+    fn shared_boundaries_returns_cmi_matches() {
+        let h: Snake<ZZ12> = hexagon();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
+        let ts = TileSet::new(vec![r.clone(), r.clone()]);
+
+        // hexagon has all-positive angles, RC is all-negative, no matches
+        let boundaries = ts.shared_boundaries(0, 1);
+        assert!(
+            boundaries.is_empty(),
+            "hexagon pair should have no RC matches: {:?}",
+            boundaries,
+        );
+
+        let self_boundaries = ts.shared_boundaries(0, 0);
+        assert!(
+            self_boundaries.is_empty(),
+            "hexagon self should have no RC matches: {:?}",
+            self_boundaries,
+        );
+
+        // spectre has non-trivial RC self-matches
+        let s: Snake<ZZ12> = spectre();
+        let spec: Rat<ZZ12> = Rat::from_unchecked(&s);
+        let ts2 = TileSet::new(vec![spec.clone(), spec]);
+        let cross = ts2.shared_boundaries(0, 1);
+        assert!(
+            !cross.is_empty(),
+            "spectre pair should have RC matches",
+        );
+        let max_len = cross.iter().map(|m| m.len).max().unwrap();
+        assert_eq!(max_len, 3, "spectre max RC cross-match should be 3");
+
+        let self_matches = ts2.shared_boundaries(0, 0);
+        assert!(
+            !self_matches.is_empty(),
+            "spectre self should have RC matches",
+        );
     }
 }
