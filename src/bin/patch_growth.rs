@@ -7,7 +7,7 @@ use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
-use tilezz::intgeom::tileset::TileSet;
+use tilezz::intgeom::tileset::{GlueStats, TileSet};
 
 #[derive(Parser)]
 #[command(
@@ -65,9 +65,9 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     patches_a: &[Rat<T>],
     patches_b: &[Rat<T>],
     verbose: bool,
-) -> (BTreeSet<Rat<T>>, usize) {
+) -> (BTreeSet<Rat<T>>, usize, GlueStats) {
     if patches_a.is_empty() || patches_b.is_empty() {
-        return (BTreeSet::new(), 0);
+        return (BTreeSet::new(), 0, GlueStats::default());
     }
     let count_a = patches_a.len();
     let count_b = patches_b.len();
@@ -80,9 +80,11 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
 
     let mut results = BTreeSet::new();
     let mut attempts = 0;
+    let mut stats = GlueStats::default();
 
     if self_match {
-        let glues = ts.all_valid_glues();
+        let (glues, s) = ts.all_valid_glues_with_stats();
+        stats = s;
         attempts = glues.len();
         for g in &glues {
             results.insert(g.result.clone());
@@ -90,7 +92,8 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     } else {
         for i in 0..count_a {
             for j in count_a..(count_a + count_b) {
-                let glues = ts.valid_glues(i, j);
+                let (glues, s) = ts.valid_glues_with_stats(i, j);
+                stats += s;
                 attempts += glues.len();
                 for g in &glues {
                     results.insert(g.result.clone());
@@ -107,9 +110,10 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
             attempts,
             results.len(),
         );
+        eprintln!("    {stats}");
     }
 
-    (results, attempts)
+    (results, attempts, stats)
 }
 
 // --- Brute-force matching (raw try_glue, no CMI) ---
@@ -149,6 +153,7 @@ struct RoundResult<T: IsComplex> {
     glue_ops: usize,
     num_tiles_a: usize,
     num_tiles_b: usize,
+    stats: GlueStats,
 }
 
 fn compute_round<T: IsComplex + IsRingOrField + Units>(
@@ -158,11 +163,11 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
     mode: &Mode,
 ) -> RoundResult<T> {
     let t0 = Instant::now();
-    let (results, glue_ops) = match mode {
+    let (results, glue_ops, stats) = match mode {
         Mode::Fast => tileset_match(pa, pb, verbose),
         Mode::Validate => {
             let t_fast = Instant::now();
-            let (fast, fast_ops) = tileset_match(pa, pb, verbose);
+            let (fast, fast_ops, fast_stats) = tileset_match(pa, pb, verbose);
             let dt_fast = t_fast.elapsed();
 
             let t_bf = Instant::now();
@@ -198,7 +203,7 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
                 "    validate: OK | tileset: {:.2?} ({} ops) | brute_force: {:.2?} ({} ops) | {:.1}x speedup | {} patches",
                 dt_fast, fast_ops, dt_bf, bf_ops, speedup, fast.len(),
             );
-            (fast, fast_ops)
+            (fast, fast_ops, fast_stats)
         }
     };
     RoundResult {
@@ -207,6 +212,7 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
         glue_ops,
         num_tiles_a: pa.len(),
         num_tiles_b: pb.len(),
+        stats,
     }
 }
 
@@ -246,6 +252,7 @@ fn main() {
     );
 
     let mut patches: BTreeMap<usize, Vec<Rat<ZZ12>>> = BTreeMap::new();
+    let mut all_stats: BTreeMap<usize, GlueStats> = BTreeMap::new();
     patches.insert(1, vec![seed]);
 
     eprintln!("\n--- Phase 1: Powers of 2 ---");
@@ -259,6 +266,8 @@ fn main() {
             next, power, power, r.patches.len(), r.glue_ops,
             r.num_tiles_a, r.num_tiles_b, r.elapsed,
         );
+        eprintln!("    {}", r.stats);
+        all_stats.insert(next, r.stats);
         patches.insert(next, r.patches);
         power = next;
     }
@@ -287,6 +296,8 @@ fn main() {
             k, a, b, r.patches.len(), r.glue_ops,
             r.num_tiles_a, r.num_tiles_b, r.elapsed,
         );
+        eprintln!("    {}", r.stats);
+        all_stats.insert(k, r.stats);
         patches.insert(k, r.patches);
     }
 
@@ -297,4 +308,11 @@ fn main() {
         total += pats.len();
     }
     eprintln!("  total:   {total:>6} patches");
+
+    let mut aggregate = GlueStats::default();
+    for s in all_stats.values() {
+        aggregate += s.clone();
+    }
+    eprintln!("\n--- Aggregate Stats ---");
+    eprintln!("  {aggregate}");
 }
