@@ -124,14 +124,15 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     ///
     /// Results are sorted by `(start_a, end_b)` in deterministic order.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        self.valid_glues_with_opts(i, j, true)
+        self.valid_glues_impl(i, j, true)
     }
 
-    pub(crate) fn valid_glues_no_heuristic(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        self.valid_glues_with_opts(i, j, false)
+    #[cfg(test)]
+    fn valid_glues_no_heuristic(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
+        self.valid_glues_impl(i, j, false)
     }
 
-    fn valid_glues_with_opts(
+    fn valid_glues_impl(
         &self,
         i: usize,
         j: usize,
@@ -737,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_heuristic_on_size4_hexagon_patches() {
+    fn heuristic_sound_on_size4_hexagon_patches() {
         let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
 
         let ts1 = TileSet::new(vec![hex.clone()]);
