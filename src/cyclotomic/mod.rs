@@ -42,7 +42,7 @@ pub use units::Units;
 
 pub use traits::{ComplexTraits, FieldTraits, RealTraits, RingTraits};
 pub use traits::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
-pub use traits::{IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField};
+pub use traits::{IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, IsZZ4};
 pub use traits::{QQType, QType, ZType, ZZType};
 
 pub use types::{Z10, Z12, Z16, Z20, Z24, Z30, Z32, Z4, Z6, Z60, Z8};
