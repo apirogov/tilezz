@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::ops::Range;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -62,21 +61,27 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         self.cmi.maximal_rc_matches(i, j)
     }
 
-    fn try_glue_if_new(
+    fn try_glue_at(
         a: &Rat<T>,
         b: &Rat<T>,
         ia: i64,
         ib: i64,
         i: usize,
         j: usize,
-        seen: &mut HashSet<(i64, usize, i64)>,
+        single_edge_only: bool,
     ) -> Option<GlueOp<T>> {
         let (ns, len, ne) = a.get_match((ia, ib), b);
-        if len == 0 || !seen.insert((ns, len, ne)) {
-            return None;
-        }
-        if !junction_gap_positive(a.seq(), ns as usize, len, b.seq(), ne as usize) {
-            return None;
+        if single_edge_only {
+            if len != 1 {
+                return None;
+            }
+        } else {
+            if len <= 1 {
+                return None;
+            }
+            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+                return None;
+            }
         }
         a.try_glue_precomputed((ns, len, ne), b)
             .ok()
@@ -100,39 +105,21 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
 
     /// Find all valid glue operations between tiles `i` and `j`.
     ///
-    /// Uses a two-phase approach with a shared `seen` set to deduplicate
-    /// normalized matches across phases:
+    /// Uses two phases that are disjoint by construction:
     ///
     /// **Phase 1 (multi-edge, CMI-seeded):** The Cyclic Match Index finds
-    /// maximal reverse-complement matches. For each CMI match, seeds at
-    /// both endpoints (k=0, k=len) are tried. Overlapping CMI matches can
-    /// produce the same normalized match, so the `seen` set deduplicates.
+    /// maximal reverse-complement matches. Each CMI match start is seeded,
+    /// and only matches of length ≥ 2 are accepted. The junction gap check
+    /// rejects only overlaps (gap < 0), allowing collinear junctions.
     ///
     /// **Phase 2 (single-edge scan):** Enumerates all `(ia, ib)` pairs and
-    /// applies the interior-angle overflow heuristic to reject infeasible
-    /// candidates before calling `get_match`. The `seen` set skips matches
-    /// already found by phase 1.
+    /// applies the interior-angle heuristic to reject candidates where the
+    /// junction gap is ≤ 0 (overlap or collinear). Only matches of length
+    /// exactly 1 are accepted — longer matches are found by phase 1.
     ///
-    /// Both phases filter through `junction_gap_positive` (cheap geometric
-    /// pre-filter checking junction vertex gaps) before the expensive
-    /// Snake self-intersection validation in `try_glue`.
-    ///
-    /// Results are sorted by `(start_a, end_b)` in deterministic order.
+    /// The two phases produce disjoint result sets by match length, so no
+    /// deduplication is needed.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        self.valid_glues_impl(i, j, true)
-    }
-
-    #[cfg(test)]
-    fn valid_glues_no_heuristic(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        self.valid_glues_impl(i, j, false)
-    }
-
-    fn valid_glues_impl(
-        &self,
-        i: usize,
-        j: usize,
-        use_single_edge_heuristic: bool,
-    ) -> Vec<GlueOp<T>> {
         let a = &self.rats[i];
         let b = &self.rats[j];
         let n_a = a.len();
@@ -142,26 +129,26 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             return vec![];
         }
 
-        let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
         let mut results: Vec<GlueOp<T>> = Vec::new();
 
         let cmi_matches = self.cmi.maximal_rc_matches(i, j);
         for m in &cmi_matches {
-            let pa = m.pos_a as i64;
-            let pb = m.pos_b as i64;
-            results.extend(Self::try_glue_if_new(a, b, pa, pb, i, j, &mut seen));
+            if let Some(glue) = Self::try_glue_at(a, b, m.pos_a as i64, m.pos_b as i64, i, j, false)
+            {
+                results.push(glue);
+            }
         }
 
         let seq_a = a.seq();
         let seq_b = b.seq();
         for ia in 0..n_a {
             for ib in 0..n_b {
-                if use_single_edge_heuristic && !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
                     continue;
                 }
-                results.extend(Self::try_glue_if_new(
-                    a, b, ia as i64, ib as i64, i, j, &mut seen,
-                ));
+                if let Some(glue) = Self::try_glue_at(a, b, ia as i64, ib as i64, i, j, true) {
+                    results.push(glue);
+                }
             }
         }
 
@@ -251,12 +238,12 @@ fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     left > 0 && right > 0
 }
 
-fn junction_gap_positive(a: &[i8], ns: usize, mlen: usize, b: &[i8], ne: usize) -> bool {
+fn junction_gap_nonnegative(a: &[i8], ns: usize, mlen: usize, b: &[i8], ne: usize) -> bool {
     let na = a.len();
     let nb = b.len();
     let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
     let right = a[ns] as i32 + b[ne] as i32;
-    left > 0 && right > 0
+    left >= 0 && right >= 0
 }
 
 #[cfg(test)]
@@ -837,7 +824,7 @@ mod tests {
         let mut index_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
         for i in 0..size4.len() {
             for j in 0..size4.len() {
-                for g in ts4.valid_glues_no_heuristic(i, j) {
+                for g in ts4.valid_glues(i, j) {
                     index_results.insert(g.result);
                 }
             }
@@ -867,60 +854,6 @@ mod tests {
             missing.len(),
             0,
             "index (no heuristic) missed {} patches",
-            missing.len(),
-        );
-    }
-
-    #[test]
-    fn size8_hexagon_heuristic_matches_no_heuristic() {
-        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-
-        let ts1 = TileSet::new(vec![hex.clone()]);
-        let size2: Vec<Rat<ZZ12>> = ts1
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let ts2 = TileSet::new(size2.clone());
-        let size4: Vec<Rat<ZZ12>> = ts2
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let ts4 = TileSet::new(size4.clone());
-
-        let with_heuristic: BTreeSet<Rat<ZZ12>> = ts4
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect();
-
-        let mut without_heuristic: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
-        for i in 0..size4.len() {
-            for j in 0..size4.len() {
-                for g in ts4.valid_glues_no_heuristic(i, j) {
-                    without_heuristic.insert(g.result);
-                }
-            }
-        }
-
-        eprintln!(
-            "with_heuristic: {}, without_heuristic: {}",
-            with_heuristic.len(),
-            without_heuristic.len(),
-        );
-
-        let missing: Vec<_> = without_heuristic.difference(&with_heuristic).collect();
-        assert_eq!(
-            missing.len(),
-            0,
-            "heuristic rejected {} patches that no-heuristic found",
             missing.len(),
         );
     }
