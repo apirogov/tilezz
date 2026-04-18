@@ -141,7 +141,11 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
                 let jr = normalize_angle::<T>(
                     a_seq[(ia + 1) % n_a] + b_seq[(ib + n_b - 1) % n_b] - hturn,
                 );
-                if jl == 0 || jl.abs() == hturn || jr == 0 || jr.abs() == hturn {
+                if jl.abs() == hturn || jr.abs() == hturn {
+                    // Heuristic: 180-degree fold-back at a junction means the boundary
+                    // doubles back on itself. try_glue would reject this anyway, but we
+                    // skip the expensive Snake construction.
+                    // NOTE: collinear junctions (jl/jr == 0) are valid — two edges merge.
                     continue;
                 }
 
@@ -272,9 +276,11 @@ fn match_covers_range(norm_start: i64, match_len: usize, range: &Range<usize>, n
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::ZZ12;
+    use crate::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
+    use crate::intgeom::rat::Rat;
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles::{hexagon, spectre};
+    use std::collections::HashSet;
 
     #[test]
     fn spectre_self_finds_mystic() {
@@ -413,5 +419,169 @@ mod tests {
             glues.len(),
             glues,
         );
+    }
+
+    fn brute_force_valid_glues<T: IsComplex + IsRingOrField + Units>(
+        a: &Rat<T>,
+        b: &Rat<T>,
+        i: usize,
+        j: usize,
+    ) -> Vec<GlueOp<T>> {
+        let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
+        let mut results: Vec<GlueOp<T>> = Vec::new();
+        for ia in 0..a.len() {
+            for ib in 0..b.len() {
+                let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
+                if len == 0 || !seen.insert((ns, len, ne)) {
+                    continue;
+                }
+                if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
+                    results.push(GlueOp {
+                        tile_a: i,
+                        tile_b: j,
+                        start_a: ns,
+                        end_b: ne,
+                        match_len: len,
+                        result: glued,
+                    });
+                }
+            }
+        }
+        results.sort_by(|x, y| {
+            x.start_a
+                .cmp(&y.start_a)
+                .then_with(|| x.end_b.cmp(&y.end_b))
+        });
+        results
+    }
+
+    fn assert_glue_sets_match<T: IsComplex + IsRingOrField + Units>(
+        ts_glues: &[GlueOp<T>],
+        bf_glues: &[GlueOp<T>],
+        label: &str,
+    ) {
+        assert_eq!(
+            ts_glues.len(),
+            bf_glues.len(),
+            "{label}: count mismatch: TileSet={}, brute_force={}",
+            ts_glues.len(),
+            bf_glues.len(),
+        );
+        for (idx, (ts_g, bf_g)) in ts_glues.iter().zip(bf_glues.iter()).enumerate() {
+            assert_eq!(
+                (ts_g.start_a, ts_g.match_len, ts_g.end_b),
+                (bf_g.start_a, bf_g.match_len, bf_g.end_b),
+                "{label}: interval mismatch at index {idx}",
+            );
+            assert_eq!(
+                ts_g.result, bf_g.result,
+                "{label}: result mismatch at ({}, {})",
+                ts_g.start_a, ts_g.end_b,
+            );
+        }
+    }
+
+    #[test]
+    fn hexagon_pair_exhaustive() {
+        let h: Snake<ZZ12> = hexagon();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
+        let ts = TileSet::new(vec![r.clone(), r.clone()]);
+
+        let ts_glues = ts.valid_glues(0, 1);
+        let bf_glues = brute_force_valid_glues(&r, &r, 0, 1);
+        assert_glue_sets_match(&ts_glues, &bf_glues, "hexagon pair");
+
+        for g in &ts_glues {
+            assert_eq!(g.match_len, 1, "hexagon pair glue should be single-edge");
+            assert_eq!(g.result.len(), 10, "hex+hex result should be 10-gon");
+        }
+
+        let canonical = &ts_glues[0].result;
+        for (idx, g) in ts_glues.iter().enumerate() {
+            assert_eq!(
+                g.result, *canonical,
+                "hex+hex glue #{idx} should yield same shape",
+            );
+        }
+
+        assert_eq!(
+            ts_glues.len(),
+            36,
+            "hexagon pair should have 36 valid glues"
+        );
+    }
+
+    #[test]
+    fn hexamino_pair_exhaustive() {
+        let h: Snake<ZZ12> = hexagon();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
+        let hexamino = r.glue((0, 0), &r);
+
+        let ts = TileSet::new(vec![hexamino.clone(), hexamino.clone()]);
+        let ts_glues = ts.valid_glues(0, 1);
+        let bf_glues = brute_force_valid_glues(&hexamino, &hexamino, 0, 1);
+        assert_glue_sets_match(&ts_glues, &bf_glues, "hexamino pair");
+
+        assert!(
+            !ts_glues.is_empty(),
+            "hexamino pair should have valid glues"
+        );
+
+        let multi_count = ts_glues.iter().filter(|g| g.match_len > 1).count();
+        let single_count = ts_glues.iter().filter(|g| g.match_len == 1).count();
+        assert!(
+            multi_count > 0,
+            "hexamino pair should have multi-edge matches",
+        );
+        assert!(
+            single_count > 0,
+            "hexamino pair should have single-edge matches",
+        );
+    }
+
+    #[test]
+    fn spectre_pair_exhaustive() {
+        let s: Snake<ZZ12> = spectre();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
+        let ts = TileSet::new(vec![r.clone(), r.clone()]);
+
+        let ts_glues = ts.valid_glues(0, 1);
+        let bf_glues = brute_force_valid_glues(&r, &r, 0, 1);
+        assert_glue_sets_match(&ts_glues, &bf_glues, "spectre pair");
+
+        let mystic = &[
+            0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
+        ];
+        assert!(
+            ts_glues.iter().any(|g| g.result.seq() == mystic),
+            "spectre pair should find mystic, got {} glues",
+            ts_glues.len(),
+        );
+
+        let multi_count = ts_glues.iter().filter(|g| g.match_len > 1).count();
+        let single_count = ts_glues.iter().filter(|g| g.match_len == 1).count();
+        assert!(
+            multi_count > 0,
+            "spectre pair should have multi-edge matches"
+        );
+        assert!(
+            single_count > 0,
+            "spectre pair should have single-edge matches"
+        );
+    }
+
+    #[test]
+    fn mixed_shapes_exhaustive() {
+        let sq = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
+        let tri = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
+        let ts = TileSet::new(vec![sq.clone(), tri.clone()]);
+
+        for i in 0..2 {
+            for j in i..2 {
+                let ts_glues = ts.valid_glues(i, j);
+                let bf_glues = brute_force_valid_glues(ts.rat(i), ts.rat(j), i, j);
+                assert_glue_sets_match(&ts_glues, &bf_glues, &format!("mixed shapes ({i},{j})"));
+            }
+        }
     }
 }
