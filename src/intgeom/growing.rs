@@ -154,7 +154,7 @@ fn grow_recursive<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::ZZ12;
+    use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::tiles;
 
     #[test]
@@ -209,6 +209,38 @@ mod tests {
         }
 
         for k in 1..=3 {
+            let old_count = old_results.get(&k).map(|s| s.len()).unwrap_or(0);
+            let new_count = new_results.get(&k).map(|s| s.len()).unwrap_or(0);
+            assert_eq!(
+                old_count, new_count,
+                "size {k}: old={old_count} new={new_count}"
+            );
+            if let (Some(old_set), Some(new_set)) = (old_results.get(&k), new_results.get(&k)) {
+                assert_eq!(old_set, new_set, "size {k}: sets differ");
+            }
+        }
+    }
+
+    #[test]
+    fn square_zz4_matches_old_approach_size6() {
+        let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let new_results = grow_redelmeier(&seed, 6);
+
+        let mut old_results: BTreeMap<usize, BTreeSet<Rat<ZZ4>>> = BTreeMap::new();
+        old_results.insert(1, std::iter::once(seed.clone()).collect());
+
+        for k in 2..=6 {
+            let prev: Vec<Rat<ZZ4>> = old_results[&(k - 1)].iter().cloned().collect();
+            let count_a = prev.len();
+            let mut all_tiles = prev;
+            all_tiles.push(seed.clone());
+            let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
+            let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
+            let (results, _) = ts.valid_rats_for_pairs(&pairs);
+            old_results.insert(k, results);
+        }
+
+        for k in 1..=6 {
             let old_count = old_results.get(&k).map(|s| s.len()).unwrap_or(0);
             let new_count = new_results.get(&k).map(|s| s.len()).unwrap_or(0);
             assert_eq!(
