@@ -246,6 +246,32 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
 
     // --- Layer 3: public API ---
 
+    /// Find all valid glue operations for the given pairs of tiles,
+    /// collecting unchecked candidates across all pairs, deduplicating
+    /// by canonical form, then validating unique sequences once.
+    /// Returns both results and detailed candidate funnel statistics.
+    pub fn valid_glues_for_pairs_with_stats(
+        &self,
+        pairs: &[(usize, usize)],
+    ) -> (Vec<GlueOp<T>>, GlueStats) {
+        let mut all_groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
+        let mut stats = GlueStats::default();
+        for &(i, j) in pairs {
+            let (groups, s) = self.valid_glues_unchecked(i, j);
+            stats.cmi_candidates += s.cmi_candidates;
+            stats.cmi_sequences += s.cmi_sequences;
+            stats.se_total_pairs += s.se_total_pairs;
+            stats.se_pass_heuristic += s.se_pass_heuristic;
+            stats.se_sequences += s.se_sequences;
+            for (rat, ops) in groups {
+                all_groups.entry(rat).or_default().extend(ops);
+            }
+        }
+        let mut results = Self::validate_glue_groups(all_groups, &mut stats);
+        Self::sort_global(&mut results);
+        (results, stats)
+    }
+
     /// Find all valid glue operations between tiles `i` and `j`,
     /// returning both results and detailed candidate funnel statistics.
     ///
@@ -278,24 +304,9 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     }
 
     pub fn all_valid_glues_with_stats(&self) -> (Vec<GlueOp<T>>, GlueStats) {
-        let mut all_groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
-        let mut stats = GlueStats::default();
-        for i in 0..self.rats.len() {
-            for j in 0..self.rats.len() {
-                let (groups, s) = self.valid_glues_unchecked(i, j);
-                stats.cmi_candidates += s.cmi_candidates;
-                stats.cmi_sequences += s.cmi_sequences;
-                stats.se_total_pairs += s.se_total_pairs;
-                stats.se_pass_heuristic += s.se_pass_heuristic;
-                stats.se_sequences += s.se_sequences;
-                for (rat, ops) in groups {
-                    all_groups.entry(rat).or_default().extend(ops);
-                }
-            }
-        }
-        let mut results = Self::validate_glue_groups(all_groups, &mut stats);
-        Self::sort_global(&mut results);
-        (results, stats)
+        let n = self.rats.len();
+        let pairs: Vec<(usize, usize)> = (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).collect();
+        self.valid_glues_for_pairs_with_stats(&pairs)
     }
 
     pub fn all_valid_glues(&self) -> Vec<GlueOp<T>> {

@@ -78,26 +78,19 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
 
     let ts = TileSet::new(all_tiles);
 
-    let mut results = BTreeSet::new();
-    let mut stats = GlueStats::default();
-
-    if self_match {
-        let (glues, s) = ts.all_valid_glues_with_stats();
-        stats = s;
-        for g in &glues {
-            results.insert(g.result.clone());
-        }
+    let pairs: Vec<(usize, usize)> = if self_match {
+        (0..count_a)
+            .flat_map(|i| (0..count_a).map(move |j| (i, j)))
+            .collect()
     } else {
-        for i in 0..count_a {
-            for j in count_a..(count_a + count_b) {
-                let (glues, s) = ts.valid_glues_with_stats(i, j);
-                stats += s;
-                for g in &glues {
-                    results.insert(g.result.clone());
-                }
-            }
-        }
-    }
+        (0..count_a)
+            .flat_map(|i| (count_a..count_a + count_b).map(move |j| (i, j)))
+            .collect()
+    };
+
+    let (glues, stats) = ts.valid_glues_for_pairs_with_stats(&pairs);
+
+    let results: BTreeSet<Rat<T>> = glues.iter().map(|g| g.result.clone()).collect();
 
     if verbose {
         eprintln!(
