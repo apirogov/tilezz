@@ -15,7 +15,7 @@ use super::snake::{Snake, Turtle};
 ///
 /// See <https://en.wikipedia.org/wiki/Lexicographically_minimal_string_rotation>
 ///
-fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
+pub(crate) fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
     let n = s.len() as isize;
     let mut f: Vec<isize> = vec![-1; 2 * s.len()];
     let mut k: isize = 0;
