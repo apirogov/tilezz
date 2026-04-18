@@ -2,18 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::angles::{normalize_angle, revcomp};
-use crate::intgeom::rat::{match_length, Rat};
-use crate::intgeom::snake::Snake;
-use crate::intgeom::tileset::{is_single_edge_candidate, junction_gap_nonnegative};
+use crate::intgeom::angles::normalize_angle;
+use crate::intgeom::rat::{lex_min_rot, Rat};
+use crate::intgeom::tileset::TileSet;
 
-    pub(crate) struct GlueSite {
+pub(crate) struct GlueSite {
     pub(crate) counter: usize,
     pub(crate) norm_start: usize,
     pub(crate) match_len: usize,
-    #[allow(dead_code)]
     pub(crate) norm_end: usize,
-    pub(crate) result_angles: Vec<i8>,
 }
 
 pub struct GrowingPatch<T: IsComplex> {
@@ -35,7 +32,8 @@ impl<T: IsComplex> GrowingPatch<T> {
 
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn from_seed(seed: &Rat<T>) -> Self {
-        let seq = seed.seq();
+        let canonical = seed.clone().canonical();
+        let seq = canonical.seq();
         let n = seq.len();
         GrowingPatch {
             angles: seq.to_vec(),
@@ -49,91 +47,23 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Rat::from_slice_unchecked(&self.angles)
     }
 
-    fn cyclic_slice(seq: &[i8], start: usize, len: usize) -> Vec<i8> {
-        let n = seq.len();
-        (0..len).map(|i| seq[(start + i) % n]).collect()
-    }
-
-    fn compute_match(
-        boundary: &[i8],
-        ia: usize,
-        seed_seq: &[i8],
-        ib: usize,
-    ) -> (usize, usize, usize) {
-        let n = boundary.len();
-        let m = seed_seq.len();
-        let x = Self::cyclic_slice(boundary, ia, n);
-        let seed_slice: Vec<i8> = (0..m).map(|i| seed_seq[(ib + 1 + i) % m]).collect();
-        let y = revcomp(&seed_slice);
-        let (len, offset) = match_length(&x, &y);
-        let norm_start = ((ia as i64 - offset as i64).rem_euclid(n as i64)) as usize;
-        let norm_end = ((ib as i64 + offset as i64).rem_euclid(m as i64)) as usize;
-        (norm_start, len, norm_end)
-    }
-
-    fn try_compute_glue(
-        &self,
-        norm_start: usize,
-        match_len: usize,
-        norm_end: usize,
-        seed_seq: &[i8],
-    ) -> Option<Vec<i8>> {
-        let n = self.angles.len();
-        let m = seed_seq.len();
-        let x_len = n - match_len + 1;
-        let y_len = m - match_len + 1;
-        let x = Self::cyclic_slice(&self.angles, (norm_start + match_len) % n, x_len);
-        let y = Self::cyclic_slice(seed_seq, norm_end, y_len);
-        let mut glued: Vec<i8> = Vec::with_capacity(x_len + y_len - 2);
-        glued.extend_from_slice(&x[..x_len - 1]);
-        glued.extend_from_slice(&y[..y_len - 1]);
-        let a_yx = normalize_angle::<T>(x[0] + y[y_len - 1] - T::hturn());
-        let a_xy = normalize_angle::<T>(y[0] + x[x_len - 1] - T::hturn());
-        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-            return None;
-        }
-        glued[0] = a_yx;
-        glued[x_len - 1] = a_xy;
-        Snake::<T>::try_from(glued.as_slice()).ok()?;
-        Some(glued)
-    }
-
     pub(crate) fn enumerate_sites(&self, seed: &Rat<T>, min_counter: usize) -> Vec<GlueSite> {
-        let n = self.angles.len();
-        let seed_seq = seed.seq();
-        let m = seed_seq.len();
-        let mut seen: BTreeSet<(usize, usize, usize)> = BTreeSet::new();
+        let patch_rat = self.to_rat();
+        let ts = TileSet::new(vec![patch_rat, seed.clone()]);
+        let glues = ts.valid_glues(0, 1);
+
         let mut sites: Vec<GlueSite> = Vec::new();
-        for ia in 0..n {
-            for ib in 0..m {
-                let (ns, ml, ne) = Self::compute_match(&self.angles, ia, seed_seq, ib);
-                if ml == 0 {
-                    continue;
-                }
-                if !seen.insert((ns, ml, ne)) {
-                    continue;
-                }
-                if self.counters[ns] < min_counter {
-                    continue;
-                }
-                let heuristic_ok = if ml >= 2 {
-                    junction_gap_nonnegative(&self.angles, ns, ml, seed_seq, ne)
-                } else {
-                    is_single_edge_candidate(&self.angles, ns, seed_seq, ne)
-                };
-                if !heuristic_ok {
-                    continue;
-                }
-                if let Some(result) = self.try_compute_glue(ns, ml, ne, seed_seq) {
-                    sites.push(GlueSite {
-                        counter: self.counters[ns],
-                        norm_start: ns,
-                        match_len: ml,
-                        norm_end: ne,
-                        result_angles: result,
-                    });
-                }
+        for glue in glues {
+            let ns = glue.start_a as usize;
+            if self.counters[ns] < min_counter {
+                continue;
             }
+            sites.push(GlueSite {
+                counter: self.counters[ns],
+                norm_start: ns,
+                match_len: glue.match_len,
+                norm_end: glue.end_b as usize,
+            });
         }
         sites.sort_by_key(|s| s.counter);
         sites
@@ -145,17 +75,38 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let n = self.angles.len();
         let ml = site.match_len;
         let ns = site.norm_start;
-        let new_angles = site.result_angles.clone();
-        let mut new_counters = Vec::with_capacity(new_angles.len());
+        let ne = site.norm_end;
+
+        let x_len = n - ml + 1;
+        let y_len = m - ml + 1;
+
+        let x: Vec<i8> = (0..x_len).map(|i| self.angles[(ns + ml + i) % n]).collect();
+        let y: Vec<i8> = (0..y_len).map(|i| seed_seq[(ne + i) % m]).collect();
+
+        let mut new_angles: Vec<i8> = Vec::with_capacity(x_len + y_len - 2);
+        new_angles.extend_from_slice(&x[..x_len - 1]);
+        new_angles.extend_from_slice(&y[..y_len - 1]);
+
+        let a_yx = normalize_angle::<T>(x[0] + y[y_len - 1] - T::hturn());
+        let a_xy = normalize_angle::<T>(y[0] + x[x_len - 1] - T::hturn());
+        new_angles[0] = a_yx;
+        new_angles[x_len - 1] = a_xy;
+
+        let mut new_counters: Vec<usize> = Vec::with_capacity(new_angles.len());
         let mut nc = self.next_counter;
-        for i in 0..(n - ml) {
+        for i in 0..(x_len - 1) {
             let old_pos = (ns + ml + i) % n;
             new_counters.push(self.counters[old_pos]);
         }
-        for _ in 0..(m - ml) {
+        for _ in 0..(y_len - 1) {
             new_counters.push(nc);
             nc += 1;
         }
+
+        let offset = lex_min_rot(&new_angles);
+        new_angles.rotate_left(offset);
+        new_counters.rotate_left(offset);
+
         GrowingPatch {
             angles: new_angles,
             counters: new_counters,
