@@ -364,8 +364,9 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         &self,
         match_info: (i64, usize, i64),
         other: &Self,
+        unchecked: bool,
     ) -> Result<Self, &str> {
-        self.try_glue_with_match_info(match_info, other, false)
+        self.try_glue_with_match_info(match_info, other, unchecked)
     }
 
     pub fn glue(&self, matched_indices: (i64, i64), other: &Self) -> Self {
