@@ -259,7 +259,7 @@ fn match_covers_range(norm_start: i64, match_len: usize, range: &Range<usize>, n
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
+    use crate::cyclotomic::ZZ12;
     use crate::intgeom::rat::Rat;
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles::{hexagon, spectre};
