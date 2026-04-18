@@ -399,7 +399,7 @@ fn match_covers_range(norm_start: i64, match_len: usize, range: &Range<usize>, n
 /// Returns `true` only when **both** junctions have a positive gap,
 /// meaning the candidate is a true single-edge match that needs only
 /// the global self-intersection check (`try_glue`).
-fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
+pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     let na = a.len();
     let nb = b.len();
     let left = a[ia] as i32 + b[ib] as i32;
@@ -407,7 +407,13 @@ fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     left > 0 && right > 0
 }
 
-fn junction_gap_nonnegative(a: &[i8], ns: usize, mlen: usize, b: &[i8], ne: usize) -> bool {
+pub(crate) fn junction_gap_nonnegative(
+    a: &[i8],
+    ns: usize,
+    mlen: usize,
+    b: &[i8],
+    ne: usize,
+) -> bool {
     let na = a.len();
     let nb = b.len();
     let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
