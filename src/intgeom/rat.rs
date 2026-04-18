@@ -317,18 +317,15 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     /// point twice. Thus the existing checks and implementation details already
     /// ensure holefreeness.
     /// QED.
-    fn try_glue_impl(
+    fn try_glue_with_match_info(
         &self,
-        matched_indices: (i64, i64),
+        (norm_start, mlen, norm_end): (i64, usize, i64),
         other: &Self,
         unchecked: bool,
     ) -> Result<Self, &str> {
         if self.chirality() != other.chirality() {
-            // NOTE: could implicitly reflect a tile and adjust the denoted index,
-            //       but this is very low priority right now.
             return Err("Cannot glue rats of opposite chirality (not implemented)!");
         }
-        let (norm_start, mlen, norm_end) = self.get_match(matched_indices, other);
 
         // get boundaries without the match (but keep the endpoints)
         let x = self.slice_from(norm_start + mlen as i64, self.len() - mlen + 1);
@@ -352,7 +349,16 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     pub fn try_glue(&self, matched_indices: (i64, i64), other: &Self) -> Result<Self, &str> {
-        self.try_glue_impl(matched_indices, other, false)
+        let match_info = self.get_match(matched_indices, other);
+        self.try_glue_with_match_info(match_info, other, false)
+    }
+
+    pub(crate) fn try_glue_precomputed(
+        &self,
+        match_info: (i64, usize, i64),
+        other: &Self,
+    ) -> Result<Self, &str> {
+        self.try_glue_with_match_info(match_info, other, false)
     }
 
     pub fn glue(&self, matched_indices: (i64, i64), other: &Self) -> Self {
@@ -360,7 +366,9 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     pub fn glue_unchecked(&self, matched_indices: (i64, i64), other: &Self) -> Self {
-        self.try_glue_impl(matched_indices, other, true).unwrap()
+        let match_info = self.get_match(matched_indices, other);
+        self.try_glue_with_match_info(match_info, other, true)
+            .unwrap()
     }
 
     // ----
