@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::angles::normalize_angle;
 use crate::intgeom::rat::Rat;
 use crate::stringmatch::CyclicMatchIndex;
 
@@ -127,25 +126,9 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             );
         }
 
-        let hturn = T::hturn();
-        let a_seq = a.seq();
-        let b_seq = b.seq();
-
-        for ia in 0..n_a {
-            for ib in 0..n_b {
-                if covered[ia][ib] {
-                    continue;
-                }
-
-                let jl = normalize_angle::<T>(a_seq[ia] + b_seq[ib] - hturn);
-                let jr = normalize_angle::<T>(
-                    a_seq[(ia + 1) % n_a] + b_seq[(ib + n_b - 1) % n_b] - hturn,
-                );
-                if jl.abs() == hturn || jr.abs() == hturn {
-                    // Heuristic: 180-degree fold-back at a junction means the boundary
-                    // doubles back on itself. try_glue would reject this anyway, but we
-                    // skip the expensive Snake construction.
-                    // NOTE: collinear junctions (jl/jr == 0) are valid — two edges merge.
+        for (ia, row) in covered.iter().enumerate().take(n_a) {
+            for (ib, &is_covered) in row.iter().enumerate().take(n_b) {
+                if is_covered {
                     continue;
                 }
 
@@ -477,6 +460,19 @@ mod tests {
                 ts_g.result, bf_g.result,
                 "{label}: result mismatch at ({}, {})",
                 ts_g.start_a, ts_g.end_b,
+            );
+        }
+    }
+
+    #[test]
+    fn spectre_foldback_cases_accepted() {
+        let s: Snake<ZZ12> = spectre();
+        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
+        let cases: Vec<(usize, usize)> = vec![(0, 4), (0, 8), (6, 4), (6, 8)];
+        for (ia, ib) in cases {
+            assert!(
+                r.try_glue((ia as i64, ib as i64), &r).is_ok(),
+                "spectre foldback ({ia},{ib}) should be accepted by try_glue",
             );
         }
     }
