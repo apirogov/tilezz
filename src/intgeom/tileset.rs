@@ -77,25 +77,6 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         }
     }
 
-    fn build_glue_op(
-        a: &Rat<T>,
-        b: &Rat<T>,
-        ia: i64,
-        ib: i64,
-        i: usize,
-        j: usize,
-        (ns, len, ne): (i64, usize, i64),
-    ) -> Option<GlueOp<T>> {
-        a.try_glue((ia, ib), b).ok().map(|glued| GlueOp {
-            tile_a: i,
-            tile_b: j,
-            start_a: ns,
-            end_b: ne,
-            match_len: len,
-            result: glued,
-        })
-    }
-
     fn try_add_glue(
         a: &Rat<T>,
         b: &Rat<T>,
@@ -106,7 +87,16 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         seen: &mut HashSet<(i64, usize, i64)>,
     ) -> Option<GlueOp<T>> {
         let match_info = Self::get_new_match(a, b, ia, ib, seen)?;
-        Self::build_glue_op(a, b, ia, ib, i, j, match_info)
+        a.try_glue_precomputed(match_info, b)
+            .ok()
+            .map(|glued| GlueOp {
+                tile_a: i,
+                tile_b: j,
+                start_a: match_info.0,
+                end_b: match_info.2,
+                match_len: match_info.1,
+                result: glued,
+            })
     }
 
     fn sort_by_interval(results: &mut [GlueOp<T>]) {
@@ -727,10 +717,7 @@ mod tests {
         let spec: Rat<ZZ12> = Rat::from_unchecked(&s);
         let ts2 = TileSet::new(vec![spec.clone(), spec]);
         let cross = ts2.shared_boundaries(0, 1);
-        assert!(
-            !cross.is_empty(),
-            "spectre pair should have RC matches",
-        );
+        assert!(!cross.is_empty(), "spectre pair should have RC matches",);
         let max_len = cross.iter().map(|m| m.len).max().unwrap();
         assert_eq!(max_len, 3, "spectre max RC cross-match should be 3");
 
