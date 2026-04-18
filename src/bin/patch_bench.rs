@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12, ZZ4};
-use tilezz::intgeom::growing::grow_redelmeier;
+use tilezz::intgeom::growing::{grow_redelmeier, make_free};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
@@ -27,6 +27,10 @@ struct Args {
     /// Cyclotomic ring
     #[arg(long, value_enum, default_value = "zz12")]
     ring: RingChoice,
+
+    /// Mod out reflections (report free instead of one-sided counts)
+    #[arg(long, default_value_t = false)]
+    free: bool,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -109,28 +113,50 @@ where
     grow_redelmeier(&seed, max_size)
 }
 
+fn to_free_results<T>(
+    onesided: &BTreeMap<usize, BTreeSet<Rat<T>>>,
+) -> BTreeMap<usize, BTreeSet<Rat<T>>>
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    onesided
+        .iter()
+        .map(|(&k, set)| (k, make_free(set)))
+        .collect()
+}
+
 fn run_and_print<T>(
     label: &str,
     seed: Rat<T>,
     max_size: usize,
     approach: &Approach,
+    free: bool,
 ) -> BTreeMap<usize, BTreeSet<Rat<T>>>
 where
     T: IsComplex + IsRingOrField + Units,
 {
+    let kind = if free { "free" } else { "one-sided" };
+    let full_label = format!("{label} ({kind})");
+
     match approach {
         Approach::Old => {
             let t0 = Instant::now();
-            let results = run_old(seed, max_size);
+            let mut results = run_old(seed, max_size);
             let elapsed = t0.elapsed();
-            print_results_generic(label, &results, elapsed);
+            if free {
+                results = to_free_results(&results);
+            }
+            print_results_generic(&full_label, &results, elapsed);
             results
         }
         Approach::New => {
             let t0 = Instant::now();
-            let results = run_new(seed, max_size);
+            let mut results = run_new(seed, max_size);
             let elapsed = t0.elapsed();
-            print_results_generic(label, &results, elapsed);
+            if free {
+                results = to_free_results(&results);
+            }
+            print_results_generic(&full_label, &results, elapsed);
             results
         }
         Approach::Both => {
@@ -142,15 +168,26 @@ where
             let new_results = run_new(seed, max_size);
             let new_elapsed = t0.elapsed();
 
+            let old_results = if free {
+                to_free_results(&old_results)
+            } else {
+                old_results
+            };
+            let new_results = if free {
+                to_free_results(&new_results)
+            } else {
+                new_results
+            };
+
             println!();
             print_results_generic(
-                &format!("Old (TileSet) - {label}"),
+                &format!("Old (TileSet) - {full_label}"),
                 &old_results,
                 old_elapsed,
             );
             println!();
             print_results_generic(
-                &format!("New (Redelmeier) - {label}"),
+                &format!("New (Redelmeier) - {full_label}"),
                 &new_results,
                 new_elapsed,
             );
@@ -208,6 +245,7 @@ fn main() {
                 seed,
                 args.max_size,
                 &args.approach,
+                args.free,
             );
         }
         RingChoice::ZZ12 => {
@@ -217,6 +255,7 @@ fn main() {
                 seed,
                 args.max_size,
                 &args.approach,
+                args.free,
             );
         }
     }
