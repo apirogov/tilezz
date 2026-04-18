@@ -70,7 +70,7 @@ fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
     }
 
     // we start checking at the 2nd point and look for the right side end
-    let mut len = 1;
+    let mut len = min_len;
     for i in 1..min_len {
         if x[i] != y[i] {
             // first non-complementary angle -> right end of match
@@ -84,15 +84,20 @@ fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
     }
 
     // go cyclically into the other direction to try extending the interval
-    let mut offset = 0;
-    for i in 1..(min_len - len) {
+    let remaining = min_len - len;
+    if remaining == 0 {
+        return (len, 0);
+    }
+    let mut offset = remaining;
+    for i in 1..remaining {
         if x[x.len() - i] != y[y.len() - i] {
             // first non-complementary angle -> left end of match
             offset = i;
             len += i;
-            break;
+            return (len, offset);
         }
     }
+    len += offset;
     (len, offset)
 }
 
@@ -225,7 +230,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
 
     /// Shift the starting node of the tile (does not affect equivalence).
     pub fn cycle(mut self, offset: i64) -> Self {
-        self.cyc = ((self.cyc as i64 + offset) % (self.len() as i64)) as usize;
+        self.cyc = (self.cyc as i64 + offset).rem_euclid(self.len() as i64) as usize;
         self
     }
 
@@ -246,7 +251,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     /// Return a slice of the angle sequence with length n.
     pub fn slice_from(&self, start: i64, len: usize) -> &[i8] {
         self.slice_from_canonical(
-            ((self.cyc as i64 + start) % self.len() as i64) as usize,
+            (self.cyc as i64 + start).rem_euclid(self.len() as i64) as usize,
             len,
         )
     }
@@ -415,8 +420,8 @@ mod tests {
         assert_eq!(match_length(&[1, 2, 3], &[]), (0, 0));
         assert_eq!(match_length(&[1, 2, 3], &[1]), (0, 0));
 
-        // match cannot be longer than shortest sequence
-        assert_eq!(match_length(&[1, 2, 3], &[1, 2]), (1, 0));
+        // full match up to shorter sequence
+        assert_eq!(match_length(&[1, 2, 3], &[1, 2]), (2, 0));
         // the end points do not matter
         assert_eq!(match_length(&[1, 2, 3], &[4, 5]), (1, 0));
         // the inside points must be equal
@@ -424,6 +429,12 @@ mod tests {
         assert_eq!(match_length(&[1, 2, 3, 4], &[5, 2, 3, 6]), (3, 0));
         // match can be extended to the left (input is starting in the middle)
         assert_eq!(match_length(&[3, 4, 1, 2], &[3, 6, 5, 2]), (3, 2));
+        // full match: all positions equal
+        assert_eq!(match_length(&[1, 2, 3], &[1, 2, 3]), (3, 0));
+        // full match with backward extension
+        assert_eq!(match_length(&[3, 4, 1, 2], &[3, 4, 1, 2]), (4, 0));
+        // backward extension that consumes all remaining elements
+        assert_eq!(match_length(&[3, 4, 1, 2], &[3, 6, 1, 2]), (4, 3),);
     }
 
     #[test]
@@ -516,6 +527,12 @@ mod tests {
 
         // revcomp works respecting the current start offset
         assert_eq!(r.cycled(2), r.cycled(2).reversed().reversed());
+
+        // negative offsets work correctly
+        assert_eq!(r.seq(), r.cycled(-1).cycled(1).seq());
+        assert_eq!(r.cycled(1).seq(), r.cycled(-13).seq());
+        assert_eq!(r.cycled(-1).seq(), r.cycled(13).seq());
+        assert_eq!(r.cycled(-1).seq(), r.cycled(r.len() as i64 - 1).seq(),);
     }
 
     #[test]
