@@ -161,8 +161,14 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
     let (results, glue_ops) = match mode {
         Mode::Fast => tileset_match(pa, pb, verbose),
         Mode::Validate => {
+            let t_fast = Instant::now();
             let (fast, fast_ops) = tileset_match(pa, pb, verbose);
+            let dt_fast = t_fast.elapsed();
+
+            let t_bf = Instant::now();
             let (bf, bf_ops) = brute_force_match(pa, pb);
+            let dt_bf = t_bf.elapsed();
+
             if fast != bf {
                 let fast_only: Vec<_> = fast.difference(&bf).collect();
                 let bf_only: Vec<_> = bf.difference(&fast).collect();
@@ -187,11 +193,10 @@ fn compute_round<T: IsComplex + IsRingOrField + Units>(
                 }
                 std::process::exit(1);
             }
+            let speedup = dt_bf.as_secs_f64() / dt_fast.as_secs_f64().max(1e-9);
             eprintln!(
-                "    validate: OK (tileset={} ops, brute_force={} ops, {} patches match)",
-                fast_ops,
-                bf_ops,
-                fast.len(),
+                "    validate: OK | tileset: {:.2?} ({} ops) | brute_force: {:.2?} ({} ops) | {:.1}x speedup | {} patches",
+                dt_fast, fast_ops, dt_bf, bf_ops, speedup, fast.len(),
             );
             (fast, fast_ops)
         }
@@ -213,10 +218,9 @@ enum Mode {
 fn main() {
     let args = Args::parse();
 
-    let mut max_size = args.max_size;
+    let max_size = args.max_size;
     if args.validate && max_size > 4 {
-        eprintln!("note: --validate caps max_size to 4 (brute force is expensive)");
-        max_size = 4;
+        eprintln!("note: --validate with max_size > 4 may be slow (brute force scales poorly)");
     }
     if max_size < 1 {
         eprintln!("max_size must be at least 1");

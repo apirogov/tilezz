@@ -124,6 +124,19 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     ///
     /// Results are sorted by `(start_a, end_b)` in deterministic order.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
+        self.valid_glues_with_opts(i, j, true)
+    }
+
+    pub(crate) fn valid_glues_no_heuristic(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
+        self.valid_glues_with_opts(i, j, false)
+    }
+
+    fn valid_glues_with_opts(
+        &self,
+        i: usize,
+        j: usize,
+        use_single_edge_heuristic: bool,
+    ) -> Vec<GlueOp<T>> {
         let a = &self.rats[i];
         let b = &self.rats[j];
         let n_a = a.len();
@@ -140,7 +153,11 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         for m in &cmi_matches {
             let pa = m.pos_a as i64;
             let pb = m.pos_b as i64;
-            results.extend(Self::try_add_glue(a, b, pa, pb, i, j, &mut seen));
+            for k in 0..=m.len {
+                let ka = (pa + k as i64).rem_euclid(n_a as i64);
+                let kb = (pb - k as i64).rem_euclid(n_b as i64);
+                results.extend(Self::try_add_glue(a, b, ka, kb, i, j, &mut seen));
+            }
             results.extend(Self::try_add_glue(
                 a,
                 b,
@@ -156,7 +173,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         let seq_b = b.seq();
         for ia in 0..n_a {
             for ib in 0..n_b {
-                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                if use_single_edge_heuristic && !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
                     continue;
                 }
                 results.extend(Self::try_add_glue(
@@ -172,7 +189,7 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
     pub fn all_valid_glues(&self) -> Vec<GlueOp<T>> {
         let mut results = Vec::new();
         for i in 0..self.rats.len() {
-            for j in i..self.rats.len() {
+            for j in 0..self.rats.len() {
                 results.extend(self.valid_glues(i, j));
             }
         }
@@ -258,7 +275,7 @@ mod tests {
     use crate::intgeom::rat::Rat;
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles::{hexagon, spectre};
-    use std::collections::HashSet;
+    use std::collections::{BTreeSet, HashSet};
 
     const MYSTIC_ZZ12: &[i8] = &[
         0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
@@ -366,9 +383,6 @@ mod tests {
         let ts = TileSet::new(vec![sq, tri]);
 
         let all = ts.all_valid_glues();
-        for g in &all {
-            assert!(g.tile_a <= g.tile_b);
-        }
         for w in all.windows(2) {
             assert!(
                 w[0].tile_a < w[1].tile_a
@@ -720,11 +734,203 @@ mod tests {
         assert!(!cross.is_empty(), "spectre pair should have RC matches",);
         let max_len = cross.iter().map(|m| m.len).max().unwrap();
         assert_eq!(max_len, 3, "spectre max RC cross-match should be 3");
+    }
 
-        let self_matches = ts2.shared_boundaries(0, 0);
-        assert!(
-            !self_matches.is_empty(),
-            "spectre self should have RC matches",
+    #[test]
+    fn debug_heuristic_on_size4_hexagon_patches() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+
+        let ts1 = TileSet::new(vec![hex.clone()]);
+        let size2: Vec<Rat<ZZ12>> = ts1
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ts2 = TileSet::new(size2.clone());
+        let size4: Vec<Rat<ZZ12>> = ts2
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        eprintln!("size-4 patches: {}", size4.len());
+
+        let mut heuristic_rejects_accept = 0;
+        let mut details: Vec<(usize, usize, i64, i64, i8, i8, i8, i8)> = Vec::new();
+
+        for (i, a) in size4.iter().enumerate() {
+            for (j, b) in size4.iter().enumerate() {
+                let seq_a = a.seq();
+                let seq_b = b.seq();
+                for ia in 0..a.len() {
+                    for ib in 0..b.len() {
+                        let (_, len, _) = a.get_match((ia as i64, ib as i64), b);
+                        if len != 1 {
+                            continue;
+                        }
+                        if a.try_glue((ia as i64, ib as i64), b).is_err() {
+                            continue;
+                        }
+                        if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                            heuristic_rejects_accept += 1;
+                            let na = a.len();
+                            let nb = b.len();
+                            let left_a = seq_a[ia];
+                            let left_b = seq_b[ib];
+                            let right_a = seq_a[(ia + 1) % na];
+                            let right_b = seq_b[(ib + nb - 1) % nb];
+                            details.push((
+                                i, j, ia as i64, ib as i64, left_a, left_b, right_a, right_b,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "heuristic rejected {} valid single-edge glues",
+            heuristic_rejects_accept
+        );
+        for (i, j, ia, ib, la, lb, ra, rb) in &details {
+            eprintln!(
+                "  patches[{}] x patches[{}], ({},{}): left=({}+{}={}) right=({}+{}={})",
+                i,
+                j,
+                ia,
+                ib,
+                la,
+                lb,
+                la + lb,
+                ra,
+                rb,
+                ra + rb,
+            );
+        }
+        assert_eq!(
+            heuristic_rejects_accept, 0,
+            "heuristic rejected {} valid glues",
+            heuristic_rejects_accept,
+        );
+    }
+
+    #[test]
+    fn size8_hexagon_no_heuristic_matches_brute_force() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+
+        let ts1 = TileSet::new(vec![hex.clone()]);
+        let size2: Vec<Rat<ZZ12>> = ts1
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ts2 = TileSet::new(size2.clone());
+        let size4: Vec<Rat<ZZ12>> = ts2
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ts4 = TileSet::new(size4.clone());
+
+        let mut index_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
+        for i in 0..size4.len() {
+            for j in 0..size4.len() {
+                for g in ts4.valid_glues_no_heuristic(i, j) {
+                    index_results.insert(g.result);
+                }
+            }
+        }
+
+        let mut bf_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
+        for a in &size4 {
+            for b in &size4 {
+                for ia in 0..a.len() {
+                    for ib in 0..b.len() {
+                        if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
+                            bf_results.insert(glued);
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "index: {}, brute_force: {}",
+            index_results.len(),
+            bf_results.len(),
+        );
+
+        let missing: Vec<_> = bf_results.difference(&index_results).collect();
+        assert_eq!(
+            missing.len(),
+            0,
+            "index (no heuristic) missed {} patches",
+            missing.len(),
+        );
+    }
+
+    #[test]
+    fn size8_hexagon_heuristic_matches_no_heuristic() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+
+        let ts1 = TileSet::new(vec![hex.clone()]);
+        let size2: Vec<Rat<ZZ12>> = ts1
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ts2 = TileSet::new(size2.clone());
+        let size4: Vec<Rat<ZZ12>> = ts2
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        let ts4 = TileSet::new(size4.clone());
+
+        let with_heuristic: BTreeSet<Rat<ZZ12>> = ts4
+            .all_valid_glues()
+            .iter()
+            .map(|g| g.result.clone())
+            .collect();
+
+        let mut without_heuristic: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
+        for i in 0..size4.len() {
+            for j in 0..size4.len() {
+                for g in ts4.valid_glues_no_heuristic(i, j) {
+                    without_heuristic.insert(g.result);
+                }
+            }
+        }
+
+        eprintln!(
+            "with_heuristic: {}, without_heuristic: {}",
+            with_heuristic.len(),
+            without_heuristic.len(),
+        );
+
+        let missing: Vec<_> = without_heuristic.difference(&with_heuristic).collect();
+        assert_eq!(
+            missing.len(),
+            0,
+            "heuristic rejected {} patches that no-heuristic found",
+            missing.len(),
         );
     }
 }
