@@ -9,3 +9,5 @@ pub mod snake;
 pub mod rat;
 
 pub mod tiles;
+
+pub mod tileset;
