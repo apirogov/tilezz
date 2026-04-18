@@ -151,6 +151,16 @@ fn grow_recursive<T>(
     }
 }
 
+pub fn make_free<T>(onesided: &BTreeSet<Rat<T>>) -> BTreeSet<Rat<T>>
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    onesided
+        .iter()
+        .map(|r| std::cmp::min(r.clone(), r.reflected()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +260,99 @@ mod tests {
             if let (Some(old_set), Some(new_set)) = (old_results.get(&k), new_results.get(&k)) {
                 assert_eq!(old_set, new_set, "size {k}: sets differ");
             }
+        }
+    }
+
+    fn brute_force_grow<T: IsComplex + IsRingOrField + Units>(
+        seed: &Rat<T>,
+        max_size: usize,
+    ) -> BTreeMap<usize, BTreeSet<Rat<T>>> {
+        let mut results: BTreeMap<usize, BTreeSet<Rat<T>>> = BTreeMap::new();
+        results.insert(1, std::iter::once(seed.clone()).collect());
+
+        for k in 2..=max_size {
+            let prev: Vec<Rat<T>> = results[&(k - 1)].iter().cloned().collect();
+            let mut next: BTreeSet<Rat<T>> = BTreeSet::new();
+            for patch in &prev {
+                for ia in 0..patch.len() {
+                    for ib in 0..seed.len() {
+                        if let Ok(glued) = patch.try_glue((ia as i64, ib as i64), seed) {
+                            next.insert(glued);
+                        }
+                    }
+                }
+            }
+            results.insert(k, next);
+        }
+        results
+    }
+
+    #[test]
+    fn square_zz4_brute_force_vs_tileset_size7() {
+        let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let bf = brute_force_grow(&seed, 7);
+
+        eprintln!("=== Brute force (try_glue) ===");
+        for k in 1..=7 {
+            let count = bf.get(&k).map(|s| s.len()).unwrap_or(0);
+            eprintln!("  size {k}: {count}");
+        }
+
+        let redel = grow_redelmeier(&seed, 7);
+        eprintln!("=== Redelmeier (TileSet) ===");
+        for k in 1..=7 {
+            let count = redel.get(&k).map(|s| s.len()).unwrap_or(0);
+            eprintln!("  size {k}: {count}");
+        }
+
+        for k in 1..=7 {
+            let bf_count = bf.get(&k).map(|s| s.len()).unwrap_or(0);
+            let redel_count = redel.get(&k).map(|s| s.len()).unwrap_or(0);
+            assert_eq!(
+                bf_count, redel_count,
+                "size {k}: brute_force={bf_count} redelmeier={redel_count}"
+            );
+            if let (Some(bf_set), Some(redel_set)) = (bf.get(&k), redel.get(&k)) {
+                let missing: Vec<_> = bf_set.difference(redel_set).collect();
+                if !missing.is_empty() {
+                    eprintln!(
+                        "  size {k}: {} patches in brute_force but not redelmeier:",
+                        missing.len()
+                    );
+                    for m in &missing {
+                        eprintln!(
+                            "    {}",
+                            m.seq()
+                                .iter()
+                                .map(|a| a.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                }
+                assert_eq!(bf_set, redel_set, "size {k}: sets differ");
+            }
+        }
+    }
+
+    const FREE_POLYOMINOES_NO_HOLES: &[usize] =
+        &[1, 1, 1, 2, 5, 12, 35, 107, 363, 1248, 4460, 16094, 58937, 217117];
+
+    #[test]
+    fn square_zz4_free_polyominoes_match_oeis() {
+        let max_size = 9;
+        let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let onesided = grow_redelmeier(&seed, max_size);
+
+        for k in 1..=max_size {
+            let onesided_set = onesided.get(&k).unwrap();
+            let free_set = make_free(onesided_set);
+            let free_count = free_set.len();
+            let expected = FREE_POLYOMINOES_NO_HOLES[k];
+            assert_eq!(
+                free_count, expected,
+                "size {k}: got {free_count}, expected {expected} free polyominoes (no holes)"
+            );
         }
     }
 }
