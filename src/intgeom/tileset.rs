@@ -399,11 +399,12 @@ mod tests {
         let mut results: Vec<GlueOp<T>> = Vec::new();
         for ia in 0..a.len() {
             for ib in 0..b.len() {
-                let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
+                let match_info = a.get_match((ia as i64, ib as i64), b);
+                let (ns, len, ne) = match_info;
                 if len == 0 || !seen.insert((ns, len, ne)) {
                     continue;
                 }
-                if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
+                if let Ok(glued) = a.try_glue_precomputed(match_info, b) {
                     results.push(GlueOp {
                         tile_a: i,
                         tile_b: j,
@@ -736,13 +737,10 @@ mod tests {
             .into_iter()
             .collect();
 
-        eprintln!("size-4 patches: {}", size4.len());
+        let mut false_rejects = 0;
 
-        let mut heuristic_rejects_accept = 0;
-        let mut details: Vec<(usize, usize, i64, i64, i8, i8, i8, i8)> = Vec::new();
-
-        for (i, a) in size4.iter().enumerate() {
-            for (j, b) in size4.iter().enumerate() {
+        for a in &size4 {
+            for b in &size4 {
                 let seq_a = a.seq();
                 let seq_b = b.seq();
                 for ia in 0..a.len() {
@@ -755,50 +753,21 @@ mod tests {
                             continue;
                         }
                         if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
-                            heuristic_rejects_accept += 1;
-                            let na = a.len();
-                            let nb = b.len();
-                            let left_a = seq_a[ia];
-                            let left_b = seq_b[ib];
-                            let right_a = seq_a[(ia + 1) % na];
-                            let right_b = seq_b[(ib + nb - 1) % nb];
-                            details.push((
-                                i, j, ia as i64, ib as i64, left_a, left_b, right_a, right_b,
-                            ));
+                            false_rejects += 1;
                         }
                     }
                 }
             }
         }
 
-        eprintln!(
-            "heuristic rejected {} valid single-edge glues",
-            heuristic_rejects_accept
-        );
-        for (i, j, ia, ib, la, lb, ra, rb) in &details {
-            eprintln!(
-                "  patches[{}] x patches[{}], ({},{}): left=({}+{}={}) right=({}+{}={})",
-                i,
-                j,
-                ia,
-                ib,
-                la,
-                lb,
-                la + lb,
-                ra,
-                rb,
-                ra + rb,
-            );
-        }
         assert_eq!(
-            heuristic_rejects_accept, 0,
-            "heuristic rejected {} valid glues",
-            heuristic_rejects_accept,
+            false_rejects, 0,
+            "heuristic falsely rejected {false_rejects} valid single-edge glues"
         );
     }
 
     #[test]
-    fn size8_hexagon_no_heuristic_matches_brute_force() {
+    fn size8_hexagon_valid_glues_matches_brute_force() {
         let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
 
         let ts1 = TileSet::new(vec![hex.clone()]);
@@ -850,11 +819,6 @@ mod tests {
         );
 
         let missing: Vec<_> = bf_results.difference(&index_results).collect();
-        assert_eq!(
-            missing.len(),
-            0,
-            "index (no heuristic) missed {} patches",
-            missing.len(),
-        );
+        assert_eq!(missing.len(), 0, "index missed {} patches", missing.len(),);
     }
 }
