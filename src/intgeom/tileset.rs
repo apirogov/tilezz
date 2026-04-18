@@ -62,6 +62,22 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         self.cmi.maximal_rc_matches(i, j)
     }
 
+    /// Find all valid glue operations between tiles `i` and `j`.
+    ///
+    /// Uses a two-phase approach:
+    ///
+    /// **Phase 1 (multi-edge):** Seeds from the CMI index find maximal
+    /// reverse-complement matches. Each CMI match position is also shifted
+    /// by one edge to catch boundary extensions where `Rat::get_match`
+    /// extends beyond the CMI match (since `Rat` starts unconditionally at
+    /// length 1 while CMI requires angle equality at every position).
+    ///
+    /// **Phase 2 (single-edge):** Enumerates all position pairs and applies
+    /// the interior-angle overflow heuristic (`is_single_edge_candidate`)
+    /// to reject locally inconsistent candidates before the global
+    /// self-intersection check via `try_glue`.
+    ///
+    /// Results are sorted by `(start_a, end_b)` in deterministic order.
     pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
         let a = &self.rats[i];
         let b = &self.rats[j];
@@ -75,77 +91,46 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
         let mut results: Vec<GlueOp<T>> = Vec::new();
 
-        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
-
-        let mut covered = vec![vec![false; n_b]; n_a];
-
-        let mark_covered =
-            |norm_start: i64, norm_end: i64, len: usize, covered: &mut Vec<Vec<bool>>| {
-                for d in 0..len {
-                    let pa = ((norm_start + d as i64) as usize) % n_a;
-                    let pb = ((norm_end - d as i64).rem_euclid(n_b as i64) as usize) % n_b;
-                    covered[pa][pb] = true;
-                }
-            };
-
-        let add_match = |ia: i64,
-                         ib: i64,
-                         seen: &mut HashSet<(i64, usize, i64)>,
-                         results: &mut Vec<GlueOp<T>>,
-                         covered: &mut Vec<Vec<bool>>| {
-            let (norm_start, len, norm_end) = a.get_match((ia, ib), b);
-            if len == 0 {
-                return;
-            }
-            if !seen.insert((norm_start, len, norm_end)) {
-                return;
-            }
-            mark_covered(norm_start, norm_end, len, covered);
-            if let Ok(glued) = a.try_glue((ia, ib), b) {
-                results.push(GlueOp {
-                    tile_a: i,
-                    tile_b: j,
-                    start_a: norm_start,
-                    end_b: norm_end,
-                    match_len: len,
-                    result: glued,
-                });
-            }
-        };
-
-        for m in &cmi_matches {
-            let pa = m.pos_a as i64;
-            let pb = m.pos_b as i64;
-            add_match(pa, pb, &mut seen, &mut results, &mut covered);
-            add_match(
-                (pa - 1).rem_euclid(n_a as i64),
-                (pb + 1).rem_euclid(n_b as i64),
-                &mut seen,
-                &mut results,
-                &mut covered,
-            );
-        }
-
-        for (ia, row) in covered.iter().enumerate().take(n_a) {
-            for (ib, &is_covered) in row.iter().enumerate().take(n_b) {
-                if is_covered {
-                    continue;
-                }
-
-                let (norm_start, len, norm_end) = a.get_match((ia as i64, ib as i64), b);
-                if len == 0 || !seen.insert((norm_start, len, norm_end)) {
-                    continue;
-                }
-                if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
+        let try_seed = |ia: i64,
+                        ib: i64,
+                        seen: &mut HashSet<(i64, usize, i64)>,
+                        results: &mut Vec<GlueOp<T>>| {
+            let (ns, len, ne) = a.get_match((ia, ib), b);
+            if len > 0 && seen.insert((ns, len, ne)) {
+                if let Ok(glued) = a.try_glue((ia, ib), b) {
                     results.push(GlueOp {
                         tile_a: i,
                         tile_b: j,
-                        start_a: norm_start,
-                        end_b: norm_end,
+                        start_a: ns,
+                        end_b: ne,
                         match_len: len,
                         result: glued,
                     });
                 }
+            }
+        };
+
+        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
+        for m in &cmi_matches {
+            let pa = m.pos_a as i64;
+            let pb = m.pos_b as i64;
+            try_seed(pa, pb, &mut seen, &mut results);
+            try_seed(
+                (pa - 1).rem_euclid(n_a as i64),
+                (pb + 1).rem_euclid(n_b as i64),
+                &mut seen,
+                &mut results,
+            );
+        }
+
+        let seq_a = a.seq();
+        let seq_b = b.seq();
+        for ia in 0..n_a {
+            for ib in 0..n_b {
+                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                    continue;
+                }
+                try_seed(ia as i64, ib as i64, &mut seen, &mut results);
             }
         }
 
@@ -254,6 +239,36 @@ fn match_covers_range(norm_start: i64, match_len: usize, range: &Range<usize>, n
         }
     }
     true
+}
+
+/// Check whether a single-edge glue at positions `(ia, ib)` is a locally
+/// consistent candidate based on interior angle sums at both junction vertices.
+///
+/// When two tiles share a single edge, two junction vertices are formed
+/// at the endpoints. At each junction, four edges meet — two from each tile.
+/// The tiles' interior angles at the junction sum to:
+///
+/// > (hturn − exterior_a) + (hturn − exterior_b) = 2·hturn − (exterior_a + exterior_b)
+///
+/// * **Overflow** (`exterior_a + exterior_b < 0`): the interior angles sum to
+///   more than a full circle, so the neighbor edges physically overlap → the
+///   glue creates a self-intersection.
+/// * **Collinear** (`exterior_a + exterior_b == 0`): the interior angles sum
+///   to exactly a full circle, so the neighbor edges are collinear → this is a
+///   multi-edge extension already handled by the CMI index.
+/// * **Gap** (`exterior_a + exterior_b > 0`): the interior angles sum to less
+///   than a full circle, so there is a gap between the neighbor edges → the
+///   candidate is locally consistent.
+///
+/// Returns `true` only when **both** junctions have a positive gap,
+/// meaning the candidate is a true single-edge match that needs only
+/// the global self-intersection check (`try_glue`).
+fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
+    let na = a.len();
+    let nb = b.len();
+    let left = a[ia] as i32 + b[ib] as i32;
+    let right = a[(ia + 1) % na] as i32 + b[(ib + nb - 1) % nb] as i32;
+    left > 0 && right > 0
 }
 
 #[cfg(test)]
@@ -577,6 +592,72 @@ mod tests {
                 let ts_glues = ts.valid_glues(i, j);
                 let bf_glues = brute_force_valid_glues(ts.rat(i), ts.rat(j), i, j);
                 assert_glue_sets_match(&ts_glues, &bf_glues, &format!("mixed shapes ({i},{j})"));
+            }
+        }
+    }
+
+    #[test]
+    fn single_edge_candidate_unit() {
+        let hex: &[i8] = &[2, 2, 2, 2, 2, 2];
+        assert!(
+            is_single_edge_candidate(hex, 0, hex, 0),
+            "hex (0,0): 2+2=4 > 0 on both sides"
+        );
+        assert!(
+            is_single_edge_candidate(hex, 0, hex, 3),
+            "hex (0,3): 2+2=4 > 0 on both sides"
+        );
+
+        let hexamino: &[i8] = &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
+        assert!(
+            !is_single_edge_candidate(hexamino, 0, hexamino, 0),
+            "hexamino (0,0): left=-2+(-2)=-4 < 0, overflow"
+        );
+        assert!(
+            !is_single_edge_candidate(hexamino, 1, hexamino, 1),
+            "hexamino (1,1): right=2+(-2)=0, collinear extension"
+        );
+        assert!(
+            is_single_edge_candidate(hexamino, 1, hexamino, 2),
+            "hexamino (1,2): left=2+2=4, right=2+2=4, both gaps"
+        );
+
+        let spectre: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+        assert!(
+            !is_single_edge_candidate(spectre, 3, spectre, 4),
+            "spectre (3,4): left=2+(-3)=-1 < 0, overflow"
+        );
+        assert!(
+            is_single_edge_candidate(spectre, 0, spectre, 1),
+            "spectre (0,1): left=3+2=5, right=2+3=5, both gaps"
+        );
+    }
+
+    #[test]
+    fn interior_angle_heuristic_sound() {
+        let hex = Rat::<ZZ12>::from_unchecked(&hexagon());
+        let spec = Rat::<ZZ12>::from_unchecked(&spectre());
+        let hexamino = hex.glue((0, 0), &hex);
+
+        let tiles: Vec<(&str, &Rat<ZZ12>)> =
+            vec![("hex", &hex), ("spec", &spec), ("hexamino", &hexamino)];
+
+        for (label, rat) in &tiles {
+            let n = rat.len();
+            let seq = rat.seq();
+            for ia in 0..n {
+                for ib in 0..n {
+                    let (_, len, _) = rat.get_match((ia as i64, ib as i64), rat);
+                    if len != 1 {
+                        continue;
+                    }
+                    if rat.try_glue((ia as i64, ib as i64), rat).is_ok() {
+                        assert!(
+                            is_single_edge_candidate(seq, ia, seq, ib),
+                            "{label}: try_glue accepted single-edge ({ia},{ib}) but heuristic rejected",
+                        );
+                    }
+                }
             }
         }
     }
