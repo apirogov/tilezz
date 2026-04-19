@@ -159,7 +159,6 @@ pub fn grow_redelmeier_profiled<T>(
 where
     T: IsComplex + IsRingOrField + Units,
 {
-    use std::time::Instant;
     let mut stats = GrowStats::default();
     let mut results: BTreeMap<usize, BTreeSet<Rat<T>>> = BTreeMap::new();
     let initial = GrowingPatch::from_seed(seed);
