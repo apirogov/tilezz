@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12, ZZ4};
-use tilezz::intgeom::growing::{grow_redelmeier, make_free};
+use tilezz::intgeom::growing::{grow_redelmeier, grow_redelmeier_profiled, make_free};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
@@ -151,12 +151,15 @@ where
         }
         Approach::New => {
             let t0 = Instant::now();
-            let mut results = run_new(seed, max_size);
+            let (results, profile) = grow_redelmeier_profiled(&seed, max_size);
             let elapsed = t0.elapsed();
             if free {
-                results = to_free_results(&results);
+                let free_results = to_free_results(&results);
+                print_results_generic(&full_label, &free_results, elapsed);
+            } else {
+                print_results_generic(&full_label, &results, elapsed);
             }
-            print_results_generic(&full_label, &results, elapsed);
+            eprintln!("\n{profile}");
             results
         }
         Approach::Both => {
