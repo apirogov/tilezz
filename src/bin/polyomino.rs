@@ -294,7 +294,9 @@ fn main() {
     let t0 = Instant::now();
     let mut results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
     let initial = Patch::from_seed(&seed);
-    results.entry(1).or_default().insert(initial.to_rat());
+    let initial_rat = initial.to_rat();
+    let initial_free = std::cmp::min(initial_rat.clone(), initial_rat.reflected());
+    results.entry(1).or_default().insert(initial_free);
 
     let mut profile_enumerate = 0u64;
     let mut profile_apply = 0u64;
@@ -313,16 +315,13 @@ fn main() {
     );
     let elapsed = t0.elapsed();
 
-    let free_results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = results
-        .iter()
-        .map(|(&k, set)| (k, make_free(set)))
-        .collect();
-
+    // Results already in free form - just print them
     println!("=== Free hole-free polyominoes (incremental) ===");
     let mut total = 0;
-    for (&size, patches) in &free_results {
-        println!("  size {size:>3}: {:>6} patches", patches.len());
-        total += patches.len();
+    for size in 1..=args.max_size {
+        let patches = results.get(&size);
+        println!("  size {size:>3}: {:>6} patches", patches.map(|s| s.len()).unwrap_or(0));
+        total += patches.map(|s| s.len()).unwrap_or(0);
     }
     println!("  total:   {total:>6} patches");
     println!("  time:    {elapsed:.2?}");
@@ -376,8 +375,11 @@ fn grow_recursive(
         let rat = new_patch.to_rat();
         *profile_apply += t0.elapsed().as_nanos() as u64;
 
+        // Store free (canonical) form directly to cut search space in half
+        let free_form = std::cmp::min(rat.clone(), rat.reflected());
+
         let new_size = current_size + 1;
-        if results.entry(new_size).or_default().insert(rat) {
+        if results.entry(new_size).or_default().insert(free_form) {
             grow_recursive(
                 &new_patch,
                 seed_seq,
@@ -594,42 +596,49 @@ mod tests {
     }
 
     #[test]
-    fn test_onesided_matches_general_redelmeier() {
-        use tilezz::intgeom::growing::grow_redelmeier;
+    fn test_free_matches_oeis() {
+        use tilezz::intgeom::rat::Rat;
         use tilezz::intgeom::tiles;
         let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
-        let max_size = 6;
-        let general = grow_redelmeier(&seed, max_size);
-        let polyomino = enumerate_onesided(max_size);
+        let max_size = 12;
+        let results = enumerate_onesided(max_size);
         for k in 1..=max_size {
-            let gen_len = general.get(&k).map(|s| s.len()).unwrap_or(0);
-            let poly_len = polyomino.get(&k).map(|s| s.len()).unwrap_or(0);
+            let count = results.get(&k).map(|s| s.len()).unwrap_or(0);
+            eprintln!("size {k}: {count}");
+        }
+
+        // Our implementation now stores free polyominoes directly
+        // (not one-sided like before)
+        // These should match OEIS A000105 (free polyominoes, one less than one-sided)
+        let expected = [
+            (1, 1),
+            (2, 1),
+            (3, 2),
+            (4, 5),
+            (5, 12),
+            (6, 35),
+            (7, 107),
+            (8, 363),
+            (9, 1248),
+            (10, 4460),
+            (11, 16094),
+            (12, 58937),
+        ];
+        for (size, expected_count) in expected.iter() {
+            let actual = results.get(size).map(|s| s.len()).unwrap_or(0);
             assert_eq!(
-                gen_len,
-                poly_len,
-                "size {k}: general has {}, polyomino has {}",
-                gen_len,
-                poly_len
+                actual,
+                *expected_count,
+                "size {}: expected {}, got {}",
+                size,
+                expected_count,
+                actual
             );
         }
     }
 
-    #[test]
-    fn test_free_matches_oeis() {
-        let oeis: &[usize] = &[0, 1, 1, 2, 5, 12, 35, 107, 363, 1248];
-        let onesided = enumerate_onesided(oeis.len() - 1);
-        for k in 1..oeis.len() {
-            let onesided_set = onesided.get(&k).unwrap();
-            let free_set = make_free(onesided_set);
-            assert_eq!(
-                free_set.len(),
-                oeis[k],
-                "size {k}: got {} free, expected {}",
-                free_set.len(),
-                oeis[k]
-            );
-        }
-    }
+    // Note: make_free is now unused since we store free form directly
+    // Keeping it for API compatibility and potential future use
 
     #[test]
     fn test_visited_grows_correctly() {
