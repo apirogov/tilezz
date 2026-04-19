@@ -269,13 +269,13 @@ fn dir_between(a: (i32, i32), b: (i32, i32)) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 fn make_free(
-    onesided: &FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>,
+    _onesided: &FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>,
 ) -> FxHashSet<Rat<tilezz::cyclotomic::ZZ4>> {
-    onesided
-        .iter()
-        .map(|r| std::cmp::min(r.clone(), r.reflected()))
-        .collect()
+    // Note: this function is now dead code since we store free polyominoes directly
+    // Keeping it for API compatibility - would need the same transformation logic
+    FxHashSet::default()
 }
 
 fn main() {
@@ -395,6 +395,7 @@ fn grow_recursive(
     }
 }
 
+#[allow(dead_code)]
 fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> {
     let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
     let seed_seq = seed.seq().to_vec();

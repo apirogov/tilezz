@@ -166,7 +166,7 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     /// This skips normalization for performance - only use if you're certain!
     #[doc(hidden)]
     pub fn from_canonical_angles_unchecked(angles: Vec<i8>) -> Self {
-        let n = angles.len();
+        let _n = angles.len();
         let angle_sum: i64 = angles.iter().map(|x| *x as i64).sum();
         let mut seq = angles;
         let seq2 = seq.clone();
