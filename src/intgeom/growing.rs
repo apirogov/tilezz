@@ -47,6 +47,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Rat::from_slice_unchecked(&self.angles)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn enumerate_sites(&self, seed: &Rat<T>, min_counter: usize) -> Vec<GlueSite> {
         let patch_rat = self.to_rat();
         let ts = TileSet::new(vec![patch_rat, seed.clone()]);
@@ -129,7 +130,7 @@ pub struct GrowStats {
 
 impl std::fmt::Display for GrowStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let total = self.enumerate_ns + self.apply_ns;
+        let _total = self.enumerate_ns + self.apply_ns;
         write!(
             f,
             "enumerate: {} calls, {:.2}s total ({:.0}% to_rat, {:.0}% tileset_new, {:.0}% valid_glues) | apply: {:.2}s ({:.0}% to_rat)",
