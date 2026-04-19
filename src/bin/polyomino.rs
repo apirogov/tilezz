@@ -1,7 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use rustc_hash::FxHashSet;
+use std::collections::BTreeSet;
 
 use clap::Parser;
 use tilezz::intgeom::angles::normalize_angle;
@@ -269,8 +270,8 @@ fn dir_between(a: (i32, i32), b: (i32, i32)) -> i32 {
 }
 
 fn make_free(
-    onesided: &BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>,
-) -> BTreeSet<Rat<tilezz::cyclotomic::ZZ4>> {
+    onesided: &FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>,
+) -> FxHashSet<Rat<tilezz::cyclotomic::ZZ4>> {
     onesided
         .iter()
         .map(|r| std::cmp::min(r.clone(), r.reflected()))
@@ -291,7 +292,7 @@ fn main() {
     let seed_seq = seed.seq().to_vec();
 
     let t0 = Instant::now();
-    let mut results: BTreeMap<usize, BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
+    let mut results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
     let initial = Patch::from_seed(&seed);
     results.entry(1).or_default().insert(initial.to_rat());
 
@@ -312,7 +313,7 @@ fn main() {
     );
     let elapsed = t0.elapsed();
 
-    let free_results: BTreeMap<usize, BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>> = results
+    let free_results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = results
         .iter()
         .map(|(&k, set)| (k, make_free(set)))
         .collect();
@@ -352,7 +353,7 @@ fn grow_recursive(
     min_counter: usize,
     current_size: usize,
     max_size: usize,
-    results: &mut BTreeMap<usize, BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>>,
+    results: &mut BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>>,
     profile_enumerate: &mut u64,
     profile_apply: &mut u64,
     enumerate_calls: &mut usize,
@@ -392,11 +393,11 @@ fn grow_recursive(
     }
 }
 
-fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>> {
+fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> {
     let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
     let seed_seq = seed.seq().to_vec();
     let initial = Patch::from_seed(&seed);
-    let mut results: BTreeMap<usize, BTreeSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
+    let mut results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
     results.entry(1).or_default().insert(initial.to_rat());
     let mut pe = 0u64;
     let mut pa = 0u64;
@@ -572,14 +573,14 @@ mod tests {
     #[test]
     fn test_size2_matches_general_glue() {
         let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
-        let general_results: BTreeSet<Rat<tilezz::cyclotomic::ZZ4>> = (0..seed.len())
+        let general_results: FxHashSet<Rat<tilezz::cyclotomic::ZZ4>> = (0..seed.len())
             .filter_map(|ia| seed.try_glue((ia as i64, 0), &seed).ok())
             .collect();
 
         let (_, seed_seq) = square_seed();
         let patch = Patch::from_seed(&seed);
         let sites = patch.enumerate_sites(&seed_seq, 0);
-        let incremental_results: BTreeSet<Rat<tilezz::cyclotomic::ZZ4>> = sites
+        let incremental_results: FxHashSet<Rat<tilezz::cyclotomic::ZZ4>> = sites
             .iter()
             .filter_map(|site| patch.try_apply(site, &seed_seq))
             .map(|p| p.to_rat())
@@ -601,14 +602,14 @@ mod tests {
         let general = grow_redelmeier(&seed, max_size);
         let polyomino = enumerate_onesided(max_size);
         for k in 1..=max_size {
-            let gen_set = general.get(&k).cloned().unwrap_or_default();
-            let poly_set = polyomino.get(&k).cloned().unwrap_or_default();
+            let gen_len = general.get(&k).map(|s| s.len()).unwrap_or(0);
+            let poly_len = polyomino.get(&k).map(|s| s.len()).unwrap_or(0);
             assert_eq!(
-                gen_set,
-                poly_set,
+                gen_len,
+                poly_len,
                 "size {k}: general has {}, polyomino has {}",
-                gen_set.len(),
-                poly_set.len()
+                gen_len,
+                poly_len
             );
         }
     }

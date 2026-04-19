@@ -428,6 +428,13 @@ impl<T: IsComplex + IsRingOrField + Units> Ord for Rat<T> {
         self.angles.cmp(&other.angles)
     }
 }
+
+impl<T: IsComplex + IsRingOrField + Units> std::hash::Hash for Rat<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.angles.hash(state);
+    }
+}
+
 impl<T: IsComplex + IsRingOrField + Units> Display for Rat<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.seq().fmt(f)
