@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
+
+use rustc_hash::FxHashSet;
 
 use clap::Parser;
 use tilezz::intgeom::angles::normalize_angle;
@@ -34,7 +36,7 @@ struct Patch {
     counters: Vec<usize>,
     next_counter: usize,
     positions: Vec<(i32, i32)>,
-    visited: HashSet<(i32, i32)>,
+    visited: FxHashSet<(i32, i32)>,
 }
 
 fn dir_step(dir: i32) -> (i32, i32) {
@@ -65,7 +67,7 @@ impl Patch {
         let n = seq.len();
         let points = trace_positions((0, 0), 0, seq);
         let positions = points[..n].to_vec();
-        let visited: HashSet<(i32, i32)> = points[..=n].iter().copied().collect();
+        let visited: FxHashSet<(i32, i32)> = points[..=n].iter().copied().collect();
         Patch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
@@ -76,7 +78,8 @@ impl Patch {
     }
 
     fn to_rat(&self) -> Rat<tilezz::cyclotomic::ZZ4> {
-        Rat::from_slice_unchecked(&self.angles)
+        // Use from_canonical_angles_unchecked since angles are already normalized by lex_min_rot in try_apply
+        Rat::from_canonical_angles_unchecked(self.angles.clone())
     }
 
     fn enumerate_sites(&self, seed_seq: &[i8], min_counter: usize) -> Vec<Site> {
@@ -272,6 +275,13 @@ fn make_free(
 fn main() {
     let args = Args::parse();
 
+    #[cfg(feature = "pprof")]
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(1000)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
+
     let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
     let seed_seq = seed.seq().to_vec();
 
@@ -318,6 +328,16 @@ fn main() {
             profile_enumerate as f64 / 1e9,
             profile_apply as f64 / 1e9,
         );
+    }
+
+    #[cfg(feature = "pprof")]
+    {
+        if let Ok(report) = guard.report().build() {
+            let flamegraph_file = "flamegraph.svg";
+            let mut file = std::fs::File::create(flamegraph_file).unwrap();
+            report.flamegraph(&mut file).unwrap();
+            eprintln!("\nFlame graph written to {}", flamegraph_file);
+        }
     }
 }
 
