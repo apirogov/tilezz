@@ -17,6 +17,7 @@ pub struct GrowingPatch<T: IsComplex> {
     angles: Vec<i8>,
     counters: Vec<usize>,
     next_counter: usize,
+    cached_rat: Option<Rat<T>>,
     _phantom: PhantomData<T>,
 }
 
@@ -35,16 +36,18 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let canonical = seed.clone().canonical();
         let seq = canonical.seq();
         let n = seq.len();
+        let rat = Rat::from_slice_unchecked(&seq);
         GrowingPatch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
             next_counter: n,
+            cached_rat: Some(rat),
             _phantom: PhantomData,
         }
     }
 
     pub fn to_rat(&self) -> Rat<T> {
-        Rat::from_slice_unchecked(&self.angles)
+        self.cached_rat.clone().unwrap_or_else(|| Rat::from_slice_unchecked(&self.angles))
     }
 
     #[allow(dead_code)]
@@ -108,10 +111,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         new_angles.rotate_left(offset);
         new_counters.rotate_left(offset);
 
+        let cached_rat = Rat::from_canonical_angles_unchecked(new_angles.clone());
+
         GrowingPatch {
             angles: new_angles,
             counters: new_counters,
             next_counter: nc,
+            cached_rat: Some(cached_rat),
             _phantom: PhantomData,
         }
     }
