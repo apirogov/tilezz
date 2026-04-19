@@ -37,6 +37,7 @@ struct Patch {
     next_counter: usize,
     positions: Vec<(i32, i32)>,
     visited: FxHashSet<(i32, i32)>,
+    rat: Rat<tilezz::cyclotomic::ZZ4>,
 }
 
 fn dir_step(dir: i32) -> (i32, i32) {
@@ -68,18 +69,19 @@ impl Patch {
         let points = trace_positions((0, 0), 0, seq);
         let positions = points[..n].to_vec();
         let visited: FxHashSet<(i32, i32)> = points[..=n].iter().copied().collect();
+        let rat = Rat::from_slice_unchecked(&seq);
         Patch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
             next_counter: n,
             positions,
             visited,
+            rat,
         }
     }
 
     fn to_rat(&self) -> Rat<tilezz::cyclotomic::ZZ4> {
-        // Use from_canonical_angles_unchecked since angles are already normalized by lex_min_rot in try_apply
-        Rat::from_canonical_angles_unchecked(self.angles.clone())
+        self.rat.clone()
     }
 
     fn enumerate_sites(&self, seed_seq: &[i8], min_counter: usize) -> Vec<Site> {
@@ -241,12 +243,15 @@ impl Patch {
         new_counters.rotate_left(offset);
         new_positions.rotate_left(offset);
 
+        let rat = Rat::from_canonical_angles_unchecked(new_angles.clone());
+
         Some(Patch {
             angles: new_angles,
             counters: new_counters,
             next_counter: nc,
             positions: new_positions,
             visited: new_visited,
+            rat,
         })
     }
 }
