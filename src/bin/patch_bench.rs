@@ -1,15 +1,22 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use clap::Parser;
-use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12};
-use tilezz::intgeom::growing::{grow_redelmeier, make_free};
+use rustc_hash::FxHashSet;
+use tilezz::cyclotomic::ZZ12;
+use tilezz::intgeom::growing::{grow_redelmeier, grow_redelmeier_free};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
 
+#[cfg(feature = "pprof")]
+use pprof::ProfilerGuardBuilder;
+
 #[derive(Parser)]
-#[command(name = "patch_bench", about = "Benchmark Redelmeier patch enumeration - ZZ12 only")]
+#[command(
+    name = "patch_bench",
+    about = "Benchmark Redelmeier patch enumeration - ZZ12 only"
+)]
 struct Args {
     #[arg(long, default_value_t = 9)]
     max_size: usize,
@@ -39,34 +46,36 @@ fn make_seed(shape: &TileShape) -> Rat<ZZ12> {
     Rat::from_unchecked(&snake)
 }
 
-fn run_redelmeier(seed: Rat<ZZ12>, max_size: usize) -> BTreeMap<usize, BTreeSet<Rat<ZZ12>>> {
-    grow_redelmeier(&seed, max_size)
-}
-
-fn to_free<T: IsComplex + IsRingOrField + Units>(
-    onesided: &BTreeMap<usize, BTreeSet<Rat<T>>>,
-) -> BTreeMap<usize, BTreeSet<Rat<T>>>
-where
-    T: Clone,
-{
-    onesided
-        .iter()
-        .map(|(&k, set)| (k, make_free(set)))
-        .collect()
+fn run_redelmeier(
+    seed: Rat<ZZ12>,
+    max_size: usize,
+    free: bool,
+) -> BTreeMap<usize, FxHashSet<Rat<ZZ12>>> {
+    if free {
+        grow_redelmeier_free(&seed, max_size)
+    } else {
+        grow_redelmeier(&seed, max_size)
+    }
 }
 
 fn main() {
     let args = Args::parse();
+
+    #[cfg(feature = "pprof")]
+    let guard = ProfilerGuardBuilder::default()
+        .frequency(1000)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
+
     let seed = make_seed(&args.tile);
 
     let full_label = format!("{:?} [ZZ12]", args.tile);
     let label_free = if args.free { " (free)" } else { "" };
 
     let t0 = Instant::now();
-    let results = run_redelmeier(seed, args.max_size);
+    let final_results = run_redelmeier(seed, args.max_size, args.free);
     let elapsed = t0.elapsed();
-
-    let final_results = if args.free { to_free(&results) } else { results };
 
     println!("=== Redelmeier - {}{} ===", full_label, label_free);
     let mut total = 0usize;
@@ -77,4 +86,14 @@ fn main() {
     }
     println!("  total: {:>6} patches", total);
     println!("  time:  {:.2?}", elapsed);
+
+    #[cfg(feature = "pprof")]
+    {
+        if let Ok(report) = guard.report().build() {
+            let flamegraph_file = "flamegraph.svg";
+            let mut file = std::fs::File::create(flamegraph_file).unwrap();
+            report.flamegraph(&mut file).unwrap();
+            eprintln!("\nFlame graph written to {}", flamegraph_file);
+        }
+    }
 }

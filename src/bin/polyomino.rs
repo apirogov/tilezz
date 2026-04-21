@@ -320,7 +320,10 @@ fn main() {
     let mut total = 0;
     for size in 1..=args.max_size {
         let patches = results.get(&size);
-        println!("  size {size:>3}: {:>6} patches", patches.map(|s| s.len()).unwrap_or(0));
+        println!(
+            "  size {size:>3}: {:>6} patches",
+            patches.map(|s| s.len()).unwrap_or(0)
+        );
         total += patches.map(|s| s.len()).unwrap_or(0);
     }
     println!("  total:   {total:>6} patches");
@@ -628,12 +631,9 @@ mod tests {
         for (size, expected_count) in expected.iter() {
             let actual = results.get(size).map(|s| s.len()).unwrap_or(0);
             assert_eq!(
-                actual,
-                *expected_count,
+                actual, *expected_count,
                 "size {}: expected {}, got {}",
-                size,
-                expected_count,
-                actual
+                size, expected_count, actual
             );
         }
     }
