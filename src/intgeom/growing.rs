@@ -1,5 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
+
+use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles::normalize_angle;
@@ -47,7 +49,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 
     pub fn to_rat(&self) -> Rat<T> {
-        self.cached_rat.clone().unwrap_or_else(|| Rat::from_slice_unchecked(&self.angles))
+        self.cached_rat
+            .clone()
+            .unwrap_or_else(|| Rat::from_slice_unchecked(&self.angles))
     }
 
     #[allow(dead_code)]
@@ -151,35 +155,69 @@ impl std::fmt::Display for GrowStats {
     }
 }
 
-pub fn grow_redelmeier<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, BTreeSet<Rat<T>>>
+pub fn grow_redelmeier<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
     T: IsComplex + IsRingOrField + Units,
 {
-    grow_redelmeier_profiled(seed, max_size).0
+    grow_redelmeier_inner(seed, max_size, false).0
+}
+
+pub fn grow_redelmeier_free<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    grow_redelmeier_inner(seed, max_size, true).0
 }
 
 pub fn grow_redelmeier_profiled<T>(
     seed: &Rat<T>,
     max_size: usize,
-) -> (BTreeMap<usize, BTreeSet<Rat<T>>>, GrowStats)
+) -> (BTreeMap<usize, FxHashSet<Rat<T>>>, GrowStats)
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    grow_redelmeier_inner(seed, max_size, false)
+}
+
+fn grow_redelmeier_inner<T>(
+    seed: &Rat<T>,
+    max_size: usize,
+    free: bool,
+) -> (BTreeMap<usize, FxHashSet<Rat<T>>>, GrowStats)
 where
     T: IsComplex + IsRingOrField + Units,
 {
     let mut stats = GrowStats::default();
-    let mut results: BTreeMap<usize, BTreeSet<Rat<T>>> = BTreeMap::new();
+    let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
     let initial = GrowingPatch::from_seed(seed);
-    results.entry(1).or_default().insert(initial.to_rat());
-    grow_recursive_profiled(&initial, seed, 0, 1, max_size, &mut results, &mut stats);
+    let initial_rat = initial.to_rat();
+    let stored = if free {
+        std::cmp::min(initial_rat.clone(), initial_rat.reflected())
+    } else {
+        initial_rat
+    };
+    results.entry(1).or_default().insert(stored);
+    grow_recursive_inner(
+        &initial,
+        seed,
+        0,
+        1,
+        max_size,
+        free,
+        &mut results,
+        &mut stats,
+    );
     (results, stats)
 }
 
-fn grow_recursive_profiled<T>(
+fn grow_recursive_inner<T>(
     patch: &GrowingPatch<T>,
     seed: &Rat<T>,
     min_counter: usize,
     current_size: usize,
     max_size: usize,
-    results: &mut BTreeMap<usize, BTreeSet<Rat<T>>>,
+    free: bool,
+    results: &mut BTreeMap<usize, FxHashSet<Rat<T>>>,
     stats: &mut GrowStats,
 ) where
     T: IsComplex + IsRingOrField + Units,
@@ -232,13 +270,19 @@ fn grow_recursive_profiled<T>(
         stats.apply_ns += t0.elapsed().as_nanos() as u64;
 
         let new_size = current_size + 1;
-        if results.entry(new_size).or_default().insert(rat) {
-            grow_recursive_profiled(
+        let stored = if free {
+            std::cmp::min(rat.clone(), rat.reflected())
+        } else {
+            rat
+        };
+        if results.entry(new_size).or_default().insert(stored) {
+            grow_recursive_inner(
                 &new_patch,
                 seed,
                 site.counter,
                 new_size,
                 max_size,
+                free,
                 results,
                 stats,
             );
@@ -246,7 +290,7 @@ fn grow_recursive_profiled<T>(
     }
 }
 
-pub fn make_free<T>(onesided: &BTreeSet<Rat<T>>) -> BTreeSet<Rat<T>>
+pub fn make_free<T>(onesided: &FxHashSet<Rat<T>>) -> FxHashSet<Rat<T>>
 where
     T: IsComplex + IsRingOrField + Units,
 {
@@ -267,7 +311,7 @@ mod tests {
         let seed: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
         let new_results = grow_redelmeier(&seed, 4);
 
-        let mut old_results: BTreeMap<usize, BTreeSet<Rat<ZZ12>>> = BTreeMap::new();
+        let mut old_results: BTreeMap<usize, FxHashSet<Rat<ZZ12>>> = BTreeMap::new();
         old_results.insert(1, std::iter::once(seed.clone()).collect());
 
         for k in 2..=4 {
@@ -278,7 +322,7 @@ mod tests {
             let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
             let (results, _) = ts.valid_rats_for_pairs(&pairs);
-            old_results.insert(k, results);
+            old_results.insert(k, results.into_iter().collect());
         }
 
         for k in 1..=4 {
@@ -289,7 +333,14 @@ mod tests {
                 "size {k}: old={old_count} new={new_count}"
             );
             if let (Some(old_set), Some(new_set)) = (old_results.get(&k), new_results.get(&k)) {
-                assert_eq!(old_set, new_set, "size {k}: sets differ");
+                assert_eq!(
+                    old_set.len(),
+                    new_set.len(),
+                    "size {k}: sets differ in length"
+                );
+                for r in old_set.iter() {
+                    assert!(new_set.contains(r), "size {k}: missing {r}");
+                }
             }
         }
     }
@@ -299,7 +350,7 @@ mod tests {
         let seed: Rat<ZZ12> = Rat::from_unchecked(&tiles::spectre());
         let new_results = grow_redelmeier(&seed, 3);
 
-        let mut old_results: BTreeMap<usize, BTreeSet<Rat<ZZ12>>> = BTreeMap::new();
+        let mut old_results: BTreeMap<usize, FxHashSet<Rat<ZZ12>>> = BTreeMap::new();
         old_results.insert(1, std::iter::once(seed.clone()).collect());
 
         for k in 2..=3 {
@@ -310,7 +361,7 @@ mod tests {
             let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
             let (results, _) = ts.valid_rats_for_pairs(&pairs);
-            old_results.insert(k, results);
+            old_results.insert(k, results.into_iter().collect());
         }
 
         for k in 1..=3 {
@@ -321,7 +372,14 @@ mod tests {
                 "size {k}: old={old_count} new={new_count}"
             );
             if let (Some(old_set), Some(new_set)) = (old_results.get(&k), new_results.get(&k)) {
-                assert_eq!(old_set, new_set, "size {k}: sets differ");
+                assert_eq!(
+                    old_set.len(),
+                    new_set.len(),
+                    "size {k}: sets differ in length"
+                );
+                for r in old_set.iter() {
+                    assert!(new_set.contains(r), "size {k}: missing {r}");
+                }
             }
         }
     }
@@ -331,7 +389,7 @@ mod tests {
         let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
         let new_results = grow_redelmeier(&seed, 6);
 
-        let mut old_results: BTreeMap<usize, BTreeSet<Rat<ZZ4>>> = BTreeMap::new();
+        let mut old_results: BTreeMap<usize, FxHashSet<Rat<ZZ4>>> = BTreeMap::new();
         old_results.insert(1, std::iter::once(seed.clone()).collect());
 
         for k in 2..=6 {
@@ -342,7 +400,7 @@ mod tests {
             let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
             let (results, _) = ts.valid_rats_for_pairs(&pairs);
-            old_results.insert(k, results);
+            old_results.insert(k, results.into_iter().collect());
         }
 
         for k in 1..=6 {
@@ -353,7 +411,14 @@ mod tests {
                 "size {k}: old={old_count} new={new_count}"
             );
             if let (Some(old_set), Some(new_set)) = (old_results.get(&k), new_results.get(&k)) {
-                assert_eq!(old_set, new_set, "size {k}: sets differ");
+                assert_eq!(
+                    old_set.len(),
+                    new_set.len(),
+                    "size {k}: sets differ in length"
+                );
+                for r in old_set.iter() {
+                    assert!(new_set.contains(r), "size {k}: missing {r}");
+                }
             }
         }
     }
@@ -361,13 +426,13 @@ mod tests {
     fn brute_force_grow<T: IsComplex + IsRingOrField + Units>(
         seed: &Rat<T>,
         max_size: usize,
-    ) -> BTreeMap<usize, BTreeSet<Rat<T>>> {
-        let mut results: BTreeMap<usize, BTreeSet<Rat<T>>> = BTreeMap::new();
+    ) -> BTreeMap<usize, FxHashSet<Rat<T>>> {
+        let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
         results.insert(1, std::iter::once(seed.clone()).collect());
 
         for k in 2..=max_size {
             let prev: Vec<Rat<T>> = results[&(k - 1)].iter().cloned().collect();
-            let mut next: BTreeSet<Rat<T>> = BTreeSet::new();
+            let mut next: FxHashSet<Rat<T>> = FxHashSet::default();
             for patch in &prev {
                 for ia in 0..patch.len() {
                     for ib in 0..seed.len() {
@@ -408,24 +473,20 @@ mod tests {
                 "size {k}: brute_force={bf_count} redelmeier={redel_count}"
             );
             if let (Some(bf_set), Some(redel_set)) = (bf.get(&k), redel.get(&k)) {
-                let missing: Vec<_> = bf_set.difference(redel_set).collect();
-                if !missing.is_empty() {
-                    eprintln!(
-                        "  size {k}: {} patches in brute_force but not redelmeier:",
-                        missing.len()
+                for r in bf_set.iter() {
+                    assert!(
+                        redel_set.contains(r),
+                        "size {k}: brute_force patch missing from redelmeier: {:?}",
+                        r.seq()
                     );
-                    for m in &missing {
-                        eprintln!(
-                            "    {}",
-                            m.seq()
-                                .iter()
-                                .map(|a| a.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                    }
                 }
-                assert_eq!(bf_set, redel_set, "size {k}: sets differ");
+                for r in redel_set.iter() {
+                    assert!(
+                        bf_set.contains(r),
+                        "size {k}: redelmeier patch missing from brute_force: {:?}",
+                        r.seq()
+                    );
+                }
             }
         }
     }
@@ -444,6 +505,22 @@ mod tests {
             let onesided_set = onesided.get(&k).unwrap();
             let free_set = make_free(onesided_set);
             let free_count = free_set.len();
+            let expected = FREE_POLYOMINOES_NO_HOLES[k];
+            assert_eq!(
+                free_count, expected,
+                "size {k}: got {free_count}, expected {expected} free polyominoes (no holes)"
+            );
+        }
+    }
+
+    #[test]
+    fn grow_redelmeier_free_matches_oeis() {
+        let max_size = 9;
+        let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let free_results = grow_redelmeier_free(&seed, max_size);
+
+        for k in 1..=max_size {
+            let free_count = free_results.get(&k).map(|s| s.len()).unwrap_or(0);
             let expected = FREE_POLYOMINOES_NO_HOLES[k];
             assert_eq!(
                 free_count, expected,
