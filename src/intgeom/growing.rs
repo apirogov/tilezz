@@ -112,20 +112,189 @@ impl_patch_pos!(Pos2, 2, crate::cyclotomic::ZZ4, 1);
 impl_patch_pos!(Pos4, 4, crate::cyclotomic::ZZ12, 2);
 impl_patch_pos!(Pos8, 8, crate::cyclotomic::ZZ10, 8);
 
+#[derive(Copy, Clone, Debug)]
+struct SR(i64, i64);
+
+impl SR {
+    fn zero() -> Self {
+        SR(0, 0)
+    }
+    fn mul(self, o: Self) -> Self {
+        SR(self.0 * o.0 + 3 * self.1 * o.1, self.0 * o.1 + self.1 * o.0)
+    }
+    fn add(self, o: Self) -> Self {
+        SR(self.0 + o.0, self.1 + o.1)
+    }
+    fn is_zero(self) -> bool {
+        self.0 == 0 && self.1 == 0
+    }
+    fn is_positive(self) -> bool {
+        sign_sqrt3(self.0, self.1) == std::cmp::Ordering::Greater
+    }
+}
+
+fn sign_sqrt3(a: i64, b: i64) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    if b == 0 {
+        return a.cmp(&0);
+    }
+    if a == 0 {
+        return b.cmp(&0);
+    }
+    let sa = a.cmp(&0);
+    let sb = b.cmp(&0);
+    if sa == sb {
+        return sa;
+    }
+    let aa = a.unsigned_abs() as u64;
+    let bb = b.unsigned_abs() as u64;
+    match (aa * aa).cmp(&(3 * bb * bb)) {
+        Greater => sa,
+        Less => sb,
+        Equal => Equal,
+    }
+}
+
+fn re4(p: Pos4) -> SR {
+    SR(p.0[0] as i64, p.0[2] as i64)
+}
+
+fn im4(p: Pos4) -> SR {
+    SR(p.0[1] as i64, p.0[3] as i64)
+}
+
+fn wedge4(p1: Pos4, p2: Pos4) -> SR {
+    re4(p1).mul(im4(p2)).sub(im4(p1).mul(re4(p2)))
+}
+
+fn dot4(p1: Pos4, p2: Pos4) -> SR {
+    re4(p1).mul(re4(p2)).add(im4(p1).mul(im4(p2)))
+}
+
+impl SR {
+    fn sub(self, o: Self) -> Self {
+        SR(self.0 - o.0, self.1 - o.1)
+    }
+}
+
+fn is_ccw4(p: Pos4, a: Pos4, b: Pos4) -> bool {
+    wedge4(a.sub_pos(&p), b.sub_pos(&p)).is_positive()
+}
+
+fn is_between4(p: Pos4, a: Pos4, b: Pos4) -> bool {
+    let v = a.sub_pos(&p);
+    let w = p.sub_pos(&b);
+    wedge4(v, w).is_zero() && dot4(v, w).is_positive()
+}
+
+fn intersect4(a: Pos4, b: Pos4, c: Pos4, d: Pos4) -> bool {
+    if a == c || a == d || b == c || b == d {
+        return false;
+    }
+    let l_ab_0 = im4(a.sub_pos(&b));
+    let l_ab_1 = re4(b.sub_pos(&a));
+    let l_ab_2 = wedge4(a, b);
+    let colinear_c = l_ab_0
+        .mul(re4(c))
+        .add(l_ab_1.mul(im4(c)))
+        .add(l_ab_2)
+        .is_zero();
+    let colinear_d = l_ab_0
+        .mul(re4(d))
+        .add(l_ab_1.mul(im4(d)))
+        .add(l_ab_2)
+        .is_zero();
+    if colinear_c && colinear_d {
+        is_between4(c, a, b) || is_between4(d, a, b)
+    } else {
+        is_ccw4(a, c, d) != is_ccw4(b, c, d) && is_ccw4(a, b, c) != is_ccw4(a, b, d)
+    }
+}
+
+fn check_new_segments_cross_existing_pos4(
+    new_points: &[Pos4],
+    parent_positions: &[Pos4],
+    n: usize,
+    ns: usize,
+    ml: usize,
+) -> bool {
+    let num_new = new_points.len();
+    if num_new < 2 {
+        return false;
+    }
+    let x_len = n - ml + 1;
+    for ni in 0..(num_new - 1) {
+        let na = new_points[ni];
+        let nb = new_points[ni + 1];
+        for xi in 0..(x_len - 1) {
+            let ei = (ns + ml + xi) % n;
+            let ea = parent_positions[ei];
+            let eb = parent_positions[(ei + 1) % n];
+            if intersect4(na, nb, ea, eb) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub trait HasPatchPos: IsComplex + IsRingOrField + Units {
     type Pos: PatchPos;
+    fn check_segment_crossings(
+        new_points: &[Self::Pos],
+        parent_positions: &[Self::Pos],
+        n: usize,
+        ns: usize,
+        ml: usize,
+    ) -> bool;
+    fn needs_snake_validation() -> bool {
+        true
+    }
 }
 
 impl HasPatchPos for crate::cyclotomic::ZZ4 {
     type Pos = Pos2;
+    fn check_segment_crossings(
+        _new_points: &[Self::Pos],
+        _parent_positions: &[Self::Pos],
+        _n: usize,
+        _ns: usize,
+        _ml: usize,
+    ) -> bool {
+        false
+    }
+    fn needs_snake_validation() -> bool {
+        false
+    }
 }
 
 impl HasPatchPos for crate::cyclotomic::ZZ10 {
     type Pos = Pos8;
+    fn check_segment_crossings(
+        _new_points: &[Self::Pos],
+        _parent_positions: &[Self::Pos],
+        _n: usize,
+        _ns: usize,
+        _ml: usize,
+    ) -> bool {
+        false
+    }
 }
 
 impl HasPatchPos for crate::cyclotomic::ZZ12 {
     type Pos = Pos4;
+    fn check_segment_crossings(
+        new_points: &[Self::Pos],
+        parent_positions: &[Self::Pos],
+        n: usize,
+        ns: usize,
+        ml: usize,
+    ) -> bool {
+        check_new_segments_cross_existing_pos4(new_points, parent_positions, n, ns, ml)
+    }
+    fn needs_snake_validation() -> bool {
+        false
+    }
 }
 
 fn trace_positions_from<P: PatchPos>(start: P, start_dir: i8, angles: &[i8]) -> Vec<P> {
@@ -314,6 +483,10 @@ impl<T: HasPatchPos> GrowingPatch<T> {
             }
         }
 
+        if T::check_segment_crossings(&new_points, &self.positions, n, ns, ml) {
+            return None;
+        }
+
         let mut new_positions: Vec<T::Pos> = Vec::with_capacity(new_angles.len());
         for i in 0..(x_len - 1) {
             new_positions.push(self.positions[(ns + ml + i) % n]);
@@ -468,7 +641,7 @@ fn grow_recursive_inner<T>(
         };
         let rat = new_patch.to_rat();
 
-        if T::turn() != 4 {
+        if T::needs_snake_validation() {
             if Snake::<T>::try_from(rat.seq()).is_err() {
                 stats.apply_ns += t0.elapsed().as_nanos() as u64;
                 continue;
@@ -511,8 +684,96 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::cyclotomic::geometry::intersect;
+    use crate::cyclotomic::{OneImag, ZZ12, ZZ4};
     use crate::intgeom::tiles;
+    use num_traits::{One, Zero};
+
+    fn zz12_to_pos4(t: ZZ12) -> Pos4 {
+        let mut arr = [0i32; 4];
+        let mut idx = 0;
+        for gi in t.zz_coeffs() {
+            arr[idx] = scale_ratio(&gi.real, 2);
+            arr[idx + 1] = scale_ratio(&gi.imag, 2);
+            idx += 2;
+        }
+        Pos4(arr)
+    }
+
+    fn build_patch_positions(angles: &[i8]) -> Vec<ZZ12> {
+        let mut positions = vec![ZZ12::zero()];
+        let mut dir: i8 = 0;
+        for &a in angles {
+            dir = (dir as i64 + a as i64).rem_euclid(12) as i8;
+            let last = *positions.last().unwrap();
+            positions.push(last + ZZ12::unit(dir));
+        }
+        positions
+    }
+
+    #[test]
+    fn segment_intersect_matches_cyclotomic() {
+        let cases: Vec<(ZZ12, ZZ12, ZZ12, ZZ12)> = vec![
+            (ZZ12::zero(), ZZ12::one(), ZZ12::from(2), ZZ12::from(3)),
+            (ZZ12::zero(), ZZ12::one(), ZZ12::one(), ZZ12::from(2)),
+            (ZZ12::zero(), ZZ12::from(2), ZZ12::one(), ZZ12::from(3)),
+            (
+                ZZ12::zero(),
+                ZZ12::one_i(),
+                ZZ12::one(),
+                ZZ12::one() + ZZ12::one_i(),
+            ),
+            (
+                ZZ12::zero(),
+                ZZ12::one() + ZZ12::one_i(),
+                ZZ12::one(),
+                ZZ12::one_i(),
+            ),
+        ];
+        for (a, b, c, d) in &cases {
+            let expected = intersect(&(*a, *b), &(*c, *d));
+            let got = intersect4(
+                zz12_to_pos4(*a),
+                zz12_to_pos4(*b),
+                zz12_to_pos4(*c),
+                zz12_to_pos4(*d),
+            );
+            assert_eq!(
+                got, expected,
+                "intersect({a:?}, {b:?}, {c:?}, {d:?}): expected {expected}, got {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn segment_intersect_fuzz_against_cyclotomic() {
+        let hex_angles: &[i8] = &[2, 2, 2, 2, 2, 2];
+        let spectre_angles: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
+        for angles in [hex_angles, spectre_angles] {
+            let positions = build_patch_positions(angles);
+            let n = positions.len() - 1;
+            for i in 0..n {
+                for k in 0..n {
+                    let a = positions[i];
+                    let b = positions[(i + 1) % (n + 1)];
+                    let c = positions[k];
+                    let d = positions[(k + 1) % (n + 1)];
+                    let expected = intersect(&(a, b), &(c, d));
+                    let got = intersect4(
+                        zz12_to_pos4(a),
+                        zz12_to_pos4(b),
+                        zz12_to_pos4(c),
+                        zz12_to_pos4(d),
+                    );
+                    assert_eq!(
+                        got, expected,
+                        "angles={angles:?} seg({i},{}) vs seg({k},{}): expected {expected}, got {got}",
+                        (i+1) % (n+1), (k+1) % (n+1)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn hexagon_matches_old_approach_size4() {
