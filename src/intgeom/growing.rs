@@ -15,11 +15,37 @@ pub(crate) struct GlueSite {
     pub(crate) norm_end: usize,
 }
 
+fn trace_positions_from<T: IsRingOrField + Units>(
+    start: T,
+    start_dir: i8,
+    angles: &[i8],
+) -> Vec<T> {
+    let mut positions = vec![start];
+    let mut dir = start_dir;
+    for &a in angles {
+        dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
+        let last = positions.last().unwrap().clone();
+        positions.push(last + T::unit(dir));
+    }
+    positions
+}
+
+fn direction_of_step<T: IsRingOrField + Units>(step: &T) -> i8 {
+    for d in 0..T::turn() {
+        if T::unit(d) == *step {
+            return d;
+        }
+    }
+    panic!("direction_of_step: not a unit step");
+}
+
 pub struct GrowingPatch<T: IsComplex> {
     angles: Vec<i8>,
     counters: Vec<usize>,
     next_counter: usize,
     cached_rat: Option<Rat<T>>,
+    positions: Vec<T>,
+    visited: FxHashSet<T>,
     _phantom: PhantomData<T>,
 }
 
@@ -39,11 +65,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let seq = canonical.seq();
         let n = seq.len();
         let rat = Rat::from_slice_unchecked(&seq);
+        let all_positions = trace_positions_from(T::zero(), 0, &seq);
+        let positions = all_positions[..n].to_vec();
+        let visited = all_positions.into_iter().collect();
         GrowingPatch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
             next_counter: n,
             cached_rat: Some(rat),
+            positions,
+            visited,
             _phantom: PhantomData,
         }
     }
@@ -161,6 +192,41 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         new_angles[0] = a_yx;
         new_angles[x_len - 1] = a_xy;
 
+        let junction_a = self.positions[(ns + ml) % n].clone();
+        let junction_b = self.positions[ns].clone();
+
+        let prev_idx = (ns + n - 1) % n;
+        let step_in = self.positions[ns].clone() - self.positions[prev_idx].clone();
+        let in_dir = direction_of_step::<T>(&step_in);
+        let out_dir: i8 = (in_dir as i64 + a_xy as i64).rem_euclid(T::turn() as i64) as i8;
+
+        let mut trace_angles: Vec<i8> = Vec::with_capacity(y_len - 1);
+        trace_angles.push(0i8);
+        if y_len > 2 {
+            trace_angles.extend_from_slice(&y[1..y_len - 1]);
+        }
+        let new_points = trace_positions_from(junction_b.clone(), out_dir, &trace_angles);
+
+        let num_new = new_points.len();
+        for p in &new_points[1..num_new] {
+            if *p != junction_a && self.visited.contains(p) {
+                return None;
+            }
+        }
+
+        let mut new_positions: Vec<T> = Vec::with_capacity(new_angles.len());
+        for i in 0..(x_len - 1) {
+            new_positions.push(self.positions[(ns + ml + i) % n].clone());
+        }
+        for p in &new_points[..num_new - 1] {
+            new_positions.push(p.clone());
+        }
+
+        let mut new_visited = self.visited.clone();
+        for p in &new_points {
+            new_visited.insert(p.clone());
+        }
+
         let mut new_counters: Vec<usize> = Vec::with_capacity(new_angles.len());
         let mut nc = self.next_counter;
         for i in 0..(x_len - 1) {
@@ -175,6 +241,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let offset = lex_min_rot(&new_angles);
         new_angles.rotate_left(offset);
         new_counters.rotate_left(offset);
+        new_positions.rotate_left(offset);
 
         let cached_rat = Rat::from_canonical_angles_unchecked(new_angles.clone());
 
@@ -183,6 +250,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             counters: new_counters,
             next_counter: nc,
             cached_rat: Some(cached_rat),
+            positions: new_positions,
+            visited: new_visited,
             _phantom: PhantomData,
         })
     }
@@ -299,9 +368,11 @@ fn grow_recursive_inner<T>(
         };
         let rat = new_patch.to_rat();
 
-        if Snake::<T>::try_from(rat.seq()).is_err() {
-            stats.apply_ns += t0.elapsed().as_nanos() as u64;
-            continue;
+        if T::turn() != 4 {
+            if Snake::<T>::try_from(rat.seq()).is_err() {
+                stats.apply_ns += t0.elapsed().as_nanos() as u64;
+                continue;
+            }
         }
 
         stats.apply_ns += t0.elapsed().as_nanos() as u64;
