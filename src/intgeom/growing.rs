@@ -6,7 +6,7 @@ use rustc_hash::FxHashSet;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles::normalize_angle;
 use crate::intgeom::rat::{lex_min_rot, Rat};
-use crate::intgeom::tileset::TileSet;
+use crate::intgeom::snake::Snake;
 
 pub(crate) struct GlueSite {
     pub(crate) counter: usize,
@@ -54,30 +54,88 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             .unwrap_or_else(|| Rat::from_slice_unchecked(&self.angles))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn enumerate_sites(&self, seed: &Rat<T>, min_counter: usize) -> Vec<GlueSite> {
-        let patch_rat = self.to_rat();
-        let ts = TileSet::new(vec![patch_rat, seed.clone()]);
-        let glues = ts.valid_glues(0, 1);
+    fn compute_match_inline(&self, ia: usize, seed_seq: &[i8], ib: usize) -> (usize, usize, usize) {
+        let n = self.angles.len();
+        let m = seed_seq.len();
+        let min_len = n.min(m);
 
+        if min_len < 2 {
+            return (ia, 1, ib);
+        }
+
+        let mut len = min_len;
+        for i in 1..min_len {
+            if self.angles[(ia + i) % n] != -seed_seq[(ib + m - i) % m] {
+                len = i;
+                break;
+            }
+        }
+
+        if self.angles[ia] != -seed_seq[ib] {
+            return (ia, len, ib);
+        }
+
+        let remaining = min_len - len;
+        for i in 1..remaining {
+            if self.angles[(ia + n - i) % n] != -seed_seq[(ib + i) % m] {
+                return (
+                    (ia as i64 - i as i64).rem_euclid(n as i64) as usize,
+                    len + i,
+                    (ib as i64 + i as i64).rem_euclid(m as i64) as usize,
+                );
+            }
+        }
+        (
+            (ia as i64 - remaining as i64).rem_euclid(n as i64) as usize,
+            len + remaining,
+            (ib as i64 + remaining as i64).rem_euclid(m as i64) as usize,
+        )
+    }
+
+    fn enumerate_sites_inline(&self, seed_seq: &[i8], min_counter: usize) -> Vec<GlueSite> {
+        let n = self.angles.len();
+        let m = seed_seq.len();
+        let mut seen: FxHashSet<(usize, usize, usize)> = FxHashSet::default();
         let mut sites: Vec<GlueSite> = Vec::new();
-        for glue in glues {
-            let ns = glue.start_a as usize;
-            if self.counters[ns] < min_counter {
+
+        for ia in 0..n {
+            if self.counters[ia] < min_counter {
                 continue;
             }
-            sites.push(GlueSite {
-                counter: self.counters[ns],
-                norm_start: ns,
-                match_len: glue.match_len,
-                norm_end: glue.end_b as usize,
-            });
+            for ib in 0..m {
+                let (ns, ml, ne) = self.compute_match_inline(ia, seed_seq, ib);
+                if ml == 0 || !seen.insert((ns, ml, ne)) {
+                    continue;
+                }
+                if ml >= 2 {
+                    let gap_left =
+                        self.angles[(ns + ml) % n] as i32 + seed_seq[(ne + m - ml) % m] as i32;
+                    let gap_right = self.angles[ns] as i32 + seed_seq[ne] as i32;
+                    if gap_left < 0 || gap_right < 0 {
+                        continue;
+                    }
+                } else {
+                    let left = self.angles[ia] as i32 + seed_seq[ib] as i32;
+                    let right =
+                        self.angles[(ia + 1) % n] as i32 + seed_seq[(ib + m - 1) % m] as i32;
+                    if left <= 0 || right <= 0 {
+                        continue;
+                    }
+                }
+                sites.push(GlueSite {
+                    counter: self.counters[ns],
+                    norm_start: ns,
+                    match_len: ml,
+                    norm_end: ne,
+                });
+            }
         }
+
         sites.sort_by_key(|s| s.counter);
         sites
     }
 
-    fn apply_site(&self, site: &GlueSite, seed: &Rat<T>) -> GrowingPatch<T> {
+    fn apply_site(&self, site: &GlueSite, seed: &Rat<T>) -> Option<GrowingPatch<T>> {
         let seed_seq = seed.seq();
         let m = seed_seq.len();
         let n = self.angles.len();
@@ -97,6 +155,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         let a_yx = normalize_angle::<T>(x[0] + y[y_len - 1] - T::hturn());
         let a_xy = normalize_angle::<T>(y[0] + x[x_len - 1] - T::hturn());
+        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
+            return None;
+        }
         new_angles[0] = a_yx;
         new_angles[x_len - 1] = a_xy;
 
@@ -117,13 +178,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         let cached_rat = Rat::from_canonical_angles_unchecked(new_angles.clone());
 
-        GrowingPatch {
+        Some(GrowingPatch {
             angles: new_angles,
             counters: new_counters,
             next_counter: nc,
             cached_rat: Some(cached_rat),
             _phantom: PhantomData,
-        }
+        })
     }
 }
 
@@ -131,26 +192,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 pub struct GrowStats {
     pub enumerate_calls: usize,
     pub enumerate_ns: u64,
-    pub to_rat_ns: u64,
-    pub tileset_new_ns: u64,
-    pub valid_glues_ns: u64,
     pub apply_ns: u64,
-    pub apply_to_rat_ns: u64,
 }
 
 impl std::fmt::Display for GrowStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let _total = self.enumerate_ns + self.apply_ns;
         write!(
             f,
-            "enumerate: {} calls, {:.2}s total ({:.0}% to_rat, {:.0}% tileset_new, {:.0}% valid_glues) | apply: {:.2}s ({:.0}% to_rat)",
+            "enumerate: {} calls, {:.2}s | apply: {:.2}s",
             self.enumerate_calls,
             self.enumerate_ns as f64 / 1e9,
-            if self.enumerate_ns > 0 { self.to_rat_ns as f64 / self.enumerate_ns as f64 * 100.0 } else { 0.0 },
-            if self.enumerate_ns > 0 { self.tileset_new_ns as f64 / self.enumerate_ns as f64 * 100.0 } else { 0.0 },
-            if self.enumerate_ns > 0 { self.valid_glues_ns as f64 / self.enumerate_ns as f64 * 100.0 } else { 0.0 },
             self.apply_ns as f64 / 1e9,
-            if self.apply_ns > 0 { self.apply_to_rat_ns as f64 / self.apply_ns as f64 * 100.0 } else { 0.0 },
         )
     }
 }
@@ -222,51 +274,36 @@ fn grow_recursive_inner<T>(
 ) where
     T: IsComplex + IsRingOrField + Units,
 {
-    use std::time::Instant;
     if current_size >= max_size {
         return;
     }
 
+    let seed_seq = seed.seq();
+
     let sites = {
         stats.enumerate_calls += 1;
-        let t0 = Instant::now();
-
-        let t1 = Instant::now();
-        let patch_rat = patch.to_rat();
-        stats.to_rat_ns += t1.elapsed().as_nanos() as u64;
-
-        let t1 = Instant::now();
-        let ts = TileSet::new(vec![patch_rat, seed.clone()]);
-        stats.tileset_new_ns += t1.elapsed().as_nanos() as u64;
-
-        let t1 = Instant::now();
-        let glues = ts.valid_glues(0, 1);
-        stats.valid_glues_ns += t1.elapsed().as_nanos() as u64;
-
-        let mut sites: Vec<GlueSite> = Vec::new();
-        for glue in glues {
-            let ns = glue.start_a as usize;
-            if patch.counters[ns] < min_counter {
-                continue;
-            }
-            sites.push(GlueSite {
-                counter: patch.counters[ns],
-                norm_start: ns,
-                match_len: glue.match_len,
-                norm_end: glue.end_b as usize,
-            });
-        }
-        sites.sort_by_key(|s| s.counter);
+        let t0 = std::time::Instant::now();
+        let sites = patch.enumerate_sites_inline(seed_seq, min_counter);
         stats.enumerate_ns += t0.elapsed().as_nanos() as u64;
         sites
     };
 
     for site in &sites {
-        let t0 = Instant::now();
-        let new_patch = patch.apply_site(site, seed);
-        let t1 = Instant::now();
+        let t0 = std::time::Instant::now();
+        let new_patch = match patch.apply_site(site, seed) {
+            Some(p) => p,
+            None => {
+                stats.apply_ns += t0.elapsed().as_nanos() as u64;
+                continue;
+            }
+        };
         let rat = new_patch.to_rat();
-        stats.apply_to_rat_ns += t1.elapsed().as_nanos() as u64;
+
+        if Snake::<T>::try_from(rat.seq()).is_err() {
+            stats.apply_ns += t0.elapsed().as_nanos() as u64;
+            continue;
+        }
+
         stats.apply_ns += t0.elapsed().as_nanos() as u64;
 
         let new_size = current_size + 1;
