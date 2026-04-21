@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::OnceLock;
 
 use rustc_hash::FxHashSet;
 
-use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::gaussint::GaussInt;
+use crate::cyclotomic::{IsComplex, IsRingOrField, SymNum, Units};
 use crate::intgeom::angles::normalize_angle;
 use crate::intgeom::rat::{lex_min_rot, Rat};
 use crate::intgeom::snake::Snake;
@@ -15,57 +17,155 @@ pub(crate) struct GlueSite {
     pub(crate) norm_end: usize,
 }
 
-fn trace_positions_from<T: IsRingOrField + Units>(
-    start: T,
-    start_dir: i8,
-    angles: &[i8],
-) -> Vec<T> {
+pub trait PatchPos: Copy + Clone + Eq + std::hash::Hash + 'static {
+    fn zero() -> Self;
+    fn add_unit(&self, dir: i8) -> Self;
+    fn sub_pos(&self, other: &Self) -> Self;
+    fn direction_of(&self) -> i8;
+    fn turn() -> i8;
+}
+
+fn scale_ratio(r: &num_rational::Ratio<i64>, scaling_fac: i64) -> i32 {
+    (*r.numer() * (scaling_fac / *r.denom())) as i32
+}
+
+fn build_scaled_table<T, const N: usize>(scaling_fac: i64) -> Vec<[i32; N]>
+where
+    T: Units + SymNum<Scalar = GaussInt<num_rational::Ratio<i64>>>,
+{
+    (0..T::turn())
+        .map(|d| {
+            let unit = T::unit(d);
+            let mut arr = [0i32; N];
+            let mut idx = 0;
+            for gi in unit.zz_coeffs() {
+                arr[idx] = scale_ratio(&gi.real, scaling_fac);
+                arr[idx + 1] = scale_ratio(&gi.imag, scaling_fac);
+                idx += 2;
+            }
+            arr
+        })
+        .collect()
+}
+
+macro_rules! define_pos {
+    ($name:ident, $n:expr) => {
+        #[derive(Copy, Clone, PartialEq, Eq, std::hash::Hash, Debug, Default)]
+        pub struct $name([i32; $n]);
+    };
+}
+
+define_pos!(Pos2, 2);
+define_pos!(Pos4, 4);
+define_pos!(Pos8, 8);
+
+macro_rules! impl_patch_pos {
+    ($pos:ty, $n:expr, $zz:ty, $sf:expr) => {
+        impl $pos {
+            fn scaled_unit_table() -> &'static Vec<[i32; $n]> {
+                static TABLE: OnceLock<Vec<[i32; $n]>> = OnceLock::new();
+                TABLE.get_or_init(|| build_scaled_table::<$zz, $n>($sf))
+            }
+        }
+
+        impl PatchPos for $pos {
+            fn zero() -> Self {
+                Self([0i32; $n])
+            }
+
+            fn add_unit(&self, dir: i8) -> Self {
+                let tab = Self::scaled_unit_table();
+                let mut r = self.0;
+                let step = &tab[dir.rem_euclid(<$zz>::turn()) as usize];
+                for i in 0..$n {
+                    r[i] += step[i];
+                }
+                Self(r)
+            }
+
+            fn sub_pos(&self, other: &Self) -> Self {
+                let mut r = self.0;
+                for i in 0..$n {
+                    r[i] -= other.0[i];
+                }
+                Self(r)
+            }
+
+            fn direction_of(&self) -> i8 {
+                let tab = Self::scaled_unit_table();
+                for d in 0..tab.len() {
+                    if self.0 == tab[d] {
+                        return d as i8;
+                    }
+                }
+                panic!("direction_of: not a unit step");
+            }
+
+            fn turn() -> i8 {
+                <$zz>::turn()
+            }
+        }
+    };
+}
+
+impl_patch_pos!(Pos2, 2, crate::cyclotomic::ZZ4, 1);
+impl_patch_pos!(Pos4, 4, crate::cyclotomic::ZZ12, 2);
+impl_patch_pos!(Pos8, 8, crate::cyclotomic::ZZ10, 8);
+
+pub trait HasPatchPos: IsComplex + IsRingOrField + Units {
+    type Pos: PatchPos;
+}
+
+impl HasPatchPos for crate::cyclotomic::ZZ4 {
+    type Pos = Pos2;
+}
+
+impl HasPatchPos for crate::cyclotomic::ZZ10 {
+    type Pos = Pos8;
+}
+
+impl HasPatchPos for crate::cyclotomic::ZZ12 {
+    type Pos = Pos4;
+}
+
+fn trace_positions_from<P: PatchPos>(start: P, start_dir: i8, angles: &[i8]) -> Vec<P> {
     let mut positions = vec![start];
     let mut dir = start_dir;
     for &a in angles {
-        dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
-        let last = positions.last().unwrap().clone();
-        positions.push(last + T::unit(dir));
+        dir = (dir as i64 + a as i64).rem_euclid(P::turn() as i64) as i8;
+        let last = *positions.last().unwrap();
+        positions.push(last.add_unit(dir));
     }
     positions
 }
 
-fn direction_of_step<T: IsRingOrField + Units>(step: &T) -> i8 {
-    for d in 0..T::turn() {
-        if T::unit(d) == *step {
-            return d;
-        }
-    }
-    panic!("direction_of_step: not a unit step");
-}
-
-pub struct GrowingPatch<T: IsComplex> {
+pub struct GrowingPatch<T: HasPatchPos> {
     angles: Vec<i8>,
     counters: Vec<usize>,
     next_counter: usize,
     cached_rat: Option<Rat<T>>,
-    positions: Vec<T>,
-    visited: FxHashSet<T>,
+    positions: Vec<T::Pos>,
+    visited: FxHashSet<T::Pos>,
     _phantom: PhantomData<T>,
 }
 
-impl<T: IsComplex> GrowingPatch<T> {
+impl<T: HasPatchPos> GrowingPatch<T> {
     pub fn len(&self) -> usize {
         self.angles.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.angles.is_empty()
+        self.angles.len() == 0
     }
 }
 
-impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
+impl<T: HasPatchPos> GrowingPatch<T> {
     pub fn from_seed(seed: &Rat<T>) -> Self {
         let canonical = seed.clone().canonical();
         let seq = canonical.seq();
         let n = seq.len();
         let rat = Rat::from_slice_unchecked(&seq);
-        let all_positions = trace_positions_from(T::zero(), 0, &seq);
+        let all_positions = trace_positions_from(T::Pos::zero(), 0, &seq);
         let positions = all_positions[..n].to_vec();
         let visited = all_positions.into_iter().collect();
         GrowingPatch {
@@ -192,12 +292,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         new_angles[0] = a_yx;
         new_angles[x_len - 1] = a_xy;
 
-        let junction_a = self.positions[(ns + ml) % n].clone();
-        let junction_b = self.positions[ns].clone();
+        let junction_a = self.positions[(ns + ml) % n];
+        let junction_b = self.positions[ns];
 
         let prev_idx = (ns + n - 1) % n;
-        let step_in = self.positions[ns].clone() - self.positions[prev_idx].clone();
-        let in_dir = direction_of_step::<T>(&step_in);
+        let step_in = self.positions[ns].sub_pos(&self.positions[prev_idx]);
+        let in_dir = step_in.direction_of();
         let out_dir: i8 = (in_dir as i64 + a_xy as i64).rem_euclid(T::turn() as i64) as i8;
 
         let mut trace_angles: Vec<i8> = Vec::with_capacity(y_len - 1);
@@ -205,7 +305,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         if y_len > 2 {
             trace_angles.extend_from_slice(&y[1..y_len - 1]);
         }
-        let new_points = trace_positions_from(junction_b.clone(), out_dir, &trace_angles);
+        let new_points = trace_positions_from(junction_b, out_dir, &trace_angles);
 
         let num_new = new_points.len();
         for p in &new_points[1..num_new] {
@@ -214,17 +314,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             }
         }
 
-        let mut new_positions: Vec<T> = Vec::with_capacity(new_angles.len());
+        let mut new_positions: Vec<T::Pos> = Vec::with_capacity(new_angles.len());
         for i in 0..(x_len - 1) {
-            new_positions.push(self.positions[(ns + ml + i) % n].clone());
+            new_positions.push(self.positions[(ns + ml + i) % n]);
         }
         for p in &new_points[..num_new - 1] {
-            new_positions.push(p.clone());
+            new_positions.push(*p);
         }
 
         let mut new_visited = self.visited.clone();
         for p in &new_points {
-            new_visited.insert(p.clone());
+            new_visited.insert(*p);
         }
 
         let mut new_counters: Vec<usize> = Vec::with_capacity(new_angles.len());
@@ -278,14 +378,14 @@ impl std::fmt::Display for GrowStats {
 
 pub fn grow_redelmeier<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     grow_redelmeier_inner(seed, max_size, false).0
 }
 
 pub fn grow_redelmeier_free<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     grow_redelmeier_inner(seed, max_size, true).0
 }
@@ -295,7 +395,7 @@ pub fn grow_redelmeier_profiled<T>(
     max_size: usize,
 ) -> (BTreeMap<usize, FxHashSet<Rat<T>>>, GrowStats)
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     grow_redelmeier_inner(seed, max_size, false)
 }
@@ -306,7 +406,7 @@ fn grow_redelmeier_inner<T>(
     free: bool,
 ) -> (BTreeMap<usize, FxHashSet<Rat<T>>>, GrowStats)
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     let mut stats = GrowStats::default();
     let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
@@ -341,7 +441,7 @@ fn grow_recursive_inner<T>(
     results: &mut BTreeMap<usize, FxHashSet<Rat<T>>>,
     stats: &mut GrowStats,
 ) where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     if current_size >= max_size {
         return;
@@ -400,7 +500,7 @@ fn grow_recursive_inner<T>(
 
 pub fn make_free<T>(onesided: &FxHashSet<Rat<T>>) -> FxHashSet<Rat<T>>
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: HasPatchPos,
 {
     onesided
         .iter()
@@ -531,7 +631,7 @@ mod tests {
         }
     }
 
-    fn brute_force_grow<T: IsComplex + IsRingOrField + Units>(
+    fn brute_force_grow<T: HasPatchPos>(
         seed: &Rat<T>,
         max_size: usize,
     ) -> BTreeMap<usize, FxHashSet<Rat<T>>> {

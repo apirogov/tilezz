@@ -2,7 +2,7 @@
 
 mod numtraits;
 
-mod gaussint;
+pub mod gaussint;
 
 #[macro_use]
 mod symnum;
