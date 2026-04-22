@@ -694,11 +694,14 @@ mod tests {
                     *pts.last().unwrap(),
                     "positions should form a closed cycle"
                 );
-                for i in 0..n {
-                    assert_eq!(
-                        new_patch.positions[i], pts[i],
-                        "position {i} mismatch with traced points"
-                    );
+                for (i, (pos, pt)) in new_patch
+                    .positions
+                    .iter()
+                    .zip(pts.iter())
+                    .enumerate()
+                    .take(n)
+                {
+                    assert_eq!(*pos, *pt, "position {i} mismatch with traced points");
                 }
             }
         }
