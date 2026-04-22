@@ -248,13 +248,17 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
     /// Add a segment to the snake without checking for
     /// denormalization, degeneracy or self-intersection.
     fn add_unsafe(&mut self, angle: i8) {
+        // compute next representative point (uses current orientation!)
         let (_, new_pt) = self.next_seg(angle);
 
+        // append segment to symbolic angle sequence
         self.angles.push(angle);
         self.ang_sum += angle as i64;
 
+        // register point in the grid
         self.grid
             .add(UnitSquareGrid::cell_of(new_pt), self.points.len());
+        // add point to representative polyline
         self.points.push(new_pt);
         if let Some(ref mut visited) = self.visited {
             visited.insert(new_pt);
