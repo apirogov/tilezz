@@ -5,6 +5,8 @@ use std::sync::OnceLock;
 use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::gaussint::GaussInt;
+#[cfg(feature = "cyclotomic_intersect")]
+use crate::cyclotomic::geometry::intersect;
 use crate::cyclotomic::{IsComplex, IsRingOrField, SymNum, Units};
 use crate::intgeom::angles::normalize_angle;
 use crate::intgeom::rat::{lex_min_rot, Rat};
@@ -76,7 +78,7 @@ macro_rules! impl_patch_pos {
             fn add_unit(&self, dir: i8) -> Self {
                 let tab = Self::scaled_unit_table();
                 let mut r = self.0;
-                let step = &tab[dir.rem_euclid(<$zz>::turn()) as usize];
+                let step = &tab[dir.rem_euclid(<$zz as SymNum>::turn()) as usize];
                 for i in 0..$n {
                     r[i] += step[i];
                 }
@@ -102,7 +104,7 @@ macro_rules! impl_patch_pos {
             }
 
             fn turn() -> i8 {
-                <$zz>::turn()
+                <$zz as SymNum>::turn()
             }
         }
     };
@@ -116,9 +118,6 @@ impl_patch_pos!(Pos8, 8, crate::cyclotomic::ZZ10, 8);
 struct SR(i64, i64);
 
 impl SR {
-    fn zero() -> Self {
-        SR(0, 0)
-    }
     fn mul(self, o: Self) -> Self {
         SR(self.0 * o.0 + 3 * self.1 * o.1, self.0 * o.1 + self.1 * o.0)
     }
@@ -281,6 +280,76 @@ impl HasPatchPos for crate::cyclotomic::ZZ10 {
     }
 }
 
+#[cfg(feature = "cyclotomic_intersect")]
+impl PatchPos for crate::cyclotomic::ZZ12 {
+    fn zero() -> Self {
+        <Self as num_traits::Zero>::zero()
+    }
+    fn add_unit(&self, dir: i8) -> Self {
+        *self + Self::unit(dir)
+    }
+    fn sub_pos(&self, other: &Self) -> Self {
+        *self - *other
+    }
+    fn direction_of(&self) -> i8 {
+        for d in 0..<Self as SymNum>::turn() {
+            if *self == Self::unit(d) {
+                return d;
+            }
+        }
+        panic!("direction_of: not a unit step");
+    }
+    fn turn() -> i8 {
+        <Self as SymNum>::turn()
+    }
+}
+
+#[cfg(feature = "cyclotomic_intersect")]
+fn check_segments_cross_cyclotomic(
+    new_points: &[crate::cyclotomic::ZZ12],
+    parent_positions: &[crate::cyclotomic::ZZ12],
+    n: usize,
+    ns: usize,
+    ml: usize,
+) -> bool {
+    let num_new = new_points.len();
+    if num_new < 2 {
+        return false;
+    }
+    let x_len = n - ml + 1;
+    for ni in 0..(num_new - 1) {
+        let na = new_points[ni];
+        let nb = new_points[ni + 1];
+        for xi in 0..(x_len - 1) {
+            let ei = (ns + ml + xi) % n;
+            let ea = parent_positions[ei];
+            let eb = parent_positions[(ei + 1) % n];
+            if intersect(&(na, nb), &(ea, eb)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(feature = "cyclotomic_intersect")]
+impl HasPatchPos for crate::cyclotomic::ZZ12 {
+    type Pos = Self;
+    fn check_segment_crossings(
+        new_points: &[Self::Pos],
+        parent_positions: &[Self::Pos],
+        n: usize,
+        ns: usize,
+        ml: usize,
+    ) -> bool {
+        check_segments_cross_cyclotomic(new_points, parent_positions, n, ns, ml)
+    }
+    fn needs_snake_validation() -> bool {
+        false
+    }
+}
+
+#[cfg(not(feature = "cyclotomic_intersect"))]
 impl HasPatchPos for crate::cyclotomic::ZZ12 {
     type Pos = Pos4;
     fn check_segment_crossings(
@@ -689,6 +758,7 @@ mod tests {
     use crate::intgeom::tiles;
     use num_traits::{One, Zero};
 
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     fn zz12_to_pos4(t: ZZ12) -> Pos4 {
         let mut arr = [0i32; 4];
         let mut idx = 0;
@@ -700,6 +770,7 @@ mod tests {
         Pos4(arr)
     }
 
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     fn build_patch_positions(angles: &[i8]) -> Vec<ZZ12> {
         let mut positions = vec![ZZ12::zero()];
         let mut dir: i8 = 0;
@@ -711,6 +782,7 @@ mod tests {
         positions
     }
 
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     #[test]
     fn segment_intersect_matches_cyclotomic() {
         let cases: Vec<(ZZ12, ZZ12, ZZ12, ZZ12)> = vec![
@@ -745,6 +817,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     #[test]
     fn segment_intersect_fuzz_against_cyclotomic() {
         let hex_angles: &[i8] = &[2, 2, 2, 2, 2, 2];
