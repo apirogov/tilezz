@@ -4,6 +4,12 @@ use std::time::Instant;
 use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 
+struct ProfileStats {
+    enumerate_ns: u64,
+    apply_ns: u64,
+    enumerate_calls: usize,
+}
+
 use clap::Parser;
 use tilezz::intgeom::angles::normalize_angle;
 use tilezz::intgeom::rat::{lex_min_rot, Rat};
@@ -70,7 +76,7 @@ impl Patch {
         let points = trace_positions((0, 0), 0, seq);
         let positions = points[..n].to_vec();
         let visited: FxHashSet<(i32, i32)> = points[..=n].iter().copied().collect();
-        let rat = Rat::from_slice_unchecked(&seq);
+        let rat = Rat::from_slice_unchecked(seq);
         Patch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
@@ -298,9 +304,11 @@ fn main() {
     let initial_free = std::cmp::min(initial_rat.clone(), initial_rat.reflected());
     results.entry(1).or_default().insert(initial_free);
 
-    let mut profile_enumerate = 0u64;
-    let mut profile_apply = 0u64;
-    let mut enumerate_calls = 0usize;
+    let mut profile = ProfileStats {
+        enumerate_ns: 0,
+        apply_ns: 0,
+        enumerate_calls: 0,
+    };
 
     grow_recursive(
         &initial,
@@ -309,9 +317,7 @@ fn main() {
         1,
         args.max_size,
         &mut results,
-        &mut profile_enumerate,
-        &mut profile_apply,
-        &mut enumerate_calls,
+        &mut profile,
     );
     let elapsed = t0.elapsed();
 
@@ -332,9 +338,9 @@ fn main() {
     if args.profile {
         eprintln!(
             "\nProfile: {} enumerate calls, {:.2}s enumerate, {:.2}s apply",
-            enumerate_calls,
-            profile_enumerate as f64 / 1e9,
-            profile_apply as f64 / 1e9,
+            profile.enumerate_calls,
+            profile.enumerate_ns as f64 / 1e9,
+            profile.apply_ns as f64 / 1e9,
         );
     }
 
@@ -356,18 +362,16 @@ fn grow_recursive(
     current_size: usize,
     max_size: usize,
     results: &mut BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>>,
-    profile_enumerate: &mut u64,
-    profile_apply: &mut u64,
-    enumerate_calls: &mut usize,
+    profile: &mut ProfileStats,
 ) {
     if current_size >= max_size {
         return;
     }
 
     let t0 = Instant::now();
-    *enumerate_calls += 1;
+    profile.enumerate_calls += 1;
     let sites = patch.enumerate_sites(seed_seq, min_counter);
-    *profile_enumerate += t0.elapsed().as_nanos() as u64;
+    profile.enumerate_ns += t0.elapsed().as_nanos() as u64;
 
     for site in &sites {
         let t0 = Instant::now();
@@ -376,7 +380,7 @@ fn grow_recursive(
             None => continue,
         };
         let rat = new_patch.to_rat();
-        *profile_apply += t0.elapsed().as_nanos() as u64;
+        profile.apply_ns += t0.elapsed().as_nanos() as u64;
 
         // Store free (canonical) form directly to cut search space in half
         let free_form = std::cmp::min(rat.clone(), rat.reflected());
@@ -390,9 +394,7 @@ fn grow_recursive(
                 new_size,
                 max_size,
                 results,
-                profile_enumerate,
-                profile_apply,
-                enumerate_calls,
+                profile,
             );
         }
     }
@@ -405,9 +407,11 @@ fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<tilezz::
     let initial = Patch::from_seed(&seed);
     let mut results: BTreeMap<usize, FxHashSet<Rat<tilezz::cyclotomic::ZZ4>>> = BTreeMap::new();
     results.entry(1).or_default().insert(initial.to_rat());
-    let mut pe = 0u64;
-    let mut pa = 0u64;
-    let mut ec = 0usize;
+    let mut profile = ProfileStats {
+        enumerate_ns: 0,
+        apply_ns: 0,
+        enumerate_calls: 0,
+    };
     grow_recursive(
         &initial,
         &seed_seq,
@@ -415,9 +419,7 @@ fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<tilezz::
         1,
         max_size,
         &mut results,
-        &mut pe,
-        &mut pa,
-        &mut ec,
+        &mut profile,
     );
     results
 }
@@ -601,9 +603,6 @@ mod tests {
 
     #[test]
     fn test_free_matches_oeis() {
-        use tilezz::intgeom::rat::Rat;
-        use tilezz::intgeom::tiles;
-        let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());
         let max_size = 12;
         let results = enumerate_onesided(max_size);
         for k in 1..=max_size {
