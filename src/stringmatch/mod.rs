@@ -1,10 +1,12 @@
 mod cyclic;
 mod lcp;
 mod maximal;
+mod period;
 mod rmq;
 mod sais;
 
 pub use cyclic::{CyclicMatch, CyclicMatchIndex};
+pub use period::repetition_factor;
 
 use std::collections::HashMap;
 
