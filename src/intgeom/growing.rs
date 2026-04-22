@@ -145,8 +145,8 @@ fn sign_sqrt3(a: i64, b: i64) -> std::cmp::Ordering {
     if sa == sb {
         return sa;
     }
-    let aa = a.unsigned_abs() as u64;
-    let bb = b.unsigned_abs() as u64;
+    let aa = a.unsigned_abs();
+    let bb = b.unsigned_abs();
     match (aa * aa).cmp(&(3 * bb * bb)) {
         Greater => sa,
         Less => sb,
@@ -402,8 +402,8 @@ impl<T: HasPatchPos> GrowingPatch<T> {
         let canonical = seed.clone().canonical();
         let seq = canonical.seq();
         let n = seq.len();
-        let rat = Rat::from_slice_unchecked(&seq);
-        let all_positions = trace_positions_from(T::Pos::zero(), 0, &seq);
+        let rat = Rat::from_slice_unchecked(seq);
+        let all_positions = trace_positions_from(T::Pos::zero(), 0, seq);
         let positions = all_positions[..n].to_vec();
         let visited = all_positions.into_iter().collect();
         GrowingPatch {
@@ -618,6 +618,11 @@ impl std::fmt::Display for GrowStats {
     }
 }
 
+struct GrowState<T: HasPatchPos> {
+    results: BTreeMap<usize, FxHashSet<Rat<T>>>,
+    stats: GrowStats,
+}
+
 pub fn grow_redelmeier<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
     T: HasPatchPos,
@@ -650,8 +655,10 @@ fn grow_redelmeier_inner<T>(
 where
     T: HasPatchPos,
 {
-    let mut stats = GrowStats::default();
-    let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
+    let mut state = GrowState {
+        results: BTreeMap::new(),
+        stats: GrowStats::default(),
+    };
     let initial = GrowingPatch::from_seed(seed);
     let initial_rat = initial.to_rat();
     let stored = if free {
@@ -659,18 +666,9 @@ where
     } else {
         initial_rat
     };
-    results.entry(1).or_default().insert(stored);
-    grow_recursive_inner(
-        &initial,
-        seed,
-        0,
-        1,
-        max_size,
-        free,
-        &mut results,
-        &mut stats,
-    );
-    (results, stats)
+    state.results.entry(1).or_default().insert(stored);
+    grow_recursive_inner(&initial, seed, 0, 1, max_size, free, &mut state);
+    (state.results, state.stats)
 }
 
 fn grow_recursive_inner<T>(
@@ -680,8 +678,7 @@ fn grow_recursive_inner<T>(
     current_size: usize,
     max_size: usize,
     free: bool,
-    results: &mut BTreeMap<usize, FxHashSet<Rat<T>>>,
-    stats: &mut GrowStats,
+    state: &mut GrowState<T>,
 ) where
     T: HasPatchPos,
 {
@@ -692,10 +689,10 @@ fn grow_recursive_inner<T>(
     let seed_seq = seed.seq();
 
     let sites = {
-        stats.enumerate_calls += 1;
+        state.stats.enumerate_calls += 1;
         let t0 = std::time::Instant::now();
         let sites = patch.enumerate_sites_inline(seed_seq, min_counter);
-        stats.enumerate_ns += t0.elapsed().as_nanos() as u64;
+        state.stats.enumerate_ns += t0.elapsed().as_nanos() as u64;
         sites
     };
 
@@ -704,20 +701,18 @@ fn grow_recursive_inner<T>(
         let new_patch = match patch.apply_site(site, seed) {
             Some(p) => p,
             None => {
-                stats.apply_ns += t0.elapsed().as_nanos() as u64;
+                state.stats.apply_ns += t0.elapsed().as_nanos() as u64;
                 continue;
             }
         };
         let rat = new_patch.to_rat();
 
-        if T::needs_snake_validation() {
-            if Snake::<T>::try_from(rat.seq()).is_err() {
-                stats.apply_ns += t0.elapsed().as_nanos() as u64;
-                continue;
-            }
+        if T::needs_snake_validation() && Snake::<T>::try_from(rat.seq()).is_err() {
+            state.stats.apply_ns += t0.elapsed().as_nanos() as u64;
+            continue;
         }
 
-        stats.apply_ns += t0.elapsed().as_nanos() as u64;
+        state.stats.apply_ns += t0.elapsed().as_nanos() as u64;
 
         let new_size = current_size + 1;
         let stored = if free {
@@ -725,7 +720,7 @@ fn grow_recursive_inner<T>(
         } else {
             rat
         };
-        if results.entry(new_size).or_default().insert(stored) {
+        if state.results.entry(new_size).or_default().insert(stored) {
             grow_recursive_inner(
                 &new_patch,
                 seed,
@@ -733,8 +728,7 @@ fn grow_recursive_inner<T>(
                 new_size,
                 max_size,
                 free,
-                results,
-                stats,
+                state,
             );
         }
     }
