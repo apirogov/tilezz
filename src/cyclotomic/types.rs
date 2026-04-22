@@ -15,8 +15,8 @@ use super::gaussint::GaussInt;
 use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
 use super::params::*;
 use super::sign::{
-    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_sym,
-    zz_partial_signum_fallback,
+    zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_pentagonal,
+    zz_partial_signum_4_sym, zz_partial_signum_fallback,
 };
 use super::symnum::{GIntT, RatioT, SymNum, ZZComplex, ZZParams};
 use super::traits::{
@@ -113,10 +113,10 @@ super::units::impl_units_for!(QQ60);
 impl_functional_traits!(ZZ4, Z4, QQ4, Q4, zz_partial_signum_1_sym);
 impl_functional_traits!(ZZ6, Z6, QQ6, Q6, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ8, Z8, QQ8, Q8, zz_partial_signum_2_sym);
-impl_functional_traits!(ZZ10, Z10, QQ10, Q10, zz_partial_signum_fallback);
+impl_functional_traits!(ZZ10, Z10, QQ10, Q10, zz_partial_signum_4_pentagonal);
 impl_functional_traits!(ZZ12, Z12, QQ12, Q12, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ16, Z16, QQ16, Q16, zz_partial_signum_4_sym);
-impl_functional_traits!(ZZ20, Z20, QQ20, Q20, zz_partial_signum_fallback);
+impl_functional_traits!(ZZ20, Z20, QQ20, Q20, zz_partial_signum_4_pentagonal);
 impl_functional_traits!(ZZ24, Z24, QQ24, Q24, zz_partial_signum_4_sym);
 impl_functional_traits!(ZZ30, Z30, QQ30, Q30, zz_partial_signum_fallback);
 impl_functional_traits!(ZZ32, Z32, QQ32, Q32, zz_partial_signum_fallback);

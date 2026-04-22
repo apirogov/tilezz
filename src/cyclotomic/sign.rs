@@ -102,6 +102,46 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + ZSigned + FromPrimitive>(
     sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
 }
 
+/// Floating-point-free sign of a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))
+/// via recursive reduction from Q(sqrt(5), sqrt(10-2*sqrt(5))) to Q(sqrt(5)).
+///
+/// Group as z = P + Q*sqrt(y) where P = a + b*sqrt(5), Q = c + d*sqrt(5), y = 10 - 2*sqrt(5).
+/// Then sign(z) is determined by sign(P), sign(Q), and sign(P^2 - Q^2*y), with P^2 - Q^2*y in Q(sqrt(5)).
+pub fn signum_sum_sqrt_expr_4_pentagonal<T: IntRing + ZSigned + FromPrimitive>(
+    a: T,
+    b: T,
+    c: T,
+    d: T,
+) -> T {
+    let sp = signum_sum_sqrt_expr_2(a, T::one(), b, T::from_i8(5).unwrap());
+    let sq = signum_sum_sqrt_expr_2(c, T::one(), d, T::from_i8(5).unwrap());
+
+    if sp == sq {
+        return sp;
+    }
+    if sq.is_zero() {
+        return sp;
+    }
+
+    let int2 = T::from_i8(2).unwrap();
+    let int5 = T::from_i8(5).unwrap();
+    let int10 = T::from_i8(10).unwrap();
+    let int20 = T::from_i8(20).unwrap();
+    let int50 = T::from_i8(50).unwrap();
+
+    let aa = a * a;
+    let bb = b * b;
+    let cc = c * c;
+    let dd = d * d;
+
+    let alpha = aa + int5 * bb - int10 * cc + int20 * c * d - int50 * dd;
+    let beta = int2 * a * b + int2 * cc - int20 * c * d + int10 * dd;
+
+    let spq = signum_sum_sqrt_expr_2(alpha, T::one(), beta, int5);
+
+    -sq * spq
+}
+
 // --------
 
 /// This implementation uses f64 (works in all ZZ rings).
@@ -165,13 +205,28 @@ pub fn zz_partial_signum_4_sym<Z: IsReal>(val: &Z) -> Z {
     result
 }
 
+pub fn zz_partial_signum_4_pentagonal<Z: IsReal>(val: &Z) -> Z {
+    let cs = val.zz_coeffs();
+    debug_assert!(cs.len() == 4);
+
+    let rs = Z::zz_params().sym_roots_sqs;
+    debug_assert!(rs.len() == 4);
+
+    let sgn = signum_sum_sqrt_expr_4_pentagonal(cs[0], cs[1], cs[2], cs[3]);
+
+    let mut result = Z::zero();
+    result.zz_coeffs_mut()[0] = sgn;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use super::super::constants::*;
     use super::super::symnum::ZZComplex;
-    use super::super::types::{Z24, ZZ24};
+    use super::super::types::{Z10, Z24, ZZ10, ZZ24};
+    use super::super::units::Units;
     use num_traits::One;
 
     #[test]
@@ -250,5 +305,56 @@ mod tests {
         assert_eq!(sign_zz24(a, -b, -c, d), m);
         assert_eq!(sign_zz24(a, -b, c, -d), m);
         assert_eq!(sign_zz24(a, b, -c, -d), p);
+    }
+
+    #[test]
+    fn test_sum_root_expr_sign_4_pentagonal() {
+        let sign_zz10 = |a, b, c, d| signum_sum_sqrt_expr_4_pentagonal(a, b, c, d);
+
+        assert_eq!(sign_zz10(0, 0, 0, 0), 0);
+        assert_eq!(sign_zz10(1, 0, 0, 0), 1);
+        assert_eq!(sign_zz10(-1, 0, 0, 0), -1);
+        assert_eq!(sign_zz10(0, 1, 0, 0), 1);
+        assert_eq!(sign_zz10(0, -1, 0, 0), -1);
+        assert_eq!(sign_zz10(0, 0, 1, 0), 1);
+        assert_eq!(sign_zz10(0, 0, -1, 0), -1);
+        assert_eq!(sign_zz10(0, 0, 0, 1), 1);
+        assert_eq!(sign_zz10(0, 0, 0, -1), -1);
+
+        assert_eq!(sign_zz10(1, 1, 0, 0), 1);
+        assert_eq!(sign_zz10(-1, -1, 0, 0), -1);
+        assert_eq!(sign_zz10(0, 0, 1, 1), 1);
+        assert_eq!(sign_zz10(0, 0, -1, -1), -1);
+
+        assert_eq!(sign_zz10(-3, 0, 1, 0), -1);
+        assert_eq!(sign_zz10(3, 0, -1, 0), 1);
+        assert_eq!(sign_zz10(1, 0, 0, -2), -1);
+        assert_eq!(sign_zz10(-1, 0, 0, 2), 1);
+    }
+
+    #[test]
+    fn test_signum_zz10() {
+        let sq5: ZZ10 = sqrt5();
+        let sqy: ZZ10 = <ZZ10 as Units>::unit(1).im().into();
+        let sq5y: ZZ10 = sq5 * sqy;
+
+        let z = Z10::zero();
+        let p = Z10::one();
+        let m = -p;
+
+        let sign_zz10 = |a, b, c, d| {
+            (ZZ10::from(a) + ZZ10::from(b) * sq5 + ZZ10::from(c) * sqy + ZZ10::from(d) * sq5y)
+                .re()
+                .signum()
+        };
+
+        let (a, b, c, d) = (485, 343, 280, 198);
+        assert_eq!(sign_zz10(0, 0, 0, 0), z);
+        assert_eq!(sign_zz10(-a, -b, c, d), m);
+        assert_eq!(sign_zz10(-a, b, -c, d), p);
+        assert_eq!(sign_zz10(-a, b, c, -d), p);
+        assert_eq!(sign_zz10(a, -b, -c, d), m);
+        assert_eq!(sign_zz10(a, -b, c, -d), m);
+        assert_eq!(sign_zz10(a, b, -c, -d), p);
     }
 }
