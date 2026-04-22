@@ -114,9 +114,11 @@ impl_patch_pos!(Pos2, 2, crate::cyclotomic::ZZ4, 1);
 impl_patch_pos!(Pos4, 4, crate::cyclotomic::ZZ12, 2);
 impl_patch_pos!(Pos8, 8, crate::cyclotomic::ZZ10, 8);
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 #[derive(Copy, Clone, Debug)]
 struct SR(i64, i64);
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 impl SR {
     fn mul(self, o: Self) -> Self {
         SR(self.0 * o.0 + 3 * self.1 * o.1, self.0 * o.1 + self.1 * o.0)
@@ -132,8 +134,8 @@ impl SR {
     }
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn sign_sqrt3(a: i64, b: i64) -> std::cmp::Ordering {
-    use std::cmp::Ordering::*;
     if b == 0 {
         return a.cmp(&0);
     }
@@ -148,44 +150,52 @@ fn sign_sqrt3(a: i64, b: i64) -> std::cmp::Ordering {
     let aa = a.unsigned_abs();
     let bb = b.unsigned_abs();
     match (aa * aa).cmp(&(3 * bb * bb)) {
-        Greater => sa,
-        Less => sb,
-        Equal => Equal,
+        std::cmp::Ordering::Greater => sa,
+        std::cmp::Ordering::Less => sb,
+        std::cmp::Ordering::Equal => std::cmp::Ordering::Equal,
     }
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn re4(p: Pos4) -> SR {
-    SR(p.0[0] as i64, p.0[2] as i64)
+    SR(i64::from(p.0[0]), i64::from(p.0[2]))
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn im4(p: Pos4) -> SR {
-    SR(p.0[1] as i64, p.0[3] as i64)
+    SR(i64::from(p.0[1]), i64::from(p.0[3]))
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn wedge4(p1: Pos4, p2: Pos4) -> SR {
     re4(p1).mul(im4(p2)).sub(im4(p1).mul(re4(p2)))
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn dot4(p1: Pos4, p2: Pos4) -> SR {
     re4(p1).mul(re4(p2)).add(im4(p1).mul(im4(p2)))
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 impl SR {
     fn sub(self, o: Self) -> Self {
         SR(self.0 - o.0, self.1 - o.1)
     }
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn is_ccw4(p: Pos4, a: Pos4, b: Pos4) -> bool {
     wedge4(a.sub_pos(&p), b.sub_pos(&p)).is_positive()
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn is_between4(p: Pos4, a: Pos4, b: Pos4) -> bool {
     let v = a.sub_pos(&p);
     let w = p.sub_pos(&b);
     wedge4(v, w).is_zero() && dot4(v, w).is_positive()
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn intersect4(a: Pos4, b: Pos4, c: Pos4, d: Pos4) -> bool {
     if a == c || a == d || b == c || b == d {
         return false;
@@ -210,6 +220,7 @@ fn intersect4(a: Pos4, b: Pos4, c: Pos4, d: Pos4) -> bool {
     }
 }
 
+#[cfg(not(feature = "cyclotomic_intersect"))]
 fn check_new_segments_cross_existing_pos4(
     new_points: &[Pos4],
     parent_positions: &[Pos4],
@@ -747,9 +758,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     use crate::cyclotomic::geometry::intersect;
-    use crate::cyclotomic::{OneImag, ZZ12, ZZ4};
+    #[cfg(not(feature = "cyclotomic_intersect"))]
+    use crate::cyclotomic::OneImag;
+    use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::tiles;
+    #[cfg(not(feature = "cyclotomic_intersect"))]
     use num_traits::{One, Zero};
 
     #[cfg(not(feature = "cyclotomic_intersect"))]
@@ -1033,15 +1048,19 @@ mod tests {
 
     #[test]
     fn square_zz4_free_polyominoes_match_oeis() {
-        let max_size = 9;
+        let max_size: usize = 9;
         let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
         let onesided = grow_redelmeier(&seed, max_size);
 
-        for k in 1..=max_size {
+        for (k, &expected) in FREE_POLYOMINOES_NO_HOLES
+            .iter()
+            .enumerate()
+            .take(max_size + 1)
+            .skip(1)
+        {
             let onesided_set = onesided.get(&k).unwrap();
             let free_set = make_free(onesided_set);
             let free_count = free_set.len();
-            let expected = FREE_POLYOMINOES_NO_HOLES[k];
             assert_eq!(
                 free_count, expected,
                 "size {k}: got {free_count}, expected {expected} free polyominoes (no holes)"
@@ -1051,13 +1070,17 @@ mod tests {
 
     #[test]
     fn grow_redelmeier_free_matches_oeis() {
-        let max_size = 9;
+        let max_size: usize = 9;
         let seed: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
         let free_results = grow_redelmeier_free(&seed, max_size);
 
-        for k in 1..=max_size {
+        for (k, &expected) in FREE_POLYOMINOES_NO_HOLES
+            .iter()
+            .enumerate()
+            .take(max_size + 1)
+            .skip(1)
+        {
             let free_count = free_results.get(&k).map(|s| s.len()).unwrap_or(0);
-            let expected = FREE_POLYOMINOES_NO_HOLES[k];
             assert_eq!(
                 free_count, expected,
                 "size {k}: got {free_count}, expected {expected} free polyominoes (no holes)"
