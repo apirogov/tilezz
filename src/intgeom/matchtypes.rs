@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
+use crate::intgeom::tileset::TileSet;
 use crate::stringmatch::CyclicMatchIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,11 +17,15 @@ pub struct MatchType {
 }
 
 impl MatchType {
-    pub fn apply<T: IsComplex + IsRingOrField + Units>(&self, rats: &[Rat<T>]) -> Rat<T> {
-        rats[self.tile_a]
+    pub fn apply<T: IsComplex + IsRingOrField + Units>(
+        &self,
+        rats_a: &[Rat<T>],
+        rats_b: &[Rat<T>],
+    ) -> Rat<T> {
+        rats_a[self.tile_a]
             .try_glue_precomputed(
                 (self.start_a as i64, self.len, self.start_b as i64),
-                &rats[self.tile_b],
+                &rats_b[self.tile_b],
                 true,
             )
             .expect("match was pre-validated")
@@ -41,31 +47,71 @@ impl MatchType {
 }
 
 pub struct MatchFinder<T: IsComplex> {
-    rats: Vec<Rat<T>>,
+    set_a: Arc<TileSet<T>>,
+    set_b: Arc<TileSet<T>>,
+    offset_b: usize,
     cmi: CyclicMatchIndex,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
-    pub fn new(rats: Vec<Rat<T>>) -> Self {
-        let sequences: Vec<Vec<i8>> = rats.iter().map(|r| r.seq().to_vec()).collect();
+    pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let cmi = CyclicMatchIndex::new(&sequences);
-        MatchFinder { rats, cmi }
+        MatchFinder {
+            set_a: Arc::clone(&tileset),
+            set_b: tileset,
+            offset_b: 0,
+            cmi,
+        }
     }
 
-    pub fn rat(&self, i: usize) -> &Rat<T> {
-        &self.rats[i]
+    pub fn crossing(a: Arc<TileSet<T>>, b: Arc<TileSet<T>>) -> Self {
+        let sequences: Vec<Vec<i8>> = a
+            .rats()
+            .iter()
+            .chain(b.rats().iter())
+            .map(|r| r.seq().to_vec())
+            .collect();
+        let cmi = CyclicMatchIndex::new(&sequences);
+        let offset_b = a.num_tiles();
+        MatchFinder {
+            set_a: a,
+            set_b: b,
+            offset_b,
+            cmi,
+        }
     }
 
-    pub fn rats(&self) -> &[Rat<T>] {
-        &self.rats
+    pub fn set_a(&self) -> &Arc<TileSet<T>> {
+        &self.set_a
     }
 
-    pub fn num_rats(&self) -> usize {
-        self.rats.len()
+    pub fn set_b(&self) -> &Arc<TileSet<T>> {
+        &self.set_b
+    }
+
+    pub fn rat_a(&self, i: usize) -> &Rat<T> {
+        self.set_a.rat(i)
+    }
+
+    pub fn rat_b(&self, j: usize) -> &Rat<T> {
+        self.set_b.rat(j)
+    }
+
+    pub fn num_tiles_a(&self) -> usize {
+        self.set_a.num_tiles()
+    }
+
+    pub fn num_tiles_b(&self) -> usize {
+        self.set_b.num_tiles()
+    }
+
+    pub fn apply_match(&self, m: &MatchType) -> Rat<T> {
+        m.apply(self.set_a.rats(), self.set_b.rats())
     }
 
     pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<crate::stringmatch::CyclicMatch> {
-        self.cmi.maximal_rc_matches(i, j)
+        self.cmi.maximal_rc_matches(i, self.offset_b + j)
     }
 
     pub fn valid_matches(&self, i: usize, j: usize) -> Vec<MatchType> {
@@ -76,8 +122,10 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     }
 
     pub fn all_valid_matches(&self) -> Vec<MatchType> {
-        let n = self.rats.len();
-        let pairs: Vec<(usize, usize)> = (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).collect();
+        let na = self.num_tiles_a();
+        let nb = self.num_tiles_b();
+        let pairs: Vec<(usize, usize)> =
+            (0..na).flat_map(|i| (0..nb).map(move |j| (i, j))).collect();
         self.valid_matches_for_pairs(&pairs)
     }
 
@@ -112,8 +160,9 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     }
 
     fn candidates_for_pair(&self, i: usize, j: usize) -> BTreeMap<Rat<T>, Vec<MatchType>> {
-        let a = &self.rats[i];
-        let b = &self.rats[j];
+        let a = self.set_a.rat(i);
+        let b = self.set_b.rat(j);
+        let cmi_j = self.offset_b + j;
         let n_a = a.len();
         let n_b = b.len();
 
@@ -122,7 +171,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
             return groups;
         }
 
-        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
+        let cmi_matches = self.cmi.maximal_rc_matches(i, cmi_j);
         for m in &cmi_matches {
             let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
             if len <= 1 {
@@ -260,7 +309,8 @@ mod tests {
     fn assert_match_sets_match<T: IsComplex + IsRingOrField + Units>(
         mf_matches: &[MatchType],
         bf_matches: &[MatchType],
-        rats: &[Rat<T>],
+        rats_a: &[Rat<T>],
+        rats_b: &[Rat<T>],
         label: &str,
     ) {
         assert_eq!(
@@ -277,8 +327,8 @@ mod tests {
                 "{label}: interval mismatch at index {idx}",
             );
             assert_eq!(
-                mf_m.apply(rats),
-                bf_m.apply(rats),
+                mf_m.apply(rats_a, rats_b),
+                bf_m.apply(rats_a, rats_b),
                 "{label}: result mismatch at ({}, {})",
                 mf_m.start_a,
                 mf_m.start_b,
@@ -286,15 +336,21 @@ mod tests {
         }
     }
 
+    fn self_match_ts(rats: Vec<Rat<ZZ12>>) -> MatchFinder<ZZ12> {
+        let ts = Arc::new(TileSet::new(rats));
+        MatchFinder::new(ts)
+    }
+
     #[test]
     fn spectre_self_finds_mystic() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
-        let mf = MatchFinder::new(vec![r]);
+        let mf = self_match_ts(vec![r]);
 
         let matches = mf.valid_matches(0, 0);
-        let rats = mf.rats();
         assert!(
-            matches.iter().any(|m| m.apply(rats).seq() == MYSTIC_ZZ12),
+            matches
+                .iter()
+                .any(|m| mf.apply_match(m).seq() == MYSTIC_ZZ12),
             "mystic not found in {} matches: {:?}",
             matches.len(),
             matches,
@@ -304,7 +360,7 @@ mod tests {
     #[test]
     fn hexagon_self_single_edge() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-        let mf = MatchFinder::new(vec![r]);
+        let mf = self_match_ts(vec![r]);
 
         let matches = mf.valid_matches(0, 0);
         assert!(
@@ -313,9 +369,8 @@ mod tests {
         );
 
         let expected = &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
-        let rats = mf.rats();
         assert!(
-            matches.iter().any(|m| m.apply(rats).seq() == expected),
+            matches.iter().any(|m| mf.apply_match(m).seq() == expected),
             "hex+hex match not found in {} matches",
             matches.len(),
         );
@@ -328,7 +383,7 @@ mod tests {
 
         assert!(r1.try_glue((8, 0), &r2).is_err());
 
-        let mf = MatchFinder::new(vec![r1, r2]);
+        let mf = self_match_ts(vec![r1, r2]);
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
@@ -351,7 +406,7 @@ mod tests {
 
         assert!(r3.try_glue((7, 0), &r4).is_err());
 
-        let mf = MatchFinder::new(vec![r3, r4]);
+        let mf = self_match_ts(vec![r3, r4]);
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
@@ -364,7 +419,7 @@ mod tests {
     #[test]
     fn deterministic_order() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-        let mf = MatchFinder::new(vec![r]);
+        let mf = self_match_ts(vec![r]);
         let matches = mf.valid_matches(0, 0);
         for w in matches.windows(2) {
             assert!(
@@ -380,7 +435,7 @@ mod tests {
         let sq = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
         let tri = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
 
-        let mf = MatchFinder::new(vec![sq, tri]);
+        let mf = self_match_ts(vec![sq, tri]);
         let all = mf.all_valid_matches();
         for w in all.windows(2) {
             assert!(
@@ -410,25 +465,31 @@ mod tests {
     #[test]
     fn hexagon_pair_exhaustive() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-        let mf = MatchFinder::new(vec![r.clone(), r.clone()]);
+        let mf = self_match_ts(vec![r.clone()]);
 
-        let mf_matches = mf.valid_matches(0, 1);
-        let bf_matches = brute_force_valid_matches(&r, &r, 0, 1);
-        assert_match_sets_match(&mf_matches, &bf_matches, mf.rats(), "hexagon pair");
+        let mf_matches = mf.valid_matches(0, 0);
+        let bf_matches = brute_force_valid_matches(&r, &r, 0, 0);
+        assert_match_sets_match(
+            &mf_matches,
+            &bf_matches,
+            mf.set_a().rats(),
+            mf.set_b().rats(),
+            "hexagon self",
+        );
 
         for m in &mf_matches {
             assert_eq!(m.len, 1, "hexagon pair match should be single-edge");
             assert_eq!(
-                m.apply(mf.rats()).len(),
+                mf.apply_match(m).len(),
                 10,
                 "hex+hex result should be 10-gon"
             );
         }
 
-        let canonical = mf_matches[0].apply(mf.rats());
+        let canonical = mf.apply_match(&mf_matches[0]);
         for (idx, m) in mf_matches.iter().enumerate() {
             assert_eq!(
-                m.apply(mf.rats()),
+                mf.apply_match(m),
                 canonical,
                 "hex+hex match #{idx} should yield same shape",
             );
@@ -446,10 +507,16 @@ mod tests {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
         let hexamino = r.glue((0, 0), &r);
 
-        let mf = MatchFinder::new(vec![hexamino.clone(), hexamino.clone()]);
-        let mf_matches = mf.valid_matches(0, 1);
-        let bf_matches = brute_force_valid_matches(&hexamino, &hexamino, 0, 1);
-        assert_match_sets_match(&mf_matches, &bf_matches, mf.rats(), "hexamino pair");
+        let mf = self_match_ts(vec![hexamino.clone()]);
+        let mf_matches = mf.valid_matches(0, 0);
+        let bf_matches = brute_force_valid_matches(&hexamino, &hexamino, 0, 0);
+        assert_match_sets_match(
+            &mf_matches,
+            &bf_matches,
+            mf.set_a().rats(),
+            mf.set_b().rats(),
+            "hexamino self",
+        );
 
         assert!(
             !mf_matches.is_empty(),
@@ -471,16 +538,22 @@ mod tests {
     #[test]
     fn spectre_pair_exhaustive() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&spectre());
-        let mf = MatchFinder::new(vec![r.clone(), r.clone()]);
+        let mf = self_match_ts(vec![r.clone()]);
 
-        let mf_matches = mf.valid_matches(0, 1);
-        let bf_matches = brute_force_valid_matches(&r, &r, 0, 1);
-        assert_match_sets_match(&mf_matches, &bf_matches, mf.rats(), "spectre pair");
+        let mf_matches = mf.valid_matches(0, 0);
+        let bf_matches = brute_force_valid_matches(&r, &r, 0, 0);
+        assert_match_sets_match(
+            &mf_matches,
+            &bf_matches,
+            mf.set_a().rats(),
+            mf.set_b().rats(),
+            "spectre self",
+        );
 
         assert!(
             mf_matches
                 .iter()
-                .any(|m| m.apply(mf.rats()).seq() == MYSTIC_ZZ12),
+                .any(|m| mf.apply_match(m).seq() == MYSTIC_ZZ12),
             "spectre pair should find mystic, got {} matches",
             mf_matches.len(),
         );
@@ -501,16 +574,17 @@ mod tests {
     fn mixed_shapes_exhaustive() {
         let sq = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
         let tri = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
-        let mf = MatchFinder::new(vec![sq, tri]);
+        let mf = self_match_ts(vec![sq, tri]);
 
         for i in 0..2 {
-            for j in i..2 {
+            for j in 0..2 {
                 let mf_matches = mf.valid_matches(i, j);
-                let bf_matches = brute_force_valid_matches(mf.rat(i), mf.rat(j), i, j);
+                let bf_matches = brute_force_valid_matches(mf.rat_a(i), mf.rat_b(j), i, j);
                 assert_match_sets_match(
                     &mf_matches,
                     &bf_matches,
-                    mf.rats(),
+                    mf.set_a().rats(),
+                    mf.set_b().rats(),
                     &format!("mixed shapes ({i},{j})"),
                 );
             }
@@ -586,57 +660,55 @@ mod tests {
     #[test]
     fn empty_tile_valid_matches() {
         let hex = Rat::<ZZ12>::from_unchecked(&hexagon());
-        let mf = MatchFinder::new(vec![hex.clone(), hex]);
-        assert!(!mf.valid_matches(0, 1).is_empty());
+        let mf = self_match_ts(vec![hex]);
+        assert!(!mf.valid_matches(0, 0).is_empty());
     }
 
     #[test]
     fn shared_boundaries_returns_cmi_matches() {
         let h: Snake<ZZ12> = hexagon();
         let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let mf = MatchFinder::new(vec![r.clone(), r.clone()]);
+        let mf = self_match_ts(vec![r]);
 
-        let boundaries = mf.shared_boundaries(0, 1);
+        let boundaries = mf.shared_boundaries(0, 0);
         assert!(
             boundaries.is_empty(),
-            "hexagon pair should have no RC matches: {:?}",
-            boundaries,
-        );
-
-        let self_boundaries = mf.shared_boundaries(0, 0);
-        assert!(
-            self_boundaries.is_empty(),
             "hexagon self should have no RC matches: {:?}",
-            self_boundaries,
+            boundaries,
         );
 
         let s: Snake<ZZ12> = spectre();
         let spec: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let mf2 = MatchFinder::new(vec![spec.clone(), spec]);
-        let cross = mf2.shared_boundaries(0, 1);
-        assert!(!cross.is_empty(), "spectre pair should have RC matches",);
-        let max_len = cross.iter().map(|m| m.len).max().unwrap();
-        assert_eq!(max_len, 3, "spectre max RC cross-match should be 3");
+        let mf2 = self_match_ts(vec![spec]);
+        let self_bounds = mf2.shared_boundaries(0, 0);
+        assert!(
+            !self_bounds.is_empty(),
+            "spectre self should have RC matches",
+        );
+        let max_len = self_bounds.iter().map(|m| m.len).max().unwrap();
+        assert_eq!(max_len, 3, "spectre max RC self-match should be 3");
     }
 
     #[test]
     fn heuristic_sound_on_size4_hexagon_patches() {
         let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
 
-        let mf1 = MatchFinder::new(vec![hex.clone()]);
+        let ts1 = Arc::new(TileSet::new(vec![hex.clone()]));
+        let mf1 = MatchFinder::new(ts1);
         let size2: Vec<Rat<ZZ12>> = mf1
             .all_valid_matches()
             .iter()
-            .map(|m| m.apply(mf1.rats()))
+            .map(|m| mf1.apply_match(m))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
 
-        let mf2 = MatchFinder::new(size2.clone());
+        let ts2 = Arc::new(TileSet::new(size2.clone()));
+        let mf2 = MatchFinder::new(ts2);
         let size4: Vec<Rat<ZZ12>> = mf2
             .all_valid_matches()
             .iter()
-            .map(|m| m.apply(mf2.rats()))
+            .map(|m| mf2.apply_match(m))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -674,31 +746,34 @@ mod tests {
     fn size8_hexagon_valid_matches_matches_brute_force() {
         let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
 
-        let mf1 = MatchFinder::new(vec![hex.clone()]);
+        let ts1 = Arc::new(TileSet::new(vec![hex.clone()]));
+        let mf1 = MatchFinder::new(ts1);
         let size2: Vec<Rat<ZZ12>> = mf1
             .all_valid_matches()
             .iter()
-            .map(|m| m.apply(mf1.rats()))
+            .map(|m| mf1.apply_match(m))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
 
-        let mf2 = MatchFinder::new(size2.clone());
+        let ts2 = Arc::new(TileSet::new(size2.clone()));
+        let mf2 = MatchFinder::new(ts2);
         let size4: Vec<Rat<ZZ12>> = mf2
             .all_valid_matches()
             .iter()
-            .map(|m| m.apply(mf2.rats()))
+            .map(|m| mf2.apply_match(m))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
 
-        let mf4 = MatchFinder::new(size4.clone());
+        let ts4 = Arc::new(TileSet::new(size4.clone()));
+        let mf4 = MatchFinder::new(ts4);
 
         let mut index_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
-        for i in 0..size4.len() {
-            for j in 0..size4.len() {
+        for i in 0..mf4.num_tiles_a() {
+            for j in 0..mf4.num_tiles_b() {
                 for m in mf4.valid_matches(i, j) {
-                    index_results.insert(m.apply(mf4.rats()));
+                    index_results.insert(mf4.apply_match(&m));
                 }
             }
         }
@@ -724,5 +799,79 @@ mod tests {
 
         let missing: Vec<_> = bf_results.difference(&index_results).collect();
         assert_eq!(missing.len(), 0, "index missed {} patches", missing.len(),);
+    }
+
+    #[test]
+    fn crossing_constructor_distinct_sets() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let spec: Rat<ZZ12> = Rat::from_unchecked(&spectre());
+
+        let ts_a = Arc::new(TileSet::new(vec![hex.clone()]));
+        let ts_b = Arc::new(TileSet::new(vec![spec.clone()]));
+        let mf = MatchFinder::crossing(ts_a, ts_b);
+
+        assert_eq!(mf.num_tiles_a(), 1);
+        assert_eq!(mf.num_tiles_b(), 1);
+
+        let matches = mf.valid_matches(0, 0);
+        assert!(
+            !matches.is_empty(),
+            "hex x spectre crossing should have valid matches"
+        );
+
+        for m in &matches {
+            assert_eq!(m.tile_a, 0);
+            assert_eq!(m.tile_b, 0);
+        }
+    }
+
+    #[test]
+    fn crossing_self_matches_new_equivalent() {
+        let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+
+        let ts = Arc::new(TileSet::new(vec![r.clone()]));
+        let mf_self = MatchFinder::new(Arc::clone(&ts));
+        let mf_cross = MatchFinder::crossing(Arc::clone(&ts), ts);
+
+        let self_matches = mf_self.valid_matches(0, 0);
+        let cross_matches = mf_cross.valid_matches(0, 0);
+
+        assert_eq!(
+            self_matches.len(),
+            cross_matches.len(),
+            "self and crossing should produce same number of matches"
+        );
+
+        for (s, c) in self_matches.iter().zip(cross_matches.iter()) {
+            assert_eq!(
+                (s.start_a, s.len, s.start_b),
+                (c.start_a, c.len, c.start_b),
+                "intervals should match"
+            );
+        }
+    }
+
+    #[test]
+    fn crossing_multi_patch_against_seed() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let hex2 = hex.glue((0, 0), &hex);
+
+        let ts_patches = Arc::new(TileSet::new(vec![hex.clone(), hex2]));
+        let ts_seed = Arc::new(TileSet::new(vec![hex]));
+        let mf = MatchFinder::crossing(ts_patches, ts_seed);
+
+        assert_eq!(mf.num_tiles_a(), 2);
+        assert_eq!(mf.num_tiles_b(), 1);
+
+        let all = mf.all_valid_matches();
+        assert!(
+            !all.is_empty(),
+            "multi-patch x seed should have valid matches"
+        );
+
+        for m in &all {
+            assert!(m.tile_a < 2, "tile_a should index into patches");
+            assert_eq!(m.tile_b, 0, "tile_b should index into seed");
+        }
     }
 }

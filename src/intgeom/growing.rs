@@ -763,9 +763,12 @@ mod tests {
     #[cfg(not(feature = "cyclotomic_intersect"))]
     use crate::cyclotomic::OneImag;
     use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::intgeom::matchtypes::MatchFinder;
     use crate::intgeom::tiles;
+    use crate::intgeom::tileset::TileSet;
     #[cfg(not(feature = "cyclotomic_intersect"))]
     use num_traits::{One, Zero};
+    use std::sync::Arc;
 
     #[cfg(not(feature = "cyclotomic_intersect"))]
     fn zz12_to_pos4(t: ZZ12) -> Pos4 {
@@ -867,11 +870,12 @@ mod tests {
 
         for k in 2..=4 {
             let prev: Vec<Rat<ZZ12>> = old_results[&(k - 1)].iter().cloned().collect();
-            let count_a = prev.len();
-            let mut all_tiles = prev;
-            all_tiles.push(seed.clone());
-            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
-            let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
+            let patch_ts = Arc::new(TileSet::new(prev));
+            let seed_ts = Arc::new(TileSet::new(vec![seed.clone()]));
+            let mf = MatchFinder::crossing(patch_ts, seed_ts);
+            let pairs: Vec<(usize, usize)> = (0..mf.num_tiles_a())
+                .flat_map(|i| (0..mf.num_tiles_b()).map(move |j| (i, j)))
+                .collect();
             let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
@@ -906,11 +910,12 @@ mod tests {
 
         for k in 2..=3 {
             let prev: Vec<Rat<ZZ12>> = old_results[&(k - 1)].iter().cloned().collect();
-            let count_a = prev.len();
-            let mut all_tiles = prev;
-            all_tiles.push(seed.clone());
-            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
-            let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
+            let patch_ts = Arc::new(TileSet::new(prev));
+            let seed_ts = Arc::new(TileSet::new(vec![seed.clone()]));
+            let mf = MatchFinder::crossing(patch_ts, seed_ts);
+            let pairs: Vec<(usize, usize)> = (0..mf.num_tiles_a())
+                .flat_map(|i| (0..mf.num_tiles_b()).map(move |j| (i, j)))
+                .collect();
             let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
@@ -945,11 +950,12 @@ mod tests {
 
         for k in 2..=6 {
             let prev: Vec<Rat<ZZ4>> = old_results[&(k - 1)].iter().cloned().collect();
-            let count_a = prev.len();
-            let mut all_tiles = prev;
-            all_tiles.push(seed.clone());
-            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
-            let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
+            let patch_ts = Arc::new(TileSet::new(prev));
+            let seed_ts = Arc::new(TileSet::new(vec![seed.clone()]));
+            let mf = MatchFinder::crossing(patch_ts, seed_ts);
+            let pairs: Vec<(usize, usize)> = (0..mf.num_tiles_a())
+                .flat_map(|i| (0..mf.num_tiles_b()).map(move |j| (i, j)))
+                .collect();
             let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
