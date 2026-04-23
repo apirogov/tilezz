@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
@@ -8,6 +9,7 @@ use tilezz::intgeom::matchtypes::MatchFinder;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
+use tilezz::intgeom::tileset::TileSet;
 
 #[derive(Parser)]
 #[command(
@@ -82,15 +84,13 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
     if patches.is_empty() || seed.is_empty() {
         return BTreeSet::new();
     }
-    let count_a = patches.len();
 
-    let mut all_tiles: Vec<Rat<T>> = patches.to_vec();
-    all_tiles.extend(seed.iter().cloned());
+    let patch_ts = Arc::new(TileSet::new(patches.to_vec()));
+    let seed_ts = Arc::new(TileSet::new(seed.to_vec()));
+    let mf = MatchFinder::crossing(patch_ts, seed_ts);
 
-    let mf = MatchFinder::new(all_tiles);
-
-    let pairs: Vec<(usize, usize)> = (0..count_a)
-        .flat_map(|i| (count_a..count_a + seed.len()).map(move |j| (i, j)))
+    let pairs: Vec<(usize, usize)> = (0..mf.num_tiles_a())
+        .flat_map(|i| (0..mf.num_tiles_b()).map(move |j| (i, j)))
         .collect();
 
     if validate {
@@ -134,8 +134,8 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
         if verbose {
             eprintln!(
                 "    indexed: {} x {} tiles, {} distinct",
-                count_a,
-                seed.len(),
+                mf.num_tiles_a(),
+                mf.num_tiles_b(),
                 fast.len(),
             );
         }
@@ -146,8 +146,8 @@ fn tileset_match<T: IsComplex + IsRingOrField + Units>(
         if verbose {
             eprintln!(
                 "    indexed: {} x {} tiles, {} distinct",
-                count_a,
-                seed.len(),
+                mf.num_tiles_a(),
+                mf.num_tiles_b(),
                 results.len(),
             );
         }
