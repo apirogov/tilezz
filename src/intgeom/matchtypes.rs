@@ -115,48 +115,23 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     }
 
     pub fn valid_matches(&self, i: usize, j: usize) -> Vec<MatchType> {
-        let groups = self.candidates_for_pair(i, j);
-        let mut results = Self::validate_and_collect(groups);
-        Self::sort_by_interval(&mut results);
-        results
+        let mut m = Self::validated_matches(self.candidates_for_pair(i, j));
+        Self::sort_by_interval(&mut m);
+        m
     }
 
     pub fn all_valid_matches(&self) -> Vec<MatchType> {
-        let na = self.num_tiles_a();
-        let nb = self.num_tiles_b();
-        let pairs: Vec<(usize, usize)> =
-            (0..na).flat_map(|i| (0..nb).map(move |j| (i, j))).collect();
-        self.valid_matches_for_pairs(&pairs)
+        self.valid_matches_for_pairs(&self.all_pairs())
     }
 
     pub fn valid_matches_for_pairs(&self, pairs: &[(usize, usize)]) -> Vec<MatchType> {
-        let mut all_groups: BTreeMap<Rat<T>, Vec<MatchType>> = BTreeMap::new();
-        for &(i, j) in pairs {
-            let groups = self.candidates_for_pair(i, j);
-            for (rat, matches) in groups {
-                all_groups.entry(rat).or_default().extend(matches);
-            }
-        }
-        let mut results = Self::validate_and_collect(all_groups);
-        Self::sort_global(&mut results);
-        results
+        let mut m = Self::validated_matches(self.collect_candidates(pairs));
+        Self::sort_global(&mut m);
+        m
     }
 
     pub fn valid_results_for_pairs(&self, pairs: &[(usize, usize)]) -> BTreeSet<Rat<T>> {
-        let mut all_keys: BTreeSet<Rat<T>> = BTreeSet::new();
-        for &(i, j) in pairs {
-            let groups = self.candidates_for_pair(i, j);
-            for (rat, _) in groups {
-                all_keys.insert(rat);
-            }
-        }
-        let mut valid = BTreeSet::new();
-        for rat in all_keys {
-            if Snake::<T>::try_from(rat.seq()).is_ok() {
-                valid.insert(rat);
-            }
-        }
-        valid
+        Self::validated_results(self.collect_candidates(pairs))
     }
 
     fn candidates_for_pair(&self, i: usize, j: usize) -> BTreeMap<Rat<T>, Vec<MatchType>> {
@@ -217,14 +192,36 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
         groups
     }
 
-    fn validate_and_collect(groups: BTreeMap<Rat<T>, Vec<MatchType>>) -> Vec<MatchType> {
-        let mut results = Vec::new();
-        for (rat, matches) in groups {
-            if Snake::<T>::try_from(rat.seq()).is_ok() {
-                results.extend(matches);
+    fn all_pairs(&self) -> Vec<(usize, usize)> {
+        let na = self.num_tiles_a();
+        let nb = self.num_tiles_b();
+        (0..na).flat_map(|i| (0..nb).map(move |j| (i, j))).collect()
+    }
+
+    fn collect_candidates(&self, pairs: &[(usize, usize)]) -> BTreeMap<Rat<T>, Vec<MatchType>> {
+        let mut all: BTreeMap<Rat<T>, Vec<MatchType>> = BTreeMap::new();
+        for &(i, j) in pairs {
+            for (rat, matches) in self.candidates_for_pair(i, j) {
+                all.entry(rat).or_default().extend(matches);
             }
         }
-        results
+        all
+    }
+
+    fn validated_matches(groups: BTreeMap<Rat<T>, Vec<MatchType>>) -> Vec<MatchType> {
+        groups
+            .into_iter()
+            .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
+            .flat_map(|(_, matches)| matches)
+            .collect()
+    }
+
+    fn validated_results(groups: BTreeMap<Rat<T>, Vec<MatchType>>) -> BTreeSet<Rat<T>> {
+        groups
+            .into_iter()
+            .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
+            .map(|(rat, _)| rat)
+            .collect()
     }
 
     fn sort_by_interval(results: &mut [MatchType]) {
