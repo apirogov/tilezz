@@ -870,9 +870,9 @@ mod tests {
             let count_a = prev.len();
             let mut all_tiles = prev;
             all_tiles.push(seed.clone());
-            let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
+            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
-            let (results, _) = ts.valid_rats_for_pairs(&pairs);
+            let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
 
@@ -909,9 +909,9 @@ mod tests {
             let count_a = prev.len();
             let mut all_tiles = prev;
             all_tiles.push(seed.clone());
-            let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
+            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
-            let (results, _) = ts.valid_rats_for_pairs(&pairs);
+            let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
 
@@ -948,9 +948,9 @@ mod tests {
             let count_a = prev.len();
             let mut all_tiles = prev;
             all_tiles.push(seed.clone());
-            let ts = crate::intgeom::tileset::TileSet::new(all_tiles);
+            let mf = crate::intgeom::matchtypes::MatchFinder::new(all_tiles);
             let pairs: Vec<(usize, usize)> = (0..count_a).map(|i| (i, count_a)).collect();
-            let (results, _) = ts.valid_rats_for_pairs(&pairs);
+            let results = mf.valid_results_for_pairs(&pairs);
             old_results.insert(k, results.into_iter().collect());
         }
 
@@ -1010,7 +1010,7 @@ mod tests {
         }
 
         let redel = grow_redelmeier(&seed, 7);
-        eprintln!("=== Redelmeier (TileSet) ===");
+        eprintln!("=== Redelmeier (MatchFinder) ===");
         for k in 1..=7 {
             let count = redel.get(&k).map(|s| s.len()).unwrap_or(0);
             eprintln!("  size {k}: {count}");

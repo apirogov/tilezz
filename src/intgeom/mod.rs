@@ -12,4 +12,6 @@ pub mod tiles;
 
 pub mod tileset;
 
+pub mod matchtypes;
+
 pub mod growing;
