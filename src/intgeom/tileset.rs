@@ -1,103 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::ops::Range;
-
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
-use crate::intgeom::snake::Snake;
-use crate::stringmatch::CyclicMatchIndex;
-
-pub struct GlueOp<T: IsComplex> {
-    pub tile_a: usize,
-    pub tile_b: usize,
-    pub start_a: i64,
-    pub end_b: i64,
-    pub match_len: usize,
-    pub result: Rat<T>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct GlueStats {
-    pub cmi_candidates: usize,
-    pub cmi_sequences: usize,
-    pub se_total_pairs: usize,
-    pub se_pass_heuristic: usize,
-    pub se_sequences: usize,
-    pub unique_sequences: usize,
-    pub snake_valid: usize,
-}
-
-impl GlueStats {
-    pub fn total_sequences(&self) -> usize {
-        self.cmi_sequences + self.se_sequences
-    }
-
-    pub fn snake_failures(&self) -> usize {
-        self.unique_sequences - self.snake_valid
-    }
-}
-
-impl fmt::Display for GlueStats {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let cmi_pre = self.cmi_candidates.saturating_sub(self.cmi_sequences);
-        let se_heuristic_rej = self.se_total_pairs.saturating_sub(self.se_pass_heuristic);
-        let se_len_rej = self.se_pass_heuristic.saturating_sub(self.se_sequences);
-        let dedup_savings = self.total_sequences().saturating_sub(self.unique_sequences);
-        write!(
-            f,
-            "cmi: {} seeds → {} pre-filtered, {} seqs | \
-             se: {} pairs → {} heuristic rej, {} len rej, {} seqs | \
-             {} total seqs → {} unique (dedup saved {}) → {} valid ({} failures, {:.1}% accept)",
-            self.cmi_candidates,
-            cmi_pre,
-            self.cmi_sequences,
-            self.se_total_pairs,
-            se_heuristic_rej,
-            se_len_rej,
-            self.se_sequences,
-            self.total_sequences(),
-            self.unique_sequences,
-            dedup_savings,
-            self.snake_valid,
-            self.snake_failures(),
-            if self.unique_sequences > 0 {
-                self.snake_valid as f64 / self.unique_sequences as f64 * 100.0
-            } else {
-                0.0
-            },
-        )
-    }
-}
-
-impl std::ops::AddAssign for GlueStats {
-    fn add_assign(&mut self, other: Self) {
-        self.cmi_candidates += other.cmi_candidates;
-        self.cmi_sequences += other.cmi_sequences;
-        self.se_total_pairs += other.se_total_pairs;
-        self.se_pass_heuristic += other.se_pass_heuristic;
-        self.se_sequences += other.se_sequences;
-        self.unique_sequences += other.unique_sequences;
-        self.snake_valid += other.snake_valid;
-    }
-}
-
-impl<T: IsComplex + IsRingOrField + Units> std::fmt::Debug for GlueOp<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "GlueOp(a={}, b={}, start_a={}, end_b={}, len={}, result={})",
-            self.tile_a, self.tile_b, self.start_a, self.end_b, self.match_len, self.result,
-        )
-    }
-}
 
 pub struct TileSet<T: IsComplex> {
     rats: Vec<Rat<T>>,
-    cmi: CyclicMatchIndex,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
-    pub fn new(rats: Vec<Rat<T>>) -> Self {
+    pub fn new(mut rats: Vec<Rat<T>>) -> Self {
         assert!(!rats.is_empty(), "need at least one tile");
 
         let chirality = rats[0].chirality();
@@ -111,10 +20,10 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
             );
         }
 
-        let sequences: Vec<Vec<i8>> = rats.iter().map(|r| r.seq().to_vec()).collect();
-        let cmi = CyclicMatchIndex::new(&sequences);
+        rats.sort();
+        rats.dedup();
 
-        TileSet { rats, cmi }
+        TileSet { rats }
     }
 
     pub fn num_tiles(&self) -> usize {
@@ -125,386 +34,20 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         &self.rats[i]
     }
 
-    pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<crate::stringmatch::CyclicMatch> {
-        self.cmi.maximal_rc_matches(i, j)
+    pub fn rats(&self) -> &[Rat<T>] {
+        &self.rats
     }
 
-    fn sort_by_interval(results: &mut [GlueOp<T>]) {
-        results.sort_by(|a, b| {
-            a.start_a
-                .cmp(&b.start_a)
-                .then_with(|| a.end_b.cmp(&b.end_b))
-        });
+    pub fn index_of(&self, rat: &Rat<T>) -> Option<usize> {
+        self.rats.binary_search(rat).ok()
     }
-
-    fn sort_global(results: &mut [GlueOp<T>]) {
-        results.sort_by(|a, b| {
-            a.tile_a
-                .cmp(&b.tile_a)
-                .then_with(|| a.tile_b.cmp(&b.tile_b))
-                .then_with(|| a.start_a.cmp(&b.start_a))
-                .then_with(|| a.end_b.cmp(&b.end_b))
-        });
-    }
-
-    // --- Layer 1: unchecked candidate generation ---
-
-    /// Generate all glue candidates for tiles `i` and `j`, computing glued
-    /// sequences via unchecked Rats and grouping by canonical form.
-    /// No geometric (Snake) validation is performed.
-    fn valid_glues_unchecked(
-        &self,
-        i: usize,
-        j: usize,
-    ) -> (BTreeMap<Rat<T>, Vec<GlueOp<T>>>, GlueStats) {
-        let a = &self.rats[i];
-        let b = &self.rats[j];
-        let n_a = a.len();
-        let n_b = b.len();
-
-        let mut stats = GlueStats::default();
-        let mut groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
-
-        if n_a == 0 || n_b == 0 {
-            return (groups, stats);
-        }
-
-        let cmi_matches = self.cmi.maximal_rc_matches(i, j);
-        stats.cmi_candidates = cmi_matches.len();
-
-        for m in &cmi_matches {
-            let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
-            if len <= 1 {
-                continue;
-            }
-            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
-                continue;
-            }
-            stats.cmi_sequences += 1;
-            if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
-                groups.entry(glued.clone()).or_default().push(GlueOp {
-                    tile_a: i,
-                    tile_b: j,
-                    start_a: ns,
-                    end_b: ne,
-                    match_len: len,
-                    result: glued,
-                });
-            }
-        }
-
-        let seq_a = a.seq();
-        let seq_b = b.seq();
-        stats.se_total_pairs = n_a * n_b;
-
-        for ia in 0..n_a {
-            for ib in 0..n_b {
-                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
-                    continue;
-                }
-                stats.se_pass_heuristic += 1;
-                let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
-                if len != 1 {
-                    continue;
-                }
-                stats.se_sequences += 1;
-                if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
-                    groups.entry(glued.clone()).or_default().push(GlueOp {
-                        tile_a: i,
-                        tile_b: j,
-                        start_a: ns,
-                        end_b: ne,
-                        match_len: len,
-                        result: glued,
-                    });
-                }
-            }
-        }
-
-        (groups, stats)
-    }
-
-    // --- Layer 2: shared geometric validation ---
-
-    /// Validate unique glued sequences via Snake construction.
-    /// For each unique Rat key, runs `Snake::try_from` once.
-    /// Returns all GlueOps whose sequences pass, plus validation counts.
-    fn validate_glue_groups(
-        groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>>,
-        stats: &mut GlueStats,
-    ) -> Vec<GlueOp<T>> {
-        stats.unique_sequences = groups.len();
-        let mut results = Vec::new();
-        for (rat, ops) in groups {
-            if Snake::<T>::try_from(rat.seq()).is_ok() {
-                stats.snake_valid += 1;
-                results.extend(ops);
-            }
-        }
-        results
-    }
-
-    // --- Layer 3: public API ---
-
-    /// Like [`valid_glues_for_pairs_with_stats`] but returns only distinct
-    /// valid Rat shapes, discarding GlueOps. Uses BTreeSet instead of
-    /// BTreeMap<Rat, Vec<GlueOp>>, dramatically reducing memory for large
-    /// numbers of tile pairs where only the distinct patch shapes matter.
-    pub fn valid_rats_for_pairs(&self, pairs: &[(usize, usize)]) -> (BTreeSet<Rat<T>>, GlueStats) {
-        let mut all_keys: BTreeSet<Rat<T>> = BTreeSet::new();
-        let mut stats = GlueStats::default();
-        for &(i, j) in pairs {
-            let (groups, s) = self.valid_glues_unchecked(i, j);
-            stats.cmi_candidates += s.cmi_candidates;
-            stats.cmi_sequences += s.cmi_sequences;
-            stats.se_total_pairs += s.se_total_pairs;
-            stats.se_pass_heuristic += s.se_pass_heuristic;
-            stats.se_sequences += s.se_sequences;
-            for (rat, _) in groups {
-                all_keys.insert(rat);
-            }
-        }
-        stats.unique_sequences = all_keys.len();
-        let mut valid = BTreeSet::new();
-        for rat in all_keys {
-            if Snake::<T>::try_from(rat.seq()).is_ok() {
-                stats.snake_valid += 1;
-                valid.insert(rat);
-            }
-        }
-        (valid, stats)
-    }
-
-    /// Find all valid glue operations for the given pairs of tiles,
-    /// collecting unchecked candidates across all pairs, deduplicating
-    /// by canonical form, then validating unique sequences once.
-    /// Returns both results and detailed candidate funnel statistics.
-    pub fn valid_glues_for_pairs_with_stats(
-        &self,
-        pairs: &[(usize, usize)],
-    ) -> (Vec<GlueOp<T>>, GlueStats) {
-        let mut all_groups: BTreeMap<Rat<T>, Vec<GlueOp<T>>> = BTreeMap::new();
-        let mut stats = GlueStats::default();
-        for &(i, j) in pairs {
-            let (groups, s) = self.valid_glues_unchecked(i, j);
-            stats.cmi_candidates += s.cmi_candidates;
-            stats.cmi_sequences += s.cmi_sequences;
-            stats.se_total_pairs += s.se_total_pairs;
-            stats.se_pass_heuristic += s.se_pass_heuristic;
-            stats.se_sequences += s.se_sequences;
-            for (rat, ops) in groups {
-                all_groups.entry(rat).or_default().extend(ops);
-            }
-        }
-        let mut results = Self::validate_glue_groups(all_groups, &mut stats);
-        Self::sort_global(&mut results);
-        (results, stats)
-    }
-
-    /// Find all valid glue operations between tiles `i` and `j`,
-    /// returning both results and detailed candidate funnel statistics.
-    ///
-    /// See [`valid_glues`] for phase documentation.
-    pub fn valid_glues_with_stats(&self, i: usize, j: usize) -> (Vec<GlueOp<T>>, GlueStats) {
-        let (groups, mut stats) = self.valid_glues_unchecked(i, j);
-        let mut results = Self::validate_glue_groups(groups, &mut stats);
-        Self::sort_by_interval(&mut results);
-        (results, stats)
-    }
-
-    /// Find all valid glue operations between tiles `i` and `j`.
-    ///
-    /// Uses two phases that are disjoint by construction:
-    ///
-    /// **Phase 1 (multi-edge, CMI-seeded):** The Cyclic Match Index finds
-    /// maximal reverse-complement matches. Each CMI match start is seeded,
-    /// and only matches of length ≥ 2 are accepted. The junction gap check
-    /// rejects only overlaps (gap < 0), allowing collinear junctions.
-    ///
-    /// **Phase 2 (single-edge scan):** Enumerates all `(ia, ib)` pairs and
-    /// applies the interior-angle heuristic to reject candidates where the
-    /// junction gap is ≤ 0 (overlap or collinear). Only matches of length
-    /// exactly 1 are accepted — longer matches are found by phase 1.
-    ///
-    /// The two phases produce disjoint result sets by match length, so no
-    /// deduplication is needed.
-    pub fn valid_glues(&self, i: usize, j: usize) -> Vec<GlueOp<T>> {
-        self.valid_glues_with_stats(i, j).0
-    }
-
-    pub fn all_valid_glues_with_stats(&self) -> (Vec<GlueOp<T>>, GlueStats) {
-        let n = self.rats.len();
-        let pairs: Vec<(usize, usize)> = (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).collect();
-        self.valid_glues_for_pairs_with_stats(&pairs)
-    }
-
-    pub fn all_valid_glues(&self) -> Vec<GlueOp<T>> {
-        self.all_valid_glues_with_stats().0
-    }
-
-    pub fn valid_glues_containing(
-        &self,
-        i: usize,
-        range: Range<usize>,
-        j: usize,
-    ) -> Vec<GlueOp<T>> {
-        let n_a = self.rats[i].len();
-        let n_b = self.rats[j].len();
-
-        if n_a == 0 || n_b == 0 || range.is_empty() || range.end > n_a {
-            return vec![];
-        }
-
-        let results: Vec<GlueOp<T>> = self
-            .valid_glues(i, j)
-            .into_iter()
-            .filter(|g| match_covers_range(g.start_a, g.match_len, &range, n_a))
-            .collect();
-        results
-    }
-}
-
-fn match_covers_range(norm_start: i64, match_len: usize, range: &Range<usize>, n: usize) -> bool {
-    if match_len < range.end - range.start {
-        return false;
-    }
-    for v in range.clone() {
-        let d = ((v as i64 - norm_start).rem_euclid(n as i64)) as usize;
-        if d >= match_len {
-            return false;
-        }
-    }
-    true
-}
-
-/// Check whether a single-edge glue at positions `(ia, ib)` is a locally
-/// consistent candidate based on interior angle sums at both junction vertices.
-///
-/// When two tiles share a single edge, two junction vertices are formed
-/// at the endpoints. At each junction, four edges meet — two from each tile.
-/// The tiles' interior angles at the junction sum to:
-///
-/// > (hturn − exterior_a) + (hturn − exterior_b) = 2·hturn − (exterior_a + exterior_b)
-///
-/// * **Overflow** (`exterior_a + exterior_b < 0`): the interior angles sum to
-///   more than a full circle, so the neighbor edges physically overlap → the
-///   glue creates a self-intersection.
-/// * **Collinear** (`exterior_a + exterior_b == 0`): the interior angles sum
-///   to exactly a full circle, so the neighbor edges are collinear → this is a
-///   multi-edge extension already handled by the CMI index.
-/// * **Gap** (`exterior_a + exterior_b > 0`): the interior angles sum to less
-///   than a full circle, so there is a gap between the neighbor edges → the
-///   candidate is locally consistent.
-///
-/// Returns `true` only when **both** junctions have a positive gap,
-/// meaning the candidate is a true single-edge match that needs only
-/// the global self-intersection check (`try_glue`).
-pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
-    let na = a.len();
-    let nb = b.len();
-    let left = a[ia] as i32 + b[ib] as i32;
-    let right = a[(ia + 1) % na] as i32 + b[(ib + nb - 1) % nb] as i32;
-    left > 0 && right > 0
-}
-
-pub(crate) fn junction_gap_nonnegative(
-    a: &[i8],
-    ns: usize,
-    mlen: usize,
-    b: &[i8],
-    ne: usize,
-) -> bool {
-    let na = a.len();
-    let nb = b.len();
-    let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
-    let right = a[ns] as i32 + b[ne] as i32;
-    left >= 0 && right >= 0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::rat::Rat;
-    use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles::{hexagon, spectre};
-    use std::collections::{BTreeSet, HashSet};
-
-    const MYSTIC_ZZ12: &[i8] = &[
-        0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
-    ];
-
-    #[test]
-    fn spectre_self_finds_mystic() {
-        let s: Snake<ZZ12> = spectre();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let ts = TileSet::new(vec![r.clone()]);
-
-        let glues = ts.valid_glues(0, 0);
-        assert!(
-            glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
-            "mystic not found in {} glues: {:?}",
-            glues.len(),
-            glues,
-        );
-    }
-
-    #[test]
-    fn hexagon_self_single_edge() {
-        let h: Snake<ZZ12> = hexagon();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let ts = TileSet::new(vec![r.clone()]);
-
-        let glues = ts.valid_glues(0, 0);
-        assert!(!glues.is_empty(), "hexagon should have valid self-glues");
-
-        let expected = &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
-        assert!(
-            glues.iter().any(|g| g.result.seq() == expected),
-            "hex+hex glue not found in {} glues",
-            glues.len(),
-        );
-    }
-
-    #[test]
-    fn self_intersecting_filtered() {
-        let r1 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0, 3]);
-        let r2 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
-        let ts = TileSet::new(vec![r1.clone(), r2.clone()]);
-
-        assert!(r1.try_glue((8, 0), &r2).is_err());
-
-        let glues = ts.valid_glues(0, 1);
-        for g in &glues {
-            assert!(
-                !(g.start_a == 8 && g.end_b == 0),
-                "self-intersecting glue should be filtered"
-            );
-        }
-    }
-
-    #[test]
-    fn vertex_touching_rejected() {
-        let r3 = Rat::<ZZ12>::try_from(
-            &Snake::try_from(&[
-                0, 0, 3, 2, 4, -3, -3, 3, 2, 4, -3, -3, 3, 0, 2, 4, -3, -3, 3, 2, 4, -3, 3, -3,
-            ])
-            .unwrap(),
-        )
-        .unwrap();
-        let r4 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
-        let ts = TileSet::new(vec![r3.clone(), r4.clone()]);
-
-        assert!(r3.try_glue((7, 0), &r4).is_err());
-
-        let glues = ts.valid_glues(0, 1);
-        for g in &glues {
-            assert!(
-                !(g.start_a == 7 && g.end_b == 0),
-                "vertex-touching glue should be filtered"
-            );
-        }
-    }
 
     #[test]
     #[should_panic(expected = "mixed chirality")]
@@ -515,485 +58,58 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_order() {
-        let h: Snake<ZZ12> = hexagon();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let ts = TileSet::new(vec![r]);
-        let glues = ts.valid_glues(0, 0);
-        for w in glues.windows(2) {
-            assert!(
-                w[0].start_a <= w[1].start_a
-                    && (w[0].start_a < w[1].start_a || w[0].end_b <= w[1].end_b),
-                "glues not in deterministic order"
-            );
-        }
+    fn dedup_removes_duplicates() {
+        let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let ts = TileSet::new(vec![r.clone(), r.clone(), r.clone()]);
+        assert_eq!(ts.num_tiles(), 1);
     }
 
     #[test]
-    fn multi_tile_all_valid_glues() {
-        let sq = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
-        let tri = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
-        let ts = TileSet::new(vec![sq, tri]);
-
-        let all = ts.all_valid_glues();
-        for w in all.windows(2) {
-            assert!(
-                w[0].tile_a < w[1].tile_a
-                    || (w[0].tile_a == w[1].tile_a && w[0].tile_b < w[1].tile_b)
-                    || (w[0].tile_a == w[1].tile_a
-                        && w[0].tile_b == w[1].tile_b
-                        && (w[0].start_a < w[1].start_a
-                            || (w[0].start_a == w[1].start_a && w[0].end_b <= w[1].end_b))),
-                "all_valid_glues not sorted"
-            );
-        }
+    fn sorts_canonically() {
+        let r1 = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
+        let r2 = Rat::<ZZ12>::from_slice_unchecked(&[1, 1, 1, 1]);
+        let ts = TileSet::new(vec![r1, r2]);
+        assert_eq!(ts.num_tiles(), 2);
+        assert_eq!(ts.rat(0).len(), 4);
+        assert_eq!(ts.rat(1).len(), 3);
     }
 
     #[test]
-    fn containing_query_spectre() {
-        let s: Snake<ZZ12> = spectre();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let ts = TileSet::new(vec![r]);
-
-        let glues = ts.valid_glues_containing(0, 2..3, 0);
-        assert!(
-            glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
-            "containing query should find mystic, got {} glues: {:?}",
-            glues.len(),
-            glues,
-        );
-    }
-
-    fn brute_force_valid_glues<T: IsComplex + IsRingOrField + Units>(
-        a: &Rat<T>,
-        b: &Rat<T>,
-        i: usize,
-        j: usize,
-    ) -> Vec<GlueOp<T>> {
-        let mut seen: HashSet<(i64, usize, i64)> = HashSet::new();
-        let mut results: Vec<GlueOp<T>> = Vec::new();
-        for ia in 0..a.len() {
-            for ib in 0..b.len() {
-                let match_info = a.get_match((ia as i64, ib as i64), b);
-                let (ns, len, ne) = match_info;
-                if len == 0 || !seen.insert((ns, len, ne)) {
-                    continue;
-                }
-                if let Ok(glued) = a.try_glue_precomputed(match_info, b, false) {
-                    results.push(GlueOp {
-                        tile_a: i,
-                        tile_b: j,
-                        start_a: ns,
-                        end_b: ne,
-                        match_len: len,
-                        result: glued,
-                    });
-                }
-            }
-        }
-        results.sort_by(|x, y| {
-            x.start_a
-                .cmp(&y.start_a)
-                .then_with(|| x.end_b.cmp(&y.end_b))
-        });
-        results
-    }
-
-    fn assert_glue_sets_match<T: IsComplex + IsRingOrField + Units>(
-        ts_glues: &[GlueOp<T>],
-        bf_glues: &[GlueOp<T>],
-        label: &str,
-    ) {
-        assert_eq!(
-            ts_glues.len(),
-            bf_glues.len(),
-            "{label}: count mismatch: TileSet={}, brute_force={}",
-            ts_glues.len(),
-            bf_glues.len(),
-        );
-        for (idx, (ts_g, bf_g)) in ts_glues.iter().zip(bf_glues.iter()).enumerate() {
-            assert_eq!(
-                (ts_g.start_a, ts_g.match_len, ts_g.end_b),
-                (bf_g.start_a, bf_g.match_len, bf_g.end_b),
-                "{label}: interval mismatch at index {idx}",
-            );
-            assert_eq!(
-                ts_g.result, bf_g.result,
-                "{label}: result mismatch at ({}, {})",
-                ts_g.start_a, ts_g.end_b,
-            );
-        }
+    fn index_of_finds_tile() {
+        let r1: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let r2: Rat<ZZ12> = Rat::from_unchecked(&spectre());
+        let ts = TileSet::new(vec![r1.clone(), r2.clone()]);
+        assert!(ts.index_of(&r1).is_some());
+        assert!(ts.index_of(&r2).is_some());
     }
 
     #[test]
-    fn spectre_foldback_cases_accepted() {
-        let s: Snake<ZZ12> = spectre();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let cases: Vec<(usize, usize)> = vec![(0, 4), (0, 8), (6, 4), (6, 8)];
-        for (ia, ib) in cases {
-            assert!(
-                r.try_glue((ia as i64, ib as i64), &r).is_ok(),
-                "spectre foldback ({ia},{ib}) should be accepted by try_glue",
-            );
-        }
+    fn index_of_missing_returns_none() {
+        let r1: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let r2: Rat<ZZ12> = Rat::from_unchecked(&spectre());
+        let ts = TileSet::new(vec![r1]);
+        assert!(ts.index_of(&r2).is_none());
     }
 
     #[test]
-    fn hexagon_pair_exhaustive() {
-        let h: Snake<ZZ12> = hexagon();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let ts = TileSet::new(vec![r.clone(), r.clone()]);
-
-        let ts_glues = ts.valid_glues(0, 1);
-        let bf_glues = brute_force_valid_glues(&r, &r, 0, 1);
-        assert_glue_sets_match(&ts_glues, &bf_glues, "hexagon pair");
-
-        for g in &ts_glues {
-            assert_eq!(g.match_len, 1, "hexagon pair glue should be single-edge");
-            assert_eq!(g.result.len(), 10, "hex+hex result should be 10-gon");
-        }
-
-        let canonical = &ts_glues[0].result;
-        for (idx, g) in ts_glues.iter().enumerate() {
-            assert_eq!(
-                g.result, *canonical,
-                "hex+hex glue #{idx} should yield same shape",
-            );
-        }
-
-        assert_eq!(
-            ts_glues.len(),
-            36,
-            "hexagon pair should have 36 valid glues"
-        );
+    #[should_panic(expected = "need at least one tile")]
+    fn empty_panics() {
+        let _: TileSet<ZZ12> = TileSet::new(vec![]);
     }
 
     #[test]
-    fn hexamino_pair_exhaustive() {
-        let h: Snake<ZZ12> = hexagon();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let hexamino = r.glue((0, 0), &r);
-
-        let ts = TileSet::new(vec![hexamino.clone(), hexamino.clone()]);
-        let ts_glues = ts.valid_glues(0, 1);
-        let bf_glues = brute_force_valid_glues(&hexamino, &hexamino, 0, 1);
-        assert_glue_sets_match(&ts_glues, &bf_glues, "hexamino pair");
-
-        assert!(
-            !ts_glues.is_empty(),
-            "hexamino pair should have valid glues"
-        );
-
-        let multi_count = ts_glues.iter().filter(|g| g.match_len > 1).count();
-        let single_count = ts_glues.iter().filter(|g| g.match_len == 1).count();
-        assert!(
-            multi_count > 0,
-            "hexamino pair should have multi-edge matches",
-        );
-        assert!(
-            single_count > 0,
-            "hexamino pair should have single-edge matches",
-        );
+    fn preserves_unique_tiles() {
+        let r1: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
+        let r2: Rat<ZZ12> = Rat::from_unchecked(&spectre());
+        let ts = TileSet::new(vec![r1, r2]);
+        assert_eq!(ts.num_tiles(), 2);
     }
 
     #[test]
-    fn spectre_pair_exhaustive() {
-        let s: Snake<ZZ12> = spectre();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let ts = TileSet::new(vec![r.clone(), r.clone()]);
-
-        let ts_glues = ts.valid_glues(0, 1);
-        let bf_glues = brute_force_valid_glues(&r, &r, 0, 1);
-        assert_glue_sets_match(&ts_glues, &bf_glues, "spectre pair");
-
-        assert!(
-            ts_glues.iter().any(|g| g.result.seq() == MYSTIC_ZZ12),
-            "spectre pair should find mystic, got {} glues",
-            ts_glues.len(),
-        );
-
-        let multi_count = ts_glues.iter().filter(|g| g.match_len > 1).count();
-        let single_count = ts_glues.iter().filter(|g| g.match_len == 1).count();
-        assert!(
-            multi_count > 0,
-            "spectre pair should have multi-edge matches"
-        );
-        assert!(
-            single_count > 0,
-            "spectre pair should have single-edge matches"
-        );
-    }
-
-    #[test]
-    fn mixed_shapes_exhaustive() {
-        let sq = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
-        let tri = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
-        let ts = TileSet::new(vec![sq.clone(), tri.clone()]);
-
-        for i in 0..2 {
-            for j in i..2 {
-                let ts_glues = ts.valid_glues(i, j);
-                let bf_glues = brute_force_valid_glues(ts.rat(i), ts.rat(j), i, j);
-                assert_glue_sets_match(&ts_glues, &bf_glues, &format!("mixed shapes ({i},{j})"));
-            }
-        }
-    }
-
-    #[test]
-    fn single_edge_candidate_unit() {
-        let hex: &[i8] = &[2, 2, 2, 2, 2, 2];
-        assert!(
-            is_single_edge_candidate(hex, 0, hex, 0),
-            "hex (0,0): 2+2=4 > 0 on both sides"
-        );
-        assert!(
-            is_single_edge_candidate(hex, 0, hex, 3),
-            "hex (0,3): 2+2=4 > 0 on both sides"
-        );
-
-        let hexamino: &[i8] = &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
-        assert!(
-            !is_single_edge_candidate(hexamino, 0, hexamino, 0),
-            "hexamino (0,0): left=-2+(-2)=-4 < 0, overflow"
-        );
-        assert!(
-            !is_single_edge_candidate(hexamino, 1, hexamino, 1),
-            "hexamino (1,1): right=2+(-2)=0, collinear extension"
-        );
-        assert!(
-            is_single_edge_candidate(hexamino, 1, hexamino, 2),
-            "hexamino (1,2): left=2+2=4, right=2+2=4, both gaps"
-        );
-
-        let spectre: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
-        assert!(
-            !is_single_edge_candidate(spectre, 3, spectre, 4),
-            "spectre (3,4): left=2+(-3)=-1 < 0, overflow"
-        );
-        assert!(
-            is_single_edge_candidate(spectre, 0, spectre, 1),
-            "spectre (0,1): left=3+2=5, right=2+3=5, both gaps"
-        );
-    }
-
-    #[test]
-    fn interior_angle_heuristic_sound() {
-        let hex = Rat::<ZZ12>::from_unchecked(&hexagon());
-        let spec = Rat::<ZZ12>::from_unchecked(&spectre());
-        let hexamino = hex.glue((0, 0), &hex);
-
-        let tiles: Vec<(&str, &Rat<ZZ12>)> =
-            vec![("hex", &hex), ("spec", &spec), ("hexamino", &hexamino)];
-
-        for (label, rat) in &tiles {
-            let n = rat.len();
-            let seq = rat.seq();
-            for ia in 0..n {
-                for ib in 0..n {
-                    let (_, len, _) = rat.get_match((ia as i64, ib as i64), rat);
-                    if len != 1 {
-                        continue;
-                    }
-                    if rat.try_glue((ia as i64, ib as i64), rat).is_ok() {
-                        assert!(
-                            is_single_edge_candidate(seq, ia, seq, ib),
-                            "{label}: try_glue accepted single-edge ({ia},{ib}) but heuristic rejected",
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn containing_query_exhaustive() {
-        let spec = Rat::<ZZ12>::from_unchecked(&spectre());
-        let hexamino =
-            Rat::<ZZ12>::from_unchecked(&hexagon()).glue((0, 0), &Rat::from_unchecked(&hexagon()));
-
-        for (label, rat) in [("spec", &spec), ("hexamino", &hexamino)] {
-            let ts = TileSet::new(vec![rat.clone()]);
-            let all = ts.valid_glues(0, 0);
-            let n = rat.len();
-
-            for edge in 0..n {
-                let containing = ts.valid_glues_containing(0, edge..edge + 1, 0);
-                let expected_intervals: Vec<_> = all
-                    .iter()
-                    .filter(|g| match_covers_range(g.start_a, g.match_len, &(edge..edge + 1), n))
-                    .map(|g| (g.start_a, g.match_len, g.end_b))
-                    .collect();
-                let got_intervals: Vec<_> = containing
-                    .iter()
-                    .map(|g| (g.start_a, g.match_len, g.end_b))
-                    .collect();
-                assert_eq!(
-                    got_intervals, expected_intervals,
-                    "{label}: edge {edge}: containing query mismatch",
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn empty_tile_valid_glues() {
-        let hex = Rat::<ZZ12>::from_unchecked(&hexagon());
-        let ts = TileSet::new(vec![hex.clone(), hex]);
-
-        // a TileSet with all-valid tiles returns empty for i!=j
-        // when there's only one distinct tile shape
-        assert!(!ts.valid_glues(0, 1).is_empty());
-    }
-
-    #[test]
-    fn containing_query_edge_cases() {
-        let s: Snake<ZZ12> = spectre();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let n = r.len();
-        let ts = TileSet::new(vec![r]);
-
-        // empty range returns nothing
-        assert!(ts.valid_glues_containing(0, 0..0, 0).is_empty());
-
-        // range.end > n returns nothing
-        assert!(ts.valid_glues_containing(0, 0..n + 1, 0).is_empty());
-    }
-
-    #[test]
-    fn shared_boundaries_returns_cmi_matches() {
-        let h: Snake<ZZ12> = hexagon();
-        let r: Rat<ZZ12> = Rat::from_unchecked(&h);
-        let ts = TileSet::new(vec![r.clone(), r.clone()]);
-
-        // hexagon has all-positive angles, RC is all-negative, no matches
-        let boundaries = ts.shared_boundaries(0, 1);
-        assert!(
-            boundaries.is_empty(),
-            "hexagon pair should have no RC matches: {:?}",
-            boundaries,
-        );
-
-        let self_boundaries = ts.shared_boundaries(0, 0);
-        assert!(
-            self_boundaries.is_empty(),
-            "hexagon self should have no RC matches: {:?}",
-            self_boundaries,
-        );
-
-        // spectre has non-trivial RC self-matches
-        let s: Snake<ZZ12> = spectre();
-        let spec: Rat<ZZ12> = Rat::from_unchecked(&s);
-        let ts2 = TileSet::new(vec![spec.clone(), spec]);
-        let cross = ts2.shared_boundaries(0, 1);
-        assert!(!cross.is_empty(), "spectre pair should have RC matches",);
-        let max_len = cross.iter().map(|m| m.len).max().unwrap();
-        assert_eq!(max_len, 3, "spectre max RC cross-match should be 3");
-    }
-
-    #[test]
-    fn heuristic_sound_on_size4_hexagon_patches() {
-        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-
-        let ts1 = TileSet::new(vec![hex.clone()]);
-        let size2: Vec<Rat<ZZ12>> = ts1
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let ts2 = TileSet::new(size2.clone());
-        let size4: Vec<Rat<ZZ12>> = ts2
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let mut false_rejects = 0;
-
-        for a in &size4 {
-            for b in &size4 {
-                let seq_a = a.seq();
-                let seq_b = b.seq();
-                for ia in 0..a.len() {
-                    for ib in 0..b.len() {
-                        let (_, len, _) = a.get_match((ia as i64, ib as i64), b);
-                        if len != 1 {
-                            continue;
-                        }
-                        if a.try_glue((ia as i64, ib as i64), b).is_err() {
-                            continue;
-                        }
-                        if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
-                            false_rejects += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        assert_eq!(
-            false_rejects, 0,
-            "heuristic falsely rejected {false_rejects} valid single-edge glues"
-        );
-    }
-
-    #[test]
-    fn size8_hexagon_valid_glues_matches_brute_force() {
-        let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
-
-        let ts1 = TileSet::new(vec![hex.clone()]);
-        let size2: Vec<Rat<ZZ12>> = ts1
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let ts2 = TileSet::new(size2.clone());
-        let size4: Vec<Rat<ZZ12>> = ts2
-            .all_valid_glues()
-            .iter()
-            .map(|g| g.result.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        let ts4 = TileSet::new(size4.clone());
-
-        let mut index_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
-        for i in 0..size4.len() {
-            for j in 0..size4.len() {
-                for g in ts4.valid_glues(i, j) {
-                    index_results.insert(g.result);
-                }
-            }
-        }
-
-        let mut bf_results: BTreeSet<Rat<ZZ12>> = BTreeSet::new();
-        for a in &size4 {
-            for b in &size4 {
-                for ia in 0..a.len() {
-                    for ib in 0..b.len() {
-                        if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
-                            bf_results.insert(glued);
-                        }
-                    }
-                }
-            }
-        }
-
-        eprintln!(
-            "index: {}, brute_force: {}",
-            index_results.len(),
-            bf_results.len(),
-        );
-
-        let missing: Vec<_> = bf_results.difference(&index_results).collect();
-        assert_eq!(missing.len(), 0, "index missed {} patches", missing.len(),);
+    fn chirality_check_passes_for_consistent_tiles() {
+        let r1 = Rat::<ZZ12>::from_slice_unchecked(&[0, 1, 0, 1, 0, 1, 0, 1]);
+        let r2 = Rat::<ZZ12>::from_slice_unchecked(&[4, 4, 4]);
+        let ts = TileSet::new(vec![r1, r2]);
+        assert_eq!(ts.num_tiles(), 2);
     }
 }
