@@ -35,6 +35,7 @@ pub struct AddTileDiff {
     pub new_vertices: Vec<VertexInfo>,
 }
 
+#[derive(Clone)]
 pub struct GrowingPatch<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     match_type_index: Arc<MatchTypeIndex<T>>,
@@ -260,14 +261,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         let match_start = pm.start_a;
-        let match_end_excl = (pm.start_a + mlen) % n;
+        let _match_end_excl = (pm.start_a + mlen) % n;
 
         let mut new_segments = Vec::new();
         let mut new_vertex_matches_lists: Vec<Vec<i32>> = Vec::new();
 
         for (i, seg) in old_segments.iter().enumerate() {
             let seg_start = seg_offsets[i];
-            let seg_end_excl = seg_start + seg.tile_len;
+            let _seg_end_excl = seg_start + seg.tile_len;
 
             if seg.tile_len == 0 {
                 continue;
@@ -752,5 +753,352 @@ mod tests {
             !diff.new_vertices.is_empty(),
             "diff should have new vertices"
         );
+    }
+
+    fn verify_bi_tile_patch<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+        seed_len: usize,
+        label: &str,
+    ) {
+        let expected_boundary = 2 * seed_len - 2;
+        assert_eq!(
+            gp.boundary_len(),
+            expected_boundary,
+            "{label}: boundary length"
+        );
+
+        let seg_sum: usize = gp.segments().iter().map(|s| s.tile_len).sum();
+        assert_eq!(
+            seg_sum,
+            gp.boundary_len(),
+            "{label}: segment lengths sum to boundary"
+        );
+
+        assert!(
+            !gp.vertices().is_empty(),
+            "{label}: should have at least 1 vertex"
+        );
+
+        let last = gp.vertices().len() - 1;
+        assert!(
+            !gp.vertices()[0].matches.is_empty(),
+            "{label}: first vertex (CW junction) should have match ID"
+        );
+        assert!(
+            !gp.vertices()[last].matches.is_empty(),
+            "{label}: last vertex (CCW junction) should have match ID"
+        );
+
+        for (i, vtx) in gp.vertices().iter().enumerate() {
+            assert!(
+                vtx.is_open,
+                "{label}: vertex {i} should be open after 2 tiles"
+            );
+            for &sid in &vtx.matches {
+                assert_ne!(sid, 0, "{label}: vertex {i} signed id should be nonzero");
+            }
+        }
+
+        let rat = gp.to_rat();
+        assert!(
+            Snake::<T>::try_from(rat.seq()).is_ok(),
+            "{label}: result should be a valid snake"
+        );
+    }
+
+    #[test]
+    fn square_all_16_matches_produce_valid_bi_squares() {
+        let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let ts = Arc::new(TileSet::new(vec![sq]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        assert_eq!(
+            matches.len(),
+            16,
+            "single square patch should have 16 raw matches (4×4)"
+        );
+
+        let mut seen_signed_ids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for (i, pm) in matches.iter().enumerate() {
+            let label = format!("sq-match-{i}");
+            let mut gp2 = gp.clone();
+            gp2.add_tile(pm).expect("add_tile should succeed");
+            verify_bi_tile_patch(&gp2, 4, &label);
+
+            let last = gp2.vertices().len() - 1;
+            seen_signed_ids.insert(gp2.vertices()[0].matches[0]);
+            seen_signed_ids.insert(gp2.vertices()[last].matches[0]);
+        }
+
+        assert_eq!(
+            seen_signed_ids.len(),
+            20,
+            "16 raw matches should produce 20 distinct signed IDs covering all 10 types × 2 signs"
+        );
+    }
+
+    #[test]
+    fn hexagon_all_36_matches_produce_valid_bi_hexes() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        assert_eq!(
+            matches.len(),
+            36,
+            "single hex patch should have 36 raw matches (6×6)"
+        );
+
+        let mut seen_signed_ids: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for (i, pm) in matches.iter().enumerate() {
+            let label = format!("hex-match-{i}");
+            let mut gp2 = gp.clone();
+            gp2.add_tile(pm).expect("add_tile should succeed");
+            verify_bi_tile_patch(&gp2, 6, &label);
+
+            let last = gp2.vertices().len() - 1;
+            seen_signed_ids.insert(gp2.vertices()[0].matches[0]);
+            seen_signed_ids.insert(gp2.vertices()[last].matches[0]);
+        }
+
+        assert_eq!(
+            seen_signed_ids.len(),
+            42,
+            "36 raw matches should produce 42 distinct signed IDs covering all 21 types × 2 signs"
+        );
+    }
+
+    #[test]
+    fn square_vertex_signed_ids_match_match_type_index() {
+        let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let ts = Arc::new(TileSet::new(vec![sq]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        for pm in &matches {
+            let mut gp2 = gp.clone();
+            let expected_id = gp2.resolve_signed_id(pm);
+            gp2.add_tile(pm).expect("add_tile");
+
+            assert!(
+                expected_id.is_some(),
+                "resolve_signed_id should return Some for match {:?}",
+                pm
+            );
+            let eid = expected_id.unwrap();
+            let last = gp2.vertices().len() - 1;
+
+            let v0_id = gp2.vertices()[0].matches[0];
+            let vn_id = gp2.vertices()[last].matches[0];
+
+            assert_eq!(
+                v0_id, -eid,
+                "first vertex should be -sid for match {:?}",
+                pm
+            );
+            assert_eq!(vn_id, eid, "last vertex should be +sid for match {:?}", pm);
+        }
+    }
+
+    #[test]
+    fn hexagon_vertex_signed_ids_match_match_type_index() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        for pm in &matches {
+            let mut gp2 = gp.clone();
+            let expected_id = gp2.resolve_signed_id(pm);
+            gp2.add_tile(pm).expect("add_tile");
+
+            assert!(
+                expected_id.is_some(),
+                "resolve_signed_id should return Some for match {:?}",
+                pm
+            );
+            let eid = expected_id.unwrap();
+            let last = gp2.vertices().len() - 1;
+
+            let v0_id = gp2.vertices()[0].matches[0];
+            let vn_id = gp2.vertices()[last].matches[0];
+
+            assert_eq!(
+                v0_id, -eid,
+                "first vertex should be -sid for match {:?}",
+                pm
+            );
+            assert_eq!(vn_id, eid, "last vertex should be +sid for match {:?}", pm);
+        }
+    }
+
+    #[test]
+    fn to_rat_matches_direct_glue_for_all_square_matches() {
+        let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let ts = Arc::new(TileSet::new(vec![sq.clone()]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        for pm in &matches {
+            let mut gp2 = gp.clone();
+            gp2.add_tile(pm).expect("add_tile");
+
+            let rat = gp2.to_rat();
+            let expected = sq.glue((pm.start_a as i64, pm.start_b as i64), &sq);
+            assert_eq!(
+                rat, expected,
+                "to_rat should match direct glue for match {:?}",
+                pm
+            );
+        }
+    }
+
+    #[test]
+    fn to_rat_matches_direct_glue_for_all_hex_matches() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex.clone()]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        let matches = gp.get_all_matches().to_vec();
+        for pm in &matches {
+            let mut gp2 = gp.clone();
+            gp2.add_tile(pm).expect("add_tile");
+
+            let rat = gp2.to_rat();
+            let expected = hex.glue((pm.start_a as i64, pm.start_b as i64), &hex);
+            assert_eq!(
+                rat, expected,
+                "to_rat should match direct glue for match {:?}",
+                pm
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_hex_square_add_tile() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let sq: Rat<ZZ12> = Rat::from_unchecked(&tiles::square());
+        let ts = Arc::new(TileSet::new(vec![hex.clone(), sq.clone()]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+
+        let gp_hex = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+        let hex_matches: Vec<PatchMatch> = gp_hex.get_matches_for_tile(1).cloned().collect();
+        assert!(
+            !hex_matches.is_empty(),
+            "hex patch should have matches with square tile"
+        );
+
+        for (i, pm) in hex_matches.iter().enumerate() {
+            let label = format!("hex+sq-{i}");
+            let mut gp = gp_hex.clone();
+            gp.add_tile(pm).expect("add_tile should succeed");
+
+            let seg_sum: usize = gp.segments().iter().map(|s| s.tile_len).sum();
+            assert_eq!(
+                seg_sum,
+                gp.boundary_len(),
+                "{label}: segment lengths should sum to boundary"
+            );
+
+            let last = gp.vertices().len() - 1;
+            assert!(
+                !gp.vertices()[0].matches.is_empty(),
+                "{label}: first vertex should have match ID"
+            );
+            assert!(
+                !gp.vertices()[last].matches.is_empty(),
+                "{label}: last vertex should have match ID"
+            );
+
+            let rat = gp.to_rat();
+            let expected = hex.glue((pm.start_a as i64, pm.start_b as i64), &sq);
+            assert_eq!(rat, expected, "{label}: to_rat should match direct glue");
+
+            assert!(
+                Snake::<ZZ12>::try_from(rat.seq()).is_ok(),
+                "{label}: result should be valid snake"
+            );
+        }
+    }
+
+    #[test]
+    fn segment_invariant_across_multiple_adds() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let mut gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        for step in 0..6 {
+            let matches = gp.get_all_matches().to_vec();
+            if matches.is_empty() {
+                break;
+            }
+            gp.add_tile(&matches[0]).expect("add_tile");
+
+            let seg_sum: usize = gp.segments().iter().map(|s| s.tile_len).sum();
+            assert_eq!(
+                seg_sum,
+                gp.boundary_len(),
+                "step {}: segment lengths should sum to boundary length",
+                step + 1
+            );
+
+            let rat = gp.to_rat();
+            assert!(
+                Snake::<ZZ12>::try_from(rat.seq()).is_ok(),
+                "step {}: should be valid snake",
+                step + 1
+            );
+        }
+    }
+
+    #[test]
+    fn junction_vertex_ids_nonempty_after_each_add() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let mut gp = GrowingPatch::from_tile(Arc::clone(&ts), Arc::clone(&mti), 0);
+
+        for step in 0..4 {
+            let matches = gp.get_all_matches().to_vec();
+            if matches.is_empty() {
+                break;
+            }
+            gp.add_tile(&matches[0]).expect("add_tile");
+
+            let seg_sum: usize = gp.segments().iter().map(|s| s.tile_len).sum();
+            assert_eq!(
+                seg_sum,
+                gp.boundary_len(),
+                "step {}: segment lengths should sum to boundary",
+                step + 1
+            );
+
+            let last = gp.vertices().len() - 1;
+            assert!(
+                !gp.vertices()[0].matches.is_empty(),
+                "step {}: first junction vertex should have match IDs",
+                step + 1
+            );
+            assert!(
+                !gp.vertices()[last].matches.is_empty(),
+                "step {}: last junction vertex should have match IDs",
+                step + 1
+            );
+
+            for vtx in gp.vertices() {
+                for &sid in &vtx.matches {
+                    assert_ne!(sid, 0, "step {}: signed id should be nonzero", step + 1);
+                }
+            }
+        }
     }
 }
