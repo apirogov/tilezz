@@ -14,4 +14,8 @@ pub mod tileset;
 
 pub mod matchtypes;
 
+pub mod vertextypes;
+
+pub mod patch;
+
 pub mod growing;
