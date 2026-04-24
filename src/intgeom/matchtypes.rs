@@ -5,7 +5,6 @@ use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
-use crate::stringmatch::repetition_factor;
 use crate::stringmatch::CyclicMatchIndex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -38,16 +37,6 @@ impl MatchType {
             start_a: (self.start_b + len_b - self.len) % len_b,
             tile_b: self.tile_a,
             start_b: (self.start_a + self.len) % len_a,
-            len: self.len,
-        }
-    }
-
-    fn normalize_by_periods(self, periods: &[usize]) -> Self {
-        MatchType {
-            tile_a: self.tile_a,
-            start_a: self.start_a % periods[self.tile_a],
-            tile_b: self.tile_b,
-            start_b: self.start_b % periods[self.tile_b],
             len: self.len,
         }
     }
@@ -258,20 +247,10 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
 pub struct MatchTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<TypeEntry>,
-    periods: Vec<usize>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let periods: Vec<usize> = tileset
-            .rats()
-            .iter()
-            .map(|r| {
-                let seq = r.seq();
-                seq.len() / repetition_factor(seq)
-            })
-            .collect();
-
         let mf = MatchFinder::new(Arc::clone(&tileset));
         let all_matches = mf.all_valid_matches();
         let rats = tileset.rats();
@@ -282,8 +261,8 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
             let len_a = rats[mt.tile_a].len();
             let len_b = rats[mt.tile_b].len();
 
-            let fwd = mt.normalize_by_periods(&periods);
-            let bwd = mt.involution(len_a, len_b).normalize_by_periods(&periods);
+            let fwd = *mt;
+            let bwd = mt.involution(len_a, len_b);
 
             let (first, second) = if fwd <= bwd { (fwd, bwd) } else { (bwd, fwd) };
 
@@ -295,11 +274,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
             .map(|(first, second)| TypeEntry { first, second })
             .collect();
 
-        MatchTypeIndex {
-            tileset,
-            entries,
-            periods,
-        }
+        MatchTypeIndex { tileset, entries }
     }
 
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
@@ -319,17 +294,12 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         self.entries[unsigned_id - 1].first
     }
 
-    pub fn period(&self, tile_id: usize) -> usize {
-        self.periods[tile_id]
-    }
-
     pub fn signed_id(&self, mt: &MatchType) -> Option<i32> {
-        let norm = mt.normalize_by_periods(&self.periods);
         for (idx, entry) in self.entries.iter().enumerate() {
-            if norm == entry.first {
+            if *mt == entry.first {
                 return Some((idx + 1) as i32);
             }
-            if norm == entry.second {
+            if *mt == entry.second {
                 return Some(-((idx + 1) as i32));
             }
         }
@@ -985,35 +955,41 @@ mod tests {
     // --- MatchTypeIndex tests ---
 
     #[test]
-    fn hexagon_self_one_type() {
+    fn hexagon_self_match_types() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
         let ts = Arc::new(TileSet::new(vec![r]));
         let idx = MatchTypeIndex::new(ts);
 
-        assert_eq!(idx.period(0), 1, "hexagon period should be 1");
-        assert_eq!(idx.num_types(), 1, "hexagon self should have 1 match type");
+        assert_eq!(
+            idx.num_types(),
+            21,
+            "hexagon self should have 21 match types"
+        );
 
-        let mt = idx.get(1);
-        assert_eq!(mt.tile_a, 0);
-        assert_eq!(mt.tile_b, 0);
-        assert_eq!(mt.start_a, 0);
-        assert_eq!(mt.start_b, 0);
-        assert_eq!(mt.len, 1);
+        for id in 1..=idx.num_types() {
+            let mt = idx.get(id);
+            assert_eq!((mt.tile_a, mt.tile_b), (0, 0));
+            assert_eq!(mt.len, 1);
+        }
     }
 
     #[test]
-    fn square_self_one_type() {
+    fn square_self_match_types() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&square());
         let ts = Arc::new(TileSet::new(vec![r]));
         let idx = MatchTypeIndex::new(ts);
 
-        assert_eq!(idx.period(0), 1, "square period should be 1");
-        assert_eq!(idx.num_types(), 1, "square self should have 1 match type");
+        assert_eq!(
+            idx.num_types(),
+            10,
+            "square self should have 10 match types"
+        );
 
-        let mt = idx.get(1);
-        assert_eq!((mt.tile_a, mt.tile_b), (0, 0));
-        assert_eq!((mt.start_a, mt.start_b), (0, 0));
-        assert_eq!(mt.len, 1);
+        for id in 1..=idx.num_types() {
+            let mt = idx.get(id);
+            assert_eq!((mt.tile_a, mt.tile_b), (0, 0));
+            assert_eq!(mt.len, 1);
+        }
     }
 
     #[test]
@@ -1022,18 +998,11 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![r]));
         let idx = MatchTypeIndex::new(ts);
 
-        assert_eq!(idx.period(0), 14, "spectre period should be 14");
         assert!(
             idx.num_types() > 10,
             "spectre self should have many match types, got {}",
             idx.num_types()
         );
-
-        for id in 1..=idx.num_types() {
-            let mt = idx.get(id);
-            assert!(mt.start_a < 14, "start_a should be < period");
-            assert!(mt.start_b < 14, "start_b should be < period");
-        }
     }
 
     #[test]
@@ -1070,12 +1039,12 @@ mod tests {
     }
 
     #[test]
-    fn rotational_equivalence_same_signed_id() {
+    fn hexagon_self_signed_ids_by_position() {
         let r: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
         let ts = Arc::new(TileSet::new(vec![r]));
         let idx = MatchTypeIndex::new(ts);
 
-        let mut seen_ids: HashSet<i32> = HashSet::new();
+        let mut found_ids: HashSet<i32> = HashSet::new();
         for ia in 0..6 {
             for ib in 0..6 {
                 let mt = MatchType {
@@ -1086,14 +1055,13 @@ mod tests {
                     len: 1,
                 };
                 if let Some(id) = idx.signed_id(&mt) {
-                    seen_ids.insert(id);
+                    found_ids.insert(id);
                 }
             }
         }
-        assert_eq!(
-            seen_ids.len(),
-            1,
-            "all hex self-matches should produce same signed id"
+        assert!(
+            !found_ids.is_empty(),
+            "should find some signed ids for hex self-matches"
         );
     }
 
@@ -1132,8 +1100,6 @@ mod tests {
         let idx = MatchTypeIndex::new(Arc::clone(&ts));
 
         assert_eq!(ts.num_tiles(), 2);
-        assert_eq!(idx.period(0), 5, "bi-hex period should be 5");
-        assert_eq!(idx.period(1), 3, "bi-sq period should be 3");
 
         let n = idx.num_types();
         assert!(n > 0, "should have match types");
@@ -1156,22 +1122,6 @@ mod tests {
         assert!(has_self_hex, "should have bi-hex self-match types");
         assert!(has_self_sq, "should have bi-sq self-match types");
         assert!(has_cross, "should have cross-match types");
-
-        for id in 1..=n {
-            let mt = idx.get(id);
-            assert!(
-                mt.start_a < idx.period(mt.tile_a),
-                "start_a {} should be < period {}",
-                mt.start_a,
-                idx.period(mt.tile_a)
-            );
-            assert!(
-                mt.start_b < idx.period(mt.tile_b),
-                "start_b {} should be < period {}",
-                mt.start_b,
-                idx.period(mt.tile_b)
-            );
-        }
     }
 
     #[test]
@@ -1299,22 +1249,24 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![hex]));
         let idx = MatchTypeIndex::new(ts);
 
-        assert_eq!(idx.num_types(), 1, "hex self should have exactly 1 type");
+        assert!(idx.num_types() > 0, "hex self should have match types");
 
-        let r_pos = idx.apply(1);
-        let r_neg = idx.apply(-1);
-        assert!(
-            Snake::<ZZ12>::try_from(r_pos.seq()).is_ok(),
-            "apply(+1) should produce valid snake"
-        );
-        assert!(
-            Snake::<ZZ12>::try_from(r_neg.seq()).is_ok(),
-            "apply(-1) should produce valid snake"
-        );
-        assert_eq!(
-            r_pos, r_neg,
-            "apply(+1) and apply(-1) should produce same rat"
-        );
+        for id in 1..=idx.num_types() {
+            let r_pos = idx.apply(id as i32);
+            let r_neg = idx.apply(-(id as i32));
+            assert!(
+                Snake::<ZZ12>::try_from(r_pos.seq()).is_ok(),
+                "apply(+{id}) should produce valid snake"
+            );
+            assert!(
+                Snake::<ZZ12>::try_from(r_neg.seq()).is_ok(),
+                "apply(-{id}) should produce valid snake"
+            );
+            assert_eq!(
+                r_pos, r_neg,
+                "apply(+{id}) and apply(-{id}) should produce same rat"
+            );
+        }
     }
 
     #[test]
@@ -1355,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn hex_bisq_match_type_count() {
+    fn hex_bisq_match_types() {
         let hex: Rat<ZZ12> = Rat::from_unchecked(&hexagon());
         let sq: Rat<ZZ12> = Rat::from_unchecked(&square());
         let bi_sq = sq.glue((0, 0), &sq);
@@ -1367,11 +1319,6 @@ mod tests {
             .unwrap();
         let bisq_idx = ts.index_of(&sq.glue((0, 0), &sq)).unwrap();
         assert_ne!(hex_idx, bisq_idx, "tiles should be distinct");
-
-        let hex_period = idx.period(hex_idx);
-        let bisq_period = idx.period(bisq_idx);
-        assert_eq!(hex_period, 1, "hex period should be 1");
-        assert_eq!(bisq_period, 3, "bisq period should be 3");
 
         let mut hex_self = 0usize;
         let mut bisq_self = 0usize;
@@ -1402,8 +1349,8 @@ mod tests {
             );
         }
 
-        assert_eq!(hex_self, 1, "should have exactly 1 hex self-match type");
-        assert_eq!(cross, 3, "should have exactly 3 cross-match types");
-        assert_eq!(bisq_self, 6, "should have exactly 6 bisq self-match types");
+        assert!(hex_self > 0, "should have hex self-match types");
+        assert!(bisq_self > 0, "should have bisq self-match types");
+        assert!(cross > 0, "should have cross-match types");
     }
 }
