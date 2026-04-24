@@ -145,6 +145,20 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    pub fn to_vertices(&self) -> Vec<VertexInfo> {
+        match &self.state {
+            PatchState::Growing { vertices, .. } => vertices.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn to_segments(&self) -> Vec<BoundarySegment> {
+        match &self.state {
+            PatchState::Growing { segments, .. } => segments.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
@@ -956,5 +970,263 @@ mod tests {
                 step + 1
             );
         }
+    }
+
+    fn brute_force_patches(
+        ts: &Arc<TileSet<ZZ4>>,
+        mti: &Arc<MatchTypeIndex<ZZ4>>,
+        max_tiles: usize,
+    ) -> std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
+        let mut results: std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> =
+            std::collections::BTreeMap::new();
+
+        fn recurse(
+            gp: &mut GrowingPatch<ZZ4>,
+            history: &mut Vec<PatchMatch>,
+            max_tiles: usize,
+            results: &mut std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+        ) {
+            let num_tiles = history.len() + 1;
+            let canonical = gp.to_rat().seq().to_vec();
+            results.entry(canonical).or_default().push(history.clone());
+
+            if num_tiles >= max_tiles || !gp.is_growing() {
+                return;
+            }
+
+            let matches = gp.get_all_matches().to_vec();
+            for pm in &matches {
+                let mut gp2 = gp.clone();
+                if gp2.add_tile(pm).is_some() {
+                    history.push(pm.clone());
+                    recurse(&mut gp2, history, max_tiles, results);
+                    history.pop();
+                }
+            }
+        }
+
+        let seed_seq = ts.rat(0).seq().to_vec();
+        results.entry(seed_seq).or_default().push(Vec::new());
+
+        let seed_matches = GrowingPatch::new(Arc::clone(ts), Arc::clone(mti), 0)
+            .get_all_matches()
+            .to_vec();
+        for pm in &seed_matches {
+            let mut gp = GrowingPatch::new(Arc::clone(ts), Arc::clone(mti), 0);
+            gp.add_tile(pm).expect("first add");
+            let mut history = vec![pm.clone()];
+            recurse(&mut gp, &mut history, max_tiles, &mut results);
+        }
+
+        results
+    }
+
+    #[test]
+    fn square_brute_force_up_to_4_tiles() {
+        let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+        let ts = Arc::new(TileSet::new(vec![sq]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+
+        let results = brute_force_patches(&ts, &mti, 4);
+
+        let mut by_tile_count: std::collections::BTreeMap<usize, (usize, usize)> =
+            std::collections::BTreeMap::new();
+        for (canonical, ways) in &results {
+            let n_tiles = ways[0].len() + 1;
+            let entry = by_tile_count.entry(n_tiles).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += ways.len();
+            eprintln!(
+                "n={}: boundary_len={} ways={} seq={:?}",
+                n_tiles,
+                canonical.len(),
+                ways.len(),
+                canonical,
+            );
+        }
+
+        eprintln!("\nSummary:");
+        for (n, (shapes, total_ways)) in &by_tile_count {
+            eprintln!(
+                "  {} tiles: {} distinct shapes, {} total ways",
+                n, shapes, total_ways
+            );
+        }
+        eprintln!("  total distinct shapes: {}", results.len());
+
+        assert!(!results.is_empty(), "should find some shapes");
+
+        let mono_count = results
+            .iter()
+            .filter(|(_, ways)| ways[0].len() + 1 == 1)
+            .count();
+        assert_eq!(mono_count, 1, "1 mono-square");
+
+        let (di_shapes, di_ways) = by_tile_count.get(&2).copied().unwrap_or((0, 0));
+        assert_eq!(di_shapes, 1, "1 unique bi-square");
+        assert_eq!(di_ways, 16, "bi-square made in 16 ways (4x4 raw matches)");
+
+        let (tri_shapes, tri_ways) = by_tile_count.get(&3).copied().unwrap_or((0, 0));
+        eprintln!(
+            "  tri-squares: {} distinct shapes, {} total ways",
+            tri_shapes, tri_ways
+        );
+        assert!(tri_shapes >= 2, "should have at least 2 tri-square shapes");
+
+        let (tetra_shapes, tetra_ways) = by_tile_count.get(&4).copied().unwrap_or((0, 0));
+        eprintln!(
+            "  tetra-squares: {} distinct shapes, {} total ways",
+            tetra_shapes, tetra_ways
+        );
+
+        for ways in results.values() {
+            for history in ways {
+                if history.is_empty() {
+                    continue;
+                }
+                let mut gp = GrowingPatch::new(Arc::clone(&ts), Arc::clone(&mti), 0);
+                for pm in history {
+                    assert!(gp.add_tile(pm).is_some(), "replay should succeed");
+                }
+                assert_eq!(
+                    gp.to_segments().len(),
+                    gp.to_vertices().len(),
+                    "cyclic invariant"
+                );
+                assert_eq!(
+                    gp.to_segments().iter().map(|s| s.tile_len).sum::<usize>(),
+                    gp.boundary_len(),
+                    "seg sum == boundary"
+                );
+                if gp.is_growing() {
+                    assert!(
+                        Snake::<ZZ4>::try_from(gp.to_rat().seq()).is_ok(),
+                        "valid snake"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hex_brute_force_up_to_3_tiles() {
+        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+        let ts = Arc::new(TileSet::new(vec![hex]));
+        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+
+        let results = brute_force_hex_patches(&ts, &mti, 3);
+
+        let mut by_tile_count: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for (canonical, ways) in &results {
+            let n_tiles = ways[0].len() + 1;
+            by_tile_count
+                .entry(n_tiles)
+                .and_modify(|c| *c += 1)
+                .or_insert(1);
+            eprintln!(
+                "n={}: boundary_len={} ways={} seq={:?}",
+                n_tiles,
+                canonical.len(),
+                ways.len(),
+                canonical,
+            );
+        }
+
+        eprintln!("\nSummary:");
+        for (n, count) in &by_tile_count {
+            eprintln!("  {} tiles: {} distinct hex-patches", n, count);
+        }
+
+        let di_count = results
+            .iter()
+            .filter(|(_, ways)| ways[0].len() + 1 == 2)
+            .count();
+        assert_eq!(di_count, 1, "1 unique bi-hex");
+
+        let tri_count = results
+            .iter()
+            .filter(|(_, ways)| ways[0].len() + 1 == 3)
+            .count();
+        eprintln!("  tri-hexes: {} distinct shapes", tri_count);
+        assert!(tri_count >= 1, "should have at least 1 tri-hex");
+
+        for ways in results.values() {
+            for history in ways {
+                if history.is_empty() {
+                    continue;
+                }
+                let mut gp = GrowingPatch::new(Arc::clone(&ts), Arc::clone(&mti), 0);
+                for pm in history {
+                    gp.add_tile(pm).expect("add_tile");
+                }
+                assert!(
+                    gp.is_growing() || gp.is_closed(),
+                    "patch should be valid after building"
+                );
+                assert_eq!(
+                    gp.to_segments().len(),
+                    gp.to_vertices().len(),
+                    "cyclic invariant"
+                );
+                if gp.is_growing() {
+                    assert!(
+                        Snake::<ZZ12>::try_from(gp.to_rat().seq()).is_ok(),
+                        "valid snake"
+                    );
+                }
+            }
+        }
+    }
+
+    fn brute_force_hex_patches(
+        ts: &Arc<TileSet<ZZ12>>,
+        mti: &Arc<MatchTypeIndex<ZZ12>>,
+        max_tiles: usize,
+    ) -> std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
+        let mut results: std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> =
+            std::collections::BTreeMap::new();
+
+        fn recurse(
+            gp: &mut GrowingPatch<ZZ12>,
+            history: &mut Vec<PatchMatch>,
+            max_tiles: usize,
+            results: &mut std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+        ) {
+            let num_tiles = history.len() + 1;
+            if gp.is_growing() {
+                let canonical = gp.to_rat().seq().to_vec();
+                results.entry(canonical).or_default().push(history.clone());
+            }
+
+            if num_tiles >= max_tiles || !gp.is_growing() {
+                return;
+            }
+
+            let matches = gp.get_all_matches().to_vec();
+            for pm in &matches {
+                let mut gp2 = gp.clone();
+                if gp2.add_tile(pm).is_some() {
+                    history.push(pm.clone());
+                    recurse(&mut gp2, history, max_tiles, results);
+                    history.pop();
+                }
+            }
+        }
+
+        let seed_seq = ts.rat(0).seq().to_vec();
+        results.entry(seed_seq).or_default().push(Vec::new());
+
+        let seed_matches = GrowingPatch::new(Arc::clone(ts), Arc::clone(mti), 0)
+            .get_all_matches()
+            .to_vec();
+        for pm in &seed_matches {
+            let mut gp = GrowingPatch::new(Arc::clone(ts), Arc::clone(mti), 0);
+            gp.add_tile(pm).expect("first add");
+            let mut history = vec![pm.clone()];
+            recurse(&mut gp, &mut history, max_tiles, &mut results);
+        }
+
+        results
     }
 }
