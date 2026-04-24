@@ -3,7 +3,7 @@
 ## Overview
 
 `GrowingPatch` is a data structure for incrementally building tile patches while
-tracking which original tile each boundary segment belongs to. This enables:
+tracking which original tile type each boundary segment belongs to. This enables:
 
 1. Mapping any boundary position back to a position on a seed tile
 2. Determining signed match types for new gluing operations
@@ -11,218 +11,153 @@ tracking which original tile each boundary segment belongs to. This enables:
 
 The structure lives in `src/intgeom/patch.rs`.
 
+## Lifecycle
+
+`GrowingPatch` has three states via an internal `PatchState` enum:
+
+1. **Seed**: Created from a tileset + seed tile ID. Has cached matches but no
+   boundary, segments, or vertices. The user picks a match from `get_all_matches()`.
+2. **Growing**: After the first `add_tile`, the patch has a proper cyclic boundary
+   with segments and open vertices. Each subsequent `add_tile` grows the patch.
+3. **Closed**: All vertices have closed (no open vertices remain). No more tiles
+   can be added.
+
+Constructor: `GrowingPatch::new(tileset, match_type_index, seed_tile_id)`
+
 ## Data Model
 
 ```rust
 pub struct BoundarySegment {
-    pub tile_id: usize,      // which seed tile this segment came from
-    pub tile_start: usize,   // start position ON the seed tile (in seq() order)
-    pub tile_len: usize,     // number of boundary edges (= number of angles)
+    pub tile_id: usize,      // which tile TYPE in the tileset
+    pub tile_start: usize,   // start position ON that tile (in seq() order)
+    pub tile_len: usize,     // number of boundary edges
 }
 
 pub struct VertexInfo {
-    pub matches: Vec<i32>,   // ordered signed match type IDs (CCW around vertex)
+    pub matches: Vec<i32>,   // signed match type IDs at this vertex
     pub is_open: bool,       // true = gap remains, false = fully surrounded
 }
-
-pub struct VertexType(pub Vec<i32>);  // standalone key for later canonicalization
 
 pub struct PatchMatch {
     pub start_a: usize,      // start of matched range on patch boundary
     pub len: usize,          // match length
-    pub start_b: usize,      // start on seed tile (in seq() order)
-    pub tile_id: usize,      // which seed tile
+    pub start_b: usize,      // start on target tile (in seq() order)
+    pub tile_id: usize,      // which target tile
 }
 
 pub struct AddTileDiff {
-    pub affected_old: Vec<VertexInfo>,
-    pub new_vertices: Vec<VertexInfo>,  // [cw_junction, closed..., ccw_junction]
-}
-
-pub struct GrowingPatch<T: IsComplex> {
-    tileset: Arc<TileSet<T>>,
-    match_type_index: Arc<MatchTypeIndex<T>>,
-    angles: Vec<i8>,                    // boundary in glue-order (non-canonical)
-    segments: Vec<BoundarySegment>,
-    vertices: Vec<VertexInfo>,
-    matches: Vec<PatchMatch>,           // cached valid matches
+    pub closed_vertices: Vec<VertexInfo>,  // vertices that became interior
 }
 ```
 
-## Invariants
+## Invariants (Growing state only)
 
-- `angles.len() == segments.iter().map(|s| s.tile_len).sum()`
-- `vertices.len() == segments.len()` (one vertex at the start boundary of each segment)
-- Vertex `i` sits between the end of segment `i-1` and the start of segment `i`
+- `segments.len() == vertices.len()` (cyclic: one vertex per segment)
+- Vertex `i` is at the boundary between segment `i-1` and segment `i`
   (cyclically: vertex 0 between segment `n-1` and segment 0)
-- Segment `k` covers `angles[sum(0..k of tile_len) .. sum(0..k+1 of tile_len)]`
+- `angles.len() == segments.iter().map(|s| s.tile_len).sum()`
 - `angles` is in glue-order (not canonical). Use `to_rat()` to canonicalize.
-- `matches` is recomputed after each `add_tile` call.
+- Only **open** vertices are stored. Closed vertices are emitted in `AddTileDiff`
+  and then forgotten.
+- Segments from the same tile type with contiguous tile positions are **merged**
+  into a single segment. This means a bi-hexagon (same tile type on both sides)
+  can produce 1 or 2 segments depending on whether tile positions are contiguous.
 
-## Constructors
+## Segment Construction (Position Walk)
 
-### `GrowingPatch::new(tileset, match_type_index)`
+When rebuilding segments after `add_tile`, we walk through each new boundary
+position in order and determine which original tile each position came from:
 
-Empty patch: `angles = []`, `segments = []`, `vertices = []`, `matches = []`.
+1. For positions in the old portion (0..seg_len_old): map back to the old
+   boundary position, find which old segment contains it, compute the tile
+   position within that tile type.
+2. For positions in the new tile portion (seg_len_old..end): tile positions
+   are `(start_b + offset) % tile_len`.
 
-### `GrowingPatch::from_tile(tileset, match_type_index, tile_id)`
+Adjacent positions with the same `tile_id` and contiguous tile positions
+(`tile_pos == (prev + 1) % tile_len_total`) are merged into one segment.
 
-Single tile as full boundary:
-- `angles = tile.seq().to_vec()`
-- `segments = [BoundarySegment { tile_id, tile_start: 0, tile_len: angles.len() }]`
-- `vertices = []` (no matches yet, no real vertices)
-- `matches` computed via MatchFinder
+This guarantees correct segment ordering and correct `tile_start` values.
 
-Adding the first tile to an empty patch is equivalent.
+## Junction Vertices
 
-## Match Finding
+After a tile is added, two junction vertices get signed match type IDs:
+- **CW junction** (vertex 0, at position 0): gets `-signed_id`
+- **CCW junction** (vertex `num_old_out`, at position `seg_len_old`): gets `+signed_id`
 
-### `get_all_matches() -> &[PatchMatch]`
+Where `num_old_out` is the number of old-derived segments in the output
+(segments covering positions 0..seg_len_old).
 
-Returns the cached list of all valid matches between the current patch boundary
-and all tiles in the seed tileset.
-
-### `get_matches(tile_id: usize) -> impl Iterator<PatchMatch>`
-
-Filters cached matches to those that add a specific seed tile.
-
-### Match computation (internal)
-
-1. Create a single-tile `TileSet` from `angles`
-2. Use `MatchFinder::crossing(patch_ts, seed_ts)` to find all valid matches
-3. Cache the results
-
-Note: the `angles` are NOT canonical. The MatchFinder handles this correctly
-since `TileSet::new` will canonicalize internally via `Rat::from_slice_unchecked`.
-The match positions are relative to the non-canonical `angles` sequence.
-
-## `add_tile(patch_match) -> AddTileDiff`
-
-Given a `PatchMatch` from `get_all_matches()` or `get_matches()`:
-
-### Step 1: Identify affected segments
-
-Find which segments overlap the matched range `[start_a, start_a+len)` on the
-patch boundary. The matched range may span multiple segment boundaries.
-
-### Step 2: Compute glue
-
-Use the same logic as `Rat::try_glue_with_match_info` to produce new `angles`:
-- `x = angles[start_a+len .. start_a-1]` (patch unmatched, cyclically)
-- `y = seed_seq[start_b .. start_b-1]` (tile unmatched, cyclically)
-- Junction angles at the two transition points
-- New `angles = x[..-1] ++ y[..-1]` with junction angle fixes
-
-### Step 3: Update segments
-
-For each old segment that overlaps the matched range:
-- If fully inside the matched range: removed (becomes interior)
-- If partially overlapped: trimmed (start or end adjusted)
-- The unmatched portion keeps its original (tile_id, tile_start) mapping
-
-Append a new segment for the unmatched part of the added tile:
-- `tile_id = patch_match.tile_id`
-- `tile_start = (start_b + len) % seed_len`  (unmatched starts after match end)
-- `tile_len = seed_len - len`
-
-### Step 4: Update vertices
-
-Determine which vertices fall within the matched range:
-- Vertices strictly interior to the match: closed (is_open = false)
-- Vertices at the boundary of the match: updated (one side matched, one not)
-
-Create/update the two junction vertices:
-- CW junction: where patch unmatched meets new tile unmatched (at match end)
-- CCW junction: where new tile unmatched meets patch unmatched (at match start)
-
-For each junction vertex, determine the signed match type by looking up the
-boundary segment at the junction and resolving via `MatchTypeIndex::signed_id`.
-
-### Step 5: Recompute matches
-
-Call the internal match computation to update the cached `matches`.
-
-### Step 6: Return diff
-
-```
-AddTileDiff {
-    affected_old: vertices that were modified or closed,
-    new_vertices: [cw_junction, closed_vertices..., ccw_junction]
-}
-```
+If all segments merge into one (CW == CCW), vertex 0 gets both IDs.
 
 ## Signed Match Type Resolution
 
-When a new tile is attached at a junction, we need to determine the signed
-match type ID. The match is between:
+When adding a tile, the signed match type ID is resolved by:
+1. Finding the boundary segment at position `pm.start_a`
+2. Computing `orig_pos = (seg.tile_start + offset_in_seg) % tile_len`
+3. Calling `seed_a.get_match((orig_pos, pm.start_b), seed_b)` on the original
+   seed tiles
+4. Looking up the resulting `MatchType` in `MatchTypeIndex::signed_id()`
 
-- The boundary segment at the junction (which came from some original tile at
-  some position)
-- The new tile
-
-We look up the boundary segment to get `(tile_id, tile_start)`, then compute
-the match on the original seed tiles and look up the signed ID in
-`MatchTypeIndex`.
-
-For junction vertices that are updates of existing vertices, we append the new
-signed match ID to the existing `matches` list.
+This maps patch-level matches back to canonical seed-level match types.
 
 ## `to_rat() -> Rat<T>`
 
-Canonicalizes `angles` via `Rat::from_slice_unchecked`, losing all
-segment/vertex metadata. Returns a standard `Rat<T>`.
+Creates a `Rat` from `angles` via `Rat::from_slice_unchecked`, which
+canonicalizes internally. All segment/vertex metadata is lost.
 
-## Example: Hexagon 3-patch
+## Example: Bi-Hexagon
 
-### Step 1: from_tile(0)
+### Step 1: Seed phase
 
 ```
-angles = [2, 2, 2, 2, 2, 2]
-segments = [(tile_id=0, tile_start=0, tile_len=6)]
-vertices = []
+gp = GrowingPatch::new(ts, mti, 0)  // hex tile_id=0
+gp.get_all_matches()  // 36 matches (6×6)
 ```
 
-### Step 2: add_tile(match at start_a=0, len=1, start_b=0, tile_id=0)
+### Step 2: First add_tile (start_a=0, start_b=0)
 
-New angles (bi-hexagon, 10 positions):
+```
+gp.add_tile(&matches[0])
+```
+
+Boundary (10 positions):
 ```
 angles = [-2, 2, 2, 2, 2, -2, 2, 2, 2, 2]
 ```
-(junction angles at positions 0 and 5 are normalize(2+2-6) = -2)
 
-Segments:
+Segments: same tile type on both sides, positions 1-5 then 0-4 are contiguous
+(5→0 wraps mod 6), so they merge:
 ```
-seg 0: (tile_id=0, tile_start=1, tile_len=4)  // old tile unmatched: pos 1-4
-seg 1: (tile_id=0, tile_start=1, tile_len=4)  // new tile unmatched: pos 1-4
+seg 0: (tile_id=0, tile_start=1, tile_len=10)
 ```
 
-Wait — need to check tile_start for new tile. The match on the new tile is at
-start_b=0, len=1. The unmatched part starts at (start_b+len)%6 = 1, length 5.
-But the boundary only gets 4 positions (5 unmatched minus 1 shared endpoint).
-So tile_start=1, tile_len=4.
+Vertex:
+```
+vtx 0: matches=[+m, -m]  (both junctions at the same vertex)
+```
+
+### Step 3: First add_tile (start_a=0, start_b=1)
+
+Tile positions 1-5 then 1-5 are NOT contiguous (5→1 ≠ 0 mod 6), so:
+```
+seg 0: (tile_id=0, tile_start=1, tile_len=5)   // old portion
+seg 1: (tile_id=0, tile_start=1, tile_len=5)   // new portion
+```
 
 Vertices:
 ```
-vtx 0 (between seg 1 and seg 0): matches=[+m], is_open=true
-vtx 1 (between seg 0 and seg 1): matches=[-m], is_open=true
+vtx 0 (CW junction):  matches=[-m]
+vtx 1 (CCW junction): matches=[+m]
 ```
-
-Where m is the signed match type ID for the first gluing.
-
-### Step 3: add_tile(match at start_a=4, len=2, start_b=0, tile_id=0)
-
-This match spans the junction at position 5 (which is vtx 1). On the seed tile,
-the corresponding match is at (tile_start=5, len=1) (since the junction doesn't
-exist on the original tile).
-
-After gluing: tri-hexagon. Some vertices may close.
 
 ## Tests
 
-1. **hexagon_add_tile**: Start with hex, add one tile, verify segment/vertex counts
-2. **hexagon_three_close**: Add three hex tiles, verify a closed vertex appears
-3. **square_add_tile**: Start with square, add one tile
-4. **square_four_close**: Add four squares, verify closed vertex
-5. **mixed_hex_square**: Tileset with hex+square, verify cross-tile matches work
-6. **match_type_ids**: Verify signed match IDs are correct at each step
-7. **diff_tracking**: Verify AddTileDiff contains correct old/new vertices
+1. `seed_patch_*`: Verify seed phase has matches but no boundary
+2. `first_add_*`: Verify first add_tile initializes correctly
+3. `square_all_16_matches_produce_valid_bi_squares`: All 4×4 matches
+4. `hexagon_all_36_matches_produce_valid_bi_hexes`: All 6×6 matches
+5. `to_rat_matches_direct_glue_for_all_matches`: Glue correctness for every match
+6. `segment_cyclic_invariant`: segments.len() == vertices.len() always
+7. `mixed_hex_square_add_tile`: Cross-tile matches
+8. `junction_vertex_ids_nonempty_after_each_add`: Multi-step growth
