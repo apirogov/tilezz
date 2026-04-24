@@ -219,47 +219,31 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             });
         }
         if seg_len_new > 0 {
-            let new_start = (pm.start_b + mlen) % m;
-            let fused = !segments.is_empty() && seed_id == pm.tile_id && {
-                let prev = &segments.last().unwrap();
-                let prev_end =
-                    (prev.tile_start + prev.tile_len) % self.tileset.rat(prev.tile_id).len();
-                prev_end == new_start
-            };
-            if fused {
-                segments.last_mut().unwrap().tile_len += seg_len_new;
-            } else {
-                segments.push(BoundarySegment {
-                    tile_id: pm.tile_id,
-                    tile_start: new_start,
-                    tile_len: seg_len_new,
-                });
-            }
+            segments.push(BoundarySegment {
+                tile_id: pm.tile_id,
+                tile_start: (pm.start_b + mlen) % m,
+                tile_len: seg_len_new,
+            });
         }
 
         if segments.is_empty() {
             return None;
         }
 
-        if segments.len() == 1 {
+        for i in 0..segments.len() {
+            let is_cw = i == 0 || segments.len() == 1;
+            let is_ccw = i == segments.len() - 1 || segments.len() == 1;
             let mut matches = Vec::new();
             if let Some(sid) = signed_id {
-                matches.push(-sid);
-                if sid != -sid {
+                if is_cw {
+                    matches.push(-sid);
+                }
+                if is_ccw && !(is_cw && sid == -sid) {
                     matches.push(sid);
                 }
             }
             vertices.push(VertexInfo {
                 matches,
-                is_open: true,
-            });
-        } else {
-            vertices.push(VertexInfo {
-                matches: signed_id.map(|sid| -sid).into_iter().collect(),
-                is_open: true,
-            });
-            vertices.push(VertexInfo {
-                matches: signed_id.into_iter().collect(),
                 is_open: true,
             });
         }
@@ -582,26 +566,25 @@ fn apply_match_locally<T: IsComplex + IsRingOrField + Units>(
 
     if seg_len_old > 0 {
         let mut p = ccw_pos;
+        let mut last_old_seg_idx: Option<usize> = None;
         for _ in 0..seg_len_old {
             let seg_idx = find_segment_at_offsets(&offsets, p);
             let seg = &old_segments[seg_idx];
             let offset_in_seg = (p + n - offsets[seg_idx]) % n;
             let tile_pos = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
 
-            let fused = new_segments.last().is_some_and(|last| {
-                last.tile_id == seg.tile_id
-                    && tile_pos
-                        == (last.tile_start + last.tile_len) % tileset.rat(last.tile_id).len()
-            });
+            let same_old_seg = last_old_seg_idx == Some(seg_idx);
+            let has_surviving_vertex = offsets
+                .iter()
+                .enumerate()
+                .any(|(vi, &off)| off == p && !consumed[vi] && vi < old_vertices.len());
 
-            if fused {
+            if same_old_seg && !has_surviving_vertex {
                 new_segments.last_mut().unwrap().tile_len += 1;
             } else {
                 if !new_segments.is_empty() {
-                    // Vertex between previous and current segment
-                    let old_boundary_pos_at_vertex = p;
                     emit_boundary_vertex(
-                        old_boundary_pos_at_vertex,
+                        p,
                         &offsets,
                         old_vertices,
                         cw_pos,
@@ -619,45 +602,36 @@ fn apply_match_locally<T: IsComplex + IsRingOrField + Units>(
                     tile_start: tile_pos,
                     tile_len: 1,
                 });
+                last_old_seg_idx = Some(seg_idx);
             }
             p = (p + 1) % n;
         }
     }
 
     // Transition from old unmatched to new tile unmatched (or wrap)
+    // Never fuse here: the CW junction vertex must always be emitted
     if seg_len_new > 0 {
         let new_tile_start = (pm.start_b + mlen) % m;
-        let fused = new_segments.last().is_some_and(|last| {
-            last.tile_id == pm.tile_id
-                && new_tile_start
-                    == (last.tile_start + last.tile_len) % tileset.rat(last.tile_id).len()
-        });
-
-        if fused {
-            new_segments.last_mut().unwrap().tile_len += seg_len_new;
-        } else {
-            // Vertex at the transition: this is the CW junction (at cw_pos on old boundary)
-            if !new_segments.is_empty() {
-                emit_boundary_vertex(
-                    cw_pos,
-                    &offsets,
-                    old_vertices,
-                    cw_pos,
-                    ccw_pos,
-                    signed_id,
-                    cw_vtx_idx,
-                    ccw_vtx_idx,
-                    &consumed,
-                    &mut new_vertices,
-                    n,
-                );
-            }
-            new_segments.push(BoundarySegment {
-                tile_id: pm.tile_id,
-                tile_start: new_tile_start,
-                tile_len: seg_len_new,
-            });
+        if !new_segments.is_empty() {
+            emit_boundary_vertex(
+                cw_pos,
+                &offsets,
+                old_vertices,
+                cw_pos,
+                ccw_pos,
+                signed_id,
+                cw_vtx_idx,
+                ccw_vtx_idx,
+                &consumed,
+                &mut new_vertices,
+                n,
+            );
         }
+        new_segments.push(BoundarySegment {
+            tile_id: pm.tile_id,
+            tile_start: new_tile_start,
+            tile_len: seg_len_new,
+        });
     }
 
     // Close the cyclic boundary: vertex between last segment and first
@@ -860,7 +834,11 @@ fn resolve_signed_id<T: IsComplex + IsRingOrField + Units>(
     if segments.is_empty() {
         return None;
     }
-    let n = angles.len();
+    let n = if angles.is_empty() {
+        segments.iter().map(|s| s.tile_len).sum()
+    } else {
+        angles.len()
+    };
     let offsets = compute_seg_offsets(segments);
     let seg_idx = find_segment_at_offsets(&offsets, pm.start_a);
     let seg = &segments[seg_idx];
@@ -1267,6 +1245,62 @@ mod tests {
             Some((gp, diffs))
         }
 
+        fn replay_with_snapshots(
+            &self,
+            history: &[PatchMatch],
+        ) -> Option<(GrowingPatch<T>, Vec<StepSnapshot<T>>)> {
+            if history.is_empty() {
+                return None;
+            }
+            let mut gp = GrowingPatch::new(Arc::clone(&self.ts), Arc::clone(&self.mti), 0);
+            let mut snapshots = Vec::new();
+            for pm in history {
+                let old_segs = gp.to_segments();
+                let old_verts = gp.to_vertices();
+                let old_offsets = compute_seg_offsets(&old_segs);
+                let old_n = gp.boundary_len();
+                let diff = gp.add_tile(pm)?;
+                let new_segs = gp.to_segments();
+                let new_verts = gp.to_vertices();
+                snapshots.push(StepSnapshot {
+                    pm: pm.clone(),
+                    old_segs,
+                    old_verts,
+                    old_offsets,
+                    old_n,
+                    diff,
+                    new_segs,
+                    new_verts,
+                    _phantom: std::marker::PhantomData,
+                });
+            }
+            Some((gp, snapshots))
+        }
+
+        fn verify_all_steps(&self, label: &str) {
+            let mut checked_steps = 0usize;
+            let mut checked_closed = 0usize;
+            for ways in self.patches.values() {
+                for history in ways {
+                    if history.is_empty() {
+                        continue;
+                    }
+                    if let Some((gp, snapshots)) = self.replay_with_snapshots(history) {
+                        verify_patch_invariants(&gp, label);
+                        for snap in &snapshots {
+                            verify_step(snap, &self.ts, &self.mti, label);
+                            checked_steps += 1;
+                            checked_closed += snap.diff.closed_vertices.len();
+                        }
+                    }
+                }
+            }
+            eprintln!(
+                "  [{}] verified {} steps, {} closed vertices",
+                label, checked_steps, checked_closed
+            );
+        }
+
         fn tile_count(&self, canonical: &[i8]) -> usize {
             self.patches
                 .get(canonical)
@@ -1351,6 +1385,299 @@ mod tests {
                 }
             }
         }
+    }
+
+    struct StepSnapshot<T: IsComplex> {
+        pm: PatchMatch,
+        old_segs: Vec<BoundarySegment>,
+        old_verts: Vec<VertexInfo>,
+        old_offsets: Vec<usize>,
+        old_n: usize,
+        diff: AddTileDiff,
+        new_segs: Vec<BoundarySegment>,
+        new_verts: Vec<VertexInfo>,
+        _phantom: std::marker::PhantomData<T>,
+    }
+
+    fn verify_patch_invariants<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+        label: &str,
+    ) {
+        if !gp.is_growing() {
+            return;
+        }
+        assert_eq!(
+            gp.to_segments().len(),
+            gp.to_vertices().len(),
+            "[{}] cyclic invariant: segs={} verts={}",
+            label,
+            gp.to_segments().len(),
+            gp.to_vertices().len()
+        );
+        assert_eq!(
+            gp.to_segments().iter().map(|s| s.tile_len).sum::<usize>(),
+            gp.boundary_len(),
+            "[{}] seg sum == boundary",
+            label
+        );
+    }
+
+    fn verify_step<T: IsComplex + IsRingOrField + Units>(
+        snap: &StepSnapshot<T>,
+        ts: &Arc<TileSet<T>>,
+        mti: &Arc<MatchTypeIndex<T>>,
+        label: &str,
+    ) {
+        let n = snap.old_n;
+        let mlen = snap.pm.len;
+
+        if snap.old_segs.is_empty() {
+            verify_first_add(snap, ts, mti, label);
+            return;
+        }
+
+        let cw_pos = snap.pm.start_a;
+        let ccw_pos = (snap.pm.start_a + mlen) % n;
+
+        // Test A: closed vertex count matches geometric prediction
+        let expected_closed: Vec<usize> = snap
+            .old_offsets
+            .iter()
+            .enumerate()
+            .filter(|(_, &vp)| {
+                vp != cw_pos
+                    && vp != ccw_pos
+                    && in_cyclic_range_strict(vp, snap.pm.start_a, mlen, n)
+            })
+            .map(|(vi, _)| vi)
+            .collect();
+        assert_eq!(
+            snap.diff.closed_vertices.len(),
+            expected_closed.len(),
+            "[{}] closed vertex count: got {} expected {}",
+            label,
+            snap.diff.closed_vertices.len(),
+            expected_closed.len()
+        );
+
+        // Test B: no closed vertices when match doesn't cross any vertex
+        if expected_closed.is_empty() {
+            assert!(
+                snap.diff.closed_vertices.is_empty(),
+                "[{}] no closed vertices expected for match not crossing any vertex",
+                label
+            );
+        }
+
+        // For each closed vertex, verify content
+        for (ci, &vi) in expected_closed.iter().enumerate() {
+            let closed_vtx = &snap.diff.closed_vertices[ci];
+            let vp = snap.old_offsets[vi];
+
+            // Test C: sub-match signed IDs verified independently
+            let mut expected_matches = Vec::new();
+            if vi < snap.old_verts.len() {
+                expected_matches.extend(snap.old_verts[vi].matches.iter().copied());
+            }
+            let cw_edge = (vp + n - 1) % n;
+            if let Some(sid) = independent_sub_match_signed_id(
+                &snap.old_segs,
+                &snap.old_offsets,
+                cw_edge,
+                &snap.pm,
+                ts,
+                mti,
+                n,
+            ) {
+                expected_matches.push(sid);
+            }
+            if let Some(sid) = independent_sub_match_signed_id(
+                &snap.old_segs,
+                &snap.old_offsets,
+                vp,
+                &snap.pm,
+                ts,
+                mti,
+                n,
+            ) {
+                expected_matches.push(sid);
+            }
+
+            // Test D: canonical rotation correctness
+            let expected_canonical = lex_min_rotation_clone(&expected_matches);
+
+            assert_eq!(
+                closed_vtx.matches, expected_canonical,
+                "[{}] closed vertex {}: got {:?} expected {:?} (raw {:?})",
+                label, ci, closed_vtx.matches, expected_canonical, expected_matches
+            );
+            assert!(
+                !closed_vtx.is_open,
+                "[{}] closed vertex should have is_open=false",
+                label
+            );
+        }
+
+        // Test E: junction vertex updates correct
+        let signed_id = resolve_signed_id(&snap.old_segs, &[], &snap.pm, ts, mti);
+
+        if let Some(sid) = signed_id {
+            let inv = -sid;
+            let cw_vtx_idx = snap.old_offsets.iter().position(|&p| p == cw_pos);
+            if let Some(cwvi) = cw_vtx_idx {
+                let old_matches_cw = &snap.old_verts[cwvi].matches;
+                let already_has_inv = old_matches_cw.contains(&inv);
+                let expected_len = snap.old_verts.get(cwvi).map_or(1, |ov| {
+                    ov.matches.len() + if already_has_inv { 0 } else { 1 }
+                });
+                let has_cw = snap
+                    .new_verts
+                    .iter()
+                    .any(|v| v.matches.contains(&inv) && v.matches.len() == expected_len);
+                assert!(
+                    has_cw,
+                    "[{}] CW junction should have -signed_id={}",
+                    label, inv
+                );
+            }
+
+            let ccw_vtx_idx = snap.old_offsets.iter().position(|&p| p == ccw_pos);
+            if let Some(ccwvi) = ccw_vtx_idx {
+                let old_matches_ccw = &snap.old_verts[ccwvi].matches;
+                let already_has_sid = old_matches_ccw.contains(&sid);
+                let expected_len = snap.old_verts.get(ccwvi).map_or(1, |ov| {
+                    ov.matches.len() + if already_has_sid { 0 } else { 1 }
+                });
+                let has_ccw = snap
+                    .new_verts
+                    .iter()
+                    .any(|v| v.matches.contains(&sid) && v.matches.len() == expected_len);
+                assert!(
+                    has_ccw,
+                    "[{}] CCW junction should have +signed_id={}",
+                    label, sid
+                );
+            }
+        }
+
+        // Test F: surviving vertices unchanged (excluding junction vertices which get updated)
+        for (vi, nv) in snap.old_verts.iter().enumerate() {
+            let vp = snap.old_offsets[vi];
+            let is_junction = vp == cw_pos || vp == ccw_pos;
+            let consumed = is_junction || in_cyclic_range_strict(vp, snap.pm.start_a, mlen, n);
+            if !consumed {
+                let survived = snap
+                    .new_verts
+                    .iter()
+                    .any(|new_v| new_v.matches == nv.matches);
+                assert!(
+                    survived,
+                    "[{}] surviving vertex {} with matches {:?} should appear in new boundary",
+                    label, vi, nv.matches
+                );
+            }
+        }
+    }
+
+    fn verify_first_add<T: IsComplex + IsRingOrField + Units>(
+        snap: &StepSnapshot<T>,
+        ts: &Arc<TileSet<T>>,
+        mti: &Arc<MatchTypeIndex<T>>,
+        label: &str,
+    ) {
+        // Test G: bi-tile vertices match match type index
+        let seed_id = 0;
+        let seed_rat = ts.rat(seed_id);
+        let (ns, slen, ne) = seed_rat.get_match(
+            (snap.pm.start_a as i64, snap.pm.start_b as i64),
+            ts.rat(snap.pm.tile_id),
+        );
+        assert!(slen > 0, "[{}] first add should have valid match", label);
+        let signed_id = mti.signed_id(&MatchType {
+            tile_a: seed_id,
+            start_a: ns as usize,
+            tile_b: snap.pm.tile_id,
+            start_b: ne as usize,
+            len: slen,
+        });
+
+        assert!(
+            snap.diff.closed_vertices.is_empty(),
+            "[{}] first add should have no closed vertices",
+            label
+        );
+
+        assert_eq!(
+            snap.new_segs.len(),
+            snap.new_verts.len(),
+            "[{}] bi-tile cyclic invariant",
+            label
+        );
+
+        if snap.new_segs.len() == 2 {
+            let expected_cw: Vec<i32> = signed_id.map(|sid| -sid).into_iter().collect();
+            let expected_ccw: Vec<i32> = signed_id.into_iter().collect();
+            assert!(
+                snap.new_verts[0].matches == expected_cw
+                    || snap.new_verts[1].matches == expected_cw,
+                "[{}] CW junction should be {:?}, got {:?} and {:?}",
+                label,
+                expected_cw,
+                snap.new_verts[0].matches,
+                snap.new_verts[1].matches
+            );
+            assert!(
+                snap.new_verts[0].matches == expected_ccw
+                    || snap.new_verts[1].matches == expected_ccw,
+                "[{}] CCW junction should be {:?}, got {:?} and {:?}",
+                label,
+                expected_ccw,
+                snap.new_verts[0].matches,
+                snap.new_verts[1].matches
+            );
+        }
+    }
+
+    fn independent_sub_match_signed_id<T: IsComplex + IsRingOrField + Units>(
+        old_segs: &[BoundarySegment],
+        old_offsets: &[usize],
+        boundary_pos: usize,
+        pm: &PatchMatch,
+        ts: &Arc<TileSet<T>>,
+        mti: &Arc<MatchTypeIndex<T>>,
+        n: usize,
+    ) -> Option<i32> {
+        let seg_idx = find_segment_at_offsets(old_offsets, boundary_pos);
+        let seg = &old_segs[seg_idx];
+        let offset_in_seg = (boundary_pos + n - old_offsets[seg_idx]) % n;
+        let orig_pos = (seg.tile_start + offset_in_seg) % ts.rat(seg.tile_id).len();
+        let new_offset = (boundary_pos + n - pm.start_a) % n;
+        let new_pos = (pm.start_b + new_offset) % ts.rat(pm.tile_id).len();
+
+        let seed_a = ts.rat(seg.tile_id);
+        let seed_b = ts.rat(pm.tile_id);
+        let (ns, slen, ne) = seed_a.get_match((orig_pos as i64, new_pos as i64), seed_b);
+
+        if slen == 0 {
+            return None;
+        }
+
+        mti.signed_id(&MatchType {
+            tile_a: seg.tile_id,
+            start_a: ns as usize,
+            tile_b: pm.tile_id,
+            start_b: ne as usize,
+            len: slen,
+        })
+    }
+
+    fn lex_min_rotation_clone(matches: &[i32]) -> Vec<i32> {
+        let rot = lex_min_rotation(matches);
+        let mut result = matches.to_vec();
+        if rot > 0 {
+            result.rotate_left(rot);
+        }
+        result
     }
 
     fn brute_force_zz4(
@@ -1455,6 +1782,7 @@ mod tests {
     fn square_brute_force_up_to_4_tiles() {
         let census = PatchCensus::for_squares(4);
         census.report("square");
+        census.verify_all_steps("square");
 
         let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
         for ways in census.patches.values() {
@@ -1508,6 +1836,7 @@ mod tests {
     fn hex_brute_force_up_to_3_tiles() {
         let census = PatchCensus::for_hexagons(3);
         census.report("hexagon");
+        census.verify_all_steps("hexagon");
 
         let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
         for ways in census.patches.values() {
