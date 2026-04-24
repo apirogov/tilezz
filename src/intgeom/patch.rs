@@ -179,8 +179,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
     fn init_from_first_add(&mut self, seed_id: usize, pm: &PatchMatch) -> Option<()> {
         let seed_rat = self.tileset.rat(seed_id);
-        let seed_seq = seed_rat.seq();
-        let n = seed_seq.len();
+        let n = seed_rat.seq().len();
         let m = self.tileset.rat(pm.tile_id).seq().len();
         let mlen = pm.len;
 
@@ -203,33 +202,69 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             len: seed_len,
         });
 
-        let seed_angles = seed_seq.to_vec();
-        let fake_old_angles = seed_angles.clone();
-        let fake_seg = BoundarySegment {
-            tile_id: seed_id,
-            tile_start: 0,
-            tile_len: n,
-        };
-
-        let new_angles = compute_glue_angles::<T>(&fake_old_angles, pm, &self.tileset)?;
+        let seed_angles = seed_rat.seq().to_vec();
+        let new_angles = compute_glue_angles::<T>(&seed_angles, pm, &self.tileset)?;
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
 
-        let (segments, vertices, closed) = rebuild_by_walk(
-            &[fake_seg],
-            &[],
-            pm,
-            &fake_old_angles,
-            &self.tileset,
-            signed_id,
-            seg_len_old,
-            seg_len_new,
-        );
+        let mut segments = Vec::new();
+        let mut vertices = Vec::new();
+
+        if seg_len_old > 0 {
+            segments.push(BoundarySegment {
+                tile_id: seed_id,
+                tile_start: (pm.start_a + mlen) % n,
+                tile_len: seg_len_old,
+            });
+        }
+        if seg_len_new > 0 {
+            let new_start = (pm.start_b + mlen) % m;
+            let fused = !segments.is_empty() && seed_id == pm.tile_id && {
+                let prev = &segments.last().unwrap();
+                let prev_end =
+                    (prev.tile_start + prev.tile_len) % self.tileset.rat(prev.tile_id).len();
+                prev_end == new_start
+            };
+            if fused {
+                segments.last_mut().unwrap().tile_len += seg_len_new;
+            } else {
+                segments.push(BoundarySegment {
+                    tile_id: pm.tile_id,
+                    tile_start: new_start,
+                    tile_len: seg_len_new,
+                });
+            }
+        }
 
         if segments.is_empty() {
             return None;
         }
+
+        if segments.len() == 1 {
+            let mut matches = Vec::new();
+            if let Some(sid) = signed_id {
+                matches.push(-sid);
+                if sid != -sid {
+                    matches.push(sid);
+                }
+            }
+            vertices.push(VertexInfo {
+                matches,
+                is_open: true,
+            });
+        } else {
+            vertices.push(VertexInfo {
+                matches: signed_id.map(|sid| -sid).into_iter().collect(),
+                is_open: true,
+            });
+            vertices.push(VertexInfo {
+                matches: signed_id.into_iter().collect(),
+                is_open: true,
+            });
+        }
+
+        debug_assert_eq!(segments.len(), vertices.len());
 
         self.state = PatchState::Growing {
             angles: new_angles,
@@ -238,8 +273,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
-
-        let _ = closed;
         Some(())
     }
 
@@ -267,7 +300,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return None;
         }
 
-        let signed_id = resolve_signed_id_from_segments(
+        let signed_id = resolve_signed_id(
             &segments,
             &angles,
             pm,
@@ -283,39 +316,36 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             }
         };
 
-        let seg_len_old = n - mlen;
-        let seg_len_new = m - mlen;
-
-        let (new_segments, new_vertices, closed_vertices) = rebuild_by_walk(
+        let result = apply_match_locally(
             &segments,
             &vertices,
             pm,
-            &angles,
             &self.tileset,
+            &self.match_type_index,
             signed_id,
-            seg_len_old,
-            seg_len_new,
         );
 
-        if new_segments.is_empty() {
-            self.restore_growing(angles, segments, vertices);
-            return None;
-        }
-
-        let has_open = new_vertices.iter().any(|v| v.is_open);
-        self.state = if has_open {
-            PatchState::Growing {
-                angles: new_angles,
-                segments: new_segments,
-                vertices: new_vertices,
-                cached_matches: Vec::new(),
+        match result {
+            Some((new_segments, new_vertices, closed_vertices)) => {
+                let has_open = new_vertices.iter().any(|v| v.is_open);
+                self.state = if has_open {
+                    PatchState::Growing {
+                        angles: new_angles,
+                        segments: new_segments,
+                        vertices: new_vertices,
+                        cached_matches: Vec::new(),
+                    }
+                } else {
+                    PatchState::Closed
+                };
+                self.recompute_matches();
+                Some(AddTileDiff { closed_vertices })
             }
-        } else {
-            PatchState::Closed
-        };
-        self.recompute_matches();
-
-        Some(AddTileDiff { closed_vertices })
+            None => {
+                self.restore_growing(angles, segments, vertices);
+                None
+            }
+        }
     }
 
     fn restore_growing(
@@ -449,206 +479,359 @@ fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     Some(new_angles)
 }
 
+struct SubMatchSpan {
+    seg_idx: usize,
+    first_pos: usize,
+    last_pos: usize,
+    signed_id: Option<i32>,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn rebuild_by_walk<T: IsComplex + IsRingOrField + Units>(
+fn apply_match_locally<T: IsComplex + IsRingOrField + Units>(
     old_segments: &[BoundarySegment],
     old_vertices: &[VertexInfo],
     pm: &PatchMatch,
-    old_angles: &[i8],
     tileset: &Arc<TileSet<T>>,
+    match_type_index: &Arc<MatchTypeIndex<T>>,
     signed_id: Option<i32>,
-    seg_len_old: usize,
-    seg_len_new: usize,
-) -> (Vec<BoundarySegment>, Vec<VertexInfo>, Vec<VertexInfo>) {
-    let n = old_angles.len();
+) -> Option<(Vec<BoundarySegment>, Vec<VertexInfo>, Vec<VertexInfo>)> {
+    let n: usize = old_segments.iter().map(|s| s.tile_len).sum();
     let mlen = pm.len;
     let m = tileset.rat(pm.tile_id).seq().len();
-    let match_end = (pm.start_a + mlen) % n;
-    let new_boundary_len = seg_len_old + seg_len_new;
 
-    let mut old_offsets = Vec::with_capacity(old_segments.len());
-    let mut off = 0usize;
-    for seg in old_segments {
-        old_offsets.push(off);
-        off += seg.tile_len;
-    }
+    let offsets = compute_seg_offsets(old_segments);
+    let spans = compute_sub_match_spans(old_segments, &offsets, pm, tileset, match_type_index, n);
 
-    let mut segments: Vec<BoundarySegment> = Vec::new();
-    let mut inherited: Vec<Option<usize>> = Vec::new();
+    let cw_pos = pm.start_a;
+    let ccw_pos = (pm.start_a + mlen) % n;
 
-    let mut cur_tile_id = usize::MAX;
-    let mut cur_tile_start = 0usize;
-    let mut cur_len = 0usize;
-    let mut cur_old_vertex: Option<usize> = None;
+    let seg_len_old = n - mlen;
+    let seg_len_new = m - mlen;
 
-    for p in 0..new_boundary_len {
-        let (tile_id, tile_pos_in_tile) = if p < seg_len_old {
-            let old_pos = (match_end + p) % n;
-            let mut found = None;
-            for (i, seg) in old_segments.iter().enumerate() {
-                if old_offsets[i] <= old_pos && old_pos < old_offsets[i] + seg.tile_len {
-                    let offset_in_seg = old_pos - old_offsets[i];
-                    let tp = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
-                    found = Some((seg.tile_id, tp));
-                    break;
-                }
+    // Map each boundary position in match range to its span index
+    let mut pos_to_span: Vec<Option<usize>> = vec![None; n];
+    for (si, span) in spans.iter().enumerate() {
+        let mut p = span.first_pos;
+        loop {
+            pos_to_span[p] = Some(si);
+            if p == span.last_pos {
+                break;
             }
-            match found {
-                Some(v) => v,
-                None => return (Vec::new(), Vec::new(), Vec::new()),
-            }
-        } else {
-            let tp = (pm.start_b + (p - seg_len_old)) % m;
-            (pm.tile_id, tp)
-        };
-
-        let tile_len_total = tileset.rat(tile_id).len();
-        let contiguous = cur_len > 0
-            && tile_id == cur_tile_id
-            && tile_pos_in_tile == (cur_tile_start + cur_len) % tile_len_total;
-
-        if !contiguous && cur_len > 0 {
-            segments.push(BoundarySegment {
-                tile_id: cur_tile_id,
-                tile_start: cur_tile_start,
-                tile_len: cur_len,
-            });
-            inherited.push(cur_old_vertex.take());
-            cur_len = 0;
+            p = (p + 1) % n;
         }
+    }
 
-        if cur_len == 0 {
-            cur_tile_id = tile_id;
-            cur_tile_start = tile_pos_in_tile;
-            cur_len = 0;
-            if p < seg_len_old {
-                let old_pos = (match_end + p) % n;
-                cur_old_vertex = old_offsets
-                    .iter()
-                    .enumerate()
-                    .find(|&(_, &off)| off == old_pos)
-                    .map(|(i, _)| i);
-            } else {
-                cur_old_vertex = None;
-            }
+    // Classify old vertices
+    let mut interior_vtx: Vec<usize> = Vec::new();
+    for (vi, &vp) in offsets.iter().enumerate() {
+        if vp == cw_pos || vp == ccw_pos {
+            continue;
         }
-        cur_len += 1;
+        if in_cyclic_range_strict(vp, pm.start_a, mlen, n) {
+            interior_vtx.push(vi);
+        }
     }
 
-    if cur_len > 0 {
-        segments.push(BoundarySegment {
-            tile_id: cur_tile_id,
-            tile_start: cur_tile_start,
-            tile_len: cur_len,
-        });
-        inherited.push(cur_old_vertex);
-    }
-
-    let num_old_out = segments
-        .iter()
-        .enumerate()
-        .take_while(|(i, _)| {
-            let seg_end: usize = segments[..=*i].iter().map(|s| s.tile_len).sum();
-            seg_end <= seg_len_old
-        })
-        .count();
-
-    if segments.is_empty() {
-        return (Vec::new(), Vec::new(), Vec::new());
-    }
-
-    let inv_sid = signed_id.map(|id| -id);
-    let num_segs = segments.len();
-
-    let cw_junction_vtx = 0;
-    let ccw_junction_vtx = if num_old_out < num_segs {
-        num_old_out
-    } else {
-        0
-    };
-
-    let mut open_vertices = Vec::with_capacity(num_segs);
-    let closed_vertices = Vec::new();
-
-    for i in 0..num_segs {
+    // Process closed vertices
+    let mut closed_vertices: Vec<VertexInfo> = Vec::new();
+    for &vi in &interior_vtx {
+        let vp = offsets[vi];
         let mut matches = Vec::new();
-
-        if let Some(oi) = inherited.get(i).and_then(|x| *x) {
-            if oi < old_vertices.len() {
-                matches.extend(old_vertices[oi].matches.iter().copied());
-            }
+        if vi < old_vertices.len() {
+            matches.extend(old_vertices[vi].matches.iter().copied());
         }
-
-        if i == cw_junction_vtx {
-            if let Some(sid) = inv_sid {
+        // CW sub-match: span covering the edge just before the vertex
+        let cw_edge = (vp + n - 1) % n;
+        if let Some(si) = pos_to_span[cw_edge] {
+            if let Some(sid) = spans[si].signed_id {
                 matches.push(sid);
             }
         }
-        if ccw_junction_vtx != cw_junction_vtx && i == ccw_junction_vtx {
-            if let Some(sid) = signed_id {
+        // CCW sub-match: span covering the edge at the vertex
+        if let Some(si) = pos_to_span[vp] {
+            if let Some(sid) = spans[si].signed_id {
                 matches.push(sid);
             }
         }
-        if ccw_junction_vtx == cw_junction_vtx {
-            if let Some(sid) = inv_sid {
-                if !matches.contains(&sid) {
-                    matches.push(sid);
-                }
-            }
-            if let Some(sid) = signed_id {
-                if !matches.contains(&sid) {
-                    matches.push(sid);
-                }
-            }
-        }
-
-        let is_open = true;
-
-        open_vertices.push(VertexInfo { matches, is_open });
+        canonicalize_closed(&mut matches);
+        closed_vertices.push(VertexInfo {
+            matches,
+            is_open: false,
+        });
     }
 
-    (segments, open_vertices, closed_vertices)
+    // Track which old vertices are NOT consumed (still on boundary, outside match range)
+    let consumed: Vec<bool> = (0..old_vertices.len())
+        .map(|vi| {
+            let vp = offsets[vi];
+            vp == cw_pos || vp == ccw_pos || in_cyclic_range_strict(vp, pm.start_a, mlen, n)
+        })
+        .collect();
+
+    // Build a mapping from old boundary position to old vertex index (for surviving vertices)
+    // A vertex survives if it's at a position in the unmatched old portion AND it's not consumed
+    // Also: CW junction at cw_pos, CCW junction at ccw_pos are special
+
+    let cw_vtx_idx = offsets.iter().position(|&p| p == cw_pos);
+    let ccw_vtx_idx = offsets.iter().position(|&p| p == ccw_pos);
+
+    // Walk the new boundary and build segments + vertices
+    // New boundary: unmatched old (ccw_pos to cw_pos, exclusive of match) then new tile unmatched
+    let mut new_segments: Vec<BoundarySegment> = Vec::new();
+    let mut new_vertices: Vec<VertexInfo> = Vec::new();
+
+    if seg_len_old > 0 {
+        let mut p = ccw_pos;
+        for _ in 0..seg_len_old {
+            let seg_idx = find_segment_at_offsets(&offsets, p);
+            let seg = &old_segments[seg_idx];
+            let offset_in_seg = (p + n - offsets[seg_idx]) % n;
+            let tile_pos = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
+
+            let fused = new_segments.last().is_some_and(|last| {
+                last.tile_id == seg.tile_id
+                    && tile_pos
+                        == (last.tile_start + last.tile_len) % tileset.rat(last.tile_id).len()
+            });
+
+            if fused {
+                new_segments.last_mut().unwrap().tile_len += 1;
+            } else {
+                if !new_segments.is_empty() {
+                    // Vertex between previous and current segment
+                    let old_boundary_pos_at_vertex = p;
+                    emit_boundary_vertex(
+                        old_boundary_pos_at_vertex,
+                        &offsets,
+                        old_vertices,
+                        cw_pos,
+                        ccw_pos,
+                        signed_id,
+                        cw_vtx_idx,
+                        ccw_vtx_idx,
+                        &consumed,
+                        &mut new_vertices,
+                        n,
+                    );
+                }
+                new_segments.push(BoundarySegment {
+                    tile_id: seg.tile_id,
+                    tile_start: tile_pos,
+                    tile_len: 1,
+                });
+            }
+            p = (p + 1) % n;
+        }
+    }
+
+    // Transition from old unmatched to new tile unmatched (or wrap)
+    if seg_len_new > 0 {
+        let new_tile_start = (pm.start_b + mlen) % m;
+        let fused = new_segments.last().is_some_and(|last| {
+            last.tile_id == pm.tile_id
+                && new_tile_start
+                    == (last.tile_start + last.tile_len) % tileset.rat(last.tile_id).len()
+        });
+
+        if fused {
+            new_segments.last_mut().unwrap().tile_len += seg_len_new;
+        } else {
+            // Vertex at the transition: this is the CW junction (at cw_pos on old boundary)
+            if !new_segments.is_empty() {
+                emit_boundary_vertex(
+                    cw_pos,
+                    &offsets,
+                    old_vertices,
+                    cw_pos,
+                    ccw_pos,
+                    signed_id,
+                    cw_vtx_idx,
+                    ccw_vtx_idx,
+                    &consumed,
+                    &mut new_vertices,
+                    n,
+                );
+            }
+            new_segments.push(BoundarySegment {
+                tile_id: pm.tile_id,
+                tile_start: new_tile_start,
+                tile_len: seg_len_new,
+            });
+        }
+    }
+
+    // Close the cyclic boundary: vertex between last segment and first
+    if !new_segments.is_empty() {
+        // This vertex is at the CCW junction (start of new boundary = ccw_pos on old)
+        let ccw_junction_pos = ccw_pos;
+        emit_boundary_vertex(
+            ccw_junction_pos,
+            &offsets,
+            old_vertices,
+            cw_pos,
+            ccw_pos,
+            signed_id,
+            cw_vtx_idx,
+            ccw_vtx_idx,
+            &consumed,
+            &mut new_vertices,
+            n,
+        );
+    }
+
+    if new_segments.is_empty() {
+        return None;
+    }
+
+    debug_assert_eq!(
+        new_segments.len(),
+        new_vertices.len(),
+        "cyclic invariant: segs={} verts={}",
+        new_segments.len(),
+        new_vertices.len()
+    );
+
+    Some((new_segments, new_vertices, closed_vertices))
 }
 
-fn resolve_signed_id_from_segments<T: IsComplex + IsRingOrField + Units>(
-    segments: &[BoundarySegment],
-    angles: &[i8],
+#[allow(clippy::too_many_arguments)]
+fn emit_boundary_vertex(
+    old_boundary_pos: usize,
+    offsets: &[usize],
+    old_vertices: &[VertexInfo],
+    cw_pos: usize,
+    ccw_pos: usize,
+    signed_id: Option<i32>,
+    cw_vtx_idx: Option<usize>,
+    ccw_vtx_idx: Option<usize>,
+    consumed: &[bool],
+    new_vertices: &mut Vec<VertexInfo>,
+    _n: usize,
+) {
+    let mut matches = Vec::new();
+
+    if old_boundary_pos == cw_pos {
+        if let Some(vi) = cw_vtx_idx {
+            if vi < old_vertices.len() {
+                matches.extend(old_vertices[vi].matches.iter().copied());
+            }
+        }
+        if let Some(sid) = signed_id {
+            let inv = -sid;
+            if !matches.contains(&inv) {
+                matches.push(inv);
+            }
+        }
+        new_vertices.push(VertexInfo {
+            matches,
+            is_open: true,
+        });
+        return;
+    }
+
+    if old_boundary_pos == ccw_pos {
+        if let Some(vi) = ccw_vtx_idx {
+            if vi < old_vertices.len() {
+                matches.extend(old_vertices[vi].matches.iter().copied());
+            }
+        }
+        if let Some(sid) = signed_id {
+            if !matches.contains(&sid) {
+                matches.push(sid);
+            }
+        }
+        new_vertices.push(VertexInfo {
+            matches,
+            is_open: true,
+        });
+        return;
+    }
+
+    // Look for a surviving old vertex at this position
+    for (vi, &off) in offsets.iter().enumerate() {
+        if off == old_boundary_pos && !consumed[vi] && vi < old_vertices.len() {
+            new_vertices.push(old_vertices[vi].clone());
+            return;
+        }
+    }
+
+    // New vertex (segment split): compute from the match at this position
+    // This is a vertex inside a segment that got split by a junction endpoint
+    // It gets the signed_id from the match type
+    if let Some(sid) = signed_id {
+        matches.push(sid);
+    }
+    new_vertices.push(VertexInfo {
+        matches,
+        is_open: true,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_sub_match_spans<T: IsComplex + IsRingOrField + Units>(
+    old_segments: &[BoundarySegment],
+    offsets: &[usize],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
     match_type_index: &Arc<MatchTypeIndex<T>>,
-) -> Option<i32> {
-    if segments.is_empty() {
-        return None;
+    n: usize,
+) -> Vec<SubMatchSpan> {
+    let mlen = pm.len;
+    let mut spans: Vec<SubMatchSpan> = Vec::new();
+    let mut p = pm.start_a;
+
+    for _ in 0..mlen {
+        let seg_idx = find_segment_at_offsets(offsets, p);
+        let continued = spans
+            .last()
+            .is_some_and(|s| s.seg_idx == seg_idx && (s.last_pos + 1) % n == p);
+
+        if continued {
+            spans.last_mut().unwrap().last_pos = p;
+        } else {
+            spans.push(SubMatchSpan {
+                seg_idx,
+                first_pos: p,
+                last_pos: p,
+                signed_id: None,
+            });
+        }
+        p = (p + 1) % n;
     }
 
-    let seg_idx = find_segment_at(segments, pm.start_a);
-    let seg = &segments[seg_idx];
+    for span in &mut spans {
+        let seg = &old_segments[span.seg_idx];
+        let offset_in_seg = (span.first_pos + n - offsets[span.seg_idx]) % n;
+        let orig_pos = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
+        let new_offset = (span.first_pos + n - pm.start_a) % n;
+        let new_pos = (pm.start_b + new_offset) % tileset.rat(pm.tile_id).len();
 
-    let offsets = compute_seg_offsets(segments);
-    let offset_in_seg = (pm.start_a + angles.len() - offsets[seg_idx]) % angles.len();
-    let orig_pos = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
+        let seed_a = tileset.rat(seg.tile_id);
+        let seed_b = tileset.rat(pm.tile_id);
+        let (ns, slen, ne) = seed_a.get_match((orig_pos as i64, new_pos as i64), seed_b);
 
-    let seed_a = tileset.rat(seg.tile_id);
-    let seed_b = tileset.rat(pm.tile_id);
-    let (ns, seed_len, ne) = seed_a.get_match((orig_pos as i64, pm.start_b as i64), seed_b);
-
-    if seed_len == 0 {
-        return None;
+        if slen > 0 {
+            span.signed_id = match_type_index.signed_id(&MatchType {
+                tile_a: seg.tile_id,
+                start_a: ns as usize,
+                tile_b: pm.tile_id,
+                start_b: ne as usize,
+                len: slen,
+            });
+        }
     }
 
-    let orig_mt = MatchType {
-        tile_a: seg.tile_id,
-        start_a: ns as usize,
-        tile_b: pm.tile_id,
-        start_b: ne as usize,
-        len: seed_len,
-    };
-
-    match_type_index.signed_id(&orig_mt)
+    spans
 }
 
-fn find_segment_at(segments: &[BoundarySegment], pos: usize) -> usize {
-    let offsets = compute_seg_offsets(segments);
+fn in_cyclic_range_strict(pos: usize, start: usize, len: usize, n: usize) -> bool {
+    if len <= 1 {
+        return false;
+    }
+    (1..len).any(|i| (start + i) % n == pos)
+}
+
+fn find_segment_at_offsets(offsets: &[usize], pos: usize) -> usize {
     for i in (0..offsets.len()).rev() {
         if offsets[i] <= pos {
             return i;
@@ -665,6 +848,69 @@ fn compute_seg_offsets(segments: &[BoundarySegment]) -> Vec<usize> {
         off += seg.tile_len;
     }
     offsets
+}
+
+fn resolve_signed_id<T: IsComplex + IsRingOrField + Units>(
+    segments: &[BoundarySegment],
+    angles: &[i8],
+    pm: &PatchMatch,
+    tileset: &Arc<TileSet<T>>,
+    match_type_index: &Arc<MatchTypeIndex<T>>,
+) -> Option<i32> {
+    if segments.is_empty() {
+        return None;
+    }
+    let n = angles.len();
+    let offsets = compute_seg_offsets(segments);
+    let seg_idx = find_segment_at_offsets(&offsets, pm.start_a);
+    let seg = &segments[seg_idx];
+    let offset_in_seg = (pm.start_a + n - offsets[seg_idx]) % n;
+    let orig_pos = (seg.tile_start + offset_in_seg) % tileset.rat(seg.tile_id).len();
+
+    let seed_a = tileset.rat(seg.tile_id);
+    let seed_b = tileset.rat(pm.tile_id);
+    let (ns, seed_len, ne) = seed_a.get_match((orig_pos as i64, pm.start_b as i64), seed_b);
+
+    if seed_len == 0 {
+        return None;
+    }
+
+    match_type_index.signed_id(&MatchType {
+        tile_a: seg.tile_id,
+        start_a: ns as usize,
+        tile_b: pm.tile_id,
+        start_b: ne as usize,
+        len: seed_len,
+    })
+}
+
+fn canonicalize_closed(matches: &mut [i32]) {
+    let rot = lex_min_rotation(matches);
+    if rot > 0 {
+        matches.rotate_left(rot);
+    }
+}
+
+fn lex_min_rotation(seq: &[i32]) -> usize {
+    if seq.len() <= 1 {
+        return 0;
+    }
+    let n = seq.len();
+    let mut best = 0;
+    for i in 1..n {
+        for j in 0..n {
+            let a = seq[(best + j) % n];
+            let b = seq[(i + j) % n];
+            if b < a {
+                best = i;
+                break;
+            }
+            if b > a {
+                break;
+            }
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -972,19 +1218,153 @@ mod tests {
         }
     }
 
-    fn brute_force_patches(
+    use std::collections::{BTreeMap, BTreeSet};
+
+    struct PatchCensus<T: IsComplex + IsRingOrField + Units> {
+        ts: Arc<TileSet<T>>,
+        mti: Arc<MatchTypeIndex<T>>,
+        patches: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+    }
+
+    impl PatchCensus<ZZ4> {
+        fn for_squares(max_tiles: usize) -> Self {
+            let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
+            let ts = Arc::new(TileSet::new(vec![sq]));
+            let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+            let patches = brute_force_zz4(&ts, &mti, max_tiles);
+            Self { ts, mti, patches }
+        }
+    }
+
+    impl PatchCensus<ZZ12> {
+        fn for_hexagons(max_tiles: usize) -> Self {
+            let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
+            let ts = Arc::new(TileSet::new(vec![hex]));
+            let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+            let patches = brute_force_zz12(&ts, &mti, max_tiles);
+            Self { ts, mti, patches }
+        }
+    }
+
+    impl<T: IsComplex + IsRingOrField + Units> PatchCensus<T> {
+        fn replay(&self, history: &[PatchMatch]) -> Option<GrowingPatch<T>> {
+            self.replay_with_diffs(history).map(|(gp, _)| gp)
+        }
+
+        fn replay_with_diffs(
+            &self,
+            history: &[PatchMatch],
+        ) -> Option<(GrowingPatch<T>, Vec<AddTileDiff>)> {
+            if history.is_empty() {
+                return None;
+            }
+            let mut gp = GrowingPatch::new(Arc::clone(&self.ts), Arc::clone(&self.mti), 0);
+            let mut diffs = Vec::new();
+            for pm in history {
+                let diff = gp.add_tile(pm)?;
+                diffs.push(diff);
+            }
+            Some((gp, diffs))
+        }
+
+        fn tile_count(&self, canonical: &[i8]) -> usize {
+            self.patches
+                .get(canonical)
+                .map(|ways| ways[0].len() + 1)
+                .unwrap_or(0)
+        }
+
+        fn collect_all_vertex_types(&self) -> (BTreeSet<Vec<i32>>, BTreeSet<Vec<i32>>) {
+            let mut open: BTreeSet<Vec<i32>> = BTreeSet::new();
+            let mut closed: BTreeSet<Vec<i32>> = BTreeSet::new();
+            for (canonical, ways) in &self.patches {
+                let _ = canonical;
+                for history in ways {
+                    if let Some((gp, diffs)) = self.replay_with_diffs(history) {
+                        for v in gp.to_vertices() {
+                            open.insert(v.matches.clone());
+                        }
+                        for diff in &diffs {
+                            for v in &diff.closed_vertices {
+                                closed.insert(v.matches.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            (open, closed)
+        }
+
+        fn collect_vertex_sequences(&self) -> BTreeMap<Vec<i8>, BTreeSet<Vec<Vec<i32>>>> {
+            let mut seqs: BTreeMap<Vec<i8>, BTreeSet<Vec<Vec<i32>>>> = BTreeMap::new();
+            for (canonical, ways) in &self.patches {
+                let entry = seqs.entry(canonical.clone()).or_default();
+                for history in ways {
+                    if let Some(gp) = self.replay(history) {
+                        let vseq: Vec<Vec<i32>> =
+                            gp.to_vertices().iter().map(|v| v.matches.clone()).collect();
+                        entry.insert(vseq);
+                    }
+                }
+            }
+            seqs
+        }
+
+        fn report(&self, label: &str) {
+            let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+            for ways in self.patches.values() {
+                let n = ways[0].len() + 1;
+                let e = by_tiles.entry(n).or_insert((0, 0));
+                e.0 += 1;
+                e.1 += ways.len();
+            }
+
+            eprintln!("\n=== {} census ===", label);
+            eprintln!("Distinct patches by tile count:");
+            for (n, (shapes, ways)) in &by_tiles {
+                eprintln!("  {} tiles: {} distinct, {} ways", n, shapes, ways);
+            }
+            eprintln!("  total distinct patches: {}", self.patches.len());
+
+            let (open_vtypes, closed_vtypes) = self.collect_all_vertex_types();
+            eprintln!("\nOpen vertex types ({} total):", open_vtypes.len());
+            for vt in &open_vtypes {
+                eprintln!("  arity={}: {:?}", vt.len(), vt);
+            }
+            eprintln!("\nClosed vertex types ({} total):", closed_vtypes.len());
+            for vt in &closed_vtypes {
+                eprintln!("  arity={}: {:?}", vt.len(), vt);
+            }
+
+            let vseqs = self.collect_vertex_sequences();
+            eprintln!("\nVertex sequences per rat:");
+            for (canonical, seq_set) in &vseqs {
+                let n = self.tile_count(canonical);
+                eprintln!(
+                    "  n={} boundary={:?} ({} distinct vertex sequences):",
+                    n,
+                    canonical,
+                    seq_set.len()
+                );
+                for vseq in seq_set {
+                    eprintln!("    {:?}", vseq);
+                }
+            }
+        }
+    }
+
+    fn brute_force_zz4(
         ts: &Arc<TileSet<ZZ4>>,
         mti: &Arc<MatchTypeIndex<ZZ4>>,
         max_tiles: usize,
-    ) -> std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
-        let mut results: std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> =
-            std::collections::BTreeMap::new();
+    ) -> BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
+        let mut results: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
 
         fn recurse(
             gp: &mut GrowingPatch<ZZ4>,
             history: &mut Vec<PatchMatch>,
             max_tiles: usize,
-            results: &mut std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+            results: &mut BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
         ) {
             let num_tiles = history.len() + 1;
             let canonical = gp.to_rat().seq().to_vec();
@@ -1021,177 +1401,18 @@ mod tests {
         results
     }
 
-    #[test]
-    fn square_brute_force_up_to_4_tiles() {
-        let sq: Rat<ZZ4> = Rat::from_unchecked(&tiles::square());
-        let ts = Arc::new(TileSet::new(vec![sq]));
-        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
-
-        let results = brute_force_patches(&ts, &mti, 4);
-
-        let mut by_tile_count: std::collections::BTreeMap<usize, (usize, usize)> =
-            std::collections::BTreeMap::new();
-        for (canonical, ways) in &results {
-            let n_tiles = ways[0].len() + 1;
-            let entry = by_tile_count.entry(n_tiles).or_insert((0, 0));
-            entry.0 += 1;
-            entry.1 += ways.len();
-            eprintln!(
-                "n={}: boundary_len={} ways={} seq={:?}",
-                n_tiles,
-                canonical.len(),
-                ways.len(),
-                canonical,
-            );
-        }
-
-        eprintln!("\nSummary:");
-        for (n, (shapes, total_ways)) in &by_tile_count {
-            eprintln!(
-                "  {} tiles: {} distinct shapes, {} total ways",
-                n, shapes, total_ways
-            );
-        }
-        eprintln!("  total distinct shapes: {}", results.len());
-
-        assert!(!results.is_empty(), "should find some shapes");
-
-        let mono_count = results
-            .iter()
-            .filter(|(_, ways)| ways[0].len() + 1 == 1)
-            .count();
-        assert_eq!(mono_count, 1, "1 mono-square");
-
-        let (di_shapes, di_ways) = by_tile_count.get(&2).copied().unwrap_or((0, 0));
-        assert_eq!(di_shapes, 1, "1 unique bi-square");
-        assert_eq!(di_ways, 16, "bi-square made in 16 ways (4x4 raw matches)");
-
-        let (tri_shapes, tri_ways) = by_tile_count.get(&3).copied().unwrap_or((0, 0));
-        eprintln!(
-            "  tri-squares: {} distinct shapes, {} total ways",
-            tri_shapes, tri_ways
-        );
-        assert!(tri_shapes >= 2, "should have at least 2 tri-square shapes");
-
-        let (tetra_shapes, tetra_ways) = by_tile_count.get(&4).copied().unwrap_or((0, 0));
-        eprintln!(
-            "  tetra-squares: {} distinct shapes, {} total ways",
-            tetra_shapes, tetra_ways
-        );
-
-        for ways in results.values() {
-            for history in ways {
-                if history.is_empty() {
-                    continue;
-                }
-                let mut gp = GrowingPatch::new(Arc::clone(&ts), Arc::clone(&mti), 0);
-                for pm in history {
-                    assert!(gp.add_tile(pm).is_some(), "replay should succeed");
-                }
-                assert_eq!(
-                    gp.to_segments().len(),
-                    gp.to_vertices().len(),
-                    "cyclic invariant"
-                );
-                assert_eq!(
-                    gp.to_segments().iter().map(|s| s.tile_len).sum::<usize>(),
-                    gp.boundary_len(),
-                    "seg sum == boundary"
-                );
-                if gp.is_growing() {
-                    assert!(
-                        Snake::<ZZ4>::try_from(gp.to_rat().seq()).is_ok(),
-                        "valid snake"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn hex_brute_force_up_to_3_tiles() {
-        let hex: Rat<ZZ12> = Rat::from_unchecked(&tiles::hexagon());
-        let ts = Arc::new(TileSet::new(vec![hex]));
-        let mti = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
-
-        let results = brute_force_hex_patches(&ts, &mti, 3);
-
-        let mut by_tile_count: std::collections::BTreeMap<usize, usize> =
-            std::collections::BTreeMap::new();
-        for (canonical, ways) in &results {
-            let n_tiles = ways[0].len() + 1;
-            by_tile_count
-                .entry(n_tiles)
-                .and_modify(|c| *c += 1)
-                .or_insert(1);
-            eprintln!(
-                "n={}: boundary_len={} ways={} seq={:?}",
-                n_tiles,
-                canonical.len(),
-                ways.len(),
-                canonical,
-            );
-        }
-
-        eprintln!("\nSummary:");
-        for (n, count) in &by_tile_count {
-            eprintln!("  {} tiles: {} distinct hex-patches", n, count);
-        }
-
-        let di_count = results
-            .iter()
-            .filter(|(_, ways)| ways[0].len() + 1 == 2)
-            .count();
-        assert_eq!(di_count, 1, "1 unique bi-hex");
-
-        let tri_count = results
-            .iter()
-            .filter(|(_, ways)| ways[0].len() + 1 == 3)
-            .count();
-        eprintln!("  tri-hexes: {} distinct shapes", tri_count);
-        assert!(tri_count >= 1, "should have at least 1 tri-hex");
-
-        for ways in results.values() {
-            for history in ways {
-                if history.is_empty() {
-                    continue;
-                }
-                let mut gp = GrowingPatch::new(Arc::clone(&ts), Arc::clone(&mti), 0);
-                for pm in history {
-                    gp.add_tile(pm).expect("add_tile");
-                }
-                assert!(
-                    gp.is_growing() || gp.is_closed(),
-                    "patch should be valid after building"
-                );
-                assert_eq!(
-                    gp.to_segments().len(),
-                    gp.to_vertices().len(),
-                    "cyclic invariant"
-                );
-                if gp.is_growing() {
-                    assert!(
-                        Snake::<ZZ12>::try_from(gp.to_rat().seq()).is_ok(),
-                        "valid snake"
-                    );
-                }
-            }
-        }
-    }
-
-    fn brute_force_hex_patches(
+    fn brute_force_zz12(
         ts: &Arc<TileSet<ZZ12>>,
         mti: &Arc<MatchTypeIndex<ZZ12>>,
         max_tiles: usize,
-    ) -> std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
-        let mut results: std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> =
-            std::collections::BTreeMap::new();
+    ) -> BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
+        let mut results: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
 
         fn recurse(
             gp: &mut GrowingPatch<ZZ12>,
             history: &mut Vec<PatchMatch>,
             max_tiles: usize,
-            results: &mut std::collections::BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+            results: &mut BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
         ) {
             let num_tiles = history.len() + 1;
             if gp.is_growing() {
@@ -1228,5 +1449,99 @@ mod tests {
         }
 
         results
+    }
+
+    #[test]
+    fn square_brute_force_up_to_4_tiles() {
+        let census = PatchCensus::for_squares(4);
+        census.report("square");
+
+        let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+        for ways in census.patches.values() {
+            let n = ways[0].len() + 1;
+            let e = by_tiles.entry(n).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += ways.len();
+        }
+
+        assert_eq!(
+            by_tiles.get(&1).map(|(s, _)| *s).unwrap_or(0),
+            1,
+            "1 mono-square"
+        );
+        assert_eq!(by_tiles.get(&2), Some(&(1, 16)), "1 bi-square, 16 ways");
+        assert!(
+            by_tiles.get(&3).map(|(s, _)| *s).unwrap_or(0) >= 2,
+            "at least 2 tri-squares"
+        );
+
+        for ways in census.patches.values() {
+            for history in ways {
+                if history.is_empty() {
+                    continue;
+                }
+                let mut gp = GrowingPatch::new(Arc::clone(&census.ts), Arc::clone(&census.mti), 0);
+                for pm in history {
+                    assert!(gp.add_tile(pm).is_some(), "replay should succeed");
+                }
+                assert_eq!(
+                    gp.to_segments().len(),
+                    gp.to_vertices().len(),
+                    "cyclic invariant"
+                );
+                assert_eq!(
+                    gp.to_segments().iter().map(|s| s.tile_len).sum::<usize>(),
+                    gp.boundary_len(),
+                    "seg sum == boundary"
+                );
+                if gp.is_growing() {
+                    assert!(
+                        Snake::<ZZ4>::try_from(gp.to_rat().seq()).is_ok(),
+                        "valid snake"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hex_brute_force_up_to_3_tiles() {
+        let census = PatchCensus::for_hexagons(3);
+        census.report("hexagon");
+
+        let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
+        for ways in census.patches.values() {
+            let n = ways[0].len() + 1;
+            by_tiles.entry(n).and_modify(|c| *c += 1).or_insert(1);
+        }
+
+        assert_eq!(by_tiles.get(&1).copied().unwrap_or(0), 1, "1 mono-hex");
+        assert_eq!(by_tiles.get(&2).copied().unwrap_or(0), 1, "1 bi-hex");
+        assert!(
+            by_tiles.get(&3).copied().unwrap_or(0) >= 1,
+            "at least 1 tri-hex"
+        );
+
+        for ways in census.patches.values() {
+            for history in ways {
+                if history.is_empty() {
+                    continue;
+                }
+                let mut gp = GrowingPatch::new(Arc::clone(&census.ts), Arc::clone(&census.mti), 0);
+                for pm in history {
+                    gp.add_tile(pm).expect("add_tile");
+                }
+                assert!(gp.is_growing(), "patch should be growing");
+                assert_eq!(
+                    gp.to_segments().len(),
+                    gp.to_vertices().len(),
+                    "cyclic invariant"
+                );
+                assert!(
+                    Snake::<ZZ12>::try_from(gp.to_rat().seq()).is_ok(),
+                    "valid snake"
+                );
+            }
+        }
     }
 }
