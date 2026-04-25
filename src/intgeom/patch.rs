@@ -134,6 +134,15 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    pub fn edge_types(&self) -> Vec<(usize, usize)> {
+        match &self.state {
+            PatchState::Growing { vertex_types, .. } => {
+                vertex_types.iter().map(|vt| vt[0]).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
@@ -1705,5 +1714,118 @@ mod tests {
             expected_angles,
             "reconstructed angles should match"
         );
+    }
+
+    fn verify_edge_type_consistency<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+        ts: &Arc<TileSet<T>>,
+        label: &str,
+    ) {
+        let n = gp.boundary_len();
+        assert!(n > 0, "[{}] patch should be growing", label);
+        let edge_types = gp.edge_types();
+        assert_eq!(edge_types.len(), n, "[{}] edge_types length", label);
+
+        for i in 0..n {
+            let (t, o) = edge_types[i];
+            assert!(
+                t < ts.num_tiles(),
+                "[{}] pos {}: invalid tile_id {}",
+                label,
+                i,
+                t
+            );
+            let tile_len = ts.rat(t).len();
+            assert!(
+                o < tile_len,
+                "[{}] pos {}: invalid offset {} for tile {} (len {})",
+                label,
+                i,
+                o,
+                t,
+                tile_len
+            );
+        }
+
+        for i in 0..n {
+            let vt = &gp.vertex_types()[i];
+            let next_vt = &gp.vertex_types()[(i + 1) % n];
+            if vt.len() == 1 && next_vt.len() == 1 {
+                let (t, o) = vt[0];
+                let (nt, no) = next_vt[0];
+                if t == nt {
+                    let expected = (o + 1) % ts.rat(t).len();
+                    assert_eq!(
+                        no, expected,
+                        "[{}] pos {}: same-tile continuation ({}, {}) → expected offset {} got {}",
+                        label, i, t, o, expected, no
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edge_types_bi_hex_consistency() {
+        let gp = hex_patch();
+        for pm in gp.get_all_matches() {
+            let mut gp2 = hex_patch();
+            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                verify_edge_type_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
+            }
+        }
+    }
+
+    #[test]
+    fn edge_types_bi_square_consistency() {
+        let gp = square_patch();
+        for pm in gp.get_all_matches() {
+            let mut gp2 = square_patch();
+            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                verify_edge_type_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
+            }
+        }
+    }
+
+    #[test]
+    fn edge_types_multi_hex_consistency() {
+        let gp = hex_patch();
+        let matches = gp.get_all_matches().to_vec();
+        for pm1 in &matches {
+            let mut gp2 = hex_patch();
+            if gp2.add_tile(pm1).is_none() || !gp2.is_growing() {
+                continue;
+            }
+            verify_edge_type_consistency(&gp2, &gp2.tileset(), "2-hex");
+            for pm2 in gp2.get_all_matches() {
+                let mut gp3 = gp2.clone();
+                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
+                    verify_edge_type_consistency(&gp3, &gp3.tileset(), "3-hex");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn edge_types_mixed_consistency() {
+        let hex_snake: Snake<ZZ12> = tiles::hexagon();
+        let sq_snake: Snake<ZZ12> = tiles::square();
+        let hex_rat = Rat::try_from(&hex_snake).unwrap();
+        let sq_rat = Rat::try_from(&sq_snake).unwrap();
+        let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
+
+        for seed_id in 0..ts.num_tiles() {
+            let gp = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), seed_id);
+            for pm in gp.get_all_matches() {
+                let mut gp2 = GrowingPatch::new(Arc::clone(&ts), seed_id);
+                if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                    verify_edge_type_consistency(
+                        &gp2,
+                        &ts,
+                        &format!("mixed seed={} pm {:?}", seed_id, pm),
+                    );
+                }
+            }
+        }
     }
 }
