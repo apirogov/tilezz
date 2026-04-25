@@ -1394,5 +1394,24 @@ mod tests {
         assert_eq!(closed, 146, "closed types (70 sq + 76 hex)");
         assert!(dead > 0, "should have dead cross-tile types");
         assert!(cursed > 0, "should have cursed types");
+
+        let mut mixed_cursed = 0usize;
+        let mut mixed_not_cursed = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            let vt = info.vtype();
+            let has_sq = vt.iter().any(|(tid, _)| *tid == 0);
+            let has_hex = vt.iter().any(|(tid, _)| *tid == 1);
+            if has_sq && has_hex {
+                if info.is_cursed() {
+                    mixed_cursed += 1;
+                } else {
+                    mixed_not_cursed += 1;
+                    eprintln!("  NOT cursed mixed type {:?} kind={:?}", vt, info.kind());
+                }
+            }
+        }
+        eprintln!("  Mixed (sq+hex) types: {} cursed, {} not cursed", mixed_cursed, mixed_not_cursed);
+        assert_eq!(mixed_not_cursed, 0, "all mixed types should be cursed");
     }
 }
