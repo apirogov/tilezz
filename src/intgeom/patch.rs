@@ -1255,4 +1255,15 @@ mod tests {
             "closed vtypes of length 3 should match synthetic"
         );
     }
+
+    #[test]
+    fn square_hex_mixed_vtypes() {
+        let sq: Snake<ZZ12> = tiles::square();
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
+        let collector = VertexTypeCollector::collect(ts);
+        collector.report("square+hexagon");
+    }
 }
