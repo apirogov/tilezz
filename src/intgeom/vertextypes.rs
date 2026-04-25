@@ -20,6 +20,7 @@ pub struct VertexTypeInfo<T: IsComplex> {
     predecessors: Vec<usize>,
     is_cursed: bool,
     realizing_rat: Rat<T>,
+    gap_angle: i8,
 }
 
 impl<T: IsComplex> VertexTypeInfo<T> {
@@ -57,6 +58,10 @@ impl<T: IsComplex> VertexTypeInfo<T> {
 
     pub fn realizing_rat(&self) -> &Rat<T> {
         &self.realizing_rat
+    }
+
+    pub fn gap_angle(&self) -> i8 {
+        self.gap_angle
     }
 }
 
@@ -163,12 +168,14 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
                 let id = i + 1;
                 let rat = reconstruct_minimal_rat(&tileset, &vt)
                     .expect("reconstruct_minimal_rat should succeed for all discovered types");
+                let gap = compute_gap_angle::<T>(&tileset, &vt);
                 VertexTypeInfo {
                     kind: kind_map[&vt],
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
                     is_cursed: is_cursed[&id],
                     realizing_rat: rat,
+                    gap_angle: gap,
                     vtype: vt,
                 }
             })
@@ -208,6 +215,30 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
+
+    pub fn vertex_type_ids(&self, vtypes: &[VertexType]) -> Vec<Option<usize>> {
+        vtypes.iter().map(|vt| self.get_id(vt)).collect()
+    }
+
+    pub fn from_vertex_type_ids(&self, ids: &[usize]) -> Option<GrowingPatch<T>> {
+        if ids.is_empty() {
+            return None;
+        }
+        for &id in ids {
+            if id == 0 || id > self.entries.len() {
+                return None;
+            }
+        }
+        let angles: Vec<i8> = ids
+            .iter()
+            .map(|&id| self.entries[id - 1].gap_angle)
+            .collect();
+        let vtypes: Vec<VertexType> = ids
+            .iter()
+            .map(|&id| self.entries[id - 1].vtype.clone())
+            .collect();
+        GrowingPatch::from_parts(Arc::clone(&self.tileset), angles, vtypes)
+    }
 }
 
 fn reconstruct_minimal_rat<T: IsComplex + IsRingOrField + Units>(
@@ -230,6 +261,18 @@ fn reconstruct_minimal_rat<T: IsComplex + IsRingOrField + Units>(
     }
 
     Some(result)
+}
+
+fn compute_gap_angle<T: IsComplex + IsRingOrField + Units + SymNum>(
+    tileset: &Arc<TileSet<T>>,
+    vtype: &VertexType,
+) -> i8 {
+    let k = vtype.len() as i8;
+    let angle_sum: i8 = vtype
+        .iter()
+        .map(|&(tile_id, offset)| tileset.rat(tile_id).seq()[offset])
+        .sum();
+    angle_sum - (k - 1) * T::hturn()
 }
 
 fn validate_closed_types<T: IsComplex + IsRingOrField + Units + SymNum>(

@@ -1,4 +1,6 @@
+#[cfg(test)]
 use std::collections::BTreeSet;
+
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -134,6 +136,26 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
+    }
+
+    pub fn from_parts(
+        tileset: Arc<TileSet<T>>,
+        angles: Vec<i8>,
+        vertex_types: Vec<VertexType>,
+    ) -> Option<Self> {
+        if angles.is_empty() || angles.len() != vertex_types.len() {
+            return None;
+        }
+        let mut gp = GrowingPatch {
+            tileset,
+            state: PatchState::Growing {
+                angles,
+                vertex_types,
+                cached_matches: Vec::new(),
+            },
+        };
+        gp.recompute_matches();
+        Some(gp)
     }
 
     pub fn add_tile(&mut self, pm: &PatchMatch) -> Option<AddTileDiff> {
@@ -504,6 +526,7 @@ fn lex_min_rotation_clone(vt: &[(usize, usize)]) -> VertexType {
     best
 }
 
+#[cfg(test)]
 fn synthetic_closed_vtypes(
     vertex_len: usize,
     tile_id: usize,
@@ -536,7 +559,7 @@ fn synthetic_closed_vtypes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::cyclotomic::{SymNum, ZZ10, ZZ12, ZZ4};
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles;
     use crate::intgeom::vertextypes::VertexTypeKind;
@@ -1509,5 +1532,178 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn penrose_p3_vertex_type_index() {
+        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
+        let narrow: Snake<ZZ10> = tiles::penrose_p3_narrow();
+        let wide: Snake<ZZ10> = tiles::penrose_p3_wide();
+        let narrow_rat = Rat::try_from(&narrow).unwrap();
+        let wide_rat = Rat::try_from(&wide).unwrap();
+        let ts = Arc::new(TileSet::new(vec![narrow_rat, wide_rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut open = 0usize;
+        let mut closed = 0usize;
+        let mut dead = 0usize;
+        let mut cursed = 0usize;
+        let mut initial = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            match info.kind() {
+                VertexTypeKind::Open => open += 1,
+                VertexTypeKind::Closed => closed += 1,
+                VertexTypeKind::Dead => dead += 1,
+            }
+            if info.is_initial() {
+                initial += 1;
+            }
+            if info.is_cursed() {
+                cursed += 1;
+            }
+        }
+
+        eprintln!(
+            "[penrose P3] VertexTypeIndex: {} types, open={} closed={} dead={} initial={} cursed={}",
+            idx.num_types(), open, closed, dead, initial, cursed
+        );
+
+        let mut by_kind: BTreeMap<VertexTypeKind, usize> = BTreeMap::new();
+        let mut rat_counts: BTreeMap<Rat<ZZ10>, (usize, BTreeSet<VertexTypeKind>)> =
+            BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            *by_kind.entry(info.kind()).or_insert(0) += 1;
+            let r = info.realizing_rat().clone();
+            let entry = rat_counts.entry(r).or_insert((0, BTreeSet::new()));
+            entry.0 += 1;
+            entry.1.insert(info.kind());
+        }
+
+        eprintln!("  By kind: {:?}", by_kind);
+        eprintln!("  {} distinct realizing rats", rat_counts.len());
+
+        let mut rat_by_len: BTreeMap<usize, usize> = BTreeMap::new();
+        for (rat, (count, _kinds)) in &rat_counts {
+            *rat_by_len.entry(rat.len()).or_insert(0) += 1;
+            eprintln!(
+                "    len={} count={} kinds={:?} seq={:?}",
+                rat.len(),
+                count,
+                _kinds,
+                rat.clone().canonical().seq(),
+            );
+        }
+        eprintln!("  Realizing rats by boundary length: {:?}", rat_by_len);
+    }
+
+    #[test]
+    fn gap_angle_verification() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+
+        let sq: Snake<ZZ12> = tiles::square();
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+
+        let sq_ts = Arc::new(TileSet::new(vec![sq_rat.clone()]));
+        let sq_idx = VertexTypeIndex::new(sq_ts);
+        for id in 1..=sq_idx.num_types() {
+            let info = sq_idx.get_info(id);
+            if info.is_closed() {
+                assert_eq!(
+                    info.gap_angle(),
+                    -ZZ12::hturn(),
+                    "square closed gap_angle should be -hturn for {:?}",
+                    info.vtype()
+                );
+            }
+        }
+
+        let hex_ts = Arc::new(TileSet::new(vec![hex_rat.clone()]));
+        let hex_idx = VertexTypeIndex::new(hex_ts);
+        for id in 1..=hex_idx.num_types() {
+            let info = hex_idx.get_info(id);
+            if info.is_closed() {
+                assert_eq!(
+                    info.gap_angle(),
+                    -ZZ12::hturn(),
+                    "hex closed gap_angle should be -hturn for {:?}",
+                    info.vtype()
+                );
+            }
+        }
+
+        let sq_hex_ts = Arc::new(TileSet::new(vec![sq_rat.clone(), hex_rat.clone()]));
+        assert_eq!(sq_hex_ts.rat(0).seq()[0], 2, "tile 0 should be hex");
+        assert_eq!(sq_hex_ts.rat(1).seq()[0], 3, "tile 1 should be square");
+        let sq_hex_idx = VertexTypeIndex::new(sq_hex_ts);
+
+        let mut bi_hex_found = false;
+        let mut sq_hex_junction_found = false;
+        for id in 1..=sq_hex_idx.num_types() {
+            let info = sq_hex_idx.get_info(id);
+            let vt = info.vtype();
+            let has_hex0 = vt.iter().any(|(tid, _)| *tid == 0);
+            let has_sq1 = vt.iter().any(|(tid, _)| *tid == 1);
+            if vt.len() == 2 && vt.iter().all(|(tid, _)| *tid == 0) {
+                assert_eq!(
+                    info.gap_angle(),
+                    -2,
+                    "bi-hex junction gap_angle should be -2 for {:?}",
+                    vt
+                );
+                bi_hex_found = true;
+            }
+            if vt.len() == 2 && has_hex0 && has_sq1 {
+                assert_eq!(
+                    info.gap_angle(),
+                    -1,
+                    "hex+sq 2-tile junction gap_angle should be -1 for {:?}",
+                    vt
+                );
+                sq_hex_junction_found = true;
+            }
+        }
+        assert!(bi_hex_found, "should find bi-hex junction types");
+        assert!(sq_hex_junction_found, "should find sq+hex junction types");
+    }
+
+    #[test]
+    fn from_vertex_type_ids_roundtrip() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(Arc::clone(&ts));
+
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let pm = gp.get_all_matches()[0].clone();
+        let _diff = gp.add_tile(&pm).expect("first add");
+        assert!(gp.is_growing());
+
+        let expected_angles = gp.angles().to_vec();
+        let vtypes = gp.vertex_types().to_vec();
+        let ids: Vec<usize> = idx
+            .vertex_type_ids(&vtypes)
+            .into_iter()
+            .map(|opt| opt.expect("all vtypes should be found"))
+            .collect();
+
+        let gap_angles: Vec<i8> = ids.iter().map(|&id| idx.get_info(id).gap_angle()).collect();
+        assert_eq!(
+            gap_angles, expected_angles,
+            "gap angles should match boundary angles"
+        );
+
+        let gp2 = idx.from_vertex_type_ids(&ids).expect("reconstruction");
+        assert!(gp2.is_growing());
+        assert_eq!(
+            gp2.angles(),
+            expected_angles,
+            "reconstructed angles should match"
+        );
     }
 }
