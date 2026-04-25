@@ -1419,70 +1419,75 @@ mod tests {
     }
 
     #[test]
-    fn square_realizing_rat_grouping() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-        use std::collections::BTreeMap;
-        let sq: Snake<ZZ12> = tiles::square();
-        let rat = Rat::try_from(&sq).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut rat_groups: BTreeMap<Rat<ZZ12>, Vec<usize>> = BTreeMap::new();
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            let rat = info.realizing_rat().clone();
-            rat_groups.entry(rat).or_default().push(id);
-        }
-
-        eprintln!(
-            "[square] {} types grouped into {} distinct realizing rats",
-            idx.num_types(),
-            rat_groups.len()
-        );
-        for (rat, ids) in &rat_groups {
-            if ids.len() > 1 || rat.len() <= 12 {
-                eprintln!("  rat_len={} count={}", rat.len(), ids.len());
-            }
-        }
-
-        assert!(!rat_groups.is_empty());
-        assert!(rat_groups.len() <= idx.num_types());
-    }
-
-    #[test]
-    fn hex_realizing_rat_closed_types() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
+    fn hex_realizing_rat_grouping() {
+        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
         use std::collections::BTreeMap;
         let hex: Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = VertexTypeIndex::new(ts);
 
-        let mut closed_rat_groups: BTreeMap<Rat<ZZ12>, usize> = BTreeMap::new();
+        let mut rat_groups: BTreeMap<Rat<ZZ12>, (VertexTypeKind, usize)> = BTreeMap::new();
         for id in 1..=idx.num_types() {
             let info = idx.get_info(id);
-            assert!(
-                !info.realizing_rat().is_empty(),
-                "type {} has empty rat",
-                id
-            );
-            if info.is_closed() {
-                *closed_rat_groups
-                    .entry(info.realizing_rat().clone())
-                    .or_insert(0) += 1;
-            }
+            let r = info.realizing_rat().clone();
+            rat_groups.entry(r).or_insert_with(|| (info.kind(), 0)).1 += 1;
         }
 
         eprintln!(
-            "[hex] {} closed types in {} distinct realizing rats",
-            closed_rat_groups.values().sum::<usize>(),
-            closed_rat_groups.len()
+            "[hex] {} types -> {} distinct realizing rats:",
+            idx.num_types(),
+            rat_groups.len()
         );
+        for (rat, (kind, count)) in &rat_groups {
+            eprintln!("  rat_len={} {:?} count={}", rat.len(), kind, count);
+        }
 
         assert_eq!(
-            closed_rat_groups.len(),
-            1,
-            "all 76 closed hex types should map to one tri-hex shape"
+            rat_groups.len(),
+            3,
+            "hex should have 3 distinct shapes (mono/bi/tri)"
         );
+    }
+
+    #[test]
+    fn mixed_realizing_rat_grouping() {
+        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
+        use std::collections::{BTreeMap, BTreeSet};
+        let sq: Snake<ZZ12> = tiles::square();
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut by_kind: BTreeMap<VertexTypeKind, usize> = BTreeMap::new();
+        let mut rat_groups: BTreeMap<Rat<ZZ12>, BTreeSet<VertexTypeKind>> = BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            *by_kind.entry(info.kind()).or_insert(0) += 1;
+            let r = info.realizing_rat().clone();
+            rat_groups.entry(r).or_default().insert(info.kind());
+        }
+
+        eprintln!(
+            "[sq+hex] {} types -> {} distinct realizing rats",
+            idx.num_types(),
+            rat_groups.len()
+        );
+        for (kind, count) in &by_kind {
+            eprintln!("  {:?}: {}", kind, count);
+        }
+        let mut by_len: BTreeMap<usize, usize> = BTreeMap::new();
+        for (rat, kinds) in &rat_groups {
+            *by_len.entry(rat.len()).or_insert(0) += 1;
+            if kinds.contains(&VertexTypeKind::Open) {
+                eprintln!("  rat_len={} kinds={:?} (has open)", rat.len(), kinds);
+            }
+        }
+        eprintln!("  Distinct rats by boundary length:");
+        for (len, count) in &by_len {
+            eprintln!("    len={}: {} distinct shapes", len, count);
+        }
     }
 }

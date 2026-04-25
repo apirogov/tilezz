@@ -6,7 +6,7 @@ use crate::intgeom::patch::{GrowingPatch, PatchMatch, VertexType};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum VertexTypeKind {
     Open,
     Closed,
