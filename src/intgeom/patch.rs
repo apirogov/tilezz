@@ -1499,13 +1499,15 @@ mod tests {
                     && idx.get_info(id).vtype().iter().any(|(t, _)| *t == 1)
             });
             let mixed = has_sq && has_hex;
-            eprintln!(
-                "    len={} count={} kinds={:?} mixed={}",
-                rat.len(),
-                count,
-                kinds,
-                mixed,
-            );
+            if mixed {
+                eprintln!(
+                    "    len={} count={} kinds={:?} seq={:?}",
+                    rat.len(),
+                    count,
+                    kinds,
+                    rat.seq(),
+                );
+            }
         }
     }
 }
