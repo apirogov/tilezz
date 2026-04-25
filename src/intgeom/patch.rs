@@ -1116,14 +1116,14 @@ mod tests {
         tileset: Arc<TileSet<T>>,
         open_types: BTreeSet<VertexType>,
         closed_types: BTreeSet<VertexType>,
-        terminal_types: BTreeSet<VertexType>,
+        dead_types: BTreeSet<VertexType>,
     }
 
     impl<T: IsComplex + IsRingOrField + Units> VertexTypeCollector<T> {
-        fn collect(tileset: Arc<TileSet<T>>, max_vertex_len: usize) -> Self {
+        fn collect(tileset: Arc<TileSet<T>>) -> Self {
             let mut open_types: BTreeSet<VertexType> = BTreeSet::new();
             let mut closed_types: BTreeSet<VertexType> = BTreeSet::new();
-            let mut terminal_types: BTreeSet<VertexType> = BTreeSet::new();
+            let mut dead_types: BTreeSet<VertexType> = BTreeSet::new();
             let mut visited: BTreeSet<VertexType> = BTreeSet::new();
             let mut queue: VecDeque<(GrowingPatch<T>, usize)> = VecDeque::new();
 
@@ -1137,7 +1137,6 @@ mod tests {
                             for pos in 0..gp.boundary_len() {
                                 let vt = gp.vertex_types()[pos].clone();
                                 if visited.insert(vt.clone()) {
-                                    open_types.insert(vt);
                                     queue.push_back((gp.clone(), pos));
                                 }
                             }
@@ -1148,21 +1147,17 @@ mod tests {
 
             while let Some((gp, pos)) = queue.pop_front() {
                 let vt = gp.vertex_types()[pos].clone();
-                if vt.len() >= max_vertex_len {
-                    open_types.remove(&vt);
-                    terminal_types.insert(vt);
-                    continue;
-                }
-                if terminal_types.contains(&vt) {
+                if dead_types.contains(&vt) {
                     continue;
                 }
 
                 let touching: Vec<&PatchMatch> = gp.get_matches_touching_vertex(pos).collect();
                 if touching.is_empty() {
-                    open_types.remove(&vt);
-                    terminal_types.insert(vt);
+                    dead_types.insert(vt);
                     continue;
                 }
+
+                open_types.insert(vt.clone());
 
                 for pm in touching {
                     let mut gp2 = gp.clone();
@@ -1172,7 +1167,6 @@ mod tests {
                             for new_pos in 0..gp2.boundary_len() {
                                 let new_vt = gp2.vertex_types()[new_pos].clone();
                                 if new_vt.len() >= vt.len() && visited.insert(new_vt.clone()) {
-                                    open_types.insert(new_vt);
                                     queue.push_back((gp2.clone(), new_pos));
                                 }
                             }
@@ -1185,7 +1179,7 @@ mod tests {
                 tileset,
                 open_types,
                 closed_types,
-                terminal_types,
+                dead_types,
             }
         }
 
@@ -1198,27 +1192,27 @@ mod tests {
             for vt in &self.closed_types {
                 *closed_by_n.entry(vt.len()).or_insert(0) += 1;
             }
-            let mut terminal_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &self.terminal_types {
-                *terminal_by_n.entry(vt.len()).or_insert(0) += 1;
+            let mut dead_by_n: BTreeMap<usize, usize> = BTreeMap::new();
+            for vt in &self.dead_types {
+                *dead_by_n.entry(vt.len()).or_insert(0) += 1;
             }
 
             eprintln!("[{}] Vertex type collection:", label);
-            eprintln!("  Open by touched-tile count:");
+            eprintln!("  Open (non-terminal) by touched-tile count:");
             for (n, c) in &open_by_n {
                 eprintln!("    {} tiles: {}", n, c);
             }
             eprintln!("  Open total: {}", self.open_types.len());
-            eprintln!("  Closed by touched-tile count:");
+            eprintln!("  Closed (terminal) by touched-tile count:");
             for (n, c) in &closed_by_n {
                 eprintln!("    {} tiles: {}", n, c);
             }
             eprintln!("  Closed total: {}", self.closed_types.len());
-            eprintln!("  Terminal (open, no extension) by touched-tile count:");
-            for (n, c) in &terminal_by_n {
+            eprintln!("  Dead (open, terminal) by touched-tile count:");
+            for (n, c) in &dead_by_n {
                 eprintln!("    {} tiles: {}", n, c);
             }
-            eprintln!("  Terminal total: {}", self.terminal_types.len());
+            eprintln!("  Dead total: {}", self.dead_types.len());
         }
     }
 
@@ -1227,10 +1221,8 @@ mod tests {
         let sq: Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let collector = VertexTypeCollector::collect(ts, 4);
+        let collector = VertexTypeCollector::collect(ts);
         collector.report("square");
-        assert!(collector.open_types.iter().all(|vt| vt.len() <= 4));
-        assert!(collector.closed_types.iter().all(|vt| vt.len() <= 4));
 
         let synthetic_closed = synthetic_closed_vtypes(4, 0, 4);
         assert_eq!(
@@ -1249,10 +1241,8 @@ mod tests {
         let hex: Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let collector = VertexTypeCollector::collect(ts, 3);
+        let collector = VertexTypeCollector::collect(ts);
         collector.report("hexagon");
-        assert!(collector.open_types.iter().all(|vt| vt.len() <= 3));
-        assert!(collector.closed_types.iter().all(|vt| vt.len() <= 3));
 
         let synthetic_closed = synthetic_closed_vtypes(3, 0, 6);
         assert_eq!(
