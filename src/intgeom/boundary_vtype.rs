@@ -121,6 +121,14 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> BoundaryVertexTypeIndex<T> {
                 continue;
             }
 
+            if visited.len().is_multiple_of(1000) {
+                eprintln!("  BFS: visited={} queue={}", visited.len(), queue.len(),);
+            }
+
+            if visited.len().is_multiple_of(1000) {
+                eprintln!("  BFS: visited={} queue={}", visited.len(), queue.len(),);
+            }
+
             let touching: Vec<_> = gp.get_matches_touching_vertex(pos).collect();
             if touching.is_empty() {
                 kind_map.insert(bvt, VertexTypeKind::Dead);
@@ -260,7 +268,7 @@ fn compute_bvtype_cursed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::ZZ12;
+    use crate::cyclotomic::{ZZ10, ZZ12};
     use crate::intgeom::rat::Rat;
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles;
@@ -385,5 +393,63 @@ mod tests {
 
         let rat = idx.to_rat(&ids).expect("reconstruct");
         assert_eq!(rat.seq(), expected.seq(), "reconstructed rat should match");
+    }
+
+    #[test]
+    #[ignore]
+    fn penrose_p3_boundary_vtype_index() {
+        let narrow: Snake<ZZ10> = tiles::penrose_p3_narrow();
+        let wide: Snake<ZZ10> = tiles::penrose_p3_wide();
+        let narrow_rat = Rat::try_from(&narrow).unwrap();
+        let wide_rat = Rat::try_from(&wide).unwrap();
+        let ts = Arc::new(TileSet::new(vec![narrow_rat, wide_rat]));
+
+        for seed_id in 0..ts.num_tiles() {
+            let seed = GrowingPatch::new(Arc::clone(&ts), seed_id);
+            let matches = seed.get_all_matches();
+            eprintln!(
+                "seed {} (len={}): {} matches",
+                seed_id,
+                ts.rat(seed_id).len(),
+                matches.len()
+            );
+        }
+
+        let idx = BoundaryVertexTypeIndex::new(ts);
+
+        let mut open = 0usize;
+        let mut dead = 0usize;
+        let mut cursed = 0usize;
+        let mut initial = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            match info.kind() {
+                VertexTypeKind::Open => open += 1,
+                VertexTypeKind::Dead => dead += 1,
+                VertexTypeKind::Closed => {}
+            }
+            if info.predecessors().is_empty() {
+                initial += 1;
+            }
+            if info.is_cursed() {
+                cursed += 1;
+            }
+        }
+
+        eprintln!(
+            "[penrose P3] BoundaryVertexTypeIndex: {} types, open={} dead={} initial={} cursed={}",
+            idx.num_types(),
+            open,
+            dead,
+            initial,
+            cursed
+        );
+
+        let mut by_kind: BTreeMap<VertexTypeKind, usize> = BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            *by_kind.entry(info.kind()).or_insert(0) += 1;
+        }
+        eprintln!("  By kind: {:?}", by_kind);
     }
 }
