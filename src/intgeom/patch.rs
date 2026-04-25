@@ -1411,7 +1411,78 @@ mod tests {
                 }
             }
         }
-        eprintln!("  Mixed (sq+hex) types: {} cursed, {} not cursed", mixed_cursed, mixed_not_cursed);
+        eprintln!(
+            "  Mixed (sq+hex) types: {} cursed, {} not cursed",
+            mixed_cursed, mixed_not_cursed
+        );
         assert_eq!(mixed_not_cursed, 0, "all mixed types should be cursed");
+    }
+
+    #[test]
+    fn square_realizing_rat_grouping() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        use std::collections::BTreeMap;
+        let sq: Snake<ZZ12> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut rat_groups: BTreeMap<Rat<ZZ12>, Vec<usize>> = BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            let rat = info.realizing_rat().clone();
+            rat_groups.entry(rat).or_default().push(id);
+        }
+
+        eprintln!(
+            "[square] {} types grouped into {} distinct realizing rats",
+            idx.num_types(),
+            rat_groups.len()
+        );
+        for (rat, ids) in &rat_groups {
+            if ids.len() > 1 || rat.len() <= 12 {
+                eprintln!("  rat_len={} count={}", rat.len(), ids.len());
+            }
+        }
+
+        assert!(!rat_groups.is_empty());
+        assert!(rat_groups.len() <= idx.num_types());
+    }
+
+    #[test]
+    fn hex_realizing_rat_closed_types() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        use std::collections::BTreeMap;
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut closed_rat_groups: BTreeMap<Rat<ZZ12>, usize> = BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            assert!(
+                !info.realizing_rat().is_empty(),
+                "type {} has empty rat",
+                id
+            );
+            if info.is_closed() {
+                *closed_rat_groups
+                    .entry(info.realizing_rat().clone())
+                    .or_insert(0) += 1;
+            }
+        }
+
+        eprintln!(
+            "[hex] {} closed types in {} distinct realizing rats",
+            closed_rat_groups.values().sum::<usize>(),
+            closed_rat_groups.len()
+        );
+
+        assert_eq!(
+            closed_rat_groups.len(),
+            1,
+            "all 76 closed hex types should map to one tri-hex shape"
+        );
     }
 }

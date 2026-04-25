@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, SymNum, Units};
 use crate::intgeom::patch::{GrowingPatch, PatchMatch, VertexType};
+use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -12,15 +13,16 @@ pub enum VertexTypeKind {
     Dead,
 }
 
-pub struct VertexTypeInfo {
+pub struct VertexTypeInfo<T: IsComplex> {
     vtype: VertexType,
     kind: VertexTypeKind,
     successors: Vec<usize>,
     predecessors: Vec<usize>,
     is_cursed: bool,
+    realizing_rat: Rat<T>,
 }
 
-impl VertexTypeInfo {
+impl<T: IsComplex> VertexTypeInfo<T> {
     pub fn vtype(&self) -> &VertexType {
         &self.vtype
     }
@@ -52,11 +54,15 @@ impl VertexTypeInfo {
     pub fn is_cursed(&self) -> bool {
         self.is_cursed
     }
+
+    pub fn realizing_rat(&self) -> &Rat<T> {
+        &self.realizing_rat
+    }
 }
 
 pub struct VertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
-    entries: Vec<VertexTypeInfo>,
+    entries: Vec<VertexTypeInfo<T>>,
     reverse: HashMap<VertexType, usize>,
 }
 
@@ -150,16 +156,19 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
 
         let is_cursed = compute_cursed(&entries, &kind_map, &succ_sets, &reverse);
 
-        let info_entries: Vec<VertexTypeInfo> = entries
+        let info_entries: Vec<VertexTypeInfo<T>> = entries
             .into_iter()
             .enumerate()
             .map(|(i, vt)| {
                 let id = i + 1;
+                let rat = reconstruct_minimal_rat(&tileset, &vt)
+                    .expect("reconstruct_minimal_rat should succeed for all discovered types");
                 VertexTypeInfo {
                     kind: kind_map[&vt],
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
                     is_cursed: is_cursed[&id],
+                    realizing_rat: rat,
                     vtype: vt,
                 }
             })
@@ -188,7 +197,7 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
         &self.entries[id - 1].vtype
     }
 
-    pub fn get_info(&self, id: usize) -> &VertexTypeInfo {
+    pub fn get_info(&self, id: usize) -> &VertexTypeInfo<T> {
         assert!(
             id >= 1 && id <= self.entries.len(),
             "vertex type id out of range"
@@ -199,6 +208,28 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
+}
+
+fn reconstruct_minimal_rat<T: IsComplex + IsRingOrField + Units>(
+    tileset: &Arc<TileSet<T>>,
+    vtype: &VertexType,
+) -> Option<Rat<T>> {
+    if vtype.is_empty() {
+        return None;
+    }
+    let (t0, o0) = vtype[0];
+    let mut result = tileset.rat(t0).clone();
+    let mut vertex_pos = o0 as i64;
+
+    for &(ti, oi) in &vtype[1..] {
+        let other = tileset.rat(ti);
+        let match_info = result.get_match((vertex_pos, oi as i64), other);
+        let old_len = result.len();
+        result = result.try_glue_precomputed(match_info, other, false).ok()?;
+        vertex_pos = (old_len - match_info.1) as i64;
+    }
+
+    Some(result)
 }
 
 fn validate_closed_types<T: IsComplex + IsRingOrField + Units + SymNum>(
