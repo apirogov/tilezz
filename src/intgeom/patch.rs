@@ -402,7 +402,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 }
 
-fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -> bool {
+pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -> bool {
     if len == 0 || n == 0 {
         return false;
     }
@@ -539,6 +539,7 @@ mod tests {
     use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles;
+    use crate::intgeom::vertextypes::VertexTypeKind;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::collections::VecDeque;
@@ -1265,5 +1266,133 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
         let collector = VertexTypeCollector::collect(ts);
         collector.report("square+hexagon");
+    }
+
+    #[test]
+    fn square_vertex_type_index() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        let sq: Snake<ZZ12> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut open = 0usize;
+        let mut closed = 0usize;
+        let mut dead = 0usize;
+        let mut cursed = 0usize;
+        let mut initial = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            match info.kind() {
+                VertexTypeKind::Open => open += 1,
+                VertexTypeKind::Closed => closed += 1,
+                VertexTypeKind::Dead => dead += 1,
+            }
+            if info.is_initial() {
+                initial += 1;
+            }
+            if info.is_cursed() {
+                cursed += 1;
+            }
+        }
+
+        eprintln!(
+            "[square] VertexTypeIndex: {} types, open={} closed={} dead={} initial={} cursed={}",
+            idx.num_types(),
+            open,
+            closed,
+            dead,
+            initial,
+            cursed
+        );
+
+        assert_eq!(open, 84, "open types");
+        assert_eq!(closed, 70, "closed types");
+        assert_eq!(dead, 0, "dead types");
+        assert_eq!(cursed, 0, "cursed types");
+        assert!(initial > 0, "has initial types");
+
+        let synthetic = synthetic_closed_vtypes(4, 0, 4);
+        assert_eq!(closed, synthetic.len(), "closed matches synthetic");
+    }
+
+    #[test]
+    fn hex_vertex_type_index() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut open = 0usize;
+        let mut closed = 0usize;
+        let mut dead = 0usize;
+        let mut cursed = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            match info.kind() {
+                VertexTypeKind::Open => open += 1,
+                VertexTypeKind::Closed => closed += 1,
+                VertexTypeKind::Dead => dead += 1,
+            }
+            if info.is_cursed() {
+                cursed += 1;
+            }
+        }
+
+        eprintln!(
+            "[hexagon] VertexTypeIndex: {} types, open={} closed={} dead={} cursed={}",
+            idx.num_types(),
+            open,
+            closed,
+            dead,
+            cursed
+        );
+
+        assert_eq!(open, 42, "open types");
+        assert_eq!(closed, 76, "closed types");
+        assert_eq!(dead, 0, "dead types");
+        assert_eq!(cursed, 0, "cursed types");
+
+        let synthetic = synthetic_closed_vtypes(3, 0, 6);
+        assert_eq!(closed, synthetic.len(), "closed matches synthetic");
+    }
+
+    #[test]
+    fn mixed_vertex_type_index() {
+        use crate::intgeom::vertextypes::VertexTypeIndex;
+        let sq: Snake<ZZ12> = tiles::square();
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let mut open = 0usize;
+        let mut closed = 0usize;
+        let mut dead = 0usize;
+        let mut cursed = 0usize;
+        let mut cursed_open = 0usize;
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            match info.kind() {
+                VertexTypeKind::Open => open += 1,
+                VertexTypeKind::Closed => closed += 1,
+                VertexTypeKind::Dead => dead += 1,
+            }
+            if info.is_cursed() {
+                cursed += 1;
+                if !info.is_closed() {
+                    cursed_open += 1;
+                }
+            }
+        }
+
+        eprintln!("[square+hexagon] VertexTypeIndex: {} types, open={} closed={} dead={} cursed={} cursed_open={}",
+            idx.num_types(), open, closed, dead, cursed, cursed_open);
+
+        assert_eq!(closed, 146, "closed types (70 sq + 76 hex)");
+        assert!(dead > 0, "should have dead cross-tile types");
+        assert!(cursed > 0, "should have cursed types");
     }
 }
