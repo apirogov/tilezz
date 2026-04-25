@@ -741,6 +741,10 @@ mod tests {
             let patches = brute_force_zz12(&ts, max_tiles);
             PatchCensus { ts, patches }
         }
+
+        fn synthetic_closed_vtypes_len3(&self) -> BTreeSet<VertexType> {
+            synthetic_closed_vtypes(3, 0, 6)
+        }
     }
 
     impl<T: IsComplex + IsRingOrField + Units> PatchCensus<T> {
@@ -1054,6 +1058,12 @@ mod tests {
         assert!(
             by_tiles.get(&3).copied().unwrap_or(0) >= 1,
             "at least 1 tri-hex"
+        );
+
+        let synthetic = census.synthetic_closed_vtypes_len3();
+        eprintln!(
+            "\n  Synthetic closed vtypes of length 3: {}",
+            synthetic.len()
         );
 
         for ways in census.patches.values() {
