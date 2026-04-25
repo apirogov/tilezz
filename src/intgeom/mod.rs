@@ -16,6 +16,8 @@ pub mod matchtypes;
 
 pub mod vertextypes;
 
+pub mod boundary_vtype;
+
 pub mod patch;
 
 pub mod growing;
