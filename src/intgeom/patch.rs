@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn seed_patch_has_matches() {
-        let mut gp = square_patch();
+        let gp = square_patch();
         let matches = gp.get_all_matches();
         assert!(!matches.is_empty(), "seed should have matches");
         for pm in matches {
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn hexagon_all_36_matches_produce_valid_bi_hexes() {
-        let mut gp = hex_patch();
+        let gp = hex_patch();
         let matches = gp.get_all_matches().to_vec();
         assert_eq!(matches.len(), 36, "hex self-matches = 36");
 
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn square_all_16_matches_produce_valid_bi_squares() {
-        let mut gp = square_patch();
+        let gp = square_patch();
         let matches = gp.get_all_matches().to_vec();
         assert_eq!(matches.len(), 16, "square self-matches = 16");
 
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn to_rat_matches_direct_glue_for_all_matches() {
-        let mut gp = hex_patch();
+        let gp = hex_patch();
         let matches = gp.get_all_matches().to_vec();
         let ts = gp.tileset().clone();
 
@@ -686,7 +686,7 @@ mod tests {
 
     struct PatchCensus<T: IsComplex> {
         ts: Arc<TileSet<T>>,
-        patches: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+        patches: BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>>,
     }
 
     impl PatchCensus<ZZ4> {
@@ -721,6 +721,14 @@ mod tests {
                 eprintln!("  {}-tile patches: {}", n, count);
             }
 
+            eprintln!("\nDetailed patches by tile count:");
+            for (rat, ways) in &self.patches {
+                let n = ways[0].len() + 1;
+                if n <= 3 {
+                    eprintln!("  n={} boundary={:?} ({} ways)", n, rat.seq(), ways.len());
+                }
+            }
+
             let mut open_vtypes: BTreeSet<VertexType> = BTreeSet::new();
             let mut closed_vtypes: BTreeSet<VertexType> = BTreeSet::new();
 
@@ -746,7 +754,7 @@ mod tests {
             eprintln!("  Closed vertex types: {} distinct", closed_vtypes.len());
 
             eprintln!("\nVertex sequences per rat:");
-            let mut vseqs: BTreeMap<Vec<i8>, BTreeSet<Vec<VertexType>>> = BTreeMap::new();
+            let mut vseqs: BTreeMap<Rat<T>, BTreeSet<Vec<VertexType>>> = BTreeMap::new();
             for ways in self.patches.values() {
                 for history in ways {
                     let mut gp = GrowingPatch::new(Arc::clone(&self.ts), 0);
@@ -754,19 +762,18 @@ mod tests {
                         gp.add_tile(pm);
                     }
                     if gp.is_growing() {
-                        let canonical = gp.to_rat().seq().to_vec();
+                        let rat = gp.to_rat();
                         let vseq = gp.vertex_types().to_vec();
-                        vseqs.entry(canonical).or_default().insert(vseq);
+                        vseqs.entry(rat).or_default().insert(vseq);
                     }
                 }
             }
-            for (canonical, seq_set) in &vseqs {
+            for (rat, seq_set) in &vseqs {
                 eprintln!(
                     "  boundary={:?} ({} distinct vertex sequences):",
-                    canonical,
+                    rat.seq(),
                     seq_set.len()
                 );
-                let _ = canonical;
             }
         }
 
@@ -780,7 +787,6 @@ mod tests {
                         continue;
                     }
                     let mut gp = GrowingPatch::new(Arc::clone(&self.ts), 0);
-                    let mut prev_vtypes: Vec<VertexType> = Vec::new();
 
                     for (step, pm) in history.iter().enumerate() {
                         let old_n = gp.boundary_len();
@@ -814,10 +820,7 @@ mod tests {
                                 );
                             }
 
-                            let cw_pos = pm.start_a;
-                            let ccw_pos = (pm.start_a + pm.len) % old_n;
                             let m = self.ts.rat(pm.tile_id).seq().len();
-                            let seg_len_new = m - pm.len;
 
                             if pm.len > 1 {
                                 assert_eq!(
@@ -859,7 +862,6 @@ mod tests {
 
                         checked_steps += 1;
                         checked_closed += diff.closed_vertex_types.len();
-                        prev_vtypes = gp.vertex_types().to_vec();
                     }
 
                     assert_eq!(
@@ -875,30 +877,23 @@ mod tests {
                 label, checked_steps, checked_closed
             );
         }
-
-        fn tile_count(&self, canonical: &[i8]) -> usize {
-            self.patches
-                .get(canonical)
-                .map(|ways| ways[0].len() + 1)
-                .unwrap_or(0)
-        }
     }
 
     fn brute_force_zz4(
         ts: &Arc<TileSet<ZZ4>>,
         max_tiles: usize,
-    ) -> BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
-        let mut results: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
+    ) -> BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>> {
+        let mut results: BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
 
         fn recurse(
             gp: &mut GrowingPatch<ZZ4>,
             history: &mut Vec<PatchMatch>,
             max_tiles: usize,
-            results: &mut BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+            results: &mut BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>>,
         ) {
             let num_tiles = history.len() + 1;
-            let canonical = gp.to_rat().seq().to_vec();
-            results.entry(canonical).or_default().push(history.clone());
+            let rat = gp.to_rat();
+            results.entry(rat).or_default().push(history.clone());
 
             if num_tiles >= max_tiles || !gp.is_growing() {
                 return;
@@ -915,8 +910,10 @@ mod tests {
             }
         }
 
-        let seed_seq = ts.rat(0).seq().to_vec();
-        results.entry(seed_seq).or_default().push(Vec::new());
+        results
+            .entry(ts.rat(0).clone())
+            .or_default()
+            .push(Vec::new());
 
         let seed_matches = GrowingPatch::new(Arc::clone(ts), 0)
             .get_all_matches()
@@ -934,19 +931,19 @@ mod tests {
     fn brute_force_zz12(
         ts: &Arc<TileSet<ZZ12>>,
         max_tiles: usize,
-    ) -> BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> {
-        let mut results: BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
+    ) -> BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>> {
+        let mut results: BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
 
         fn recurse(
             gp: &mut GrowingPatch<ZZ12>,
             history: &mut Vec<PatchMatch>,
             max_tiles: usize,
-            results: &mut BTreeMap<Vec<i8>, Vec<Vec<PatchMatch>>>,
+            results: &mut BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>>,
         ) {
             let num_tiles = history.len() + 1;
             if gp.is_growing() {
-                let canonical = gp.to_rat().seq().to_vec();
-                results.entry(canonical).or_default().push(history.clone());
+                let rat = gp.to_rat();
+                results.entry(rat).or_default().push(history.clone());
             }
 
             if num_tiles >= max_tiles || !gp.is_growing() {
@@ -964,8 +961,10 @@ mod tests {
             }
         }
 
-        let seed_seq = ts.rat(0).seq().to_vec();
-        results.entry(seed_seq).or_default().push(Vec::new());
+        results
+            .entry(ts.rat(0).clone())
+            .or_default()
+            .push(Vec::new());
 
         let seed_matches = GrowingPatch::new(Arc::clone(ts), 0)
             .get_all_matches()
