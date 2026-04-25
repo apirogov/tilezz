@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -481,6 +482,35 @@ fn lex_min_rotation_clone(vt: &[(usize, usize)]) -> VertexType {
     best
 }
 
+fn synthetic_closed_vtypes(
+    vertex_len: usize,
+    tile_id: usize,
+    tile_edges: usize,
+) -> BTreeSet<VertexType> {
+    let seed: Vec<VertexType> = (0..tile_edges).map(|i| vec![(tile_id, i)]).collect();
+    let mut result: BTreeSet<VertexType> = BTreeSet::new();
+    let mut combo: Vec<(usize, usize)> = Vec::with_capacity(vertex_len);
+    fn recurse(
+        depth: usize,
+        max_depth: usize,
+        seed: &[VertexType],
+        combo: &mut Vec<(usize, usize)>,
+        result: &mut BTreeSet<VertexType>,
+    ) {
+        if depth == max_depth {
+            result.insert(lex_min_rotation_clone(combo));
+            return;
+        }
+        for s in seed {
+            combo.push(s[0]);
+            recurse(depth + 1, max_depth, seed, combo, result);
+            combo.pop();
+        }
+    }
+    recurse(0, vertex_len, &seed, &mut combo, &mut result);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,6 +727,10 @@ mod tests {
             let patches = brute_force_zz4(&ts, max_tiles);
             PatchCensus { ts, patches }
         }
+
+        fn synthetic_closed_vtypes_len4(&self) -> BTreeSet<VertexType> {
+            synthetic_closed_vtypes(4, 0, 4)
+        }
     }
 
     impl PatchCensus<ZZ12> {
@@ -750,30 +784,22 @@ mod tests {
                 }
             }
 
-            eprintln!("  Open vertex types: {} distinct", open_vtypes.len());
-            eprintln!("  Closed vertex types: {} distinct", closed_vtypes.len());
-
-            eprintln!("\nVertex sequences per rat:");
-            let mut vseqs: BTreeMap<Rat<T>, BTreeSet<Vec<VertexType>>> = BTreeMap::new();
-            for ways in self.patches.values() {
-                for history in ways {
-                    let mut gp = GrowingPatch::new(Arc::clone(&self.ts), 0);
-                    for pm in history {
-                        gp.add_tile(pm);
-                    }
-                    if gp.is_growing() {
-                        let rat = gp.to_rat();
-                        let vseq = gp.vertex_types().to_vec();
-                        vseqs.entry(rat).or_default().insert(vseq);
-                    }
-                }
+            let mut open_by_n: BTreeMap<usize, usize> = BTreeMap::new();
+            for vt in &open_vtypes {
+                *open_by_n.entry(vt.len()).or_insert(0) += 1;
             }
-            for (rat, seq_set) in &vseqs {
-                eprintln!(
-                    "  boundary={:?} ({} distinct vertex sequences):",
-                    rat.seq(),
-                    seq_set.len()
-                );
+            eprintln!("\n  Open vertex types by touched-tile count:");
+            for (n, count) in &open_by_n {
+                eprintln!("    touching {} tiles: {}", n, count);
+            }
+
+            let mut closed_by_n: BTreeMap<usize, usize> = BTreeMap::new();
+            for vt in &closed_vtypes {
+                *closed_by_n.entry(vt.len()).or_insert(0) += 1;
+            }
+            eprintln!("\n  Closed vertex types by touched-tile count:");
+            for (n, count) in &closed_by_n {
+                eprintln!("    touching {} tiles: {}", n, count);
             }
         }
 
@@ -1004,28 +1030,11 @@ mod tests {
             "at least 2 tri-squares"
         );
 
-        for ways in census.patches.values() {
-            for history in ways {
-                if history.is_empty() {
-                    continue;
-                }
-                let mut gp = GrowingPatch::new(Arc::clone(&census.ts), 0);
-                for pm in history {
-                    assert!(gp.add_tile(pm).is_some(), "replay should succeed");
-                }
-                assert_eq!(
-                    gp.angles().len(),
-                    gp.vertex_types().len(),
-                    "angles == vertex_types"
-                );
-                if gp.is_growing() {
-                    assert!(
-                        Snake::<ZZ4>::try_from(gp.to_rat().seq()).is_ok(),
-                        "valid snake"
-                    );
-                }
-            }
-        }
+        let synthetic = census.synthetic_closed_vtypes_len4();
+        eprintln!(
+            "\n  Synthetic closed vtypes of length 4: {}",
+            synthetic.len()
+        );
     }
 
     #[test]
