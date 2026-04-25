@@ -1470,24 +1470,42 @@ mod tests {
             rat_groups.entry(r).or_default().insert(info.kind());
         }
 
+        let mut rat_counts: BTreeMap<Rat<ZZ12>, (usize, BTreeSet<VertexTypeKind>)> =
+            BTreeMap::new();
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            let r = info.realizing_rat().clone();
+            let entry = rat_counts.entry(r).or_insert((0, BTreeSet::new()));
+            entry.0 += 1;
+            entry.1.insert(info.kind());
+        }
+
         eprintln!(
             "[sq+hex] {} types -> {} distinct realizing rats",
             idx.num_types(),
-            rat_groups.len()
+            rat_counts.len()
         );
         for (kind, count) in &by_kind {
             eprintln!("  {:?}: {}", kind, count);
         }
-        let mut by_len: BTreeMap<usize, usize> = BTreeMap::new();
-        for (rat, kinds) in &rat_groups {
-            *by_len.entry(rat.len()).or_insert(0) += 1;
-            if kinds.contains(&VertexTypeKind::Open) {
-                eprintln!("  rat_len={} kinds={:?} (has open)", rat.len(), kinds);
-            }
-        }
-        eprintln!("  Distinct rats by boundary length:");
-        for (len, count) in &by_len {
-            eprintln!("    len={}: {} distinct shapes", len, count);
+        eprintln!("  All distinct realizing rats:");
+        for (rat, (count, kinds)) in &rat_counts {
+            let has_sq = (1..=idx.num_types()).any(|id| {
+                idx.get_info(id).realizing_rat() == rat
+                    && idx.get_info(id).vtype().iter().any(|(t, _)| *t == 0)
+            });
+            let has_hex = (1..=idx.num_types()).any(|id| {
+                idx.get_info(id).realizing_rat() == rat
+                    && idx.get_info(id).vtype().iter().any(|(t, _)| *t == 1)
+            });
+            let mixed = has_sq && has_hex;
+            eprintln!(
+                "    len={} count={} kinds={:?} mixed={}",
+                rat.len(),
+                count,
+                kinds,
+                mixed,
+            );
         }
     }
 }
