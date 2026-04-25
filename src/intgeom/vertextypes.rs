@@ -263,7 +263,7 @@ fn reconstruct_minimal_rat<T: IsComplex + IsRingOrField + Units>(
     Some(result)
 }
 
-fn compute_gap_angle<T: IsComplex + IsRingOrField + Units + SymNum>(
+pub(crate) fn compute_gap_angle<T: IsComplex + IsRingOrField + Units + SymNum>(
     tileset: &Arc<TileSet<T>>,
     vtype: &VertexType,
 ) -> i8 {
