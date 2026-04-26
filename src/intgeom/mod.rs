@@ -18,6 +18,8 @@ pub mod vertextypes;
 
 pub mod boundary_vtype;
 
+pub mod seq_explorer;
+
 pub mod patch;
 
 pub mod growing;

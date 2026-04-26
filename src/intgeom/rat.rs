@@ -45,7 +45,7 @@ pub fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
 /// minimal rotation and returns two copies of that,
 /// with an offset of the beginning of the sequence wrt.
 /// the original input sequence.
-fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
+pub(crate) fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
     // normalize (lex. minimal rotation of cyclic sequence)
     let mut canonical = angles.to_vec();
     let offset = lex_min_rot(canonical.as_slice());
