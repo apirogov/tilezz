@@ -445,7 +445,7 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     }
 }
 
-fn canonicalize_vtx(vt: &mut Vec<(usize, usize)>) {
+pub(crate) fn canonicalize_vtx(vt: &mut Vec<(usize, usize)>) {
     let n = vt.len();
     if n <= 1 {
         return;
@@ -454,7 +454,7 @@ fn canonicalize_vtx(vt: &mut Vec<(usize, usize)>) {
     *vt = best;
 }
 
-fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
+pub(crate) fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
