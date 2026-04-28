@@ -103,8 +103,11 @@ impl SeqTrie {
         if let Some(w) = self.nodes[node].witness {
             result.entry(w).or_default().push(path.clone());
         }
-        let mut sorted_children: Vec<(i8, usize)> =
-            self.nodes[node].children.iter().map(|(&a, &c)| (a, c)).collect();
+        let mut sorted_children: Vec<(i8, usize)> = self.nodes[node]
+            .children
+            .iter()
+            .map(|(&a, &c)| (a, c))
+            .collect();
         sorted_children.sort_by_key(|(a, _)| *a);
         for (angle, child) in sorted_children {
             path.push(angle);
@@ -172,7 +175,9 @@ fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) 
 
 #[derive(Debug, Clone)]
 pub enum Provenance {
-    Seed { tile_idx: usize },
+    Seed {
+        tile_idx: usize,
+    },
     Glue {
         source_rat_id: usize,
         tile_idx: usize,
@@ -215,16 +220,11 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
                 provenances.push(Provenance::Seed { tile_idx });
 
                 let witness_idx = witnesses.len();
-                let (new_count, raw_active) =
-                    trie.insert_cyclic_subseqs(rat.seq(), k, witness_idx);
+                let (new_count, raw_active) = trie.insert_cyclic_subseqs(rat.seq(), k, witness_idx);
                 if new_count > 0 {
                     let n = rat.seq().len();
-                    let mask = junction_active_mask(
-                        &raw_active,
-                        k,
-                        &Provenance::Seed { tile_idx },
-                        n,
-                    );
+                    let mask =
+                        junction_active_mask(&raw_active, k, &Provenance::Seed { tile_idx }, n);
                     active_map.insert(rat_id, mask);
                     witnesses.push(rat_id);
                     pending.insert(rat_id);
@@ -327,21 +327,14 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
                 rat_to_id.insert(rat.clone(), rat_id);
 
                 let witness_idx = witnesses.len();
-                let (new_count, raw_active) =
-                    trie.insert_cyclic_subseqs(rat.seq(), k, witness_idx);
+                let (new_count, raw_active) = trie.insert_cyclic_subseqs(rat.seq(), k, witness_idx);
                 if new_count > 0 {
                     let source_len = match &provenances[rat_id] {
                         Provenance::Seed { .. } => rat.len(),
-                        Provenance::Glue { source_rat_id, .. } => {
-                            rats[*source_rat_id].len()
-                        }
+                        Provenance::Glue { source_rat_id, .. } => rats[*source_rat_id].len(),
                     };
-                    let mask = junction_active_mask(
-                        &raw_active,
-                        k,
-                        &provenances[rat_id],
-                        source_len,
-                    );
+                    let mask =
+                        junction_active_mask(&raw_active, k, &provenances[rat_id], source_len);
                     active_map.insert(rat_id, mask);
                     witnesses.push(rat_id);
                     pending.insert(rat_id);

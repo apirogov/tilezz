@@ -1,6 +1,3 @@
-#[cfg(test)]
-use std::collections::BTreeSet;
-
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -9,15 +6,13 @@ use crate::intgeom::matchtypes::{MatchFinder, MatchTypeIndex};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
-pub type VertexType = Vec<(usize, usize)>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EdgeInfo {
     pub tile_id: usize,
     pub tile_offset: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PatchVertexType {
     pub angle: i8,
     pub cw: EdgeInfo,
@@ -39,11 +34,7 @@ pub struct PatchMatch {
     pub tile_id: usize,
 }
 
-pub struct AddTileDiff {
-    pub old_local: Vec<VertexType>,
-    pub new_local: Vec<VertexType>,
-    pub closed_vertex_types: Vec<VertexType>,
-}
+pub struct AddTileDiff;
 
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsComplex> {
@@ -60,7 +51,6 @@ enum PatchState<T: IsComplex> {
     },
     Growing {
         angles: Vec<i8>,
-        vertex_types: Vec<VertexType>,
         edges: Vec<EdgeInfo>,
         cached_matches: Vec<PatchMatch>,
     },
@@ -125,13 +115,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn vertex_types(&self) -> &[VertexType] {
-        match &self.state {
-            PatchState::Growing { vertex_types, .. } => vertex_types,
-            _ => &[],
-        }
-    }
-
     pub fn angles(&self) -> &[i8] {
         match &self.state {
             PatchState::Growing { angles, .. } => angles,
@@ -143,15 +126,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         match &self.state {
             PatchState::Growing { angles, .. } => Rat::from_slice_unchecked(angles),
             _ => panic!("patch has no boundary"),
-        }
-    }
-
-    pub fn edge_types(&self) -> Vec<(usize, usize)> {
-        match &self.state {
-            PatchState::Growing { vertex_types, .. } => {
-                vertex_types.iter().map(|vt| vt[0]).collect()
-            }
-            _ => Vec::new(),
         }
     }
 
@@ -264,25 +238,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn from_parts(
         tileset: Arc<TileSet<T>>,
         angles: Vec<i8>,
-        vertex_types: Vec<VertexType>,
+        edges: Vec<EdgeInfo>,
     ) -> Option<Self> {
-        if angles.is_empty() || angles.len() != vertex_types.len() {
+        if angles.is_empty() || angles.len() != edges.len() {
             return None;
         }
-        let edges: Vec<EdgeInfo> = vertex_types
-            .iter()
-            .map(|vt| EdgeInfo {
-                tile_id: vt[0].0,
-                tile_offset: vt[0].1,
-            })
-            .collect();
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut gp = GrowingPatch {
             tileset,
             match_index,
             state: PatchState::Growing {
                 angles,
-                vertex_types,
                 edges,
                 cached_matches: Vec::new(),
             },
@@ -330,90 +296,43 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return None;
         }
 
-        let cw_pos = pm.start_a;
         let ccw_pos = (pm.start_a + mlen) % n;
 
-        let seed_vtx: Vec<VertexType> = (0..n).map(|i| vec![(seed_id, i)]).collect();
-
-        let mut closed = Vec::new();
-        for k in 1..mlen {
-            let p = (cw_pos + k) % n;
-            let mut vt = seed_vtx[p].clone();
-            let new_offset = (pm.start_b + k) % m;
-            vt.push((pm.tile_id, new_offset));
-            canonicalize_vtx(&mut vt);
-            closed.push(vt);
+        let mut edges = Vec::with_capacity(new_len);
+        for i in 0..seg_len_old {
+            edges.push(EdgeInfo {
+                tile_id: seed_id,
+                tile_offset: (ccw_pos + i) % n,
+            });
         }
-
-        let mut old_local = Vec::new();
-        for k in 0..=mlen {
-            let p = (cw_pos + k) % n;
-            old_local.push(seed_vtx[p].clone());
-        }
-
-        let mut new_vtx = Vec::with_capacity(new_len);
-
-        let mut ccw_junction = seed_vtx[ccw_pos].clone();
-        let ccw_new_offset = (pm.start_b + mlen) % m;
-        ccw_junction.insert(0, (pm.tile_id, ccw_new_offset));
-        new_vtx.push(ccw_junction);
-
-        for i in 1..seg_len_old {
-            let old_p = (ccw_pos + i) % n;
-            new_vtx.push(seed_vtx[old_p].clone());
-        }
-
-        let mut cw_junction = seed_vtx[cw_pos].clone();
-        cw_junction.push((pm.tile_id, pm.start_b));
-        new_vtx.push(cw_junction);
-
+        edges.push(EdgeInfo {
+            tile_id: pm.tile_id,
+            tile_offset: pm.start_b,
+        });
         for k in 1..seg_len_new {
-            let offset = (pm.start_b + mlen + k) % m;
-            new_vtx.push(vec![(pm.tile_id, offset)]);
+            edges.push(EdgeInfo {
+                tile_id: pm.tile_id,
+                tile_offset: (pm.start_b + mlen + k) % m,
+            });
         }
 
-        debug_assert_eq!(new_vtx.len(), new_len);
-
-        let mut new_local = Vec::new();
-        new_local.push(new_vtx[0].clone());
-        for k in 1..seg_len_new {
-            new_local.push(new_vtx[seg_len_old + k].clone());
-        }
-        new_local.push(new_vtx[seg_len_old].clone());
+        debug_assert_eq!(edges.len(), new_len);
 
         self.state = PatchState::Growing {
             angles: new_angles,
-            vertex_types: new_vtx.clone(),
-            edges: new_vtx
-                .iter()
-                .map(|vt| EdgeInfo {
-                    tile_id: vt.last().unwrap().0,
-                    tile_offset: vt.last().unwrap().1,
-                })
-                .collect(),
+            edges,
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
 
-        Some(AddTileDiff {
-            old_local,
-            new_local,
-            closed_vertex_types: closed,
-        })
+        Some(AddTileDiff)
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> Option<AddTileDiff> {
-        let (angles, vertex_types, edges) = match &mut self.state {
-            PatchState::Growing {
-                angles,
-                vertex_types,
-                edges,
-                ..
-            } => (
-                std::mem::take(angles),
-                std::mem::take(vertex_types),
-                std::mem::take(edges),
-            ),
+        let (angles, edges) = match &mut self.state {
+            PatchState::Growing { angles, edges, .. } => {
+                (std::mem::take(angles), std::mem::take(edges))
+            }
             _ => return None,
         };
 
@@ -422,14 +341,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let m = self.tileset.rat(pm.tile_id).seq().len();
 
         if mlen == 0 || mlen > n || mlen > m {
-            self.restore_growing(angles, vertex_types, edges);
+            self.restore_growing(angles, edges);
             return None;
         }
 
         let new_angles = match compute_glue_angles::<T>(&angles, pm, &self.tileset) {
             Some(a) => a,
             None => {
-                self.restore_growing(angles, vertex_types, edges);
+                self.restore_growing(angles, edges);
                 return None;
             }
         };
@@ -440,94 +359,41 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         if new_len == 0 {
             self.state = PatchState::Closed;
-            return Some(AddTileDiff {
-                old_local: Vec::new(),
-                new_local: Vec::new(),
-                closed_vertex_types: Vec::new(),
+            return Some(AddTileDiff);
+        }
+
+        let ccw_pos = (pm.start_a + mlen) % n;
+
+        let mut new_edges = Vec::with_capacity(new_len);
+        for i in 0..seg_len_old {
+            new_edges.push(edges[(ccw_pos + i) % n]);
+        }
+        new_edges.push(EdgeInfo {
+            tile_id: pm.tile_id,
+            tile_offset: pm.start_b,
+        });
+        for k in 1..seg_len_new {
+            new_edges.push(EdgeInfo {
+                tile_id: pm.tile_id,
+                tile_offset: (pm.start_b + mlen + k) % m,
             });
         }
 
-        let cw_pos = pm.start_a;
-        let ccw_pos = (pm.start_a + mlen) % n;
-
-        let mut closed = Vec::new();
-        for k in 1..mlen {
-            let p = (cw_pos + k) % n;
-            let mut vt = vertex_types[p].clone();
-            let new_offset = (pm.start_b + k) % m;
-            vt.push((pm.tile_id, new_offset));
-            canonicalize_vtx(&mut vt);
-            closed.push(vt);
-        }
-
-        let mut old_local = Vec::new();
-        for k in 0..=mlen {
-            let p = (cw_pos + k) % n;
-            old_local.push(vertex_types[p].clone());
-        }
-
-        let mut new_vtx = Vec::with_capacity(new_len);
-
-        let mut ccw_junction = vertex_types[ccw_pos].clone();
-        let ccw_new_offset = (pm.start_b + mlen) % m;
-        ccw_junction.insert(0, (pm.tile_id, ccw_new_offset));
-        new_vtx.push(ccw_junction);
-
-        for i in 1..seg_len_old {
-            let old_p = (ccw_pos + i) % n;
-            new_vtx.push(vertex_types[old_p].clone());
-        }
-
-        let mut cw_junction = vertex_types[cw_pos].clone();
-        cw_junction.push((pm.tile_id, pm.start_b));
-        new_vtx.push(cw_junction);
-
-        for k in 1..seg_len_new {
-            let offset = (pm.start_b + mlen + k) % m;
-            new_vtx.push(vec![(pm.tile_id, offset)]);
-        }
-
-        debug_assert_eq!(new_vtx.len(), new_len);
-
-        let mut new_local = Vec::new();
-        new_local.push(new_vtx[0].clone());
-        for k in 1..seg_len_new {
-            new_local.push(new_vtx[seg_len_old + k].clone());
-        }
-        new_local.push(new_vtx[seg_len_old].clone());
-
-        let new_edges: Vec<EdgeInfo> = new_vtx
-            .iter()
-            .map(|vt| EdgeInfo {
-                tile_id: vt.last().unwrap().0,
-                tile_offset: vt.last().unwrap().1,
-            })
-            .collect();
+        debug_assert_eq!(new_edges.len(), new_len);
 
         self.state = PatchState::Growing {
             angles: new_angles,
-            vertex_types: new_vtx,
             edges: new_edges,
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
 
-        Some(AddTileDiff {
-            old_local,
-            new_local,
-            closed_vertex_types: closed,
-        })
+        Some(AddTileDiff)
     }
 
-    fn restore_growing(
-        &mut self,
-        angles: Vec<i8>,
-        vertex_types: Vec<VertexType>,
-        edges: Vec<EdgeInfo>,
-    ) {
+    fn restore_growing(&mut self, angles: Vec<i8>, edges: Vec<EdgeInfo>) {
         self.state = PatchState::Growing {
             angles,
-            vertex_types,
             edges,
             cached_matches: Vec::new(),
         };
@@ -596,15 +462,6 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     }
 }
 
-pub(crate) fn canonicalize_vtx(vt: &mut Vec<(usize, usize)>) {
-    let n = vt.len();
-    if n <= 1 {
-        return;
-    }
-    let best = lex_min_rotation_clone(vt);
-    *vt = best;
-}
-
 pub(crate) fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
@@ -671,61 +528,13 @@ pub(crate) fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     Some(new_angles)
 }
 
-fn lex_min_rotation_clone(vt: &[(usize, usize)]) -> VertexType {
-    let n = vt.len();
-    if n <= 1 {
-        return vt.to_vec();
-    }
-    let mut best = vt.to_vec();
-    for r in 1..n {
-        let candidate: Vec<(usize, usize)> = (0..n).map(|i| vt[(r + i) % n]).collect();
-        if candidate < best {
-            best = candidate;
-        }
-    }
-    best
-}
-
-#[cfg(test)]
-fn synthetic_closed_vtypes(
-    vertex_len: usize,
-    tile_id: usize,
-    tile_edges: usize,
-) -> BTreeSet<VertexType> {
-    let seed: Vec<VertexType> = (0..tile_edges).map(|i| vec![(tile_id, i)]).collect();
-    let mut result: BTreeSet<VertexType> = BTreeSet::new();
-    let mut combo: Vec<(usize, usize)> = Vec::with_capacity(vertex_len);
-    fn recurse(
-        depth: usize,
-        max_depth: usize,
-        seed: &[VertexType],
-        combo: &mut Vec<(usize, usize)>,
-        result: &mut BTreeSet<VertexType>,
-    ) {
-        if depth == max_depth {
-            result.insert(lex_min_rotation_clone(combo));
-            return;
-        }
-        for s in seed {
-            combo.push(s[0]);
-            recurse(depth + 1, max_depth, seed, combo, result);
-            combo.pop();
-        }
-    }
-    recurse(0, vertex_len, &seed, &mut combo, &mut result);
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{SymNum, ZZ10, ZZ12, ZZ4};
+    use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles;
-    use crate::intgeom::vertextypes::VertexTypeKind;
     use std::collections::BTreeMap;
-    use std::collections::BTreeSet;
-    use std::collections::VecDeque;
 
     fn square_patch() -> GrowingPatch<ZZ4> {
         let sq: Snake<ZZ4> = tiles::square();
@@ -747,7 +556,7 @@ mod tests {
         assert!(!gp.is_growing());
         assert!(!gp.is_closed());
         assert_eq!(gp.boundary_len(), 0);
-        assert_eq!(gp.vertex_types().len(), 0);
+        assert_eq!(gp.edges().len(), 0);
     }
 
     #[test]
@@ -769,11 +578,9 @@ mod tests {
 
         assert!(gp.is_growing());
         assert_eq!(gp.boundary_len(), 12 - 2 * pm.len);
-        assert_eq!(gp.vertex_types().len(), gp.boundary_len());
-
-        assert!(diff.closed_vertex_types.is_empty() || pm.len > 2);
-        assert!(!diff.old_local.is_empty());
-        assert!(!diff.new_local.is_empty());
+        assert_eq!(gp.edges().len(), gp.boundary_len());
+        assert_eq!(gp.angles().len(), gp.boundary_len());
+        let _ = diff;
     }
 
     #[test]
@@ -782,19 +589,15 @@ mod tests {
         let matches = gp.get_all_matches().to_vec();
         let pm = matches[0].clone();
         gp.add_tile(&pm).expect("first add");
-        assert_eq!(
-            gp.angles().len(),
-            gp.vertex_types().len(),
-            "angles == vertex_types"
-        );
+        assert_eq!(gp.angles().len(), gp.edges().len(), "angles == edges");
 
         let matches2 = gp.get_all_matches().to_vec();
         if let Some(pm2) = matches2.first() {
             if gp.add_tile(pm2).is_some() {
                 assert_eq!(
                     gp.angles().len(),
-                    gp.vertex_types().len(),
-                    "angles == vertex_types after second add"
+                    gp.edges().len(),
+                    "angles == edges after second add"
                 );
             }
         }
@@ -806,26 +609,20 @@ mod tests {
         let matches = gp.get_all_matches().to_vec();
 
         for (step, pm) in matches.iter().enumerate() {
-            let diff = gp.add_tile(pm);
-            if diff.is_none() {
+            if gp.add_tile(pm).is_none() {
                 break;
             }
-            let vt = gp.vertex_types();
+            let edges = gp.edges();
             assert!(
-                !vt.is_empty(),
-                "step {}: vertex types should not be empty",
+                !edges.is_empty(),
+                "step {}: edges should not be empty",
                 step
             );
             if step < 3 {
+                let junctions = gp.junction_vertices();
                 assert!(
-                    !vt[0].is_empty(),
-                    "step {}: first vertex type should be non-empty",
-                    step
-                );
-                let last = vt.len() - 1;
-                assert!(
-                    !vt[last].is_empty(),
-                    "step {}: last vertex type should be non-empty",
+                    !junctions.is_empty(),
+                    "step {}: should have junction vertices",
                     step
                 );
             }
@@ -840,10 +637,14 @@ mod tests {
 
         for pm in &matches {
             let mut gp2 = hex_patch();
-            let diff = gp2.add_tile(pm).expect("first add");
+            assert!(
+                gp2.add_tile(pm).is_some(),
+                "first add should succeed for pm {:?}",
+                pm
+            );
             assert!(gp2.is_growing());
             assert_eq!(gp2.boundary_len(), 12 - 2 * pm.len);
-            assert_eq!(gp2.vertex_types().len(), gp2.boundary_len());
+            assert_eq!(gp2.edges().len(), gp2.boundary_len());
 
             let rat = gp2.to_rat();
             assert!(
@@ -851,9 +652,6 @@ mod tests {
                 "valid snake for pm {:?}",
                 pm
             );
-
-            assert_eq!(diff.old_local.len(), pm.len + 1);
-            assert!(diff.new_local.len() >= 2);
         }
     }
 
@@ -865,7 +663,11 @@ mod tests {
 
         for pm in &matches {
             let mut gp2 = square_patch();
-            let diff = gp2.add_tile(pm).expect("first add");
+            assert!(
+                gp2.add_tile(pm).is_some(),
+                "first add should succeed for pm {:?}",
+                pm
+            );
             assert!(gp2.is_growing());
             assert_eq!(gp2.boundary_len(), 8 - 2 * pm.len);
 
@@ -875,9 +677,6 @@ mod tests {
                 "valid snake for pm {:?}",
                 pm
             );
-
-            assert_eq!(diff.old_local.len(), pm.len + 1);
-            assert!(diff.new_local.len() >= 2);
         }
     }
 
@@ -915,205 +714,195 @@ mod tests {
         assert!(!matches.is_empty());
 
         if let Some(pm) = matches.first() {
-            let diff = gp.add_tile(pm);
-            assert!(diff.is_some());
+            let result = gp.add_tile(pm);
+            assert!(result.is_some());
             assert!(gp.is_growing());
         }
     }
 
-    struct PatchCensus<T: IsComplex> {
-        ts: Arc<TileSet<T>>,
-        patches: BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>>,
-    }
-
-    impl PatchCensus<ZZ4> {
-        fn for_squares(max_tiles: usize) -> Self {
-            let sq: Snake<ZZ4> = tiles::square();
-            let rat = Rat::try_from(&sq).unwrap();
-            let ts = Arc::new(TileSet::new(vec![rat]));
-            let patches = brute_force_zz4(&ts, max_tiles);
-            PatchCensus { ts, patches }
-        }
-
-        fn synthetic_closed_vtypes_len4(&self) -> BTreeSet<VertexType> {
-            synthetic_closed_vtypes(4, 0, 4)
-        }
-    }
-
-    impl PatchCensus<ZZ12> {
-        fn for_hexagons(max_tiles: usize) -> Self {
-            let hex: Snake<ZZ12> = tiles::hexagon();
-            let rat = Rat::try_from(&hex).unwrap();
-            let ts = Arc::new(TileSet::new(vec![rat]));
-            let patches = brute_force_zz12(&ts, max_tiles);
-            PatchCensus { ts, patches }
-        }
-
-        fn synthetic_closed_vtypes_len3(&self) -> BTreeSet<VertexType> {
-            synthetic_closed_vtypes(3, 0, 6)
-        }
-    }
-
-    impl<T: IsComplex + IsRingOrField + Units> PatchCensus<T> {
-        fn report(&self, label: &str) {
-            let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
-            for ways in self.patches.values() {
-                let n = ways[0].len() + 1;
-                by_tiles.entry(n).and_modify(|c| *c += 1).or_insert(1);
+    #[test]
+    fn edges_self_consistent() {
+        let gp_sq: GrowingPatch<ZZ4> = square_patch();
+        for pm in gp_sq.get_all_matches() {
+            let mut gp2 = gp_sq.clone();
+            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                continue;
             }
-            eprintln!("[{}] Patch census:", label);
-            for (n, count) in &by_tiles {
-                eprintln!("  {}-tile patches: {}", n, count);
+            verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
+        }
+        let gp_hex: GrowingPatch<ZZ12> = hex_patch();
+        for pm in gp_hex.get_all_matches() {
+            let mut gp2 = gp_hex.clone();
+            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                continue;
             }
-
-            eprintln!("\nDetailed patches by tile count:");
-            for (rat, ways) in &self.patches {
-                let n = ways[0].len() + 1;
-                if n <= 3 {
-                    eprintln!("  n={} boundary={:?} ({} ways)", n, rat.seq(), ways.len());
+            verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
+            for pm2 in gp2.get_all_matches() {
+                let mut gp3 = gp2.clone();
+                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
+                    verify_edges_consistency(&gp3, &gp3.tileset(), "3-hex");
                 }
             }
+        }
+    }
 
-            let mut open_vtypes: BTreeSet<VertexType> = BTreeSet::new();
-            let mut closed_vtypes: BTreeSet<VertexType> = BTreeSet::new();
+    fn verify_edges_consistency<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+        ts: &Arc<TileSet<T>>,
+        label: &str,
+    ) {
+        let n = gp.boundary_len();
+        assert!(n > 0, "[{}] patch should be growing", label);
+        let edges = gp.edges();
+        assert_eq!(edges.len(), n, "[{}] edges length", label);
 
-            for ways in self.patches.values() {
-                for history in ways {
-                    let mut gp = GrowingPatch::new(Arc::clone(&self.ts), 0);
-                    let mut all_closed: Vec<VertexType> = Vec::new();
-                    for pm in history {
-                        if let Some(diff) = gp.add_tile(pm) {
-                            all_closed.extend(diff.closed_vertex_types);
-                        }
-                    }
-                    if gp.is_growing() {
-                        for vt in gp.vertex_types() {
-                            open_vtypes.insert(vt.clone());
-                        }
-                    }
-                    closed_vtypes.extend(all_closed);
-                }
-            }
+        for i in 0..n {
+            assert!(
+                edges[i].tile_id < ts.num_tiles(),
+                "[{}] pos {}: invalid tile_id {}",
+                label,
+                i,
+                edges[i].tile_id
+            );
+            let tile_len = ts.rat(edges[i].tile_id).len();
+            assert!(
+                edges[i].tile_offset < tile_len,
+                "[{}] pos {}: invalid offset {} for tile {} (len {})",
+                label,
+                i,
+                edges[i].tile_offset,
+                edges[i].tile_id,
+                tile_len
+            );
+        }
 
-            let mut open_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &open_vtypes {
-                *open_by_n.entry(vt.len()).or_insert(0) += 1;
-            }
-            eprintln!("\n  Open vertex types by touched-tile count:");
-            for (n, count) in &open_by_n {
-                eprintln!("    touching {} tiles: {}", n, count);
-            }
-
-            let mut closed_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &closed_vtypes {
-                *closed_by_n.entry(vt.len()).or_insert(0) += 1;
-            }
-            eprintln!("\n  Closed vertex types by touched-tile count:");
-            for (n, count) in &closed_by_n {
-                eprintln!("    touching {} tiles: {}", n, count);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            if edges[i].tile_id == edges[j].tile_id && !gp.is_junction(i) && !gp.is_junction(j) {
+                let tile_len = ts.rat(edges[i].tile_id).len();
+                let expected_next = (edges[i].tile_offset + 1) % tile_len;
+                assert_eq!(
+                    edges[j].tile_offset, expected_next,
+                    "[{}] pos {}->{}: same-tile continuation expected offset {} got {}",
+                    label, i, j, expected_next, edges[j].tile_offset
+                );
             }
         }
 
-        fn verify_all_steps(&self, label: &str) {
-            let mut checked_steps = 0usize;
-            let mut checked_closed = 0usize;
+        let angles = gp.angles();
+        assert_eq!(angles.len(), n, "[{}] angles length", label);
+    }
 
-            for ways in self.patches.values() {
-                for history in ways {
-                    if history.is_empty() {
-                        continue;
-                    }
-                    let mut gp = GrowingPatch::new(Arc::clone(&self.ts), 0);
+    #[test]
+    fn edges_bi_hex_consistency() {
+        let gp = hex_patch();
+        for pm in gp.get_all_matches() {
+            let mut gp2 = hex_patch();
+            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
+            }
+        }
+    }
 
-                    for (step, pm) in history.iter().enumerate() {
-                        let old_n = gp.boundary_len();
-                        let old_vtypes = if old_n > 0 {
-                            gp.vertex_types().to_vec()
-                        } else {
-                            Vec::new()
-                        };
+    #[test]
+    fn edges_bi_square_consistency() {
+        let gp = square_patch();
+        for pm in gp.get_all_matches() {
+            let mut gp2 = square_patch();
+            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
+            }
+        }
+    }
 
-                        let diff = gp.add_tile(pm);
-                        assert!(diff.is_some(), "[{}] step {} add_tile failed", label, step);
-                        let diff = diff.unwrap();
+    #[test]
+    fn edges_multi_hex_consistency() {
+        let gp = hex_patch();
+        let matches = gp.get_all_matches().to_vec();
+        for pm1 in &matches {
+            let mut gp2 = hex_patch();
+            if gp2.add_tile(pm1).is_none() || !gp2.is_growing() {
+                continue;
+            }
+            verify_edges_consistency(&gp2, &gp2.tileset(), "2-hex");
+            for pm2 in gp2.get_all_matches() {
+                let mut gp3 = gp2.clone();
+                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
+                    verify_edges_consistency(&gp3, &gp3.tileset(), "3-hex");
+                }
+            }
+        }
+    }
 
-                        if old_n > 0 {
-                            assert_eq!(
-                                diff.old_local.len(),
-                                pm.len + 1,
-                                "[{}] step {}: old_local len should be mlen+1={}",
-                                label,
-                                step,
-                                pm.len + 1
-                            );
+    #[test]
+    fn edges_mixed_consistency() {
+        let hex_snake: Snake<ZZ12> = tiles::hexagon();
+        let sq_snake: Snake<ZZ12> = tiles::square();
+        let hex_rat = Rat::try_from(&hex_snake).unwrap();
+        let sq_rat = Rat::try_from(&sq_snake).unwrap();
+        let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
 
-                            let cw_pos = pm.start_a;
-                            for k in 0..=pm.len {
-                                let p = (cw_pos + k) % old_n;
-                                assert_eq!(
-                                    diff.old_local[k], old_vtypes[p],
-                                    "[{}] step {}: old_local[{}] mismatch at pos {}",
-                                    label, step, k, p
-                                );
-                            }
-
-                            let m = self.ts.rat(pm.tile_id).seq().len();
-
-                            if pm.len > 1 {
-                                assert_eq!(
-                                    diff.closed_vertex_types.len(),
-                                    pm.len - 1,
-                                    "[{}] step {}: closed count",
-                                    label,
-                                    step
-                                );
-                                for (ck, cvt) in diff.closed_vertex_types.iter().enumerate() {
-                                    let k = ck + 1;
-                                    let p = (cw_pos + k) % old_n;
-                                    let mut expected = old_vtypes[p].clone();
-                                    expected.push((pm.tile_id, (pm.start_b + k) % m));
-                                    let expected_canon = lex_min_rotation_clone(&expected);
-                                    assert_eq!(
-                                        *cvt, expected_canon,
-                                        "[{}] step {}: closed vtx {} at pos {}",
-                                        label, step, ck, p
-                                    );
-                                }
-                            } else {
-                                assert!(
-                                    diff.closed_vertex_types.is_empty(),
-                                    "[{}] step {}: no closed for mlen=1",
-                                    label,
-                                    step
-                                );
-                            }
-
-                            assert_eq!(
-                                gp.angles().len(),
-                                gp.vertex_types().len(),
-                                "[{}] step {}: angles==vtx_types",
-                                label,
-                                step
-                            );
-                        }
-
-                        checked_steps += 1;
-                        checked_closed += diff.closed_vertex_types.len();
-                    }
-
-                    assert_eq!(
-                        gp.angles().len(),
-                        gp.vertex_types().len(),
-                        "[{}] final cyclic invariant",
-                        label
+        for seed_id in 0..ts.num_tiles() {
+            let gp = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), seed_id);
+            for pm in gp.get_all_matches() {
+                let mut gp2 = GrowingPatch::new(Arc::clone(&ts), seed_id);
+                if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                    verify_edges_consistency(
+                        &gp2,
+                        &ts,
+                        &format!("mixed seed={} pm {:?}", seed_id, pm),
                     );
                 }
             }
-            eprintln!(
-                "  [{}] verified {} steps, {} closed vertices",
-                label, checked_steps, checked_closed
-            );
         }
+    }
+
+    #[test]
+    fn brute_force_squares_up_to_4_tiles() {
+        let sq: Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let patches = brute_force_zz4(&ts, 4);
+
+        let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+        for ways in patches.values() {
+            let n = ways[0].len() + 1;
+            let e = by_tiles.entry(n).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += ways.len();
+        }
+
+        assert_eq!(
+            by_tiles.get(&1).map(|(s, _)| *s).unwrap_or(0),
+            1,
+            "1 mono-square"
+        );
+        assert_eq!(by_tiles.get(&2), Some(&(1, 16)), "1 bi-square, 16 ways");
+        assert!(
+            by_tiles.get(&3).map(|(s, _)| *s).unwrap_or(0) >= 2,
+            "at least 2 tri-squares"
+        );
+    }
+
+    #[test]
+    fn brute_force_hexagons_up_to_3_tiles() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let patches = brute_force_zz12(&ts, 3);
+
+        let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
+        for ways in patches.values() {
+            let n = ways[0].len() + 1;
+            by_tiles.entry(n).and_modify(|c| *c += 1).or_insert(1);
+        }
+
+        assert_eq!(by_tiles.get(&1).copied().unwrap_or(0), 1, "1 mono-hex");
+        assert_eq!(by_tiles.get(&2).copied().unwrap_or(0), 1, "1 bi-hex");
+        assert!(
+            by_tiles.get(&3).copied().unwrap_or(0) >= 1,
+            "at least 1 tri-hex"
+        );
     }
 
     fn brute_force_zz4(
@@ -1214,815 +1003,5 @@ mod tests {
         }
 
         results
-    }
-
-    #[test]
-    fn square_brute_force_up_to_4_tiles() {
-        let census = PatchCensus::for_squares(4);
-        census.report("square");
-        census.verify_all_steps("square");
-
-        let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-        for ways in census.patches.values() {
-            let n = ways[0].len() + 1;
-            let e = by_tiles.entry(n).or_insert((0, 0));
-            e.0 += 1;
-            e.1 += ways.len();
-        }
-
-        assert_eq!(
-            by_tiles.get(&1).map(|(s, _)| *s).unwrap_or(0),
-            1,
-            "1 mono-square"
-        );
-        assert_eq!(by_tiles.get(&2), Some(&(1, 16)), "1 bi-square, 16 ways");
-        assert!(
-            by_tiles.get(&3).map(|(s, _)| *s).unwrap_or(0) >= 2,
-            "at least 2 tri-squares"
-        );
-
-        let synthetic = census.synthetic_closed_vtypes_len4();
-        eprintln!(
-            "\n  Synthetic closed vtypes of length 4: {}",
-            synthetic.len()
-        );
-    }
-
-    #[test]
-    fn hex_brute_force_up_to_3_tiles() {
-        let census = PatchCensus::for_hexagons(3);
-        census.report("hexagon");
-        census.verify_all_steps("hexagon");
-
-        let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
-        for ways in census.patches.values() {
-            let n = ways[0].len() + 1;
-            by_tiles.entry(n).and_modify(|c| *c += 1).or_insert(1);
-        }
-
-        assert_eq!(by_tiles.get(&1).copied().unwrap_or(0), 1, "1 mono-hex");
-        assert_eq!(by_tiles.get(&2).copied().unwrap_or(0), 1, "1 bi-hex");
-        assert!(
-            by_tiles.get(&3).copied().unwrap_or(0) >= 1,
-            "at least 1 tri-hex"
-        );
-
-        let synthetic = census.synthetic_closed_vtypes_len3();
-        eprintln!(
-            "\n  Synthetic closed vtypes of length 3: {}",
-            synthetic.len()
-        );
-
-        for ways in census.patches.values() {
-            for history in ways {
-                if history.is_empty() {
-                    continue;
-                }
-                let mut gp = GrowingPatch::new(Arc::clone(&census.ts), 0);
-                for pm in history {
-                    gp.add_tile(pm).expect("add_tile");
-                }
-                assert!(gp.is_growing(), "patch should be growing");
-                assert_eq!(
-                    gp.angles().len(),
-                    gp.vertex_types().len(),
-                    "angles == vertex_types"
-                );
-                assert!(
-                    Snake::<ZZ12>::try_from(gp.to_rat().seq()).is_ok(),
-                    "valid snake"
-                );
-            }
-        }
-    }
-
-    struct VertexTypeCollector<T: IsComplex> {
-        tileset: Arc<TileSet<T>>,
-        open_types: BTreeSet<VertexType>,
-        closed_types: BTreeSet<VertexType>,
-        dead_types: BTreeSet<VertexType>,
-    }
-
-    impl<T: IsComplex + IsRingOrField + Units> VertexTypeCollector<T> {
-        fn collect(tileset: Arc<TileSet<T>>) -> Self {
-            let mut open_types: BTreeSet<VertexType> = BTreeSet::new();
-            let mut closed_types: BTreeSet<VertexType> = BTreeSet::new();
-            let mut dead_types: BTreeSet<VertexType> = BTreeSet::new();
-            let mut visited: BTreeSet<VertexType> = BTreeSet::new();
-            let mut queue: VecDeque<(GrowingPatch<T>, usize)> = VecDeque::new();
-
-            for seed_id in 0..tileset.num_tiles() {
-                let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
-                for pm in seed.get_all_matches() {
-                    let mut gp = seed.clone();
-                    if let Some(diff) = gp.add_tile(pm) {
-                        closed_types.extend(diff.closed_vertex_types);
-                        if gp.is_growing() {
-                            for pos in 0..gp.boundary_len() {
-                                let vt = gp.vertex_types()[pos].clone();
-                                if visited.insert(vt.clone()) {
-                                    queue.push_back((gp.clone(), pos));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            while let Some((gp, pos)) = queue.pop_front() {
-                let vt = gp.vertex_types()[pos].clone();
-                if dead_types.contains(&vt) {
-                    continue;
-                }
-
-                let touching: Vec<&PatchMatch> = gp.get_matches_touching_vertex(pos).collect();
-                if touching.is_empty() {
-                    dead_types.insert(vt);
-                    continue;
-                }
-
-                open_types.insert(vt.clone());
-
-                for pm in touching {
-                    let mut gp2 = gp.clone();
-                    if let Some(diff) = gp2.add_tile(pm) {
-                        closed_types.extend(diff.closed_vertex_types);
-                        if gp2.is_growing() {
-                            for new_pos in 0..gp2.boundary_len() {
-                                let new_vt = gp2.vertex_types()[new_pos].clone();
-                                if new_vt.len() >= vt.len() && visited.insert(new_vt.clone()) {
-                                    queue.push_back((gp2.clone(), new_pos));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            VertexTypeCollector {
-                tileset,
-                open_types,
-                closed_types,
-                dead_types,
-            }
-        }
-
-        fn report(&self, label: &str) {
-            let mut open_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &self.open_types {
-                *open_by_n.entry(vt.len()).or_insert(0) += 1;
-            }
-            let mut closed_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &self.closed_types {
-                *closed_by_n.entry(vt.len()).or_insert(0) += 1;
-            }
-            let mut dead_by_n: BTreeMap<usize, usize> = BTreeMap::new();
-            for vt in &self.dead_types {
-                *dead_by_n.entry(vt.len()).or_insert(0) += 1;
-            }
-
-            eprintln!("[{}] Vertex type collection:", label);
-            eprintln!("  Open (non-terminal) by touched-tile count:");
-            for (n, c) in &open_by_n {
-                eprintln!("    {} tiles: {}", n, c);
-            }
-            eprintln!("  Open total: {}", self.open_types.len());
-            eprintln!("  Closed (terminal) by touched-tile count:");
-            for (n, c) in &closed_by_n {
-                eprintln!("    {} tiles: {}", n, c);
-            }
-            eprintln!("  Closed total: {}", self.closed_types.len());
-            eprintln!("  Dead (open, terminal) by touched-tile count:");
-            for (n, c) in &dead_by_n {
-                eprintln!("    {} tiles: {}", n, c);
-            }
-            eprintln!("  Dead total: {}", self.dead_types.len());
-        }
-    }
-
-    #[test]
-    fn square_systematic_vtypes() {
-        let sq: Snake<ZZ4> = tiles::square();
-        let rat = Rat::try_from(&sq).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let collector = VertexTypeCollector::collect(ts);
-        collector.report("square");
-
-        let synthetic_closed = synthetic_closed_vtypes(4, 0, 4);
-        assert_eq!(
-            collector
-                .closed_types
-                .iter()
-                .filter(|vt| vt.len() == 4)
-                .count(),
-            synthetic_closed.len(),
-            "closed vtypes of length 4 should match synthetic"
-        );
-    }
-
-    #[test]
-    fn hex_systematic_vtypes() {
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let collector = VertexTypeCollector::collect(ts);
-        collector.report("hexagon");
-
-        let synthetic_closed = synthetic_closed_vtypes(3, 0, 6);
-        assert_eq!(
-            collector
-                .closed_types
-                .iter()
-                .filter(|vt| vt.len() == 3)
-                .count(),
-            synthetic_closed.len(),
-            "closed vtypes of length 3 should match synthetic"
-        );
-    }
-
-    #[test]
-    fn square_hex_mixed_vtypes() {
-        let sq: Snake<ZZ12> = tiles::square();
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let sq_rat = Rat::try_from(&sq).unwrap();
-        let hex_rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
-        let collector = VertexTypeCollector::collect(ts);
-        collector.report("square+hexagon");
-    }
-
-    #[test]
-    fn square_vertex_type_index() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-        let sq: Snake<ZZ12> = tiles::square();
-        let rat = Rat::try_from(&sq).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut open = 0usize;
-        let mut closed = 0usize;
-        let mut dead = 0usize;
-        let mut cursed = 0usize;
-        let mut initial = 0usize;
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            match info.kind() {
-                VertexTypeKind::Open => open += 1,
-                VertexTypeKind::Closed => closed += 1,
-                VertexTypeKind::Dead => dead += 1,
-            }
-            if info.is_initial() {
-                initial += 1;
-            }
-            if info.is_cursed() {
-                cursed += 1;
-            }
-        }
-
-        eprintln!(
-            "[square] VertexTypeIndex: {} types, open={} closed={} dead={} initial={} cursed={}",
-            idx.num_types(),
-            open,
-            closed,
-            dead,
-            initial,
-            cursed
-        );
-
-        assert_eq!(open, 84, "open types");
-        assert_eq!(closed, 70, "closed types");
-        assert_eq!(dead, 0, "dead types");
-        assert_eq!(cursed, 0, "cursed types");
-        assert!(initial > 0, "has initial types");
-
-        let synthetic = synthetic_closed_vtypes(4, 0, 4);
-        assert_eq!(closed, synthetic.len(), "closed matches synthetic");
-    }
-
-    #[test]
-    fn hex_vertex_type_index() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut open = 0usize;
-        let mut closed = 0usize;
-        let mut dead = 0usize;
-        let mut cursed = 0usize;
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            match info.kind() {
-                VertexTypeKind::Open => open += 1,
-                VertexTypeKind::Closed => closed += 1,
-                VertexTypeKind::Dead => dead += 1,
-            }
-            if info.is_cursed() {
-                cursed += 1;
-            }
-        }
-
-        eprintln!(
-            "[hexagon] VertexTypeIndex: {} types, open={} closed={} dead={} cursed={}",
-            idx.num_types(),
-            open,
-            closed,
-            dead,
-            cursed
-        );
-
-        assert_eq!(open, 42, "open types");
-        assert_eq!(closed, 76, "closed types");
-        assert_eq!(dead, 0, "dead types");
-        assert_eq!(cursed, 0, "cursed types");
-
-        let synthetic = synthetic_closed_vtypes(3, 0, 6);
-        assert_eq!(closed, synthetic.len(), "closed matches synthetic");
-    }
-
-    #[test]
-    fn mixed_vertex_type_index() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-        let sq: Snake<ZZ12> = tiles::square();
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let sq_rat = Rat::try_from(&sq).unwrap();
-        let hex_rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut open = 0usize;
-        let mut closed = 0usize;
-        let mut dead = 0usize;
-        let mut cursed = 0usize;
-        let mut cursed_open = 0usize;
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            match info.kind() {
-                VertexTypeKind::Open => open += 1,
-                VertexTypeKind::Closed => closed += 1,
-                VertexTypeKind::Dead => dead += 1,
-            }
-            if info.is_cursed() {
-                cursed += 1;
-                if !info.is_closed() {
-                    cursed_open += 1;
-                }
-            }
-        }
-
-        eprintln!("[square+hexagon] VertexTypeIndex: {} types, open={} closed={} dead={} cursed={} cursed_open={}",
-            idx.num_types(), open, closed, dead, cursed, cursed_open);
-
-        assert_eq!(closed, 146, "closed types (70 sq + 76 hex)");
-        assert!(dead > 0, "should have dead cross-tile types");
-        assert!(cursed > 0, "should have cursed types");
-
-        let mut mixed_cursed = 0usize;
-        let mut mixed_not_cursed = 0usize;
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            let vt = info.vtype();
-            let has_sq = vt.iter().any(|(tid, _)| *tid == 0);
-            let has_hex = vt.iter().any(|(tid, _)| *tid == 1);
-            if has_sq && has_hex {
-                if info.is_cursed() {
-                    mixed_cursed += 1;
-                } else {
-                    mixed_not_cursed += 1;
-                    eprintln!("  NOT cursed mixed type {:?} kind={:?}", vt, info.kind());
-                }
-            }
-        }
-        eprintln!(
-            "  Mixed (sq+hex) types: {} cursed, {} not cursed",
-            mixed_cursed, mixed_not_cursed
-        );
-        assert_eq!(mixed_not_cursed, 0, "all mixed types should be cursed");
-    }
-
-    #[test]
-    fn hex_realizing_rat_grouping() {
-        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
-        use std::collections::BTreeMap;
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut rat_groups: BTreeMap<Rat<ZZ12>, (VertexTypeKind, usize)> = BTreeMap::new();
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            let r = info.realizing_rat().clone();
-            rat_groups.entry(r).or_insert_with(|| (info.kind(), 0)).1 += 1;
-        }
-
-        eprintln!(
-            "[hex] {} types -> {} distinct realizing rats:",
-            idx.num_types(),
-            rat_groups.len()
-        );
-        for (rat, (kind, count)) in &rat_groups {
-            eprintln!("  rat_len={} {:?} count={}", rat.len(), kind, count);
-        }
-
-        assert_eq!(
-            rat_groups.len(),
-            3,
-            "hex should have 3 distinct shapes (mono/bi/tri)"
-        );
-    }
-
-    #[test]
-    fn mixed_realizing_rat_grouping() {
-        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
-        use std::collections::{BTreeMap, BTreeSet};
-        let sq: Snake<ZZ12> = tiles::square();
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let sq_rat = Rat::try_from(&sq).unwrap();
-        let hex_rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut by_kind: BTreeMap<VertexTypeKind, usize> = BTreeMap::new();
-        let mut rat_groups: BTreeMap<Rat<ZZ12>, BTreeSet<VertexTypeKind>> = BTreeMap::new();
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            *by_kind.entry(info.kind()).or_insert(0) += 1;
-            let r = info.realizing_rat().clone();
-            rat_groups.entry(r).or_default().insert(info.kind());
-        }
-
-        let mut rat_counts: BTreeMap<Rat<ZZ12>, (usize, BTreeSet<VertexTypeKind>)> =
-            BTreeMap::new();
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            let r = info.realizing_rat().clone();
-            let entry = rat_counts.entry(r).or_insert((0, BTreeSet::new()));
-            entry.0 += 1;
-            entry.1.insert(info.kind());
-        }
-
-        eprintln!(
-            "[sq+hex] {} types -> {} distinct realizing rats",
-            idx.num_types(),
-            rat_counts.len()
-        );
-        for (kind, count) in &by_kind {
-            eprintln!("  {:?}: {}", kind, count);
-        }
-        eprintln!("  All distinct realizing rats:");
-        for (rat, (count, kinds)) in &rat_counts {
-            let has_sq = (1..=idx.num_types()).any(|id| {
-                idx.get_info(id).realizing_rat() == rat
-                    && idx.get_info(id).vtype().iter().any(|(t, _)| *t == 0)
-            });
-            let has_hex = (1..=idx.num_types()).any(|id| {
-                idx.get_info(id).realizing_rat() == rat
-                    && idx.get_info(id).vtype().iter().any(|(t, _)| *t == 1)
-            });
-            let mixed = has_sq && has_hex;
-            if mixed {
-                eprintln!(
-                    "    len={} count={} kinds={:?} seq={:?}",
-                    rat.len(),
-                    count,
-                    kinds,
-                    rat.seq(),
-                );
-            }
-        }
-    }
-
-    #[test]
-    #[ignore]
-    fn penrose_p3_vertex_type_index() {
-        use crate::intgeom::vertextypes::{VertexTypeIndex, VertexTypeKind};
-        let narrow: Snake<ZZ10> = tiles::penrose_p3_narrow();
-        let wide: Snake<ZZ10> = tiles::penrose_p3_wide();
-        let narrow_rat = Rat::try_from(&narrow).unwrap();
-        let wide_rat = Rat::try_from(&wide).unwrap();
-        let ts = Arc::new(TileSet::new(vec![narrow_rat, wide_rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let mut open = 0usize;
-        let mut closed = 0usize;
-        let mut dead = 0usize;
-        let mut cursed = 0usize;
-        let mut initial = 0usize;
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            match info.kind() {
-                VertexTypeKind::Open => open += 1,
-                VertexTypeKind::Closed => closed += 1,
-                VertexTypeKind::Dead => dead += 1,
-            }
-            if info.is_initial() {
-                initial += 1;
-            }
-            if info.is_cursed() {
-                cursed += 1;
-            }
-        }
-
-        eprintln!(
-            "[penrose P3] VertexTypeIndex: {} types, open={} closed={} dead={} initial={} cursed={}",
-            idx.num_types(), open, closed, dead, initial, cursed
-        );
-
-        let mut by_kind: BTreeMap<VertexTypeKind, usize> = BTreeMap::new();
-        let mut rat_counts: BTreeMap<Rat<ZZ10>, (usize, BTreeSet<VertexTypeKind>)> =
-            BTreeMap::new();
-        for id in 1..=idx.num_types() {
-            let info = idx.get_info(id);
-            *by_kind.entry(info.kind()).or_insert(0) += 1;
-            let r = info.realizing_rat().clone();
-            let entry = rat_counts.entry(r).or_insert((0, BTreeSet::new()));
-            entry.0 += 1;
-            entry.1.insert(info.kind());
-        }
-
-        eprintln!("  By kind: {:?}", by_kind);
-        eprintln!("  {} distinct realizing rats", rat_counts.len());
-
-        let mut rat_by_len: BTreeMap<usize, usize> = BTreeMap::new();
-        for (rat, (count, _kinds)) in &rat_counts {
-            *rat_by_len.entry(rat.len()).or_insert(0) += 1;
-            eprintln!(
-                "    len={} count={} kinds={:?} seq={:?}",
-                rat.len(),
-                count,
-                _kinds,
-                rat.clone().canonical().seq(),
-            );
-        }
-        eprintln!("  Realizing rats by boundary length: {:?}", rat_by_len);
-    }
-
-    #[test]
-    fn gap_angle_verification() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-
-        let sq: Snake<ZZ12> = tiles::square();
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let sq_rat = Rat::try_from(&sq).unwrap();
-        let hex_rat = Rat::try_from(&hex).unwrap();
-
-        let sq_ts = Arc::new(TileSet::new(vec![sq_rat.clone()]));
-        let sq_idx = VertexTypeIndex::new(sq_ts);
-        for id in 1..=sq_idx.num_types() {
-            let info = sq_idx.get_info(id);
-            if info.is_closed() {
-                assert_eq!(
-                    info.gap_angle(),
-                    -ZZ12::hturn(),
-                    "square closed gap_angle should be -hturn for {:?}",
-                    info.vtype()
-                );
-            }
-        }
-
-        let hex_ts = Arc::new(TileSet::new(vec![hex_rat.clone()]));
-        let hex_idx = VertexTypeIndex::new(hex_ts);
-        for id in 1..=hex_idx.num_types() {
-            let info = hex_idx.get_info(id);
-            if info.is_closed() {
-                assert_eq!(
-                    info.gap_angle(),
-                    -ZZ12::hturn(),
-                    "hex closed gap_angle should be -hturn for {:?}",
-                    info.vtype()
-                );
-            }
-        }
-
-        let sq_hex_ts = Arc::new(TileSet::new(vec![sq_rat.clone(), hex_rat.clone()]));
-        assert_eq!(sq_hex_ts.rat(0).seq()[0], 2, "tile 0 should be hex");
-        assert_eq!(sq_hex_ts.rat(1).seq()[0], 3, "tile 1 should be square");
-        let sq_hex_idx = VertexTypeIndex::new(sq_hex_ts);
-
-        let mut bi_hex_found = false;
-        let mut sq_hex_junction_found = false;
-        for id in 1..=sq_hex_idx.num_types() {
-            let info = sq_hex_idx.get_info(id);
-            let vt = info.vtype();
-            let has_hex0 = vt.iter().any(|(tid, _)| *tid == 0);
-            let has_sq1 = vt.iter().any(|(tid, _)| *tid == 1);
-            if vt.len() == 2 && vt.iter().all(|(tid, _)| *tid == 0) {
-                assert_eq!(
-                    info.gap_angle(),
-                    -2,
-                    "bi-hex junction gap_angle should be -2 for {:?}",
-                    vt
-                );
-                bi_hex_found = true;
-            }
-            if vt.len() == 2 && has_hex0 && has_sq1 {
-                assert_eq!(
-                    info.gap_angle(),
-                    -1,
-                    "hex+sq 2-tile junction gap_angle should be -1 for {:?}",
-                    vt
-                );
-                sq_hex_junction_found = true;
-            }
-        }
-        assert!(bi_hex_found, "should find bi-hex junction types");
-        assert!(sq_hex_junction_found, "should find sq+hex junction types");
-    }
-
-    #[test]
-    fn from_vertex_type_ids_roundtrip() {
-        use crate::intgeom::vertextypes::VertexTypeIndex;
-        let hex: Snake<ZZ12> = tiles::hexagon();
-        let rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(Arc::clone(&ts));
-
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let pm = gp.get_all_matches()[0].clone();
-        let _diff = gp.add_tile(&pm).expect("first add");
-        assert!(gp.is_growing());
-
-        let expected_angles = gp.angles().to_vec();
-        let vtypes = gp.vertex_types().to_vec();
-        let ids: Vec<usize> = idx
-            .vertex_type_ids(&vtypes)
-            .into_iter()
-            .map(|opt| opt.expect("all vtypes should be found"))
-            .collect();
-
-        let gap_angles: Vec<i8> = ids.iter().map(|&id| idx.get_info(id).gap_angle()).collect();
-        assert_eq!(
-            gap_angles, expected_angles,
-            "gap angles should match boundary angles"
-        );
-
-        let gp2 = idx.from_vertex_type_ids(&ids).expect("reconstruction");
-        assert!(gp2.is_growing());
-        assert_eq!(
-            gp2.angles(),
-            expected_angles,
-            "reconstructed angles should match"
-        );
-    }
-
-    fn verify_edge_type_consistency<T: IsComplex + IsRingOrField + Units>(
-        gp: &GrowingPatch<T>,
-        ts: &Arc<TileSet<T>>,
-        label: &str,
-    ) {
-        let n = gp.boundary_len();
-        assert!(n > 0, "[{}] patch should be growing", label);
-        let edge_types = gp.edge_types();
-        assert_eq!(edge_types.len(), n, "[{}] edge_types length", label);
-
-        for i in 0..n {
-            let (t, o) = edge_types[i];
-            assert!(
-                t < ts.num_tiles(),
-                "[{}] pos {}: invalid tile_id {}",
-                label,
-                i,
-                t
-            );
-            let tile_len = ts.rat(t).len();
-            assert!(
-                o < tile_len,
-                "[{}] pos {}: invalid offset {} for tile {} (len {})",
-                label,
-                i,
-                o,
-                t,
-                tile_len
-            );
-        }
-
-        for i in 0..n {
-            let vt = &gp.vertex_types()[i];
-            let next_vt = &gp.vertex_types()[(i + 1) % n];
-            if vt.len() == 1 && next_vt.len() == 1 {
-                let (t, o) = vt[0];
-                let (nt, no) = next_vt[0];
-                if t == nt {
-                    let expected = (o + 1) % ts.rat(t).len();
-                    assert_eq!(
-                        no, expected,
-                        "[{}] pos {}: same-tile continuation ({}, {}) → expected offset {} got {}",
-                        label, i, t, o, expected, no
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn edge_types_bi_hex_consistency() {
-        let gp = hex_patch();
-        for pm in gp.get_all_matches() {
-            let mut gp2 = hex_patch();
-            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
-                verify_edge_type_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
-            }
-        }
-    }
-
-    #[test]
-    fn edge_types_bi_square_consistency() {
-        let gp = square_patch();
-        for pm in gp.get_all_matches() {
-            let mut gp2 = square_patch();
-            if gp2.add_tile(pm).is_some() && gp2.is_growing() {
-                verify_edge_type_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
-            }
-        }
-    }
-
-    #[test]
-    fn edge_types_multi_hex_consistency() {
-        let gp = hex_patch();
-        let matches = gp.get_all_matches().to_vec();
-        for pm1 in &matches {
-            let mut gp2 = hex_patch();
-            if gp2.add_tile(pm1).is_none() || !gp2.is_growing() {
-                continue;
-            }
-            verify_edge_type_consistency(&gp2, &gp2.tileset(), "2-hex");
-            for pm2 in gp2.get_all_matches() {
-                let mut gp3 = gp2.clone();
-                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
-                    verify_edge_type_consistency(&gp3, &gp3.tileset(), "3-hex");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn edge_types_mixed_consistency() {
-        let hex_snake: Snake<ZZ12> = tiles::hexagon();
-        let sq_snake: Snake<ZZ12> = tiles::square();
-        let hex_rat = Rat::try_from(&hex_snake).unwrap();
-        let sq_rat = Rat::try_from(&sq_snake).unwrap();
-        let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
-
-        for seed_id in 0..ts.num_tiles() {
-            let gp = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), seed_id);
-            for pm in gp.get_all_matches() {
-                let mut gp2 = GrowingPatch::new(Arc::clone(&ts), seed_id);
-                if gp2.add_tile(pm).is_some() && gp2.is_growing() {
-                    verify_edge_type_consistency(
-                        &gp2,
-                        &ts,
-                        &format!("mixed seed={} pm {:?}", seed_id, pm),
-                    );
-                }
-            }
-        }
-    }
-
-    fn verify_edges_match_vertex_types<T: IsComplex + IsRingOrField + Units>(gp: &GrowingPatch<T>) {
-        if !gp.is_growing() {
-            return;
-        }
-        let n = gp.boundary_len();
-        let edges = gp.edges();
-        let vt = gp.vertex_types();
-        assert_eq!(edges.len(), n);
-        assert_eq!(vt.len(), n);
-        for i in 0..n {
-            let last = vt[i].last().unwrap();
-            assert_eq!(edges[i].tile_id, last.0, "edges[{}].tile_id mismatch", i);
-            assert_eq!(
-                edges[i].tile_offset, last.1,
-                "edges[{}].tile_offset mismatch",
-                i
-            );
-        }
-    }
-
-    #[test]
-    fn edges_consistent_with_vertex_types() {
-        let gp_sq: GrowingPatch<ZZ4> = square_patch();
-        for pm in gp_sq.get_all_matches() {
-            let mut gp2 = gp_sq.clone();
-            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
-                continue;
-            }
-            verify_edges_match_vertex_types(&gp2);
-        }
-        let gp_hex: GrowingPatch<ZZ12> = hex_patch();
-        for pm in gp_hex.get_all_matches() {
-            let mut gp2 = gp_hex.clone();
-            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
-                continue;
-            }
-            verify_edges_match_vertex_types(&gp2);
-            for pm2 in gp2.get_all_matches() {
-                let mut gp3 = gp2.clone();
-                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
-                    verify_edges_match_vertex_types(&gp3);
-                }
-            }
-        }
     }
 }
