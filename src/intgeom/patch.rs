@@ -1,9 +1,13 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles::normalize_angle;
-use crate::intgeom::matchtypes::{MatchFinder, MatchTypeIndex};
+use crate::intgeom::matchtypes::{
+    is_single_edge_candidate, junction_gap_nonnegative, MatchTypeIndex,
+};
 use crate::intgeom::rat::Rat;
+use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -61,7 +65,7 @@ enum PatchState<T: IsComplex> {
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        let seed_matches = Self::compute_seed_matches(&tileset, seed_tile_id);
+        let seed_matches = Self::compute_seed_matches(&match_index, &tileset, seed_tile_id);
         GrowingPatch {
             match_index,
             tileset,
@@ -400,51 +404,207 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         self.recompute_matches();
     }
 
-    fn compute_seed_matches(tileset: &Arc<TileSet<T>>, seed_tile_id: usize) -> Vec<PatchMatch> {
+    fn compute_seed_matches(
+        match_index: &Arc<MatchTypeIndex<T>>,
+        tileset: &Arc<TileSet<T>>,
+        seed_tile_id: usize,
+    ) -> Vec<PatchMatch> {
         let seed = tileset.rat(seed_tile_id);
-        let patch_ts = Arc::new(TileSet::new(vec![seed.clone()]));
-        let mf = MatchFinder::crossing(Arc::clone(&patch_ts), Arc::clone(tileset));
-
+        let seed_seq = seed.seq();
+        let n = seed_seq.len();
+        let mut seen: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
         let mut matches = Vec::new();
-        for j in 0..mf.num_tiles_b() {
-            for mt in mf.valid_matches(0, j) {
-                matches.push(PatchMatch {
-                    start_a: mt.start_a,
-                    len: mt.len,
-                    start_b: mt.start_b,
-                    tile_id: j,
-                });
+
+        for offset in 0..n {
+            for cand in match_index.candidates_starting_at(seed_tile_id, offset) {
+                let tile_b = tileset.rat(cand.tile_b);
+                let (ns, len, ne) = seed.get_match((offset as i64, cand.start_b as i64), tile_b);
+                if len == 0 {
+                    continue;
+                }
+                let ns_u = ns.rem_euclid(n as i64) as usize;
+                let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
+                if !junction_gap_nonnegative(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
+                    continue;
+                }
+                if let Ok(glued) =
+                    seed.try_glue_precomputed((ns as i64, len, ne as i64), tile_b, true)
+                {
+                    if Snake::<T>::try_from(glued.seq()).is_ok() {
+                        let key = (ns_u, len, ne_u, cand.tile_b);
+                        if seen.insert(key) {
+                            matches.push(PatchMatch {
+                                start_a: ns_u,
+                                len,
+                                start_b: ne_u,
+                                tile_id: cand.tile_b,
+                            });
+                        }
+                    }
+                }
             }
         }
+
+        for tile_id in 0..tileset.num_tiles() {
+            let tile_b = tileset.rat(tile_id);
+            let b_seq = tile_b.seq();
+            let m = b_seq.len();
+            for ia in 0..n {
+                for ib in 0..m {
+                    if !is_single_edge_candidate(seed_seq, ia, b_seq, ib) {
+                        continue;
+                    }
+                    let (ns, len, ne) = seed.get_match((ia as i64, ib as i64), tile_b);
+                    if len != 1 {
+                        continue;
+                    }
+                    let ns_u = ns.rem_euclid(n as i64) as usize;
+                    let ne_u = ne.rem_euclid(m as i64) as usize;
+                    let key = (ns_u, len, ne_u, tile_id);
+                    if seen.insert(key) {
+                        if let Ok(glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
+                            if Snake::<T>::try_from(glued.seq()).is_ok() {
+                                matches.push(PatchMatch {
+                                    start_a: ns_u,
+                                    len,
+                                    start_b: ne_u,
+                                    tile_id,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         matches
     }
 
     fn recompute_matches(&mut self) {
-        let (angles, cached_matches) = match &mut self.state {
-            PatchState::Growing {
-                angles,
-                cached_matches,
-                ..
-            } => (angles.clone(), cached_matches),
+        let (angles, _edges, segments, junctions) = match &self.state {
+            PatchState::Growing { angles, edges, .. } => {
+                let n = angles.len();
+                if n == 0 {
+                    return;
+                }
+                let mut segs = Vec::new();
+                let mut seg_start = 0;
+                for i in 1..=n {
+                    let at_end = i == n;
+                    let tile_change = !at_end
+                        && (edges[i].tile_id != edges[seg_start].tile_id
+                            || edges[i].tile_offset
+                                != edges[seg_start].tile_offset + (i - seg_start));
+                    let junction_break = !at_end && {
+                        let ei = edges[i];
+                        self.tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[i]
+                    };
+                    if at_end || tile_change || junction_break {
+                        segs.push(TileSegment {
+                            patch_start: seg_start,
+                            patch_end: i,
+                            tile_id: edges[seg_start].tile_id,
+                            offset_start: edges[seg_start].tile_offset,
+                        });
+                        seg_start = i;
+                    }
+                }
+
+                let mut juncs = Vec::new();
+                for i in 0..n {
+                    let ei = edges[i];
+                    if self.tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[i] {
+                        juncs.push(i);
+                    }
+                }
+
+                (angles.clone(), edges.clone(), segs, juncs)
+            }
+            _ => return,
+        };
+
+        let cached_matches = match &mut self.state {
+            PatchState::Growing { cached_matches, .. } => cached_matches,
             _ => return,
         };
 
         cached_matches.clear();
-        if angles.is_empty() {
-            return;
+        let n = angles.len();
+        let rat = Rat::from_slice_unchecked(&angles);
+        let mut seen: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
+
+        for segment in &segments {
+            let tile_id = segment.tile_id;
+            let seg_len = segment.patch_end - segment.patch_start;
+
+            for local_k in 0..seg_len {
+                let tile_offset =
+                    (segment.offset_start + local_k) % self.tileset.rat(tile_id).len();
+                let patch_pos = segment.patch_start + local_k;
+
+                for cand in self
+                    .match_index
+                    .candidates_starting_at(tile_id, tile_offset)
+                {
+                    let tile_b = self.tileset.rat(cand.tile_b);
+                    let (ns, len, ne) =
+                        rat.get_match((patch_pos as i64, cand.start_b as i64), tile_b);
+                    if len == 0 {
+                        continue;
+                    }
+                    let ns_u = ns.rem_euclid(n as i64) as usize;
+                    let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
+                    if !junction_gap_nonnegative(&angles, ns_u, len, tile_b.seq(), ne_u) {
+                        continue;
+                    }
+                    let key = (ns_u, len, ne_u, cand.tile_b);
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    if let Ok(glued) = rat.try_glue_precomputed((ns, len, ne), tile_b, true) {
+                        if Snake::<T>::try_from(glued.seq()).is_ok() {
+                            cached_matches.push(PatchMatch {
+                                start_a: ns_u,
+                                len,
+                                start_b: ne_u,
+                                tile_id: cand.tile_b,
+                            });
+                        }
+                    }
+                }
+            }
         }
 
-        let patch_ts = Arc::new(TileSet::new(vec![Rat::from_slice_unchecked(&angles)]));
-        let mf = MatchFinder::crossing(Arc::clone(&patch_ts), Arc::clone(&self.tileset));
-
-        for j in 0..mf.num_tiles_b() {
-            for mt in mf.valid_matches(0, j) {
-                cached_matches.push(PatchMatch {
-                    start_a: mt.start_a,
-                    len: mt.len,
-                    start_b: mt.start_b,
-                    tile_id: j,
-                });
+        for &junc_idx in &junctions {
+            for tile_id in 0..self.tileset.num_tiles() {
+                let tile_b = self.tileset.rat(tile_id);
+                let b_seq = tile_b.seq();
+                let m = b_seq.len();
+                for ib in 0..m {
+                    if !is_single_edge_candidate(&angles, junc_idx, b_seq, ib) {
+                        continue;
+                    }
+                    let (ns, len, ne) = rat.get_match((junc_idx as i64, ib as i64), tile_b);
+                    if len != 1 {
+                        continue;
+                    }
+                    let ns_u = ns.rem_euclid(n as i64) as usize;
+                    let ne_u = ne.rem_euclid(m as i64) as usize;
+                    let key = (ns_u, len, ne_u, tile_id);
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    if let Ok(glued) = rat.try_glue_precomputed((ns, len, ne), tile_b, true) {
+                        if Snake::<T>::try_from(glued.seq()).is_ok() {
+                            cached_matches.push(PatchMatch {
+                                start_a: ns_u,
+                                len,
+                                start_b: ne_u,
+                                tile_id,
+                            });
+                        }
+                    }
+                }
             }
         }
     }

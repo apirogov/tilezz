@@ -249,3 +249,69 @@ fn compute_cursed(
 
     cursed
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::intgeom::tiles;
+    use crate::intgeom::tileset::TileSet;
+    use std::sync::Arc;
+
+    #[test]
+    fn hexagon_vertex_type_counts() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+        assert!(idx.num_types() > 0, "should discover some vertex types");
+        let open = idx
+            .entries
+            .iter()
+            .filter(|e| e.kind == VertexTypeKind::Open)
+            .count();
+        let dead = idx
+            .entries
+            .iter()
+            .filter(|e| e.kind == VertexTypeKind::Dead)
+            .count();
+        assert!(open > 0, "should have open types");
+        eprintln!(
+            "hex: {} types ({} open, {} dead)",
+            idx.num_types(),
+            open,
+            dead
+        );
+    }
+
+    #[test]
+    fn square_vertex_type_counts() {
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+        assert!(idx.num_types() > 0);
+        let open = idx
+            .entries
+            .iter()
+            .filter(|e| e.kind == VertexTypeKind::Open)
+            .count();
+        eprintln!("square: {} types ({} open)", idx.num_types(), open);
+    }
+
+    #[test]
+    fn hexagon_no_duplicate_witnesses() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+        for info in &idx.entries {
+            let pvt = info.witness().vertex_type_at(info.witness_pos());
+            assert_eq!(
+                pvt,
+                Some(info.vtype),
+                "witness should realize its claimed type"
+            );
+        }
+    }
+}
