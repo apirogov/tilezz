@@ -1,30 +1,30 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::cyclotomic::{IsComplex, IsRingOrField, SymNum, Units};
-use crate::intgeom::patch::{GrowingPatch, PatchMatch, VertexType};
+use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::intgeom::patch::{GrowingPatch, PatchMatch, PatchVertexType};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum VertexTypeKind {
     Open,
-    Closed,
     Dead,
 }
 
 pub struct VertexTypeInfo<T: IsComplex> {
-    vtype: VertexType,
+    vtype: PatchVertexType,
     kind: VertexTypeKind,
     successors: Vec<usize>,
     predecessors: Vec<usize>,
     is_cursed: bool,
     realizing_rat: Rat<T>,
-    gap_angle: i8,
+    witness: GrowingPatch<T>,
+    witness_pos: usize,
 }
 
 impl<T: IsComplex> VertexTypeInfo<T> {
-    pub fn vtype(&self) -> &VertexType {
+    pub fn vtype(&self) -> &PatchVertexType {
         &self.vtype
     }
 
@@ -48,10 +48,6 @@ impl<T: IsComplex> VertexTypeInfo<T> {
         self.successors.is_empty()
     }
 
-    pub fn is_closed(&self) -> bool {
-        self.kind == VertexTypeKind::Closed
-    }
-
     pub fn is_cursed(&self) -> bool {
         self.is_cursed
     }
@@ -61,39 +57,44 @@ impl<T: IsComplex> VertexTypeInfo<T> {
     }
 
     pub fn gap_angle(&self) -> i8 {
-        self.gap_angle
+        self.vtype.angle
+    }
+
+    pub fn witness(&self) -> &GrowingPatch<T> {
+        &self.witness
+    }
+
+    pub fn witness_pos(&self) -> usize {
+        self.witness_pos
     }
 }
 
 pub struct VertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<VertexTypeInfo<T>>,
-    reverse: HashMap<VertexType, usize>,
+    reverse: HashMap<PatchVertexType, usize>,
 }
 
-impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
+impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let mut all_types: BTreeSet<VertexType> = BTreeSet::new();
-        let mut kind_map: HashMap<VertexType, VertexTypeKind> = HashMap::new();
-        let mut transitions: Vec<(VertexType, VertexType)> = Vec::new();
+        let mut all_types: BTreeSet<PatchVertexType> = BTreeSet::new();
+        let mut kind_map: HashMap<PatchVertexType, VertexTypeKind> = HashMap::new();
+        let mut transitions: Vec<(PatchVertexType, PatchVertexType)> = Vec::new();
+        let mut witnesses: HashMap<PatchVertexType, (GrowingPatch<T>, usize)> = HashMap::new();
 
-        let mut visited: BTreeSet<VertexType> = BTreeSet::new();
+        let mut visited: BTreeSet<PatchVertexType> = BTreeSet::new();
         let mut queue: VecDeque<(GrowingPatch<T>, usize)> = VecDeque::new();
 
         for seed_id in 0..tileset.num_tiles() {
             let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
             for pm in seed.get_all_matches() {
                 let mut gp = seed.clone();
-                if let Some(diff) = gp.add_tile(pm) {
-                    for cvt in &diff.closed_vertex_types {
-                        all_types.insert(cvt.clone());
-                        kind_map.insert(cvt.clone(), VertexTypeKind::Closed);
-                    }
-                    if gp.is_growing() {
-                        for pos in 0..gp.boundary_len() {
-                            let vt = gp.vertex_types()[pos].clone();
-                            if visited.insert(vt.clone()) {
-                                all_types.insert(vt.clone());
+                if gp.add_tile(pm).is_some() && gp.is_growing() {
+                    for pos in 0..gp.boundary_len() {
+                        if let Some(pvt) = gp.vertex_type_at(pos) {
+                            all_types.insert(pvt);
+                            witnesses.entry(pvt).or_insert_with(|| (gp.clone(), pos));
+                            if visited.insert(pvt) {
                                 queue.push_back((gp.clone(), pos));
                             }
                         }
@@ -103,35 +104,34 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
         }
 
         while let Some((gp, pos)) = queue.pop_front() {
-            let vt = gp.vertex_types()[pos].clone();
-            if kind_map.get(&vt) == Some(&VertexTypeKind::Dead) {
+            let pvt = gp.vertex_type_at(pos).unwrap();
+            if kind_map.get(&pvt) == Some(&VertexTypeKind::Dead) {
                 continue;
             }
 
             let touching: Vec<&PatchMatch> = gp.get_matches_touching_vertex(pos).collect();
             if touching.is_empty() {
-                kind_map.insert(vt, VertexTypeKind::Dead);
+                kind_map.insert(pvt, VertexTypeKind::Dead);
                 continue;
             }
 
-            kind_map.entry(vt.clone()).or_insert(VertexTypeKind::Open);
+            kind_map.entry(pvt).or_insert(VertexTypeKind::Open);
 
             for pm in touching {
                 let mut gp2 = gp.clone();
-                if let Some(diff) = gp2.add_tile(pm) {
-                    for cvt in &diff.closed_vertex_types {
-                        all_types.insert(cvt.clone());
-                        kind_map.insert(cvt.clone(), VertexTypeKind::Closed);
+                if gp2.add_tile(pm).is_some() && gp2.is_growing() {
+                    let old_n = gp.boundary_len();
+                    let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
+                    if let Some(new_pvt) = gp2.vertex_type_at(junction_pos) {
+                        transitions.push((pvt, new_pvt));
                     }
-                    if gp2.is_growing() {
-                        let n = gp.boundary_len();
-                        let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
-                        let new_vt = gp2.vertex_types()[junction_pos].clone();
-                        transitions.push((vt.clone(), new_vt.clone()));
-                        for new_pos in 0..gp2.boundary_len() {
-                            let nv = gp2.vertex_types()[new_pos].clone();
-                            if nv.len() >= vt.len() && visited.insert(nv) {
-                                all_types.insert(gp2.vertex_types()[new_pos].clone());
+                    for new_pos in 0..gp2.boundary_len() {
+                        if let Some(nv) = gp2.vertex_type_at(new_pos) {
+                            all_types.insert(nv);
+                            witnesses
+                                .entry(nv)
+                                .or_insert_with(|| (gp2.clone(), new_pos));
+                            if visited.insert(nv) {
                                 queue.push_back((gp2.clone(), new_pos));
                             }
                         }
@@ -140,43 +140,41 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
             }
         }
 
-        validate_closed_types(&all_types, &kind_map, &tileset);
-
-        let entries: Vec<VertexType> = all_types.into_iter().collect();
-        let reverse: HashMap<VertexType, usize> = entries
+        let entries: Vec<PatchVertexType> = all_types.into_iter().collect();
+        let reverse: HashMap<PatchVertexType, usize> = entries
             .iter()
             .enumerate()
-            .map(|(i, vt)| (vt.clone(), i + 1))
+            .map(|(i, vt)| (*vt, i + 1))
             .collect();
 
         let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
         let mut pred_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
 
         for (src, dst) in &transitions {
-            let src_id = reverse[src];
-            let dst_id = reverse[dst];
-            succ_sets[src_id - 1].insert(dst_id);
-            pred_sets[dst_id - 1].insert(src_id);
+            if let (Some(&src_id), Some(&dst_id)) = (reverse.get(src), reverse.get(dst)) {
+                succ_sets[src_id - 1].insert(dst_id);
+                pred_sets[dst_id - 1].insert(src_id);
+            }
         }
 
-        let is_cursed = compute_cursed(&entries, &kind_map, &succ_sets, &reverse);
+        let is_cursed = compute_cursed(&entries, &kind_map, &succ_sets);
 
         let info_entries: Vec<VertexTypeInfo<T>> = entries
             .into_iter()
             .enumerate()
             .map(|(i, vt)| {
                 let id = i + 1;
-                let rat = reconstruct_minimal_rat(&tileset, &vt)
-                    .expect("reconstruct_minimal_rat should succeed for all discovered types");
-                let gap = compute_gap_angle::<T>(&tileset, &vt);
+                let (witness, witness_pos) = witnesses.remove(&vt).expect("witness missing");
+                let rat = witness.to_rat();
                 VertexTypeInfo {
-                    kind: kind_map[&vt],
+                    kind: kind_map.get(&vt).copied().unwrap_or(VertexTypeKind::Open),
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
                     is_cursed: is_cursed[&id],
                     realizing_rat: rat,
-                    gap_angle: gap,
                     vtype: vt,
+                    witness,
+                    witness_pos,
                 }
             })
             .collect();
@@ -192,11 +190,11 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
         self.entries.len()
     }
 
-    pub fn get_id(&self, vtype: &VertexType) -> Option<usize> {
+    pub fn get_id(&self, vtype: &PatchVertexType) -> Option<usize> {
         self.reverse.get(vtype).copied()
     }
 
-    pub fn get_type(&self, id: usize) -> &VertexType {
+    pub fn get_type(&self, id: usize) -> &PatchVertexType {
         assert!(
             id >= 1 && id <= self.entries.len(),
             "vertex type id out of range"
@@ -215,112 +213,27 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> VertexTypeIndex<T> {
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
-
-    pub fn vertex_type_ids(&self, vtypes: &[VertexType]) -> Vec<Option<usize>> {
-        vtypes.iter().map(|vt| self.get_id(vt)).collect()
-    }
-
-    pub fn from_vertex_type_ids(&self, ids: &[usize]) -> Option<GrowingPatch<T>> {
-        if ids.is_empty() {
-            return None;
-        }
-        for &id in ids {
-            if id == 0 || id > self.entries.len() {
-                return None;
-            }
-        }
-        let angles: Vec<i8> = ids
-            .iter()
-            .map(|&id| self.entries[id - 1].gap_angle)
-            .collect();
-        let vtypes: Vec<VertexType> = ids
-            .iter()
-            .map(|&id| self.entries[id - 1].vtype.clone())
-            .collect();
-        GrowingPatch::from_parts(Arc::clone(&self.tileset), angles, vtypes)
-    }
-}
-
-fn reconstruct_minimal_rat<T: IsComplex + IsRingOrField + Units>(
-    tileset: &Arc<TileSet<T>>,
-    vtype: &VertexType,
-) -> Option<Rat<T>> {
-    if vtype.is_empty() {
-        return None;
-    }
-    let (t0, o0) = vtype[0];
-    let mut result = tileset.rat(t0).clone();
-    let mut vertex_pos = o0 as i64;
-
-    for &(ti, oi) in &vtype[1..] {
-        let other = tileset.rat(ti);
-        let match_info = result.get_match((vertex_pos, oi as i64), other);
-        let old_len = result.len();
-        result = result.try_glue_precomputed(match_info, other, false).ok()?;
-        vertex_pos = (old_len - match_info.1) as i64;
-    }
-
-    Some(result)
-}
-
-pub(crate) fn compute_gap_angle<T: IsComplex + IsRingOrField + Units + SymNum>(
-    tileset: &Arc<TileSet<T>>,
-    vtype: &VertexType,
-) -> i8 {
-    let k = vtype.len() as i8;
-    let angle_sum: i8 = vtype
-        .iter()
-        .map(|&(tile_id, offset)| tileset.rat(tile_id).seq()[offset])
-        .sum();
-    angle_sum - (k - 1) * T::hturn()
-}
-
-fn validate_closed_types<T: IsComplex + IsRingOrField + Units + SymNum>(
-    all_types: &BTreeSet<VertexType>,
-    kind_map: &HashMap<VertexType, VertexTypeKind>,
-    tileset: &Arc<TileSet<T>>,
-) {
-    let hturn = T::hturn() as i64;
-    for vt in all_types {
-        if kind_map[vt] != VertexTypeKind::Closed {
-            continue;
-        }
-        let angle_sum: i64 = vt
-            .iter()
-            .map(|&(tile_id, offset)| tileset.rat(tile_id).seq()[offset] as i64)
-            .sum();
-        let expected = (vt.len() as i64 - 2) * hturn;
-        assert_eq!(
-            angle_sum, expected,
-            "closed vertex type {:?}: angle sum {} != expected {}",
-            vt, angle_sum, expected
-        );
-    }
 }
 
 fn compute_cursed(
-    entries: &[VertexType],
-    kind_map: &HashMap<VertexType, VertexTypeKind>,
+    entries: &[PatchVertexType],
+    kind_map: &HashMap<PatchVertexType, VertexTypeKind>,
     succ_sets: &[BTreeSet<usize>],
-    _reverse: &HashMap<VertexType, usize>,
 ) -> HashMap<usize, bool> {
     let n = entries.len();
     let mut cursed: HashMap<usize, bool> = HashMap::with_capacity(n);
 
     for (i, vt) in entries.iter().enumerate() {
         let id = i + 1;
-        cursed.insert(id, kind_map[vt] == VertexTypeKind::Dead);
+        cursed.insert(id, kind_map.get(vt) == Some(&VertexTypeKind::Dead));
     }
 
     let mut changed = true;
     while changed {
         changed = false;
-        for (i, vt) in entries.iter().enumerate() {
+        for (i, _vt) in entries.iter().enumerate() {
             let id = i + 1;
             if cursed[&id] {
-                continue;
-            }
-            if kind_map[vt] == VertexTypeKind::Closed {
                 continue;
             }
             let succs = &succ_sets[i];
