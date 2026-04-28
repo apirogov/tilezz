@@ -244,9 +244,17 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CandidateMatch {
+    pub tile_b: usize,
+    pub start_b: usize,
+    pub len: usize,
+}
+
 pub struct MatchTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<TypeEntry>,
+    by_start: Vec<Vec<Vec<CandidateMatch>>>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
@@ -274,7 +282,34 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
             .map(|(first, second)| TypeEntry { first, second })
             .collect();
 
-        MatchTypeIndex { tileset, entries }
+        let num_tiles = tileset.num_tiles();
+        let mut by_start: Vec<Vec<Vec<CandidateMatch>>> = (0..num_tiles)
+            .map(|_| vec![vec![]; rats[0].len()])
+            .collect();
+        for ti in 0..num_tiles {
+            by_start[ti] = vec![vec![]; rats[ti].len()];
+        }
+        for mt in &all_matches {
+            let cm = CandidateMatch {
+                tile_b: mt.tile_b,
+                start_b: mt.start_b,
+                len: mt.len,
+            };
+            by_start[mt.tile_a][mt.start_a].push(cm);
+            let inv = mt.involution(rats[mt.tile_a].len(), rats[mt.tile_b].len());
+            let cm_inv = CandidateMatch {
+                tile_b: inv.tile_b,
+                start_b: inv.start_b,
+                len: inv.len,
+            };
+            by_start[inv.tile_a][inv.start_a].push(cm_inv);
+        }
+
+        MatchTypeIndex {
+            tileset,
+            entries,
+            by_start,
+        }
     }
 
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
@@ -321,9 +356,17 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         };
         mt.apply(rats, rats)
     }
+
+    pub fn candidates_starting_at(&self, tile_id: usize, offset: usize) -> &[CandidateMatch] {
+        &self.by_start[tile_id][offset]
+    }
+
+    pub fn all_candidates_for_tile(&self, tile_id: usize) -> &[Vec<CandidateMatch>] {
+        &self.by_start[tile_id]
+    }
 }
 
-fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
+pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     let na = a.len();
     let nb = b.len();
     let left = a[ia] as i32 + b[ib] as i32;
@@ -331,7 +374,13 @@ fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     left > 0 && right > 0
 }
 
-fn junction_gap_nonnegative(a: &[i8], ns: usize, mlen: usize, b: &[i8], ne: usize) -> bool {
+pub(crate) fn junction_gap_nonnegative(
+    a: &[i8],
+    ns: usize,
+    mlen: usize,
+    b: &[i8],
+    ne: usize,
+) -> bool {
     let na = a.len();
     let nb = b.len();
     let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
@@ -1352,5 +1401,47 @@ mod tests {
         assert!(hex_self > 0, "should have hex self-match types");
         assert!(bisq_self > 0, "should have bisq self-match types");
         assert!(cross > 0, "should have cross-match types");
+    }
+
+    #[test]
+    fn candidates_starting_at_covers_all_valid_matches() {
+        let hex_rat = Rat::try_from(&hexagon::<ZZ12>()).unwrap();
+        let sq_rat = Rat::try_from(&square::<ZZ12>()).unwrap();
+        let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
+        let mf = MatchFinder::new(Arc::clone(&ts));
+        let idx = MatchTypeIndex::new(ts.clone());
+
+        let all_matches = mf.all_valid_matches();
+        let mut by_start_count = 0usize;
+        for tile_a in 0..2 {
+            for offset in 0..idx.all_candidates_for_tile(tile_a).len() {
+                by_start_count += idx.candidates_starting_at(tile_a, offset).len();
+            }
+        }
+
+        let all_inv: Vec<MatchType> = all_matches
+            .iter()
+            .flat_map(|mt| {
+                let inv = mt.involution(ts.rat(mt.tile_a).len(), ts.rat(mt.tile_b).len());
+                vec![*mt, inv]
+            })
+            .collect();
+        assert_eq!(
+            by_start_count,
+            all_inv.len(),
+            "secondary index should have same total count as all matches (including involutions)"
+        );
+
+        for mt in &all_inv {
+            let found = idx
+                .candidates_starting_at(mt.tile_a, mt.start_a)
+                .iter()
+                .any(|c| c.tile_b == mt.tile_b && c.start_b == mt.start_b && c.len == mt.len);
+            assert!(
+                found,
+                "match ({}, {}, {}, {}, {}) not found in secondary index",
+                mt.tile_a, mt.start_a, mt.tile_b, mt.start_b, mt.len
+            );
+        }
     }
 }

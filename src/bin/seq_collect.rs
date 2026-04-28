@@ -11,7 +11,7 @@ use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
 
 #[derive(Parser)]
-#[command(name = "bvtype_bench", about = "SeqExplorer: collect + validate")]
+#[command(name = "seq_collect", about = "SeqExplorer: collect + validate")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -64,9 +64,9 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
     Arc::new(TileSet::new(vec![n, w]))
 }
 
-fn write_collection<T: tilezz::cyclotomic::IsComplex
-    + tilezz::cyclotomic::IsRingOrField
-    + tilezz::cyclotomic::Units>(
+fn write_collection<
+    T: tilezz::cyclotomic::IsComplex + tilezz::cyclotomic::IsRingOrField + tilezz::cyclotomic::Units,
+>(
     explorer: &SeqExplorer<T>,
     ring_name: &str,
     path: &str,
@@ -129,7 +129,9 @@ struct ParsedFile {
 }
 
 enum RatEntry {
-    Seed { tile_idx: usize },
+    Seed {
+        tile_idx: usize,
+    },
     Glue {
         source_rat_id: usize,
         tile_idx: usize,
@@ -227,9 +229,9 @@ fn is_cyclic_substring(haystack: &[i8], needle: &[i8]) -> bool {
     false
 }
 
-fn validate_common<T: tilezz::cyclotomic::IsComplex
-    + tilezz::cyclotomic::IsRingOrField
-    + tilezz::cyclotomic::Units>(
+fn validate_common<
+    T: tilezz::cyclotomic::IsComplex + tilezz::cyclotomic::IsRingOrField + tilezz::cyclotomic::Units,
+>(
     pf: &ParsedFile,
     tile_ts: &Arc<TileSet<T>>,
 ) -> Result<(), String> {
@@ -325,8 +327,7 @@ fn validate_common<T: tilezz::cyclotomic::IsComplex
                     let max_len = k.min(n);
                     for start in 0..n {
                         for l in 1..=max_len {
-                            let subseq: Vec<i8> =
-                                (0..l).map(|j| seq[(start + j) % n]).collect();
+                            let subseq: Vec<i8> = (0..l).map(|j| seq[(start + j) % n]).collect();
                             if !known_subseqs.contains(&subseq) {
                                 new_found += 1;
                                 if new_found <= 10 {
