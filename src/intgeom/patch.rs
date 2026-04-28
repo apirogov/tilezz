@@ -5,11 +5,31 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles::normalize_angle;
-use crate::intgeom::matchtypes::MatchFinder;
+use crate::intgeom::matchtypes::{MatchFinder, MatchTypeIndex};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
 pub type VertexType = Vec<(usize, usize)>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EdgeInfo {
+    pub tile_id: usize,
+    pub tile_offset: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PatchVertexType {
+    pub angle: i8,
+    pub cw: EdgeInfo,
+    pub ccw: EdgeInfo,
+}
+
+pub struct TileSegment {
+    pub patch_start: usize,
+    pub patch_end: usize,
+    pub tile_id: usize,
+    pub offset_start: usize,
+}
 
 #[derive(Debug, Clone)]
 pub struct PatchMatch {
@@ -28,6 +48,7 @@ pub struct AddTileDiff {
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
+    match_index: Arc<MatchTypeIndex<T>>,
     state: PatchState<T>,
 }
 
@@ -40,6 +61,7 @@ enum PatchState<T: IsComplex> {
     Growing {
         angles: Vec<i8>,
         vertex_types: Vec<VertexType>,
+        edges: Vec<EdgeInfo>,
         cached_matches: Vec<PatchMatch>,
     },
     Closed,
@@ -48,25 +70,15 @@ enum PatchState<T: IsComplex> {
 
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let seed_matches = Self::compute_seed_matches(&tileset, seed_tile_id);
         GrowingPatch {
+            match_index,
             tileset,
             state: PatchState::Seed {
                 tile_id: seed_tile_id,
                 cached_matches: seed_matches,
             },
-        }
-    }
-
-    pub fn seed_tile_id(&self) -> usize {
-        match &self.state {
-            PatchState::Seed { tile_id, .. } => *tile_id,
-            PatchState::Growing { vertex_types, .. } => vertex_types
-                .first()
-                .and_then(|v| v.first())
-                .map(|(id, _)| *id)
-                .unwrap_or(0),
-            PatchState::Closed | PatchState::_Phantom(_) => 0,
         }
     }
 
@@ -147,6 +159,108 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         &self.tileset
     }
 
+    pub fn match_index(&self) -> &Arc<MatchTypeIndex<T>> {
+        &self.match_index
+    }
+
+    pub fn edges(&self) -> &[EdgeInfo] {
+        match &self.state {
+            PatchState::Growing { edges, .. } => edges,
+            _ => &[],
+        }
+    }
+
+    pub fn vertex_type_at(&self, i: usize) -> Option<PatchVertexType> {
+        let n = self.boundary_len();
+        if n == 0 || i >= n {
+            return None;
+        }
+        let edges = match &self.state {
+            PatchState::Growing { edges, .. } => edges,
+            _ => return None,
+        };
+        let angles = self.angles();
+        Some(PatchVertexType {
+            angle: angles[i],
+            cw: edges[(i + n - 1) % n],
+            ccw: edges[i],
+        })
+    }
+
+    pub fn is_junction(&self, i: usize) -> bool {
+        let edges = match &self.state {
+            PatchState::Growing { edges, .. } => edges,
+            _ => return false,
+        };
+        let n = edges.len();
+        if n == 0 {
+            return false;
+        }
+        let ei = edges[i];
+        let tile = self.tileset.rat(ei.tile_id);
+        tile.seq()[ei.tile_offset] != self.angles()[i]
+    }
+
+    pub fn junction_vertices(&self) -> Vec<(usize, PatchVertexType)> {
+        let n = self.boundary_len();
+        let mut result = Vec::new();
+        for i in 0..n {
+            if self.is_junction(i) {
+                result.push((i, self.vertex_type_at(i).unwrap()));
+            }
+        }
+        result
+    }
+
+    pub fn tile_segments(&self) -> Vec<TileSegment> {
+        let edges = match &self.state {
+            PatchState::Growing { edges, .. } => edges,
+            _ => return vec![],
+        };
+        let n = edges.len();
+        if n == 0 {
+            return vec![];
+        }
+        let mut segments: Vec<TileSegment> = Vec::new();
+        let mut seg_start = 0;
+        for i in 1..=n {
+            let at_end = i == n;
+            let tile_change = !at_end
+                && (edges[i].tile_id != edges[seg_start].tile_id
+                    || edges[i].tile_offset != edges[seg_start].tile_offset + (i - seg_start));
+            let junction_break = !at_end && self.is_junction(i);
+            if at_end || tile_change || junction_break {
+                segments.push(TileSegment {
+                    patch_start: seg_start,
+                    patch_end: i,
+                    tile_id: edges[seg_start].tile_id,
+                    offset_start: edges[seg_start].tile_offset,
+                });
+                seg_start = i;
+            }
+        }
+        if segments.len() >= 2
+            && segments[0].patch_start == 0
+            && segments.last().unwrap().patch_end == n
+        {
+            let last = segments.last().unwrap();
+            let first = &segments[0];
+            if last.tile_id == first.tile_id
+                && last.offset_start + (last.patch_end - last.patch_start) == first.offset_start
+            {
+                let merged = TileSegment {
+                    patch_start: last.patch_start,
+                    patch_end: first.patch_end,
+                    tile_id: first.tile_id,
+                    offset_start: last.offset_start,
+                };
+                segments.pop();
+                segments[0] = merged;
+            }
+        }
+        segments
+    }
+
     pub fn from_parts(
         tileset: Arc<TileSet<T>>,
         angles: Vec<i8>,
@@ -155,11 +269,21 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         if angles.is_empty() || angles.len() != vertex_types.len() {
             return None;
         }
+        let edges: Vec<EdgeInfo> = vertex_types
+            .iter()
+            .map(|vt| EdgeInfo {
+                tile_id: vt[0].0,
+                tile_offset: vt[0].1,
+            })
+            .collect();
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut gp = GrowingPatch {
             tileset,
+            match_index,
             state: PatchState::Growing {
                 angles,
                 vertex_types,
+                edges,
                 cached_matches: Vec::new(),
             },
         };
@@ -259,7 +383,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         self.state = PatchState::Growing {
             angles: new_angles,
-            vertex_types: new_vtx,
+            vertex_types: new_vtx.clone(),
+            edges: new_vtx
+                .iter()
+                .map(|vt| EdgeInfo {
+                    tile_id: vt.last().unwrap().0,
+                    tile_offset: vt.last().unwrap().1,
+                })
+                .collect(),
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
@@ -272,12 +403,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> Option<AddTileDiff> {
-        let (angles, vertex_types) = match &mut self.state {
+        let (angles, vertex_types, edges) = match &mut self.state {
             PatchState::Growing {
                 angles,
                 vertex_types,
+                edges,
                 ..
-            } => (std::mem::take(angles), std::mem::take(vertex_types)),
+            } => (
+                std::mem::take(angles),
+                std::mem::take(vertex_types),
+                std::mem::take(edges),
+            ),
             _ => return None,
         };
 
@@ -286,14 +422,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let m = self.tileset.rat(pm.tile_id).seq().len();
 
         if mlen == 0 || mlen > n || mlen > m {
-            self.restore_growing(angles, vertex_types);
+            self.restore_growing(angles, vertex_types, edges);
             return None;
         }
 
         let new_angles = match compute_glue_angles::<T>(&angles, pm, &self.tileset) {
             Some(a) => a,
             None => {
-                self.restore_growing(angles, vertex_types);
+                self.restore_growing(angles, vertex_types, edges);
                 return None;
             }
         };
@@ -360,9 +496,18 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
         new_local.push(new_vtx[seg_len_old].clone());
 
+        let new_edges: Vec<EdgeInfo> = new_vtx
+            .iter()
+            .map(|vt| EdgeInfo {
+                tile_id: vt.last().unwrap().0,
+                tile_offset: vt.last().unwrap().1,
+            })
+            .collect();
+
         self.state = PatchState::Growing {
             angles: new_angles,
             vertex_types: new_vtx,
+            edges: new_edges,
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
@@ -374,10 +519,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         })
     }
 
-    fn restore_growing(&mut self, angles: Vec<i8>, vertex_types: Vec<VertexType>) {
+    fn restore_growing(
+        &mut self,
+        angles: Vec<i8>,
+        vertex_types: Vec<VertexType>,
+        edges: Vec<EdgeInfo>,
+    ) {
         self.state = PatchState::Growing {
             angles,
             vertex_types,
+            edges,
             cached_matches: Vec::new(),
         };
         self.recompute_matches();
@@ -1824,6 +1975,52 @@ mod tests {
                         &ts,
                         &format!("mixed seed={} pm {:?}", seed_id, pm),
                     );
+                }
+            }
+        }
+    }
+
+    fn verify_edges_match_vertex_types<T: IsComplex + IsRingOrField + Units>(gp: &GrowingPatch<T>) {
+        if !gp.is_growing() {
+            return;
+        }
+        let n = gp.boundary_len();
+        let edges = gp.edges();
+        let vt = gp.vertex_types();
+        assert_eq!(edges.len(), n);
+        assert_eq!(vt.len(), n);
+        for i in 0..n {
+            let last = vt[i].last().unwrap();
+            assert_eq!(edges[i].tile_id, last.0, "edges[{}].tile_id mismatch", i);
+            assert_eq!(
+                edges[i].tile_offset, last.1,
+                "edges[{}].tile_offset mismatch",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn edges_consistent_with_vertex_types() {
+        let gp_sq: GrowingPatch<ZZ4> = square_patch();
+        for pm in gp_sq.get_all_matches() {
+            let mut gp2 = gp_sq.clone();
+            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                continue;
+            }
+            verify_edges_match_vertex_types(&gp2);
+        }
+        let gp_hex: GrowingPatch<ZZ12> = hex_patch();
+        for pm in gp_hex.get_all_matches() {
+            let mut gp2 = gp_hex.clone();
+            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                continue;
+            }
+            verify_edges_match_vertex_types(&gp2);
+            for pm2 in gp2.get_all_matches() {
+                let mut gp3 = gp2.clone();
+                if gp3.add_tile(pm2).is_some() && gp3.is_growing() {
+                    verify_edges_match_vertex_types(&gp3);
                 }
             }
         }

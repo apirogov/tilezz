@@ -355,11 +355,7 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> BoundaryVertexTypeIndex<T> {
 
                 for pm in touching {
                     if let Some(new_fp) = apply_match_to_frontier(fp, pm, &tileset) {
-                        let junction_pos = if pm.start_a == *pos {
-                            n - pm.len
-                        } else {
-                            0
-                        };
+                        let junction_pos = if pm.start_a == *pos { n - pm.len } else { 0 };
                         let new_bvtypes = extract_bvtypes(&new_fp);
                         let new_bvt = new_bvtypes[junction_pos];
                         transitions.push((bvt, new_bvt));
@@ -462,7 +458,10 @@ impl<T: IsComplex + IsRingOrField + Units + SymNum> BoundaryVertexTypeIndex<T> {
         if ids.is_empty() {
             return None;
         }
-        let angles: Vec<i8> = ids.iter().map(|&id| self.entries[id - 1].btype.angle).collect();
+        let angles: Vec<i8> = ids
+            .iter()
+            .map(|&id| self.entries[id - 1].btype.angle)
+            .collect();
         Some(Rat::from_slice_unchecked(&angles))
     }
 }
@@ -564,7 +563,12 @@ mod tests {
         }
         eprintln!(
             "[{}] BoundaryVertexTypeIndex: {} types, open={} dead={} initial={} cursed={}",
-            label, idx.num_types(), open, dead, initial, cursed
+            label,
+            idx.num_types(),
+            open,
+            dead,
+            initial,
+            cursed
         );
     }
 
