@@ -69,9 +69,16 @@ impl<T: IsComplex> VertexTypeInfo<T> {
     }
 }
 
+pub struct TransitionInfo {
+    pub src_id: usize,
+    pub dst_id: usize,
+    pub patch_match: PatchMatch,
+}
+
 pub struct VertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<VertexTypeInfo<T>>,
+    transitions: Vec<TransitionInfo>,
     reverse: HashMap<PatchVertexType, usize>,
 }
 
@@ -79,7 +86,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let mut all_types: BTreeSet<PatchVertexType> = BTreeSet::new();
         let mut kind_map: HashMap<PatchVertexType, VertexTypeKind> = HashMap::new();
-        let mut transitions: Vec<(PatchVertexType, PatchVertexType)> = Vec::new();
+        let mut transitions: Vec<(PatchVertexType, PatchVertexType, PatchMatch)> = Vec::new();
         let mut witnesses: HashMap<PatchVertexType, (GrowingPatch<T>, usize)> = HashMap::new();
 
         let mut visited: BTreeSet<PatchVertexType> = BTreeSet::new();
@@ -123,7 +130,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     let old_n = gp.boundary_len();
                     let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
                     if let Some(new_pvt) = gp2.vertex_type_at(junction_pos) {
-                        transitions.push((pvt, new_pvt));
+                        transitions.push((pvt, new_pvt, pm.clone()));
                     }
                     for new_pos in 0..gp2.boundary_len() {
                         if let Some(nv) = gp2.vertex_type_at(new_pos) {
@@ -150,10 +157,16 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
         let mut pred_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
 
-        for (src, dst) in &transitions {
+        let mut transition_infos: Vec<TransitionInfo> = Vec::new();
+        for (src, dst, pm) in &transitions {
             if let (Some(&src_id), Some(&dst_id)) = (reverse.get(src), reverse.get(dst)) {
                 succ_sets[src_id - 1].insert(dst_id);
                 pred_sets[dst_id - 1].insert(src_id);
+                transition_infos.push(TransitionInfo {
+                    src_id,
+                    dst_id,
+                    patch_match: pm.clone(),
+                });
             }
         }
 
@@ -182,12 +195,21 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         VertexTypeIndex {
             tileset,
             entries: info_entries,
+            transitions: transition_infos,
             reverse,
         }
     }
 
     pub fn num_types(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn transitions(&self) -> &[TransitionInfo] {
+        &self.transitions
+    }
+
+    pub fn entries(&self) -> &[VertexTypeInfo<T>] {
+        &self.entries
     }
 
     pub fn get_id(&self, vtype: &PatchVertexType) -> Option<usize> {
