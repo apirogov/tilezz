@@ -123,6 +123,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
 ) {
     let t0 = Instant::now();
     let mut out = String::new();
+    let mut witness_keys: BTreeSet<String> = BTreeSet::new();
 
     out.push_str(&format!("TILESET {}\n", ring_name));
     for i in 0..idx.tileset().num_tiles() {
@@ -182,6 +183,16 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
                 }
             })
             .collect();
+
+        let witness_key = format!(
+            "{}|{}|{}|{}",
+            angle_strs.join(" "),
+            edge_strs.join(" "),
+            cand_strs.join(" "),
+            inner_strs.join(" "),
+        );
+        witness_keys.insert(witness_key);
+
         out.push_str(&format!(
             "WITNESS {} {} {} {} {} {} {} {}\n",
             id,
@@ -217,12 +228,13 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} transitions in {:.2?}",
+        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} unique witnesses, {} transitions in {:.2?}",
         out.len(),
         idx.num_types(),
         n_alive,
         n_dead,
         n_cursed,
+        witness_keys.len(),
         idx.transitions().len(),
         t0.elapsed(),
     );
