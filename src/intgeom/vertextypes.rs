@@ -9,14 +9,14 @@ use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum VertexTypeKind {
-    Open,
-    Dead,
+enum HasTransitions {
+    Yes,
+    No,
 }
 
 pub struct VertexTypeInfo<T: IsComplex> {
     vtype: VertexType,
-    kind: VertexTypeKind,
+    has_transitions: HasTransitions,
     successors: Vec<usize>,
     predecessors: Vec<usize>,
     is_cursed: bool,
@@ -31,24 +31,12 @@ impl<T: IsComplex> VertexTypeInfo<T> {
         &self.vtype
     }
 
-    pub fn kind(&self) -> VertexTypeKind {
-        self.kind
+    pub fn is_alive(&self) -> bool {
+        !self.is_cursed
     }
 
-    pub fn successors(&self) -> &[usize] {
-        &self.successors
-    }
-
-    pub fn predecessors(&self) -> &[usize] {
-        &self.predecessors
-    }
-
-    pub fn is_initial(&self) -> bool {
-        self.predecessors.is_empty()
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        self.successors.is_empty()
+    pub fn is_dead(&self) -> bool {
+        matches!(self.has_transitions, HasTransitions::No)
     }
 
     pub fn is_cursed(&self) -> bool {
@@ -89,7 +77,7 @@ pub struct VertexTypeIndex<T: IsComplex> {
 impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let mut all_types: BTreeSet<VertexType> = BTreeSet::new();
-        let mut kind_map: HashMap<VertexType, VertexTypeKind> = HashMap::new();
+        let mut transition_map: HashMap<VertexType, HasTransitions> = HashMap::new();
         let mut raw_transitions: Vec<(VertexType, VertexType, TransitionSide, PatchMatch)> =
             Vec::new();
 
@@ -119,7 +107,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         }
 
         while let Some(vt) = queue.pop_front() {
-            if kind_map.get(&vt) == Some(&VertexTypeKind::Dead) {
+            if transition_map.get(&vt) == Some(&HasTransitions::No) {
                 continue;
             }
 
@@ -128,10 +116,12 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 let n = gp.boundary_len();
                 let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos).cloned().collect();
                 if t.is_empty() {
-                    kind_map.insert(vt, VertexTypeKind::Dead);
+                    transition_map.insert(vt, HasTransitions::No);
                     continue;
                 }
-                kind_map.entry(vt.clone()).or_insert(VertexTypeKind::Open);
+                transition_map
+                    .entry(vt.clone())
+                    .or_insert(HasTransitions::Yes);
                 (t, n)
             };
             let (touching, n) = touching;
@@ -195,7 +185,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             }
         }
 
-        let is_cursed = compute_cursed(&entries, &kind_map, &succ_sets);
+        let is_cursed = compute_cursed(&entries, &transition_map, &succ_sets);
 
         let info_entries: Vec<VertexTypeInfo<T>> = entries
             .into_iter()
@@ -205,7 +195,10 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 let (witness, witness_pos, gap_angle) = witness_store.remove(&vt).unwrap();
                 let rat = witness.to_rat();
                 VertexTypeInfo {
-                    kind: kind_map.get(&vt).copied().unwrap_or(VertexTypeKind::Open),
+                    has_transitions: transition_map
+                        .get(&vt)
+                        .copied()
+                        .unwrap_or(HasTransitions::Yes),
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
                     is_cursed: is_cursed[&id],
@@ -265,7 +258,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
 fn compute_cursed(
     entries: &[VertexType],
-    kind_map: &HashMap<VertexType, VertexTypeKind>,
+    transition_map: &HashMap<VertexType, HasTransitions>,
     succ_sets: &[BTreeSet<usize>],
 ) -> HashMap<usize, bool> {
     let n = entries.len();
@@ -273,7 +266,7 @@ fn compute_cursed(
 
     for (i, vt) in entries.iter().enumerate() {
         let id = i + 1;
-        cursed.insert(id, kind_map.get(vt) == Some(&VertexTypeKind::Dead));
+        cursed.insert(id, transition_map.get(vt) == Some(&HasTransitions::No));
     }
 
     let mut changed = true;
@@ -313,21 +306,13 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = VertexTypeIndex::new(ts);
         assert!(idx.num_types() > 0, "should discover some vertex types");
-        let open = idx
-            .entries
-            .iter()
-            .filter(|e| e.kind == VertexTypeKind::Open)
-            .count();
-        let dead = idx
-            .entries
-            .iter()
-            .filter(|e| e.kind == VertexTypeKind::Dead)
-            .count();
+        let alive = idx.entries.iter().filter(|e| e.is_alive()).count();
+        let dead = idx.entries.iter().filter(|e| e.is_dead()).count();
         let cursed = idx.entries.iter().filter(|e| e.is_cursed).count();
         eprintln!(
-            "hex: {} types ({} open, {} dead, {} cursed)",
+            "hex: {} types ({} alive, {} dead, {} cursed)",
             idx.num_types(),
-            open,
+            alive,
             dead,
             cursed
         );
@@ -340,12 +325,8 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = VertexTypeIndex::new(ts);
         assert!(idx.num_types() > 0);
-        let open = idx
-            .entries
-            .iter()
-            .filter(|e| e.kind == VertexTypeKind::Open)
-            .count();
-        eprintln!("square: {} types ({} open)", idx.num_types(), open);
+        let alive = idx.entries.iter().filter(|e| e.is_alive()).count();
+        eprintln!("square: {} types ({} alive)", idx.num_types(), alive);
     }
 
     #[test]
