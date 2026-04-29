@@ -674,6 +674,16 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
+pub fn candidates_from_flat(n: usize, flat: Vec<PatchMatch>) -> Vec<Vec<PatchMatch>> {
+    let mut result = vec![Vec::new(); n];
+    for pm in flat {
+        if pm.start_a < n {
+            result[pm.start_a].push(pm);
+        }
+    }
+    result
+}
+
 pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -> bool {
     if len == 0 || n == 0 {
         return false;
