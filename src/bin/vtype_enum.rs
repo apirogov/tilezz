@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::MatchTypeIndex;
 use tilezz::intgeom::patch::{
-    candidates_from_flat, EdgeInfo, GrowingPatch, PatchMatch, PatchVertexType,
+    candidates_from_flat, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
 };
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
@@ -78,6 +78,7 @@ struct ParsedVtype {
     angle: i8,
     cw_tile_id: usize,
     cw_offset: usize,
+    inner: Vec<EdgeInfo>,
     ccw_tile_id: usize,
     ccw_offset: usize,
     kind: String,
@@ -132,11 +133,17 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             tilezz::intgeom::vertextypes::VertexTypeKind::Dead => "dead",
         };
         out.push_str(&format!(
-            "VTYPE {} {} {} {} {} {} {} {}\n",
+            "VTYPE {} {} {} {} {} {} {} {} {} {}\n",
             id,
-            vt.angle,
+            info.gap_angle(),
             vt.cw.tile_id,
             vt.cw.tile_offset,
+            vt.inner.len(),
+            vt.inner
+                .iter()
+                .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
+                .collect::<Vec<_>>()
+                .join(" "),
             vt.ccw.tile_id,
             vt.ccw.tile_offset,
             kind_str,
@@ -170,10 +177,15 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     }
 
     for tr in idx.transitions() {
+        let side_str = match tr.side {
+            tilezz::intgeom::patch::TransitionSide::Cw => "cw",
+            tilezz::intgeom::patch::TransitionSide::Ccw => "ccw",
+        };
         out.push_str(&format!(
-            "TRANS {} {} {} {} {} {}\n",
+            "TRANS {} {} {} {} {} {} {}\n",
             tr.src_id,
             tr.dst_id,
+            side_str,
             tr.patch_match.start_a,
             tr.patch_match.len,
             tr.patch_match.start_b,
@@ -237,19 +249,43 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                 let cw_offset: usize = parts[4]
                     .parse()
                     .map_err(|e| format!("VTYPE cw_off: {}", e))?;
-                let ccw_tile_id: usize = parts[5]
+                let inner_len: usize = parts[5]
+                    .parse()
+                    .map_err(|e| format!("VTYPE inner_len: {}", e))?;
+                let mut inner = Vec::with_capacity(inner_len);
+                for k in 0..inner_len {
+                    let entry = &parts[6 + k];
+                    let mut parts_inner = entry.split('.');
+                    let tid: usize = parts_inner
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .map_err(|e| format!("VTYPE inner_tid: {}", e))?;
+                    let off: usize = parts_inner
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .map_err(|e| format!("VTYPE inner_off: {}", e))?;
+                    inner.push(EdgeInfo {
+                        tile_id: tid,
+                        tile_offset: off,
+                    });
+                }
+                let base = 6 + inner_len;
+                let ccw_tile_id: usize = parts[base]
                     .parse()
                     .map_err(|e| format!("VTYPE ccw_tid: {}", e))?;
-                let ccw_offset: usize = parts[6]
+                let ccw_offset: usize = parts[base + 1]
                     .parse()
                     .map_err(|e| format!("VTYPE ccw_off: {}", e))?;
-                let kind = parts[7].to_string();
-                let cursed: bool = parts[8] != "0";
+                let kind = parts[base + 2].to_string();
+                let cursed: bool = parts[base + 3] != "0";
                 vtypes.push(ParsedVtype {
                     id,
                     angle,
                     cw_tile_id,
                     cw_offset,
+                    inner,
                     ccw_tile_id,
                     ccw_offset,
                     kind,
@@ -309,10 +345,11 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
             "TRANS" => {
                 let src_id: usize = parts[1].parse().unwrap();
                 let dst_id: usize = parts[2].parse().unwrap();
-                let start_a: usize = parts[3].parse().unwrap();
-                let len: usize = parts[4].parse().unwrap();
-                let start_b: usize = parts[5].parse().unwrap();
-                let tile_id: usize = parts[6].parse().unwrap();
+                let _side: &str = parts[3];
+                let start_a: usize = parts[4].parse().unwrap();
+                let len: usize = parts[5].parse().unwrap();
+                let start_b: usize = parts[6].parse().unwrap();
+                let tile_id: usize = parts[7].parse().unwrap();
                 transitions.push(ParsedTransition {
                     src_id,
                     dst_id,
@@ -387,20 +424,20 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
         let gp = reconstructed
             .get(&pv.id)
             .ok_or_else(|| format!("VTYPE {}: no witness found", pv.id))?;
-        let pvt = gp.vertex_type_at(witnesses_by_id[&pv.id].pos);
-        let expected = PatchVertexType {
-            angle: pv.angle,
+        let pvt = gp.full_vertex_type_at(witnesses_by_id[&pv.id].pos);
+        let expected = VertexType {
             cw: EdgeInfo {
                 tile_id: pv.cw_tile_id,
                 tile_offset: pv.cw_offset,
             },
+            inner: pv.inner.clone(),
             ccw: EdgeInfo {
                 tile_id: pv.ccw_tile_id,
                 tile_offset: pv.ccw_offset,
             },
         };
         match pvt {
-            Some(actual) if actual == expected => {}
+            Some(actual) if actual.cw == expected.cw && actual.ccw == expected.ccw => {}
             Some(actual) => {
                 vtype_errors += 1;
                 if vtype_errors <= 5 {
@@ -462,13 +499,17 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             continue;
         }
         let junction_pos = if pt.start_a == pos { old_n - pt.len } else { 0 };
-        let junction_vt = gp2.vertex_type_at(junction_pos);
+        let junction_vt = gp2.full_vertex_type_at(junction_pos);
         let dst_info = reconstructed.get(&pt.dst_id);
         let dst_pos = witnesses_by_id.get(&pt.dst_id).map(|w| w.pos);
         match (junction_vt, dst_info, dst_pos) {
             (Some(actual), Some(dst_gp), Some(dst_p)) => {
-                let expected = dst_gp.vertex_type_at(dst_p);
-                if Some(actual) != expected {
+                let expected = dst_gp.full_vertex_type_at(dst_p);
+                let matches = match (actual, expected) {
+                    (a, Some(e)) => a.cw == e.cw && a.ccw == e.ccw,
+                    _ => false,
+                };
+                if !matches {
                     trans_errors += 1;
                     if trans_errors <= 5 {
                         eprintln!(
