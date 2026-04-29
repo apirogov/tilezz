@@ -155,7 +155,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                         .try_glue_precomputed((ns, len, ne), tile_b, true)
                         .is_ok()
                     {
-                        result[junc_idx].push(PatchMatch {
+                        result[ns_u].push(PatchMatch {
                             start_a: ns_u,
                             len,
                             start_b: ne_u,
@@ -232,7 +232,15 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 ..
             } => {
                 let n = angles.len();
-                let k = self.max_tile_len().min(n);
+                let k = self
+                    .match_index
+                    .tileset()
+                    .rats()
+                    .iter()
+                    .map(|r| r.len())
+                    .max()
+                    .unwrap_or(0)
+                    .min(n);
                 let mut result = Vec::new();
                 for offset in 0..=k {
                     let start = (vertex_index + n - offset) % n;
@@ -520,129 +528,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         };
     }
 
-    fn max_tile_len(&self) -> usize {
-        self.match_index
-            .tileset()
-            .rats()
-            .iter()
-            .map(|r| r.len())
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn incremental_candidates(
-        old_angles: &[i8],
-        _old_edges: &[EdgeInfo],
-        old_candidates: &[Vec<PatchMatch>],
-        new_angles: &[i8],
-        new_edges: &[EdgeInfo],
-        start_a: usize,
-        mlen: usize,
-        match_index: &Arc<MatchTypeIndex<T>>,
-    ) -> Vec<Vec<PatchMatch>> {
-        let n = old_angles.len();
-        let n_new = new_angles.len();
-        let k = match_index
-            .tileset()
-            .rats()
-            .iter()
-            .map(|r| r.len())
-            .max()
-            .unwrap_or(0);
-
-        let mut new_candidates = vec![Vec::new(); n_new];
-
-        let seg_len_old = n - mlen;
-
-        for new_pos in 0..n_new {
-            let is_old_part = new_pos < seg_len_old;
-            let is_junction_pos = new_pos == 0 || new_pos == seg_len_old;
-
-            if is_old_part && !is_junction_pos {
-                let old_pos = (start_a + mlen + new_pos) % n;
-                let offset_from_junction_start = new_pos;
-                let offset_from_junction_end = seg_len_old - new_pos;
-
-                if offset_from_junction_start > k && offset_from_junction_end > k {
-                    new_candidates[new_pos] = old_candidates[old_pos].clone();
-                    continue;
-                }
-            }
-
-            new_candidates[new_pos] =
-                Self::compute_candidates_at(new_pos, new_angles, new_edges, match_index);
-        }
-
-        new_candidates
-    }
-
-    fn compute_candidates_at(
-        pos: usize,
-        angles: &[i8],
-        edges: &[EdgeInfo],
-        match_index: &MatchTypeIndex<T>,
-    ) -> Vec<PatchMatch> {
-        let n = angles.len();
-        let rat = Rat::from_slice_unchecked(angles);
-        let tileset = match_index.tileset();
-        let tile_id = edges[pos].tile_id;
-        let tile_offset = edges[pos].tile_offset;
-
-        let mut seen: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
-        let mut candidates = Vec::new();
-
-        for cand in match_index.candidates_starting_at(tile_id, tile_offset) {
-            append_match_candidate(
-                pos,
-                angles,
-                &rat,
-                n,
-                cand,
-                match_index,
-                tileset,
-                &mut seen,
-                &mut candidates,
-            );
-        }
-
-        let ei = edges[pos];
-        if tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[pos] {
-            for tile_id_b in 0..tileset.num_tiles() {
-                let tile_b = tileset.rat(tile_id_b);
-                let b_seq = tile_b.seq();
-                let m = b_seq.len();
-                for ib in 0..m {
-                    if !is_single_edge_candidate(angles, pos, b_seq, ib) {
-                        continue;
-                    }
-                    let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
-                    if len != 1 {
-                        continue;
-                    }
-                    let ns_u = ns.rem_euclid(n as i64) as usize;
-                    let ne_u = ne.rem_euclid(m as i64) as usize;
-                    let key = (ns_u, len, ne_u, tile_id_b);
-                    if !seen.insert(key) {
-                        continue;
-                    }
-                    if rat
-                        .try_glue_precomputed((ns, len, ne), tile_b, true)
-                        .is_ok()
-                    {
-                        candidates.push(PatchMatch {
-                            start_a: ns_u,
-                            len,
-                            start_b: ne_u,
-                            tile_id: tile_id_b,
-                        });
-                    }
-                }
-            }
-        }
-
-        candidates
-    }
-
     fn compute_seed_matches(
         match_index: &MatchTypeIndex<T>,
         tileset: &TileSet<T>,
@@ -748,17 +633,7 @@ fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
     result: &mut [Vec<PatchMatch>],
 ) {
     for cand in match_index.candidates_starting_at(tile_id, tile_offset) {
-        append_match_candidate(
-            pos,
-            angles,
-            rat,
-            n,
-            cand,
-            match_index,
-            tileset,
-            global_seen,
-            &mut result[pos],
-        );
+        append_match_candidate(pos, angles, rat, n, cand, tileset, global_seen, result);
     }
 }
 
@@ -768,10 +643,9 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
     rat: &Rat<T>,
     n: usize,
     cand: &CandidateMatch,
-    _match_index: &MatchTypeIndex<T>,
     tileset: &TileSet<T>,
     seen: &mut BTreeSet<(usize, usize, usize, usize)>,
-    candidates: &mut Vec<PatchMatch>,
+    result: &mut [Vec<PatchMatch>],
 ) {
     let tile_b = tileset.rat(cand.tile_b);
     let (ns, len, ne) = rat.get_match((pos as i64, cand.start_b as i64), tile_b);
@@ -791,7 +665,7 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
         .try_glue_precomputed((ns, len, ne), tile_b, true)
         .is_ok()
     {
-        candidates.push(PatchMatch {
+        result[ns_u].push(PatchMatch {
             start_a: ns_u,
             len,
             start_b: ne_u,
