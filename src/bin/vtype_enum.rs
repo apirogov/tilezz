@@ -10,6 +10,9 @@ use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
 use tilezz::intgeom::vertextypes::VertexTypeIndex;
 
+#[cfg(feature = "pprof")]
+use pprof::ProfilerGuardBuilder;
+
 #[derive(Parser)]
 #[command(
     name = "vtype_enum",
@@ -553,6 +556,13 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
 }
 
 fn main() {
+    #[cfg(feature = "pprof")]
+    let guard = ProfilerGuardBuilder::default()
+        .frequency(1000)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -605,6 +615,16 @@ fn main() {
                 }
             }
             println!("OK");
+        }
+    }
+
+    #[cfg(feature = "pprof")]
+    {
+        if let Ok(report) = guard.report().build() {
+            let path = "flamegraph_vtype.svg";
+            let mut file = std::fs::File::create(path).unwrap();
+            report.flamegraph(&mut file).unwrap();
+            eprintln!("Flame graph written to {}", path);
         }
     }
 }

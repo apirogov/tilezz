@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::patch::{GrowingPatch, PatchMatch, PatchVertexType};
+use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, PatchVertexType};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
@@ -87,22 +87,31 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         let mut all_types: BTreeSet<PatchVertexType> = BTreeSet::new();
         let mut kind_map: HashMap<PatchVertexType, VertexTypeKind> = HashMap::new();
         let mut transitions: Vec<(PatchVertexType, PatchVertexType, PatchMatch)> = Vec::new();
-        let mut witnesses: HashMap<PatchVertexType, (GrowingPatch<T>, usize)> = HashMap::new();
 
         let mut visited: BTreeSet<PatchVertexType> = BTreeSet::new();
-        let mut queue: VecDeque<(GrowingPatch<T>, usize)> = VecDeque::new();
+        let mut queue: VecDeque<PatchVertexType> = VecDeque::new();
+        let mut patch_store: HashMap<(Vec<i8>, Vec<EdgeInfo>), GrowingPatch<T>> = HashMap::new();
+        let mut witness_refs: HashMap<PatchVertexType, ((Vec<i8>, Vec<EdgeInfo>), usize)> =
+            HashMap::new();
+
+        let intern = |gp: &GrowingPatch<T>| (gp.angles().to_vec(), gp.edges().to_vec());
 
         for seed_id in 0..tileset.num_tiles() {
             let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
             for pm in seed.get_all_matches() {
-                let mut gp = seed.clone();
+                let mut gp = seed.clone_for_mutation();
                 if gp.add_tile(pm).is_some() && gp.is_growing() {
+                    let key = intern(&gp);
+                    patch_store.entry(key.clone()).or_insert(gp);
+                    let gp = patch_store.get(&key).unwrap();
                     for pos in 0..gp.boundary_len() {
                         if let Some(pvt) = gp.vertex_type_at(pos) {
                             all_types.insert(pvt);
-                            witnesses.entry(pvt).or_insert_with(|| (gp.clone(), pos));
+                            witness_refs
+                                .entry(pvt)
+                                .or_insert_with(|| (key.clone(), pos));
                             if visited.insert(pvt) {
-                                queue.push_back((gp.clone(), pos));
+                                queue.push_back(pvt);
                             }
                         }
                     }
@@ -110,38 +119,50 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             }
         }
 
-        while let Some((gp, pos)) = queue.pop_front() {
-            let pvt = gp.vertex_type_at(pos).unwrap();
+        while let Some(pvt) = queue.pop_front() {
+            let (key, pos) = witness_refs[&pvt].clone();
             if kind_map.get(&pvt) == Some(&VertexTypeKind::Dead) {
                 continue;
             }
 
-            let touching: Vec<&PatchMatch> = gp.get_matches_touching_vertex(pos).collect();
-            if touching.is_empty() {
-                kind_map.insert(pvt, VertexTypeKind::Dead);
-                continue;
-            }
-
-            kind_map.entry(pvt).or_insert(VertexTypeKind::Open);
+            let (touching, old_n) = {
+                let gp = patch_store.get(&key).unwrap();
+                let touching: Vec<PatchMatch> =
+                    gp.get_matches_touching_vertex(pos).cloned().collect();
+                if touching.is_empty() {
+                    kind_map.insert(pvt, VertexTypeKind::Dead);
+                    continue;
+                }
+                kind_map.entry(pvt).or_insert(VertexTypeKind::Open);
+                (touching, gp.boundary_len())
+            };
 
             for pm in touching {
-                let mut gp2 = gp.clone();
-                if gp2.add_tile(pm).is_some() && gp2.is_growing() {
-                    let old_n = gp.boundary_len();
+                let mut gp2 = {
+                    let gp = patch_store.get(&key).unwrap();
+                    gp.clone_for_mutation()
+                };
+                if gp2.add_tile(&pm).is_some() && gp2.is_growing() {
                     let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
                     if let Some(new_pvt) = gp2.vertex_type_at(junction_pos) {
-                        transitions.push((pvt, new_pvt, pm.clone()));
+                        transitions.push((pvt, new_pvt, pm));
                     }
+                    let gp2_key = intern(&gp2);
+                    let mut has_new = false;
                     for new_pos in 0..gp2.boundary_len() {
                         if let Some(nv) = gp2.vertex_type_at(new_pos) {
                             all_types.insert(nv);
-                            witnesses
-                                .entry(nv)
-                                .or_insert_with(|| (gp2.clone(), new_pos));
                             if visited.insert(nv) {
-                                queue.push_back((gp2.clone(), new_pos));
+                                has_new = true;
+                                witness_refs
+                                    .entry(nv)
+                                    .or_insert_with(|| (gp2_key.clone(), new_pos));
+                                queue.push_back(nv);
                             }
                         }
+                    }
+                    if has_new {
+                        patch_store.entry(gp2_key).or_insert(gp2);
                     }
                 }
             }
@@ -177,7 +198,8 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             .enumerate()
             .map(|(i, vt)| {
                 let id = i + 1;
-                let (witness, witness_pos) = witnesses.remove(&vt).expect("witness missing");
+                let (ref key, witness_pos) = witness_refs[&vt];
+                let witness = patch_store.get(key).unwrap().clone();
                 let rat = witness.to_rat();
                 VertexTypeInfo {
                     kind: kind_map.get(&vt).copied().unwrap_or(VertexTypeKind::Open),
