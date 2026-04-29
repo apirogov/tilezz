@@ -7,6 +7,7 @@ use crate::intgeom::matchtypes::{
     is_single_edge_candidate, junction_gap_nonnegative, MatchTypeIndex,
 };
 use crate::intgeom::rat::Rat;
+use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -311,6 +312,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         let seed_angles = seed_rat.seq().to_vec();
         let new_angles = compute_glue_angles::<T>(&seed_angles, pm, &self.tileset)?;
+        if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
+            return None;
+        }
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
@@ -375,6 +379,11 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 return None;
             }
         };
+
+        if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
+            self.restore_growing(angles, edges);
+            return None;
+        }
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
