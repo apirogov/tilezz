@@ -7,7 +7,6 @@ use crate::intgeom::matchtypes::{
     is_single_edge_candidate, junction_gap_nonnegative, MatchTypeIndex,
 };
 use crate::intgeom::rat::Rat;
-use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -82,6 +81,26 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
     pub fn is_closed(&self) -> bool {
         matches!(self.state, PatchState::Closed)
+    }
+
+    pub(crate) fn clone_for_mutation(&self) -> Self {
+        GrowingPatch {
+            tileset: Arc::clone(&self.tileset),
+            match_index: Arc::clone(&self.match_index),
+            state: match &self.state {
+                PatchState::Seed { tile_id, .. } => PatchState::Seed {
+                    tile_id: *tile_id,
+                    cached_matches: Vec::new(),
+                },
+                PatchState::Growing { angles, edges, .. } => PatchState::Growing {
+                    angles: angles.clone(),
+                    edges: edges.clone(),
+                    cached_matches: Vec::new(),
+                },
+                PatchState::Closed => PatchState::Closed,
+                PatchState::_Phantom(p) => PatchState::_Phantom(p.clone()),
+            },
+        }
     }
 
     pub fn get_all_matches(&self) -> &[PatchMatch] {
@@ -427,19 +446,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 if !junction_gap_nonnegative(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
                     continue;
                 }
-                if let Ok(glued) =
+                if let Ok(_glued) =
                     seed.try_glue_precomputed((ns as i64, len, ne as i64), tile_b, true)
                 {
-                    if Snake::<T>::try_from(glued.seq()).is_ok() {
-                        let key = (ns_u, len, ne_u, cand.tile_b);
-                        if seen.insert(key) {
-                            matches.push(PatchMatch {
-                                start_a: ns_u,
-                                len,
-                                start_b: ne_u,
-                                tile_id: cand.tile_b,
-                            });
-                        }
+                    let key = (ns_u, len, ne_u, cand.tile_b);
+                    if seen.insert(key) {
+                        matches.push(PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id: cand.tile_b,
+                        });
                     }
                 }
             }
@@ -462,15 +479,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     let ne_u = ne.rem_euclid(m as i64) as usize;
                     let key = (ns_u, len, ne_u, tile_id);
                     if seen.insert(key) {
-                        if let Ok(glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
-                            if Snake::<T>::try_from(glued.seq()).is_ok() {
-                                matches.push(PatchMatch {
-                                    start_a: ns_u,
-                                    len,
-                                    start_b: ne_u,
-                                    tile_id,
-                                });
-                            }
+                        if seed
+                            .try_glue_precomputed((ns, len, ne), tile_b, true)
+                            .is_ok()
+                        {
+                            matches.push(PatchMatch {
+                                start_a: ns_u,
+                                len,
+                                start_b: ne_u,
+                                tile_id,
+                            });
                         }
                     }
                 }
@@ -561,15 +579,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     if !seen.insert(key) {
                         continue;
                     }
-                    if let Ok(glued) = rat.try_glue_precomputed((ns, len, ne), tile_b, true) {
-                        if Snake::<T>::try_from(glued.seq()).is_ok() {
-                            cached_matches.push(PatchMatch {
-                                start_a: ns_u,
-                                len,
-                                start_b: ne_u,
-                                tile_id: cand.tile_b,
-                            });
-                        }
+                    if rat
+                        .try_glue_precomputed((ns, len, ne), tile_b, true)
+                        .is_ok()
+                    {
+                        cached_matches.push(PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id: cand.tile_b,
+                        });
                     }
                 }
             }
@@ -594,15 +613,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     if !seen.insert(key) {
                         continue;
                     }
-                    if let Ok(glued) = rat.try_glue_precomputed((ns, len, ne), tile_b, true) {
-                        if Snake::<T>::try_from(glued.seq()).is_ok() {
-                            cached_matches.push(PatchMatch {
-                                start_a: ns_u,
-                                len,
-                                start_b: ne_u,
-                                tile_id,
-                            });
-                        }
+                    if rat
+                        .try_glue_precomputed((ns, len, ne), tile_b, true)
+                        .is_ok()
+                    {
+                        cached_matches.push(PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id,
+                        });
                     }
                 }
             }
