@@ -100,7 +100,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
             for pm in seed.get_all_matches() {
                 let mut gp = seed.clone_for_mutation();
-                if gp.add_tile(pm).is_some() && gp.is_growing() {
+                if gp.add_tile(&pm).is_some() && gp.is_growing() {
                     let key = intern(&gp);
                     patch_store.entry(key.clone()).or_insert(gp);
                     let gp = patch_store.get(&key).unwrap();

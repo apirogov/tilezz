@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
+use tilezz::intgeom::matchtypes::MatchTypeIndex;
 use tilezz::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, PatchVertexType};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
@@ -327,10 +328,13 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
 
     eprintln!("  Phase 1: Reconstructing witnesses...");
     let t1 = Instant::now();
+    let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
     let mut reconstructed: HashMap<usize, GrowingPatch<T>> = HashMap::new();
     for pw in &pf.witnesses {
-        let gp = GrowingPatch::from_parts(Arc::clone(tile_ts), pw.angles.clone(), pw.edges.clone())
-            .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
+        let cands = GrowingPatch::compute_all_candidates(&mi, &pw.angles, &pw.edges);
+        let gp =
+            GrowingPatch::from_parts(Arc::clone(&mi), pw.angles.clone(), pw.edges.clone(), cands)
+                .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
         reconstructed.insert(pw.vtype_id, gp);
     }
     eprintln!(
