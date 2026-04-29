@@ -45,6 +45,7 @@ enum TileSetKind {
     Hex,
     Square,
     Mixed,
+    Spectre,
     Penrose,
 }
 
@@ -56,6 +57,10 @@ fn make_ts_12(kind: &TileSetKind) -> Arc<TileSet<ZZ12>> {
         }
         TileSetKind::Square => {
             let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
+            Arc::new(TileSet::new(vec![rat]))
+        }
+        TileSetKind::Spectre => {
+            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
             Arc::new(TileSet::new(vec![rat]))
         }
         TileSetKind::Mixed => {
