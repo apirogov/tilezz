@@ -38,6 +38,28 @@ pub struct PatchMatch {
     pub tile_id: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VertexType {
+    pub cw: EdgeInfo,
+    pub inner: Vec<EdgeInfo>,
+    pub ccw: EdgeInfo,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TransitionSide {
+    Cw,
+    Ccw,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transition {
+    pub src_id: usize,
+    pub dst_id: Option<usize>,
+    pub side: TransitionSide,
+    pub tile_id: usize,
+    pub tile_offset: usize,
+}
+
 pub struct AddTileDiff;
 
 #[derive(Clone)]
@@ -56,6 +78,7 @@ enum PatchState<T: IsComplex> {
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
         candidates_by_start: Vec<Vec<PatchMatch>>,
+        inner_chains: Vec<Vec<EdgeInfo>>,
     },
     _Phantom(std::marker::PhantomData<T>),
 }
@@ -79,10 +102,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
         candidates_by_start: Vec<Vec<PatchMatch>>,
+        inner_chains: Vec<Vec<EdgeInfo>>,
     ) -> Option<Self> {
         if angles.is_empty()
             || angles.len() != edges.len()
             || candidates_by_start.len() != angles.len()
+            || inner_chains.len() != angles.len()
         {
             return None;
         }
@@ -92,6 +117,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 angles,
                 edges,
                 candidates_by_start,
+                inner_chains,
             },
         })
     }
@@ -185,11 +211,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     angles,
                     edges,
                     candidates_by_start,
-                    ..
+                    inner_chains,
                 } => PatchState::Growing {
                     angles: angles.clone(),
                     edges: edges.clone(),
                     candidates_by_start: candidates_by_start.clone(),
+                    inner_chains: inner_chains.clone(),
                 },
                 PatchState::_Phantom(p) => PatchState::_Phantom(p.clone()),
             },
@@ -323,6 +350,25 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         })
     }
 
+    pub fn full_vertex_type_at(&self, i: usize) -> Option<VertexType> {
+        let n = self.boundary_len();
+        if n == 0 || i >= n {
+            return None;
+        }
+        match &self.state {
+            PatchState::Growing {
+                edges,
+                inner_chains,
+                ..
+            } => Some(VertexType {
+                cw: edges[(i + n - 1) % n],
+                inner: inner_chains[i].clone(),
+                ccw: edges[i],
+            }),
+            _ => None,
+        }
+    }
+
     pub fn is_junction(&self, i: usize) -> bool {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
@@ -430,25 +476,30 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let candidates_by_start =
             Self::compute_all_candidates(&self.match_index, &new_angles, &edges);
 
+        let inner_chains = vec![vec![]; new_len];
+
         self.state = PatchState::Growing {
             angles: new_angles,
             edges,
             candidates_by_start,
+            inner_chains,
         };
 
         Some(AddTileDiff)
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> Option<AddTileDiff> {
-        let (angles, edges, old_candidates) = match &mut self.state {
+        let (angles, edges, old_candidates, old_inner) = match &mut self.state {
             PatchState::Growing {
                 angles,
                 edges,
                 candidates_by_start,
+                inner_chains,
             } => (
                 std::mem::take(angles),
                 std::mem::take(edges),
                 std::mem::take(candidates_by_start),
+                std::mem::take(inner_chains),
             ),
             _ => return None,
         };
@@ -459,14 +510,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let m = tileset.rat(pm.tile_id).seq().len();
 
         if mlen == 0 || mlen > n || mlen > m {
-            self.restore_growing(angles, edges, old_candidates);
+            self.restore_growing(angles, edges, old_candidates, old_inner);
             return None;
         }
 
         let new_angles = match compute_glue_angles::<T>(&angles, pm, tileset) {
             Some(a) => a,
             None => {
-                self.restore_growing(angles, edges, old_candidates);
+                self.restore_growing(angles, edges, old_candidates, old_inner);
                 return None;
             }
         };
@@ -480,7 +531,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
-            self.restore_growing(angles, edges, old_candidates);
+            self.restore_growing(angles, edges, old_candidates, old_inner);
             return None;
         }
 
@@ -506,10 +557,30 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let new_candidates =
             Self::compute_all_candidates(&self.match_index, &new_angles, &new_edges);
 
+        let mut new_inner = vec![Vec::new(); new_len];
+
+        for i in 1..seg_len_old {
+            new_inner[i] = old_inner[(ccw_pos + i) % n].clone();
+        }
+
+        let cw_end_matched = (pm.start_a + mlen - 1) % n;
+        new_inner[0] = old_inner[ccw_pos]
+            .iter()
+            .chain(std::iter::once(&edges[cw_end_matched]))
+            .cloned()
+            .collect();
+
+        new_inner[seg_len_old] = old_inner[pm.start_a]
+            .iter()
+            .chain(std::iter::once(&edges[pm.start_a]))
+            .cloned()
+            .collect();
+
         self.state = PatchState::Growing {
             angles: new_angles,
             edges: new_edges,
             candidates_by_start: new_candidates,
+            inner_chains: new_inner,
         };
 
         Some(AddTileDiff)
@@ -520,11 +591,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
         candidates_by_start: Vec<Vec<PatchMatch>>,
+        inner_chains: Vec<Vec<EdgeInfo>>,
     ) {
         self.state = PatchState::Growing {
             angles,
             edges,
             candidates_by_start,
+            inner_chains,
         };
     }
 
@@ -1232,5 +1305,77 @@ mod tests {
         }
 
         results
+    }
+
+    #[test]
+    fn inner_chains_empty_after_first_glue() {
+        let gp = hex_patch();
+        let pm = gp.get_all_matches()[0].clone();
+        let mut gp2 = gp.clone();
+        gp2.add_tile(&pm).expect("first add");
+        let inner = match &gp2.state {
+            PatchState::Growing { inner_chains, .. } => inner_chains.clone(),
+            _ => panic!("expected Growing"),
+        };
+        for (i, chain) in inner.iter().enumerate() {
+            assert!(
+                chain.is_empty(),
+                "inner chain at position {i} should be empty after first glue, got {chain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inner_chains_grow_on_second_glue() {
+        let gp = hex_patch();
+        let first_match = gp.get_all_matches()[0].clone();
+        let mut gp2 = gp.clone();
+        gp2.add_tile(&first_match).expect("first add");
+
+        let n = gp2.boundary_len();
+        let candidates = gp2.get_all_matches();
+        let second = candidates
+            .iter()
+            .find(|pm| pm.len == 1)
+            .expect("need len-1 match");
+        let pos_of_match = second.start_a;
+        let mut gp3 = gp2.clone();
+        gp3.add_tile(second).expect("second add");
+
+        let inner = match &gp3.state {
+            PatchState::Growing { inner_chains, .. } => inner_chains.clone(),
+            _ => panic!("expected Growing"),
+        };
+
+        let new_n = gp3.boundary_len();
+        let mut found_nonempty = false;
+        for (i, chain) in inner.iter().enumerate() {
+            if !chain.is_empty() {
+                found_nonempty = true;
+                assert_eq!(
+                    chain.len(),
+                    1,
+                    "inner chain at position {i} should have exactly 1 entry after second glue"
+                );
+                assert_eq!(
+                    chain[0].tile_id, 0,
+                    "inner entry should be the original hex tile"
+                );
+            }
+        }
+        assert!(found_nonempty, "at least one inner chain should be non-empty after second glue on a {new_n}-edge boundary, pos_of_match={pos_of_match}");
+    }
+
+    #[test]
+    fn full_vertex_type_roundtrip_after_first_glue() {
+        let gp = hex_patch();
+        let pm = gp.get_all_matches()[0].clone();
+        let mut gp2 = gp.clone();
+        gp2.add_tile(&pm).expect("first add");
+        let n = gp2.boundary_len();
+        for i in 0..n {
+            let vt = gp2.full_vertex_type_at(i).expect("should have vertex type");
+            assert!(vt.inner.is_empty(), "inner should be empty at pos {i}");
+        }
     }
 }

@@ -361,10 +361,17 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
     let mut reconstructed: HashMap<usize, GrowingPatch<T>> = HashMap::new();
     for pw in &pf.witnesses {
-        let cands = candidates_from_flat(pw.angles.len(), pw.candidates.clone());
-        let gp =
-            GrowingPatch::from_parts(Arc::clone(&mi), pw.angles.clone(), pw.edges.clone(), cands)
-                .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
+        let n = pw.angles.len();
+        let cands = candidates_from_flat(n, pw.candidates.clone());
+        let inner_chains = vec![vec![]; n];
+        let gp = GrowingPatch::from_parts(
+            Arc::clone(&mi),
+            pw.angles.clone(),
+            pw.edges.clone(),
+            cands,
+            inner_chains,
+        )
+        .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
         reconstructed.insert(pw.vtype_id, gp);
     }
     eprintln!(
