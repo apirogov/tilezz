@@ -382,6 +382,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    pub fn inner_chains(&self) -> &[Vec<EdgeInfo>] {
+        match &self.state {
+            PatchState::Growing { inner_chains, .. } => inner_chains,
+            _ => &[],
+        }
+    }
+
     pub fn candidates_by_start(&self) -> &[Vec<PatchMatch>] {
         match &self.state {
             PatchState::Growing {

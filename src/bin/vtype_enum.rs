@@ -91,6 +91,7 @@ struct ParsedWitness {
     angles: Vec<i8>,
     edges: Vec<EdgeInfo>,
     candidates: Vec<PatchMatch>,
+    inner_chains: Vec<Vec<EdgeInfo>>,
 }
 
 struct ParsedTransition {
@@ -164,8 +165,23 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             .iter()
             .map(|m| format!("{}.{}.{}.{}", m.start_a, m.len, m.start_b, m.tile_id))
             .collect();
+        let inner_strs: Vec<String> = w
+            .inner_chains()
+            .iter()
+            .map(|chain| {
+                if chain.is_empty() {
+                    "-".to_string()
+                } else {
+                    chain
+                        .iter()
+                        .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                }
+            })
+            .collect();
         out.push_str(&format!(
-            "WITNESS {} {} {} {} {} {} {}\n",
+            "WITNESS {} {} {} {} {} {} {} {}\n",
             id,
             info.witness_pos(),
             n,
@@ -173,6 +189,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             edge_strs.join(" "),
             all_matches.len(),
             cand_strs.join(" "),
+            inner_strs.join(" "),
         ));
     }
 
@@ -334,12 +351,38 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                         }
                     })
                     .collect();
+                let inner_base = 4 + 2 * n + 1 + num_cands;
+                let inner_chains: Vec<Vec<EdgeInfo>> = if inner_base < parts.len() {
+                    parts[inner_base..]
+                        .iter()
+                        .map(|s| {
+                            if *s == "-" {
+                                vec![]
+                            } else {
+                                s.split(',')
+                                    .map(|e| {
+                                        let mut sp = e.split('.');
+                                        let tid: usize = sp.next().unwrap().parse().unwrap();
+                                        let off: usize = sp.next().unwrap().parse().unwrap();
+                                        EdgeInfo {
+                                            tile_id: tid,
+                                            tile_offset: off,
+                                        }
+                                    })
+                                    .collect()
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![vec![]; n]
+                };
                 witnesses.push(ParsedWitness {
                     vtype_id,
                     pos,
                     angles,
                     edges,
                     candidates,
+                    inner_chains,
                 });
             }
             "TRANS" => {
@@ -400,7 +443,11 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     for pw in &pf.witnesses {
         let n = pw.angles.len();
         let cands = candidates_from_flat(n, pw.candidates.clone());
-        let inner_chains = vec![vec![]; n];
+        let inner_chains = if pw.inner_chains.len() == n {
+            pw.inner_chains.clone()
+        } else {
+            vec![vec![]; n]
+        };
         let gp = GrowingPatch::from_parts(
             Arc::clone(&mi),
             pw.angles.clone(),
@@ -569,13 +616,19 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                 continue;
             }
             let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
-            if let Some(jvt) = gp2.vertex_type_at(junction_pos) {
-                let found = (1..=num_types).any(|id| {
-                    let info = reconstructed.get(&id);
-                    let wpos = witnesses_by_id.get(&id).map(|w| w.pos);
-                    match (info, wpos) {
-                        (Some(gp), Some(wp)) => gp.vertex_type_at(wp) == Some(jvt),
-                        _ => false,
+            if let Some(jvt) = gp2.full_vertex_type_at(junction_pos) {
+                let found = pf.vtypes.iter().any(|pv| {
+                    let gp = match reconstructed.get(&pv.id) {
+                        Some(g) => g,
+                        None => return false,
+                    };
+                    let wp = match witnesses_by_id.get(&pv.id) {
+                        Some(w) => w.pos,
+                        None => return false,
+                    };
+                    match gp.full_vertex_type_at(wp) {
+                        Some(stored) => stored == jvt,
+                        None => false,
                     }
                 });
                 if !found {
