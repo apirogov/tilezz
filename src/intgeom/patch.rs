@@ -122,6 +122,65 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         })
     }
 
+    pub fn construct_minimal_witness(
+        vtype: &VertexType,
+        match_index: Arc<MatchTypeIndex<T>>,
+    ) -> Option<(Self, usize)> {
+        let tileset = match_index.tileset();
+
+        let mut patch = GrowingPatch::new(Arc::clone(&tileset), vtype.cw.tile_id);
+
+        let mut targets = vtype.inner.clone();
+        targets.push(vtype.ccw);
+
+        for (step, target) in targets.iter().enumerate() {
+            let expected_inner: Vec<EdgeInfo> = vtype.inner[..step].to_vec();
+            let candidates = patch.get_all_matches();
+
+            let mut found = false;
+            for pm in &candidates {
+                if pm.tile_id != target.tile_id {
+                    continue;
+                }
+
+                let mut trial = patch.clone();
+                if trial.add_tile(pm).is_none() {
+                    continue;
+                }
+
+                let trial_n = trial.boundary_len();
+                for pos in 0..trial_n {
+                    let vt = match trial.full_vertex_type_at(pos) {
+                        Some(vt) => vt,
+                        None => continue,
+                    };
+
+                    if vt.cw == vtype.cw && vt.ccw == *target && vt.inner == expected_inner {
+                        patch = trial;
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+
+            if !found {
+                return None;
+            }
+        }
+
+        for pos in 0..patch.boundary_len() {
+            let vt = patch.full_vertex_type_at(pos)?;
+            if vt == *vtype {
+                return Some((patch, pos));
+            }
+        }
+
+        None
+    }
+
     pub fn compute_all_candidates(
         match_index: &Arc<MatchTypeIndex<T>>,
         angles: &[i8],
@@ -1376,6 +1435,90 @@ mod tests {
         for i in 0..n {
             let vt = gp2.full_vertex_type_at(i).expect("should have vertex type");
             assert!(vt.inner.is_empty(), "inner should be empty at pos {i}");
+        }
+    }
+
+    #[test]
+    fn construct_minimal_witness_hex_roundtrip() {
+        let gp = hex_patch();
+        let matches = gp.get_all_matches();
+        let ts = gp.match_index.clone();
+
+        for pm in &matches {
+            let mut glued = gp.clone();
+            glued.add_tile(pm).expect("glue should succeed");
+            let n = glued.boundary_len();
+            for pos in 0..n {
+                let vt = glued.full_vertex_type_at(pos).expect("vertex type");
+                let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
+                assert!(
+                    result.is_some(),
+                    "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
+                );
+                let (witness, wpos) = result.unwrap();
+                let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+                assert_eq!(
+                    reconstructed, vt,
+                    "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn construct_minimal_witness_square_roundtrip() {
+        let gp = square_patch();
+        let matches = gp.get_all_matches();
+        let ts = gp.match_index.clone();
+
+        for pm in &matches {
+            let mut glued = gp.clone();
+            glued.add_tile(pm).expect("glue should succeed");
+            let n = glued.boundary_len();
+            for pos in 0..n {
+                let vt = glued.full_vertex_type_at(pos).expect("vertex type");
+                let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
+                assert!(
+                    result.is_some(),
+                    "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
+                );
+                let (witness, wpos) = result.unwrap();
+                let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+                assert_eq!(
+                    reconstructed, vt,
+                    "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn construct_minimal_witness_hex_with_inner() {
+        let gp = hex_patch();
+        let ts = gp.match_index.clone();
+        let first = gp.get_all_matches()[0].clone();
+        let mut gp2 = gp.clone();
+        gp2.add_tile(&first).expect("first add");
+
+        let second_candidates = gp2.get_all_matches();
+        let len1_match = second_candidates
+            .iter()
+            .find(|pm| pm.len == 1)
+            .expect("need len-1 match")
+            .clone();
+        let mut gp3 = gp2.clone();
+        gp3.add_tile(&len1_match).expect("second add");
+
+        for pos in 0..gp3.boundary_len() {
+            let vt = gp3.full_vertex_type_at(pos).expect("vertex type");
+            let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
+            assert!(
+                result.is_some(),
+                "construct_minimal_witness should succeed for vt={vt:?} with inner"
+            );
+            let (witness, wpos) = result.unwrap();
+            let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+            assert_eq!(reconstructed, vt, "roundtrip failed for vt={vt:?}");
         }
     }
 }
