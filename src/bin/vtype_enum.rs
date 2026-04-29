@@ -129,10 +129,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     for id in 1..=idx.num_types() {
         let info = idx.get_info(id);
         let vt = info.vtype();
-        let kind_str = match info.kind() {
-            tilezz::intgeom::vertextypes::VertexTypeKind::Open => "open",
-            tilezz::intgeom::vertextypes::VertexTypeKind::Dead => "dead",
-        };
+        let kind_str = if info.is_dead() { "dead" } else { "open" };
         out.push_str(&format!(
             "VTYPE {} {} {} {} {} {} {} {} {} {}\n",
             id,
@@ -211,22 +208,14 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     }
 
     std::fs::write(path, &out).unwrap();
-    let n_open = idx
-        .entries()
-        .iter()
-        .filter(|e| matches!(e.kind(), tilezz::intgeom::vertextypes::VertexTypeKind::Open))
-        .count();
-    let n_dead = idx
-        .entries()
-        .iter()
-        .filter(|e| matches!(e.kind(), tilezz::intgeom::vertextypes::VertexTypeKind::Dead))
-        .count();
+    let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
+    let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "  Written {} bytes, {} types ({} open, {} dead, {} cursed), {} transitions in {:.2?}",
+        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} transitions in {:.2?}",
         out.len(),
         idx.num_types(),
-        n_open,
+        n_alive,
         n_dead,
         n_cursed,
         idx.transitions().len(),
@@ -665,22 +654,14 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
     let idx = VertexTypeIndex::new(ts);
     let elapsed = t0.elapsed();
 
-    let n_open = idx
-        .entries()
-        .iter()
-        .filter(|e| matches!(e.kind(), tilezz::intgeom::vertextypes::VertexTypeKind::Open))
-        .count();
-    let n_dead = idx
-        .entries()
-        .iter()
-        .filter(|e| matches!(e.kind(), tilezz::intgeom::vertextypes::VertexTypeKind::Dead))
-        .count();
+    let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
+    let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "[{}] types={} (open={}, dead={}, cursed={}) transitions={} time={:.2?}",
+        "[{}] types={} (alive={}, dead={}, cursed={}) transitions={} time={:.2?}",
         label,
         idx.num_types(),
-        n_open,
+        n_alive,
         n_dead,
         n_cursed,
         idx.transitions().len(),
