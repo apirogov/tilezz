@@ -5,7 +5,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::MatchTypeIndex;
-use tilezz::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, PatchVertexType};
+use tilezz::intgeom::patch::{
+    candidates_from_flat, EdgeInfo, GrowingPatch, PatchMatch, PatchVertexType,
+};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
@@ -87,6 +89,7 @@ struct ParsedWitness {
     pos: usize,
     angles: Vec<i8>,
     edges: Vec<EdgeInfo>,
+    candidates: Vec<PatchMatch>,
 }
 
 struct ParsedTransition {
@@ -149,13 +152,20 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             .iter()
             .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
             .collect();
+        let all_matches = w.get_all_matches();
+        let cand_strs: Vec<String> = all_matches
+            .iter()
+            .map(|m| format!("{}.{}.{}.{}", m.start_a, m.len, m.start_b, m.tile_id))
+            .collect();
         out.push_str(&format!(
-            "WITNESS {} {} {} {} {}\n",
+            "WITNESS {} {} {} {} {} {} {}\n",
             id,
             info.witness_pos(),
             n,
             angle_strs.join(" "),
             edge_strs.join(" "),
+            all_matches.len(),
+            cand_strs.join(" "),
         ));
     }
 
@@ -269,11 +279,31 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                         }
                     })
                     .collect();
+                let num_cands: usize = parts[4 + 2 * n]
+                    .parse()
+                    .map_err(|e| format!("WITNESS num_cands: {}", e))?;
+                let candidates: Vec<PatchMatch> = parts[4 + 2 * n + 1..4 + 2 * n + 1 + num_cands]
+                    .iter()
+                    .map(|s| {
+                        let mut sp = s.split('.');
+                        let start_a: usize = sp.next().unwrap().parse().unwrap();
+                        let len: usize = sp.next().unwrap().parse().unwrap();
+                        let start_b: usize = sp.next().unwrap().parse().unwrap();
+                        let tile_id: usize = sp.next().unwrap().parse().unwrap();
+                        PatchMatch {
+                            start_a,
+                            len,
+                            start_b,
+                            tile_id,
+                        }
+                    })
+                    .collect();
                 witnesses.push(ParsedWitness {
                     vtype_id,
                     pos,
                     angles,
                     edges,
+                    candidates,
                 });
             }
             "TRANS" => {
@@ -331,7 +361,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
     let mut reconstructed: HashMap<usize, GrowingPatch<T>> = HashMap::new();
     for pw in &pf.witnesses {
-        let cands = GrowingPatch::compute_all_candidates(&mi, &pw.angles, &pw.edges);
+        let cands = candidates_from_flat(pw.angles.len(), pw.candidates.clone());
         let gp =
             GrowingPatch::from_parts(Arc::clone(&mi), pw.angles.clone(), pw.edges.clone(), cands)
                 .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
