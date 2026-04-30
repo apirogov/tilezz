@@ -211,9 +211,13 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
 
             let witness_idx = witness_indices.len();
             let seq = tile_rat.seq();
-            let (new_count, _raw_active) = trie.insert_cyclic_subseqs(seq, k, witness_idx);
+            let (new_count, raw_active) = trie.insert_cyclic_subseqs(seq, k, witness_idx);
             if new_count > 0 {
+                let n = seq.len();
+                let mask = junction_active_mask(&raw_active, k, &Provenance::Seed { tile_idx }, n);
+                active_map.insert(rat_id, mask);
                 witness_indices.push(rat_id);
+                pending.insert(rat_id);
             }
         }
 
@@ -277,13 +281,15 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
             for (batch_pos, &source_id) in batch_ids.iter().enumerate() {
                 let patch = &witnesses[source_id];
                 let n = patch.boundary_len();
-                let active = &batch_active[batch_pos];
 
                 let matches = patch.get_all_matches();
                 for pm in &matches {
-                    if !match_touches_active(pm.start_a, pm.len, n, active) {
-                        layer_skipped += 1;
-                        continue;
+                    if n > 0 {
+                        let active = &batch_active[batch_pos];
+                        if !match_touches_active(pm.start_a, pm.len, n, active) {
+                            layer_skipped += 1;
+                            continue;
+                        }
                     }
                     layer_considered += 1;
 
@@ -294,13 +300,21 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
 
                     let rat = gp.to_rat();
                     if !rat_to_id.contains_key(&rat) && seen_new.insert(rat.clone()) {
+                        let source_len = if n > 0 {
+                            n
+                        } else {
+                            match &provenances[source_id] {
+                                Provenance::Seed { tile_idx } => tileset.rat(*tile_idx).seq().len(),
+                                Provenance::Extend { .. } => n,
+                            }
+                        };
                         new_entries.push((
                             gp,
                             Provenance::Extend {
                                 source_witness_id: source_id,
                                 patch_match: pm.clone(),
                             },
-                            rat.len(),
+                            source_len,
                         ));
                     }
                 }
