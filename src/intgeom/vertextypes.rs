@@ -231,6 +231,16 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         &self.entries
     }
 
+    pub fn range_by_cw(&self, tile_id: usize) -> &[VertexTypeInfo<T>] {
+        let start = self
+            .entries
+            .partition_point(|e| e.vtype().cw.tile_id < tile_id);
+        let end = self
+            .entries
+            .partition_point(|e| e.vtype().cw.tile_id <= tile_id);
+        &self.entries[start..end]
+    }
+
     pub fn get_id(&self, vtype: &VertexType) -> Option<usize> {
         self.reverse.get(vtype).copied()
     }
@@ -343,5 +353,60 @@ mod tests {
                 "witness should realize its claimed type"
             );
         }
+    }
+
+    #[test]
+    fn range_by_cw_single_tile() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let slice = idx.range_by_cw(0);
+        assert_eq!(
+            slice.len(),
+            idx.num_types(),
+            "single-tile tileset: all types have cw.tile_id == 0"
+        );
+        for info in slice {
+            assert_eq!(info.vtype().cw.tile_id, 0);
+        }
+
+        let empty = idx.range_by_cw(1);
+        assert!(empty.is_empty(), "no types with cw.tile_id == 1");
+    }
+
+    #[test]
+    fn range_by_cw_multi_tile() {
+        let sq: crate::intgeom::snake::Snake<ZZ12> = tiles::square();
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let n = idx.num_types();
+        assert!(n > 0);
+
+        let sq_slice = idx.range_by_cw(0);
+        let hex_slice = idx.range_by_cw(1);
+
+        assert_eq!(
+            sq_slice.len() + hex_slice.len(),
+            n,
+            "partition must cover all types"
+        );
+        assert!(sq_slice.len() > 0, "should have types starting with square");
+        assert!(hex_slice.len() > 0, "should have types starting with hex");
+
+        for info in sq_slice {
+            assert_eq!(info.vtype().cw.tile_id, 0);
+        }
+        for info in hex_slice {
+            assert_eq!(info.vtype().cw.tile_id, 1);
+        }
+
+        let empty = idx.range_by_cw(2);
+        assert!(empty.is_empty());
     }
 }
