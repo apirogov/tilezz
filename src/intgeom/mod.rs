@@ -20,4 +20,6 @@ pub mod seq_explorer;
 
 pub mod patch;
 
+pub mod vtseq_explorer;
+
 pub mod growing;
