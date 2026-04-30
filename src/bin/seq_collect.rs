@@ -374,6 +374,13 @@ fn validate_common<
 }
 
 fn main() {
+    #[cfg(feature = "pprof")]
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(1000)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -448,6 +455,23 @@ fn main() {
                 }
             }
             println!("OK");
+        }
+    }
+
+    #[cfg(feature = "pprof")]
+    {
+        if let Ok(report) = guard.report().build() {
+            let path = "flamegraph_seq.svg";
+            let mut file = std::fs::File::create(path).unwrap();
+            report.flamegraph(&mut file).unwrap();
+            eprintln!("Flame graph written to {}", path);
+
+            let mut text_report = Vec::new();
+            use std::io::Write;
+            report.text_detailed(&mut text_report).unwrap();
+            let text_path = "pprof_seq.txt";
+            std::fs::write(text_path, &text_report).unwrap();
+            eprintln!("Text report written to {}", text_path);
         }
     }
 }

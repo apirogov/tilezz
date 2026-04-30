@@ -6,8 +6,13 @@ pub fn find_maximal_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match
     })
 }
 
-pub fn find_all_positive_matches(index: &MatchIndex, i: usize, j: usize) -> Vec<Match> {
-    find_matches_with_filter(index, i, j, |_, _, _, _, _| true)
+pub fn find_positive_matches_at_positions(
+    index: &MatchIndex,
+    i: usize,
+    j: usize,
+    positions: &[usize],
+) -> Vec<Match> {
+    find_matches_at_positions_with_filter(index, i, j, positions, |_, _, _, _, _| true)
 }
 
 fn find_matches_with_filter(
@@ -16,12 +21,23 @@ fn find_matches_with_filter(
     j: usize,
     accept: impl Fn(&MatchIndex, usize, usize, usize, usize) -> bool,
 ) -> Vec<Match> {
+    let len_i = index.string_lens[i];
+    let positions: Vec<usize> = (0..len_i).collect();
+    find_matches_at_positions_with_filter(index, i, j, &positions, accept)
+}
+
+fn find_matches_at_positions_with_filter(
+    index: &MatchIndex,
+    i: usize,
+    j: usize,
+    positions: &[usize],
+    accept: impl Fn(&MatchIndex, usize, usize, usize, usize) -> bool,
+) -> Vec<Match> {
     let mut matches = Vec::new();
 
     let start_i = index.boundaries[i];
-    let len_i = index.string_lens[i];
 
-    for local_a in 0..len_i {
+    for &local_a in positions {
         let pos_a = start_i + local_a;
         let r = index.rank[pos_a];
 

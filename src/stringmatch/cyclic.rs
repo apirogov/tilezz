@@ -111,7 +111,20 @@ impl CyclicMatchIndex {
     /// angles at positions `pos_a..pos_a+len` (cyclically) match the reverse
     /// complement of tile B's angles at positions `pos_b-len+1..=pos_b` (cyclically).
     pub fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<CyclicMatch> {
-        let raw = self.index.all_positive_matches(i, self.n + j);
+        let n_a = self.originals[i].len();
+        let positions: Vec<usize> = (0..n_a).collect();
+        self.maximal_rc_matches_at_positions(i, j, &positions)
+    }
+
+    pub fn maximal_rc_matches_at_positions(
+        &self,
+        i: usize,
+        j: usize,
+        positions: &[usize],
+    ) -> Vec<CyclicMatch> {
+        let raw = self
+            .index
+            .positive_matches_at_positions(i, self.n + j, positions);
 
         let n_a = self.originals[i].len();
         let n_b = self.originals[j].len();
