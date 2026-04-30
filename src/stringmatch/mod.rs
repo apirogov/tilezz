@@ -136,8 +136,13 @@ impl MatchIndex {
         maximal::find_maximal_matches(self, i, j)
     }
 
-    pub(crate) fn all_positive_matches(&self, i: usize, j: usize) -> Vec<Match> {
-        maximal::find_all_positive_matches(self, i, j)
+    pub(crate) fn positive_matches_at_positions(
+        &self,
+        i: usize,
+        j: usize,
+        positions: &[usize],
+    ) -> Vec<Match> {
+        maximal::find_positive_matches_at_positions(self, i, j, positions)
     }
 
     pub fn lcp_between(&self, a: usize, b: usize) -> usize {

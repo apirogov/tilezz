@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::time::Instant;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchFinder;
 use crate::intgeom::rat::Rat;
+use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
 pub fn replay_glue<T: IsComplex + IsRingOrField + Units>(
@@ -153,7 +157,7 @@ fn junction_active_mask(
     }
 }
 
-fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) -> bool {
+pub(crate) fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) -> bool {
     if mlen == 0 || n == 0 {
         return false;
     }
@@ -192,7 +196,7 @@ pub struct SeqExplorer<T: IsComplex> {
     trie: SeqTrie,
     rats: Vec<Rat<T>>,
     provenances: Vec<Provenance>,
-    rat_to_id: BTreeMap<Rat<T>, usize>,
+    rat_to_id: FxHashMap<Rat<T>, usize>,
     witnesses: Vec<usize>,
     max_subseq_len: usize,
     total_matches_skipped: usize,
@@ -201,19 +205,20 @@ pub struct SeqExplorer<T: IsComplex> {
 
 impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let t0 = Instant::now();
         let k = tileset.rats().iter().map(|r| r.len()).max().unwrap_or(0);
 
         let mut trie = SeqTrie::new();
         let mut rats: Vec<Rat<T>> = Vec::new();
         let mut provenances: Vec<Provenance> = Vec::new();
-        let mut rat_to_id: BTreeMap<Rat<T>, usize> = BTreeMap::new();
+        let mut rat_to_id: FxHashMap<Rat<T>, usize> = FxHashMap::default();
         let mut witnesses: Vec<usize> = Vec::new();
         let mut pending: BTreeSet<usize> = BTreeSet::new();
         let mut active_map: HashMap<usize, Vec<bool>> = HashMap::new();
 
         for tile_idx in 0..tileset.num_tiles() {
             let rat = tileset.rat(tile_idx).clone();
-            if let std::collections::btree_map::Entry::Vacant(e) = rat_to_id.entry(rat.clone()) {
+            if let std::collections::hash_map::Entry::Vacant(e) = rat_to_id.entry(rat.clone()) {
                 let rat_id = rats.len();
                 e.insert(rat_id);
                 rats.push(rat.clone());
@@ -272,7 +277,8 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
             let mf = MatchFinder::crossing(Arc::clone(&batch_ts), Arc::clone(&tileset));
 
             let mut new_rat_entries: Vec<(Rat<T>, Provenance)> = Vec::new();
-            let mut seen_new: BTreeSet<Rat<T>> = BTreeSet::new();
+            let mut seen_new: FxHashSet<Rat<T>> = FxHashSet::default();
+            let mut seen_invalid: FxHashSet<Rat<T>> = FxHashSet::default();
             let mut layer_skipped = 0usize;
             let mut layer_considered = 0usize;
 
@@ -282,26 +288,32 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
                 let global_source = global_from_batch[batch_idx];
 
                 for tile_idx in 0..tileset.num_tiles() {
-                    for mt in mf.valid_matches(batch_idx, tile_idx) {
-                        if !match_touches_active(mt.start_a, mt.len, n, active) {
-                            layer_skipped += 1;
-                            continue;
-                        }
+                    for (glued, mt) in mf.valid_matches_filtered(batch_idx, tile_idx, active) {
                         layer_considered += 1;
 
-                        let glued = mt.apply(batch_ts.rats(), tileset.rats());
-                        if !rat_to_id.contains_key(&glued) && seen_new.insert(glued.clone()) {
-                            new_rat_entries.push((
-                                glued,
-                                Provenance::Glue {
-                                    source_rat_id: global_source,
-                                    tile_idx,
-                                    start_a: mt.start_a,
-                                    start_b: mt.start_b,
-                                    len: mt.len,
-                                },
-                            ));
+                        if rat_to_id.contains_key(&glued)
+                            || seen_new.contains(&glued)
+                            || seen_invalid.contains(&glued)
+                        {
+                            continue;
                         }
+
+                        if Snake::<T>::try_from(glued.seq()).is_err() {
+                            seen_invalid.insert(glued);
+                            continue;
+                        }
+
+                        seen_new.insert(glued.clone());
+                        new_rat_entries.push((
+                            glued,
+                            Provenance::Glue {
+                                source_rat_id: global_source,
+                                tile_idx,
+                                start_a: mt.start_a,
+                                start_b: mt.start_b,
+                                len: mt.len,
+                            },
+                        ));
                     }
                 }
             }
@@ -358,13 +370,14 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
         }
 
         eprintln!(
-            "  Done: {} layers, {} rats, {} subseqs, {} witnesses, skip={}/{}",
+            "  Done: {} layers, {} rats, {} subseqs, {} witnesses, skip={}/{} time={:.2?}",
             layer,
             rats.len(),
             trie.len(),
             witnesses.len(),
             total_skipped,
             total_skipped + total_considered,
+            t0.elapsed(),
         );
 
         SeqExplorer {
@@ -494,5 +507,25 @@ mod tests {
         assert!(explorer.num_subseqs() > 0);
         assert!(explorer.num_known_rats() > 0);
         assert!(explorer.num_witnesses() <= explorer.num_subseqs());
+    }
+
+    fn mixed_ts() -> Arc<TileSet<ZZ12>> {
+        let sq: Snake<ZZ12> = tiles::square();
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        Arc::new(TileSet::new(vec![sq_rat, hex_rat]))
+    }
+
+    #[test]
+    fn mixed_seq_explorer() {
+        let explorer = SeqExplorer::new(mixed_ts());
+        eprintln!(
+            "[mixed] subseqs={} witnesses={} rats={} k={}",
+            explorer.num_subseqs(),
+            explorer.num_witnesses(),
+            explorer.num_known_rats(),
+            explorer.max_subseq_len(),
+        );
     }
 }

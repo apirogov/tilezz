@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use rustc_hash::FxHashSet;
+
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
@@ -121,6 +123,113 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
         m
     }
 
+    pub fn valid_matches_with_rats(&self, i: usize, j: usize) -> Vec<(Rat<T>, MatchType)> {
+        let mut m = Self::validated_matches_with_rats(self.candidates_for_pair(i, j));
+        m.sort_by(|a, b| {
+            a.1.start_a
+                .cmp(&b.1.start_a)
+                .then_with(|| a.1.start_b.cmp(&b.1.start_b))
+        });
+        m
+    }
+}
+
+impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
+    pub fn valid_matches_filtered(
+        &self,
+        i: usize,
+        j: usize,
+        active: &[bool],
+    ) -> Vec<(Rat<T>, MatchType)> {
+        let a = self.set_a.rat(i);
+        let b = self.set_b.rat(j);
+        let cmi_j = self.offset_b + j;
+        let n_a = a.len();
+        let n_b = b.len();
+
+        if n_a == 0 || n_b == 0 || active.is_empty() {
+            return Vec::new();
+        }
+
+        let max_match_len = n_a.min(n_b);
+        let mut near_active = vec![false; n_a];
+        for pos in 0..n_a {
+            if active[pos] {
+                for d in 0..=max_match_len {
+                    near_active[(pos + n_a - d) % n_a] = true;
+                    near_active[(pos + d) % n_a] = true;
+                }
+            }
+        }
+        let scan_positions: Vec<usize> = (0..n_a).filter(|&p| near_active[p]).collect();
+
+        let mut raw: Vec<(Rat<T>, MatchType)> = Vec::new();
+
+        let cmi_matches = self
+            .cmi
+            .maximal_rc_matches_at_positions(i, cmi_j, &scan_positions);
+        for m in &cmi_matches {
+            let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
+            if len <= 1 {
+                continue;
+            }
+            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+                continue;
+            }
+            let ns_u = ns.rem_euclid(n_a as i64) as usize;
+            if !super::seq_explorer::match_touches_active(ns_u, len, n_a, active) {
+                continue;
+            }
+            if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
+                raw.push((
+                    glued,
+                    MatchType {
+                        tile_a: i,
+                        start_a: ns_u,
+                        tile_b: j,
+                        start_b: ne.rem_euclid(n_b as i64) as usize,
+                        len,
+                    },
+                ));
+            }
+        }
+
+        let seq_a = a.seq();
+        let seq_b = b.seq();
+        for ia in 0..n_a {
+            for ib in 0..n_b {
+                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                    continue;
+                }
+                let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
+                if len != 1 {
+                    continue;
+                }
+                let ns_u = ns.rem_euclid(n_a as i64) as usize;
+                if !super::seq_explorer::match_touches_active(ns_u, len, n_a, active) {
+                    continue;
+                }
+                if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
+                    raw.push((
+                        glued,
+                        MatchType {
+                            tile_a: i,
+                            start_a: ns_u,
+                            tile_b: j,
+                            start_b: ne.rem_euclid(n_b as i64) as usize,
+                            len,
+                        },
+                    ));
+                }
+            }
+        }
+
+        let mut seen: FxHashSet<Rat<T>> = FxHashSet::default();
+        raw.into_iter()
+            .filter(|(rat, _)| seen.insert(rat.clone()))
+            .collect()
+    }
+
     pub fn all_valid_matches(&self) -> Vec<MatchType> {
         self.valid_matches_for_pairs(&self.all_pairs())
     }
@@ -214,6 +323,16 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
             .into_iter()
             .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
             .flat_map(|(_, matches)| matches)
+            .collect()
+    }
+
+    fn validated_matches_with_rats(
+        groups: BTreeMap<Rat<T>, Vec<MatchType>>,
+    ) -> Vec<(Rat<T>, MatchType)> {
+        groups
+            .into_iter()
+            .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
+            .flat_map(|(rat, matches)| matches.into_iter().map(move |m| (rat.clone(), m)))
             .collect()
     }
 
