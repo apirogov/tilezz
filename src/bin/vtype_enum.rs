@@ -639,12 +639,16 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
 
             let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
 
+            let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, n);
+            let covers_cw = cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n);
+            let covers_both = covers_cw && covers_ccw;
+
             if pt.dst_id == 0 {
-                if !gp2.is_junction(junction_pos) {
+                if covers_both {
                     found = true;
                     break;
                 }
-            } else if gp2.is_junction(junction_pos) {
+            } else if !covers_both {
                 if let Some(actual) = gp2.full_vertex_type_at(junction_pos) {
                     let dst_gp = match reconstructed.get(&pt.dst_id) {
                         Some(g) => g,
@@ -708,7 +712,10 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                 continue;
             }
             let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
-            if !gp2.is_junction(junction_pos) {
+            let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, old_n);
+            let covers_cw =
+                cyclic_range_contains(pm.start_a, pm.len, (pos + old_n - 1) % old_n, old_n);
+            if covers_cw && covers_ccw {
                 continue;
             }
             if let Some(jvt) = gp2.full_vertex_type_at(junction_pos) {
