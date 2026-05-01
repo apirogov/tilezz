@@ -89,8 +89,6 @@ struct ParsedVtype {
     cw_nbr: usize,
     ccw_nbr: usize,
     kind: String,
-    cursed: bool,
-    blessed: bool,
     initial: bool,
 }
 
@@ -139,9 +137,14 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     for id in 1..=idx.num_types() {
         let info = idx.get_info(id);
         let vt = info.vtype();
-        let kind_str = if info.is_dead() { "dead" } else { "open" };
+        let kind_str = match info.kind() {
+            tilezz::intgeom::vertextypes::VTypeKind::Dead => "dead",
+            tilezz::intgeom::vertextypes::VTypeKind::Undead => "undead",
+            tilezz::intgeom::vertextypes::VTypeKind::Blessed => "blessed",
+            tilezz::intgeom::vertextypes::VTypeKind::Free => "free",
+        };
         out.push_str(&format!(
-            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
+            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {}\n",
             id,
             info.gap_angle(),
             vt.cw.tile_id,
@@ -157,8 +160,6 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             info.cw_neighbor_offset(),
             info.ccw_neighbor_offset(),
             kind_str,
-            if info.is_cursed() { 1 } else { 0 },
-            if info.is_blessed() { 1 } else { 0 },
             if info.is_initial() { 1 } else { 0 },
         ));
 
@@ -230,22 +231,23 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     }
 
     std::fs::write(path, &out).unwrap();
-    let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
-    let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
-    let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
-    let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
+    let n_total = idx.num_types();
     let n_initial = idx.entries().iter().filter(|e| e.is_initial()).count();
+    let n_free = idx.entries().iter().filter(|e| e.is_free()).count();
+    let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
+    let n_undead = idx.entries().iter().filter(|e| e.is_undead()).count();
+    let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_closed = idx.transitions().iter().filter(|t| t.is_closed()).count();
     let n_open = idx.transitions().len() - n_closed;
     eprintln!(
-        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed, {} blessed, {} initial), {} transitions ({} open, {} closed), {} segments in {:.2?}",
+        "  Written {} bytes, {} types ({} initial, {} free, {} blessed, {} undead, {} dead), {} transitions ({} open, {} closed), {} segments in {:.2?}",
         out.len(),
-        idx.num_types(),
-        n_alive,
-        n_dead,
-        n_cursed,
-        n_blessed,
+        n_total,
         n_initial,
+        n_free,
+        n_blessed,
+        n_undead,
+        n_dead,
         idx.transitions().len(),
         n_open,
         n_closed,
@@ -323,14 +325,8 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     .parse()
                     .map_err(|e| format!("VTYPE ccw_nbr: {}", e))?;
                 let kind = parts[base + 4].to_string();
-                let cursed: bool = parts[base + 5] != "0";
-                let blessed: bool = if base + 6 < parts.len() {
-                    parts[base + 6] != "0"
-                } else {
-                    false
-                };
-                let initial: bool = if base + 7 < parts.len() {
-                    parts[base + 7] != "0"
+                let initial: bool = if base + 5 < parts.len() {
+                    parts[base + 5] != "0"
                 } else {
                     false
                 };
@@ -345,8 +341,6 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     cw_nbr,
                     ccw_nbr,
                     kind,
-                    cursed,
-                    blessed,
                     initial,
                 });
             }
@@ -696,7 +690,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     let mut missing_types: BTreeSet<usize> = BTreeSet::new();
     let mut total_match_checks = 0usize;
     for pv in &pf.vtypes {
-        if pv.kind == "dead" {
+        if pv.kind == "dead" || pv.kind == "undead" {
             continue;
         }
         let gp = match reconstructed.get(&pv.id) {
@@ -821,16 +815,21 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
     let idx = VertexTypeIndex::new(ts);
     let elapsed = t0.elapsed();
 
-    let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
+    let n_total = idx.num_types();
+    let n_initial = idx.entries().iter().filter(|e| e.is_initial()).count();
+    let n_free = idx.entries().iter().filter(|e| e.is_free()).count();
+    let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
+    let n_undead = idx.entries().iter().filter(|e| e.is_undead()).count();
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
-    let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "[{}] types={} (alive={}, dead={}, cursed={}) transitions={} segments={} time={:.2?}",
+        "[{}] types={} (initial={}, free={}, blessed={}, undead={}, dead={}) transitions={} segments={} time={:.2?}",
         label,
-        idx.num_types(),
-        n_alive,
+        n_total,
+        n_initial,
+        n_free,
+        n_blessed,
+        n_undead,
         n_dead,
-        n_cursed,
         idx.transitions().len(),
         idx.segments().len(),
         elapsed,
