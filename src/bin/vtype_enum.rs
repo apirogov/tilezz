@@ -115,7 +115,7 @@ struct ParsedFile {
     vtypes: Vec<ParsedVtype>,
     witnesses: Vec<ParsedWitness>,
     transitions: Vec<ParsedTransition>,
-    segments: Vec<(usize, usize)>,
+    segments: Vec<(usize, usize, String)>,
 }
 
 fn write_collection<T: IsComplex + IsRingOrField + Units>(
@@ -227,7 +227,16 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     }
 
     for seg in idx.segments() {
-        out.push_str(&format!("SEG {} {}\n", seg.v1_id, seg.v2_id));
+        let ka = idx.get_info(seg.v1_id).kind();
+        let kb = idx.get_info(seg.v2_id).kind();
+        let sk = tilezz::intgeom::vertextypes::VTypeKind::segment_kind(ka, kb);
+        let kind_str = match sk {
+            tilezz::intgeom::vertextypes::VTypeKind::Dead => "dead",
+            tilezz::intgeom::vertextypes::VTypeKind::Undead => "undead",
+            tilezz::intgeom::vertextypes::VTypeKind::Blessed => "blessed",
+            tilezz::intgeom::vertextypes::VTypeKind::Free => "free",
+        };
+        out.push_str(&format!("SEG {} {} {}\n", seg.v1_id, seg.v2_id, kind_str));
     }
 
     std::fs::write(path, &out).unwrap();
@@ -239,8 +248,42 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_closed = idx.transitions().iter().filter(|t| t.is_closed()).count();
     let n_open = idx.transitions().len() - n_closed;
+    let seg_blessed = idx
+        .segments()
+        .iter()
+        .filter(|s| {
+            let sk = tilezz::intgeom::vertextypes::VTypeKind::segment_kind(
+                idx.get_info(s.v1_id).kind(),
+                idx.get_info(s.v2_id).kind(),
+            );
+            sk == tilezz::intgeom::vertextypes::VTypeKind::Blessed
+        })
+        .count();
+    let seg_free = idx
+        .segments()
+        .iter()
+        .filter(|s| {
+            let sk = tilezz::intgeom::vertextypes::VTypeKind::segment_kind(
+                idx.get_info(s.v1_id).kind(),
+                idx.get_info(s.v2_id).kind(),
+            );
+            sk == tilezz::intgeom::vertextypes::VTypeKind::Free
+        })
+        .count();
+    let seg_undead = idx
+        .segments()
+        .iter()
+        .filter(|s| {
+            let sk = tilezz::intgeom::vertextypes::VTypeKind::segment_kind(
+                idx.get_info(s.v1_id).kind(),
+                idx.get_info(s.v2_id).kind(),
+            );
+            sk == tilezz::intgeom::vertextypes::VTypeKind::Undead
+        })
+        .count();
+    let seg_dead = idx.segments().len() - seg_blessed - seg_free - seg_undead;
     eprintln!(
-        "  Written {} bytes, {} types ({} initial, {} free, {} blessed, {} undead, {} dead), {} transitions ({} open, {} closed), {} segments in {:.2?}",
+        "  Written {} bytes, {} types ({} initial, {} free, {} blessed, {} undead, {} dead), {} transitions ({} open, {} closed), {} segments ({} blessed, {} free, {} undead, {} dead) in {:.2?}",
         out.len(),
         n_total,
         n_initial,
@@ -252,6 +295,10 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         n_open,
         n_closed,
         idx.segments().len(),
+        seg_blessed,
+        seg_free,
+        seg_undead,
+        seg_dead,
         t0.elapsed(),
     );
 }
@@ -263,7 +310,7 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
     let mut vtypes: Vec<ParsedVtype> = Vec::new();
     let mut witnesses: Vec<ParsedWitness> = Vec::new();
     let mut transitions: Vec<ParsedTransition> = Vec::new();
-    let mut segments: Vec<(usize, usize)> = Vec::new();
+    let mut segments: Vec<(usize, usize, String)> = Vec::new();
 
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -437,7 +484,12 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
             "SEG" => {
                 let v1_id: usize = parts[1].parse().unwrap();
                 let v2_id: usize = parts[2].parse().unwrap();
-                segments.push((v1_id, v2_id));
+                let kind = if parts.len() > 3 {
+                    parts[3].to_string()
+                } else {
+                    "unknown".to_string()
+                };
+                segments.push((v1_id, v2_id, kind));
             }
             _ => {}
         }
@@ -749,7 +801,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     eprintln!("  Phase 5: Verifying segment types...");
     let t5 = Instant::now();
     let mut seg_errors = 0usize;
-    for &(v1_id, v2_id) in &pf.segments {
+    for &(v1_id, v2_id, ref seg_kind) in &pf.segments {
         if !known_ids.contains(&v1_id) || !known_ids.contains(&v2_id) {
             seg_errors += 1;
             if seg_errors <= 5 {
@@ -757,6 +809,47 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             }
             continue;
         }
+
+        let pv1 = pf.vtypes.iter().find(|v| v.id == v1_id).unwrap();
+        let pv2 = pf.vtypes.iter().find(|v| v.id == v2_id).unwrap();
+        let k1 = match pv1.kind.as_str() {
+            "dead" => tilezz::intgeom::vertextypes::VTypeKind::Dead,
+            "undead" => tilezz::intgeom::vertextypes::VTypeKind::Undead,
+            "blessed" => tilezz::intgeom::vertextypes::VTypeKind::Blessed,
+            "free" => tilezz::intgeom::vertextypes::VTypeKind::Free,
+            _ => {
+                seg_errors += 1;
+                continue;
+            }
+        };
+        let k2 = match pv2.kind.as_str() {
+            "dead" => tilezz::intgeom::vertextypes::VTypeKind::Dead,
+            "undead" => tilezz::intgeom::vertextypes::VTypeKind::Undead,
+            "blessed" => tilezz::intgeom::vertextypes::VTypeKind::Blessed,
+            "free" => tilezz::intgeom::vertextypes::VTypeKind::Free,
+            _ => {
+                seg_errors += 1;
+                continue;
+            }
+        };
+        let expected = tilezz::intgeom::vertextypes::VTypeKind::segment_kind(k1, k2);
+        let expected_str = match expected {
+            tilezz::intgeom::vertextypes::VTypeKind::Dead => "dead",
+            tilezz::intgeom::vertextypes::VTypeKind::Undead => "undead",
+            tilezz::intgeom::vertextypes::VTypeKind::Blessed => "blessed",
+            tilezz::intgeom::vertextypes::VTypeKind::Free => "free",
+        };
+        if seg_kind != expected_str {
+            seg_errors += 1;
+            if seg_errors <= 5 {
+                eprintln!(
+                    "  ERROR: SEG {} -> {}: kind={} expected={}",
+                    v1_id, v2_id, seg_kind, expected_str
+                );
+            }
+            continue;
+        }
+
         let gp1 = match reconstructed.get(&v1_id) {
             Some(g) => g,
             None => continue,

@@ -22,6 +22,24 @@ pub enum VTypeKind {
     Free,
 }
 
+impl VTypeKind {
+    pub fn segment_kind(a: VTypeKind, b: VTypeKind) -> VTypeKind {
+        let cursed = matches!(a, VTypeKind::Dead | VTypeKind::Undead)
+            || matches!(b, VTypeKind::Dead | VTypeKind::Undead);
+        let dead = matches!(a, VTypeKind::Dead) || matches!(b, VTypeKind::Dead);
+        let blessed = matches!(a, VTypeKind::Blessed) && matches!(b, VTypeKind::Blessed);
+        if dead {
+            VTypeKind::Dead
+        } else if cursed {
+            VTypeKind::Undead
+        } else if blessed {
+            VTypeKind::Blessed
+        } else {
+            VTypeKind::Free
+        }
+    }
+}
+
 pub struct VertexTypeInfo<T: IsComplex> {
     vtype: VertexType,
     has_transitions: HasTransitions,
