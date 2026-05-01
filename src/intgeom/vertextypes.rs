@@ -201,13 +201,17 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
                     .rem_euclid(m as i64) as usize;
 
-                let dst_vt = if gp2.is_junction(junction_pos) {
-                    gp2.full_vertex_type_at(junction_pos)
-                } else {
-                    None
-                };
-
-                raw_transitions.insert((vt.clone(), dst_vt, side, pm.tile_id, tile_offset));
+                if covers_both {
+                    raw_transitions.insert((vt.clone(), None, side, pm.tile_id, tile_offset));
+                } else if let Some(new_vt) = gp2.full_vertex_type_at(junction_pos) {
+                    raw_transitions.insert((
+                        vt.clone(),
+                        Some(new_vt),
+                        side,
+                        pm.tile_id,
+                        tile_offset,
+                    ));
+                }
 
                 for new_pos in 0..gp2.boundary_len() {
                     if !gp2.is_junction(new_pos) {
