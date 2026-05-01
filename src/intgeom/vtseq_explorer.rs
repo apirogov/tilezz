@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{GrowingPatch, PatchMatch};
@@ -187,6 +188,7 @@ pub struct PatchSeqExplorer<T: IsComplex> {
 
 impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let t0 = Instant::now();
         let k = tileset.rats().iter().map(|r| r.len()).max().unwrap_or(0);
 
         let mut trie = SeqTrie::new();
@@ -360,13 +362,14 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
         }
 
         eprintln!(
-            "  Done: {} layers, {} patches, {} subseqs, {} witnesses, skip={}/{}",
+            "  Done: {} layers, {} patches, {} subseqs, {} witnesses, skip={}/{} time={:.2?}",
             layer,
             witnesses.len(),
             trie.len(),
             witness_indices.len(),
             total_skipped,
             total_skipped + total_considered,
+            t0.elapsed(),
         );
 
         PatchSeqExplorer {
@@ -447,6 +450,23 @@ mod tests {
         assert!(explorer.num_subseqs() > 0);
         assert!(explorer.num_patches() > 0);
         assert!(explorer.num_witnesses() <= explorer.num_subseqs());
+    }
+
+    #[test]
+    fn mixed_patch_seq_explorer() {
+        let sq: crate::intgeom::snake::Snake<ZZ12> = tiles::square();
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let sq_rat = Rat::try_from(&sq).unwrap();
+        let hex_rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
+        let explorer = PatchSeqExplorer::new(ts);
+        eprintln!(
+            "[mixed] subseqs={} witnesses={} patches={} k={}",
+            explorer.num_subseqs(),
+            explorer.num_witnesses(),
+            explorer.num_patches(),
+            explorer.max_subseq_len(),
+        );
     }
 
     #[test]
