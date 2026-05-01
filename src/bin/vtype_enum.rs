@@ -90,6 +90,8 @@ struct ParsedVtype {
     ccw_nbr: usize,
     kind: String,
     cursed: bool,
+    blessed: bool,
+    initial: bool,
 }
 
 struct ParsedWitness {
@@ -139,7 +141,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         let vt = info.vtype();
         let kind_str = if info.is_dead() { "dead" } else { "open" };
         out.push_str(&format!(
-            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {}\n",
+            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {} {} {}\n",
             id,
             info.gap_angle(),
             vt.cw.tile_id,
@@ -156,6 +158,8 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             info.ccw_neighbor_offset(),
             kind_str,
             if info.is_cursed() { 1 } else { 0 },
+            if info.is_blessed() { 1 } else { 0 },
+            if info.is_initial() { 1 } else { 0 },
         ));
 
         let w = info.witness();
@@ -229,15 +233,22 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
     let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
+    let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
+    let n_initial = idx.entries().iter().filter(|e| e.is_initial()).count();
+    let n_closed = idx.transitions().iter().filter(|t| t.is_closed()).count();
+    let n_open = idx.transitions().len() - n_closed;
     eprintln!(
-        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} unique witnesses, {} transitions, {} segments in {:.2?}",
+        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed, {} blessed, {} initial), {} transitions ({} open, {} closed), {} segments in {:.2?}",
         out.len(),
         idx.num_types(),
         n_alive,
         n_dead,
         n_cursed,
-        witness_keys.len(),
+        n_blessed,
+        n_initial,
         idx.transitions().len(),
+        n_open,
+        n_closed,
         idx.segments().len(),
         t0.elapsed(),
     );
@@ -313,6 +324,16 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     .map_err(|e| format!("VTYPE ccw_nbr: {}", e))?;
                 let kind = parts[base + 4].to_string();
                 let cursed: bool = parts[base + 5] != "0";
+                let blessed: bool = if base + 6 < parts.len() {
+                    parts[base + 6] != "0"
+                } else {
+                    false
+                };
+                let initial: bool = if base + 7 < parts.len() {
+                    parts[base + 7] != "0"
+                } else {
+                    false
+                };
                 vtypes.push(ParsedVtype {
                     id,
                     angle,
@@ -325,6 +346,8 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     ccw_nbr,
                     kind,
                     cursed,
+                    blessed,
+                    initial,
                 });
             }
             "WITNESS" => {
@@ -549,10 +572,23 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     let mut trans_ok = 0usize;
     let known_ids: BTreeSet<usize> = pf.vtypes.iter().map(|v| v.id).collect();
     for pt in &pf.transitions {
-        if !known_ids.contains(&pt.src_id) || !known_ids.contains(&pt.dst_id) {
+        if !known_ids.contains(&pt.src_id) {
             trans_errors += 1;
             if trans_errors <= 5 {
-                eprintln!("  ERROR: TRANS {} -> {}: unknown id", pt.src_id, pt.dst_id);
+                eprintln!(
+                    "  ERROR: TRANS {} -> {}: unknown src id",
+                    pt.src_id, pt.dst_id
+                );
+            }
+            continue;
+        }
+        if pt.dst_id != 0 && !known_ids.contains(&pt.dst_id) {
+            trans_errors += 1;
+            if trans_errors <= 5 {
+                eprintln!(
+                    "  ERROR: TRANS {} -> {}: unknown dst id",
+                    pt.src_id, pt.dst_id
+                );
             }
             continue;
         }
@@ -602,19 +638,27 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             }
 
             let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
-            if let Some(actual) = gp2.full_vertex_type_at(junction_pos) {
-                let dst_gp = match reconstructed.get(&pt.dst_id) {
-                    Some(g) => g,
-                    None => continue,
-                };
-                let dst_pos = match witnesses_by_id.get(&pt.dst_id) {
-                    Some(w) => w.pos,
-                    None => continue,
-                };
-                if let Some(expected) = dst_gp.full_vertex_type_at(dst_pos) {
-                    if actual.cw == expected.cw && actual.ccw == expected.ccw {
-                        found = true;
-                        break;
+
+            if pt.dst_id == 0 {
+                if !gp2.is_junction(junction_pos) {
+                    found = true;
+                    break;
+                }
+            } else if gp2.is_junction(junction_pos) {
+                if let Some(actual) = gp2.full_vertex_type_at(junction_pos) {
+                    let dst_gp = match reconstructed.get(&pt.dst_id) {
+                        Some(g) => g,
+                        None => continue,
+                    };
+                    let dst_pos = match witnesses_by_id.get(&pt.dst_id) {
+                        Some(w) => w.pos,
+                        None => continue,
+                    };
+                    if let Some(expected) = dst_gp.full_vertex_type_at(dst_pos) {
+                        if actual.cw == expected.cw && actual.ccw == expected.ccw {
+                            found = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -664,6 +708,9 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                 continue;
             }
             let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
+            if !gp2.is_junction(junction_pos) {
+                continue;
+            }
             if let Some(jvt) = gp2.full_vertex_type_at(junction_pos) {
                 let found = pf.vtypes.iter().any(|pv| {
                     let gp = match reconstructed.get(&pv.id) {

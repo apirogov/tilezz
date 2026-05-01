@@ -20,6 +20,8 @@ pub struct VertexTypeInfo<T: IsComplex> {
     successors: Vec<usize>,
     predecessors: Vec<usize>,
     is_cursed: bool,
+    is_blessed: bool,
+    is_initial: bool,
     realizing_rat: Rat<T>,
     witness: GrowingPatch<T>,
     witness_pos: usize,
@@ -43,6 +45,14 @@ impl<T: IsComplex> VertexTypeInfo<T> {
 
     pub fn is_cursed(&self) -> bool {
         self.is_cursed
+    }
+
+    pub fn is_blessed(&self) -> bool {
+        self.is_blessed
+    }
+
+    pub fn is_initial(&self) -> bool {
+        self.is_initial
     }
 
     pub fn realizing_rat(&self) -> &Rat<T> {
@@ -70,12 +80,20 @@ impl<T: IsComplex> VertexTypeInfo<T> {
     }
 }
 
+pub const CLOSED_ID: usize = 0;
+
 pub struct TransitionInfo {
     pub src_id: usize,
     pub dst_id: usize,
     pub side: TransitionSide,
     pub tile_id: usize,
     pub tile_offset: usize,
+}
+
+impl TransitionInfo {
+    pub fn is_closed(&self) -> bool {
+        self.dst_id == CLOSED_ID
+    }
 }
 
 pub struct VertexTypeIndex<T: IsComplex> {
@@ -89,9 +107,15 @@ pub struct VertexTypeIndex<T: IsComplex> {
 impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let mut all_types: BTreeSet<VertexType> = BTreeSet::new();
+        let mut initial_types: BTreeSet<VertexType> = BTreeSet::new();
         let mut transition_map: HashMap<VertexType, HasTransitions> = HashMap::new();
-        let mut raw_transitions: BTreeSet<(VertexType, VertexType, TransitionSide, usize, usize)> =
-            BTreeSet::new();
+        let mut raw_transitions: BTreeSet<(
+            VertexType,
+            Option<VertexType>,
+            TransitionSide,
+            usize,
+            usize,
+        )> = BTreeSet::new();
         let mut raw_segments: BTreeSet<(VertexType, VertexType)> = BTreeSet::new();
 
         let mut visited: BTreeSet<VertexType> = BTreeSet::new();
@@ -107,8 +131,12 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 }
                 collect_adjacent_pairs(&gp, &mut raw_segments);
                 for pos in 0..gp.boundary_len() {
+                    if !gp.is_junction(pos) {
+                        continue;
+                    }
                     if let Some(vt) = gp.full_vertex_type_at(pos) {
                         all_types.insert(vt.clone());
+                        initial_types.insert(vt.clone());
                         witness_store
                             .entry(vt.clone())
                             .or_insert_with(|| (gp.clone(), pos, gp.angles()[pos]));
@@ -155,29 +183,36 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
                 let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
 
-                if let Some(new_vt) = gp2.full_vertex_type_at(junction_pos) {
-                    let covers_both = covers_cw && covers_ccw;
-                    let side = if covers_both || covers_cw {
-                        TransitionSide::Cw
-                    } else {
-                        TransitionSide::Ccw
-                    };
+                let covers_both = covers_cw && covers_ccw;
+                let side = if covers_both || covers_cw {
+                    TransitionSide::Cw
+                } else {
+                    TransitionSide::Ccw
+                };
 
-                    let edge_pos = if side == TransitionSide::Cw {
-                        (pos + n - 1) % n
-                    } else {
-                        pos
-                    };
-                    let offset_in_match =
-                        (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
-                    let m = tileset.rat(pm.tile_id).len();
-                    let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
-                        .rem_euclid(m as i64) as usize;
+                let edge_pos = if side == TransitionSide::Cw {
+                    (pos + n - 1) % n
+                } else {
+                    pos
+                };
+                let offset_in_match =
+                    (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
+                let m = tileset.rat(pm.tile_id).len();
+                let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                    .rem_euclid(m as i64) as usize;
 
-                    raw_transitions.insert((vt.clone(), new_vt, side, pm.tile_id, tile_offset));
-                }
+                let dst_vt = if gp2.is_junction(junction_pos) {
+                    gp2.full_vertex_type_at(junction_pos)
+                } else {
+                    None
+                };
+
+                raw_transitions.insert((vt.clone(), dst_vt, side, pm.tile_id, tile_offset));
 
                 for new_pos in 0..gp2.boundary_len() {
+                    if !gp2.is_junction(new_pos) {
+                        continue;
+                    }
                     if let Some(nv) = gp2.full_vertex_type_at(new_pos) {
                         all_types.insert(nv.clone());
                         if visited.insert(nv.clone()) {
@@ -219,20 +254,36 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
         let mut transition_infos: Vec<TransitionInfo> = Vec::new();
         for (src, dst, side, tid, toff) in &raw_transitions {
-            if let (Some(&src_id), Some(&dst_id)) = (reverse.get(src), reverse.get(dst)) {
-                succ_sets[src_id - 1].insert(dst_id);
-                pred_sets[dst_id - 1].insert(src_id);
-                transition_infos.push(TransitionInfo {
-                    src_id,
-                    dst_id,
-                    side: *side,
-                    tile_id: *tid,
-                    tile_offset: *toff,
-                });
+            if let Some(&src_id) = reverse.get(src) {
+                match dst {
+                    Some(dst_vt) => {
+                        if let Some(&dst_id) = reverse.get(dst_vt) {
+                            succ_sets[src_id - 1].insert(dst_id);
+                            pred_sets[dst_id - 1].insert(src_id);
+                            transition_infos.push(TransitionInfo {
+                                src_id,
+                                dst_id,
+                                side: *side,
+                                tile_id: *tid,
+                                tile_offset: *toff,
+                            });
+                        }
+                    }
+                    None => {
+                        transition_infos.push(TransitionInfo {
+                            src_id,
+                            dst_id: CLOSED_ID,
+                            side: *side,
+                            tile_id: *tid,
+                            tile_offset: *toff,
+                        });
+                    }
+                }
             }
         }
 
         let is_cursed = compute_cursed(&entries, &transition_map, &succ_sets);
+        let is_blessed = compute_blessed(&entries, &transition_infos);
 
         let segment_list: Vec<SegmentType> = raw_segments
             .into_iter()
@@ -264,6 +315,8 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
                     is_cursed: is_cursed[&id],
+                    is_blessed: is_blessed[&id],
+                    is_initial: initial_types.contains(&vt),
                     realizing_rat: rat,
                     vtype: vt,
                     witness,
@@ -565,6 +618,41 @@ fn compute_cursed(
     }
 
     cursed
+}
+
+fn compute_blessed(entries: &[VertexType], transitions: &[TransitionInfo]) -> HashMap<usize, bool> {
+    let n = entries.len();
+    let mut blessed: HashMap<usize, bool> = HashMap::with_capacity(n);
+
+    for (i, _vt) in entries.iter().enumerate() {
+        let id = i + 1;
+        blessed.insert(id, false);
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (i, _vt) in entries.iter().enumerate() {
+            let id = i + 1;
+            if blessed[&id] {
+                continue;
+            }
+            let has_any = transitions.iter().any(|t| t.src_id == id);
+            if !has_any {
+                continue;
+            }
+            let all_closed_or_blessed = transitions
+                .iter()
+                .filter(|t| t.src_id == id)
+                .all(|t| t.is_closed() || blessed.get(&t.dst_id).copied().unwrap_or(false));
+            if all_closed_or_blessed {
+                blessed.insert(id, true);
+                changed = true;
+            }
+        }
+    }
+
+    blessed
 }
 
 #[cfg(test)]
