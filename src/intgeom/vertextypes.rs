@@ -14,13 +14,20 @@ enum HasTransitions {
     No,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum VTypeKind {
+    Dead,
+    Undead,
+    Blessed,
+    Free,
+}
+
 pub struct VertexTypeInfo<T: IsComplex> {
     vtype: VertexType,
     has_transitions: HasTransitions,
     successors: Vec<usize>,
     predecessors: Vec<usize>,
-    is_cursed: bool,
-    is_blessed: bool,
+    kind: VTypeKind,
     is_initial: bool,
     realizing_rat: Rat<T>,
     witness: GrowingPatch<T>,
@@ -35,20 +42,32 @@ impl<T: IsComplex> VertexTypeInfo<T> {
         &self.vtype
     }
 
-    pub fn is_alive(&self) -> bool {
-        !self.is_cursed
+    pub fn kind(&self) -> VTypeKind {
+        self.kind
     }
 
     pub fn is_dead(&self) -> bool {
-        matches!(self.has_transitions, HasTransitions::No)
+        self.kind == VTypeKind::Dead
     }
 
-    pub fn is_cursed(&self) -> bool {
-        self.is_cursed
+    pub fn is_undead(&self) -> bool {
+        self.kind == VTypeKind::Undead
     }
 
     pub fn is_blessed(&self) -> bool {
-        self.is_blessed
+        self.kind == VTypeKind::Blessed
+    }
+
+    pub fn is_free(&self) -> bool {
+        self.kind == VTypeKind::Free
+    }
+
+    pub fn is_cursed(&self) -> bool {
+        matches!(self.kind, VTypeKind::Dead | VTypeKind::Undead)
+    }
+
+    pub fn is_alive(&self) -> bool {
+        matches!(self.kind, VTypeKind::Blessed | VTypeKind::Free)
     }
 
     pub fn is_initial(&self) -> bool {
@@ -311,15 +330,25 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 let (cw_nbr, ccw_nbr) = witness
                     .neighbor_junction_offsets(witness_pos)
                     .unwrap_or((0, 0));
+                let no_transitions = transition_map.get(&vt) == Some(&HasTransitions::No);
+                let kind = if no_transitions {
+                    VTypeKind::Dead
+                } else if is_cursed[&id] {
+                    VTypeKind::Undead
+                } else if is_blessed[&id] {
+                    VTypeKind::Blessed
+                } else {
+                    VTypeKind::Free
+                };
                 VertexTypeInfo {
-                    has_transitions: transition_map
-                        .get(&vt)
-                        .copied()
-                        .unwrap_or(HasTransitions::Yes),
+                    has_transitions: if no_transitions {
+                        HasTransitions::No
+                    } else {
+                        HasTransitions::Yes
+                    },
                     successors: succ_sets[i].iter().copied().collect(),
                     predecessors: pred_sets[i].iter().copied().collect(),
-                    is_cursed: is_cursed[&id],
-                    is_blessed: is_blessed[&id],
+                    kind,
                     is_initial: initial_types.contains(&vt),
                     realizing_rat: rat,
                     vtype: vt,
@@ -676,7 +705,7 @@ mod tests {
         assert!(idx.num_types() > 0, "should discover some vertex types");
         let alive = idx.entries.iter().filter(|e| e.is_alive()).count();
         let dead = idx.entries.iter().filter(|e| e.is_dead()).count();
-        let cursed = idx.entries.iter().filter(|e| e.is_cursed).count();
+        let cursed = idx.entries.iter().filter(|e| e.is_cursed()).count();
         eprintln!(
             "hex: {} types ({} alive, {} dead, {} cursed)",
             idx.num_types(),
