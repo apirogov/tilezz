@@ -45,7 +45,7 @@ pub struct VertexType {
     pub ccw: EdgeInfo,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransitionSide {
     Cw,
     Ccw,

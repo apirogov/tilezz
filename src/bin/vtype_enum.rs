@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::MatchTypeIndex;
 use tilezz::intgeom::patch::{
-    candidates_from_flat, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
+    candidates_from_flat, cyclic_range_contains, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
 };
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
@@ -104,10 +104,9 @@ struct ParsedWitness {
 struct ParsedTransition {
     src_id: usize,
     dst_id: usize,
-    start_a: usize,
-    len: usize,
-    start_b: usize,
+    side: String,
     tile_id: usize,
+    tile_offset: usize,
 }
 
 struct ParsedFile {
@@ -217,14 +216,8 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
             tilezz::intgeom::patch::TransitionSide::Ccw => "ccw",
         };
         out.push_str(&format!(
-            "TRANS {} {} {} {} {} {} {}\n",
-            tr.src_id,
-            tr.dst_id,
-            side_str,
-            tr.patch_match.start_a,
-            tr.patch_match.len,
-            tr.patch_match.start_b,
-            tr.patch_match.tile_id,
+            "TRANS {} {} {} {} {}\n",
+            tr.src_id, tr.dst_id, side_str, tr.tile_id, tr.tile_offset,
         ));
     }
 
@@ -413,18 +406,15 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
             "TRANS" => {
                 let src_id: usize = parts[1].parse().unwrap();
                 let dst_id: usize = parts[2].parse().unwrap();
-                let _side: &str = parts[3];
-                let start_a: usize = parts[4].parse().unwrap();
-                let len: usize = parts[5].parse().unwrap();
-                let start_b: usize = parts[6].parse().unwrap();
-                let tile_id: usize = parts[7].parse().unwrap();
+                let side: String = parts[3].to_string();
+                let tile_id: usize = parts[4].parse().unwrap();
+                let tile_offset: usize = parts[5].parse().unwrap();
                 transitions.push(ParsedTransition {
                     src_id,
                     dst_id,
-                    start_a,
-                    len,
-                    start_b,
+                    side,
                     tile_id,
+                    tile_offset,
                 });
             }
             "SEG" => {
@@ -556,7 +546,8 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     eprintln!("  Phase 3: Verifying transitions...");
     let t3 = Instant::now();
     let mut trans_errors = 0usize;
-    let mut known_ids: BTreeSet<usize> = pf.vtypes.iter().map(|v| v.id).collect();
+    let mut trans_ok = 0usize;
+    let known_ids: BTreeSet<usize> = pf.vtypes.iter().map(|v| v.id).collect();
     for pt in &pf.transitions {
         if !known_ids.contains(&pt.src_id) || !known_ids.contains(&pt.dst_id) {
             trans_errors += 1;
@@ -565,71 +556,86 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             }
             continue;
         }
-        let gp = reconstructed
-            .get(&pt.src_id)
-            .ok_or_else(|| format!("TRANS {} -> {}: no source witness", pt.src_id, pt.dst_id))?;
-        let pos = witnesses_by_id[&pt.src_id].pos;
-        let old_n = gp.boundary_len();
-        let mut gp2 = gp.clone();
-        let pm = PatchMatch {
-            start_a: pt.start_a,
-            len: pt.len,
-            start_b: pt.start_b,
-            tile_id: pt.tile_id,
-        };
-        if gp2.add_tile(&pm).is_none() {
-            trans_errors += 1;
-            if trans_errors <= 5 {
-                eprintln!(
-                    "  ERROR: TRANS {} -> {}: add_tile failed",
-                    pt.src_id, pt.dst_id
-                );
+        let gp = match reconstructed.get(&pt.src_id) {
+            Some(g) => g,
+            None => {
+                trans_errors += 1;
+                if trans_errors <= 5 {
+                    eprintln!(
+                        "  ERROR: TRANS {} -> {}: no source witness",
+                        pt.src_id, pt.dst_id
+                    );
+                }
+                continue;
             }
-            continue;
-        }
-        let junction_pos = if pt.start_a == pos { old_n - pt.len } else { 0 };
-        let junction_vt = gp2.full_vertex_type_at(junction_pos);
-        let dst_info = reconstructed.get(&pt.dst_id);
-        let dst_pos = witnesses_by_id.get(&pt.dst_id).map(|w| w.pos);
-        match (junction_vt, dst_info, dst_pos) {
-            (Some(actual), Some(dst_gp), Some(dst_p)) => {
-                let expected = dst_gp.full_vertex_type_at(dst_p);
-                let matches = match (actual, expected) {
-                    (a, Some(e)) => a.cw == e.cw && a.ccw == e.ccw,
-                    _ => false,
+        };
+        let pos = witnesses_by_id[&pt.src_id].pos;
+        let n = gp.boundary_len();
+
+        let edge_pos = if pt.side == "cw" {
+            (pos + n - 1) % n
+        } else {
+            pos
+        };
+
+        let tile_len = tile_ts.rat(pt.tile_id).len();
+        let candidates: Vec<PatchMatch> = gp.get_all_matches();
+        let mut found = false;
+        for pm in &candidates {
+            if pm.tile_id != pt.tile_id {
+                continue;
+            }
+            if !cyclic_range_contains(pm.start_a, pm.len, edge_pos, n) {
+                continue;
+            }
+            let offset_in_match =
+                (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
+            let computed_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                .rem_euclid(tile_len as i64) as usize;
+            if computed_offset != pt.tile_offset {
+                continue;
+            }
+
+            let mut gp2 = gp.clone();
+            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                continue;
+            }
+
+            let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+            if let Some(actual) = gp2.full_vertex_type_at(junction_pos) {
+                let dst_gp = match reconstructed.get(&pt.dst_id) {
+                    Some(g) => g,
+                    None => continue,
                 };
-                if !matches {
-                    trans_errors += 1;
-                    if trans_errors <= 5 {
-                        eprintln!(
-                            "  ERROR: TRANS {} -> {}: junction type mismatch",
-                            pt.src_id, pt.dst_id
-                        );
+                let dst_pos = match witnesses_by_id.get(&pt.dst_id) {
+                    Some(w) => w.pos,
+                    None => continue,
+                };
+                if let Some(expected) = dst_gp.full_vertex_type_at(dst_pos) {
+                    if actual.cw == expected.cw && actual.ccw == expected.ccw {
+                        found = true;
+                        break;
                     }
                 }
             }
-            (None, _, _) => {
-                trans_errors += 1;
-                if trans_errors <= 5 {
-                    eprintln!(
-                        "  ERROR: TRANS {} -> {}: junction has no vertex type",
-                        pt.src_id, pt.dst_id
-                    );
-                }
-            }
-            _ => {
-                trans_errors += 1;
-                if trans_errors <= 5 {
-                    eprintln!(
-                        "  ERROR: TRANS {} -> {}: missing dst witness",
-                        pt.src_id, pt.dst_id
-                    );
-                }
+        }
+        if found {
+            trans_ok += 1;
+        } else {
+            trans_errors += 1;
+            if trans_errors <= 5 {
+                eprintln!(
+                    "  ERROR: TRANS {} -> {}: no matching glue found",
+                    pt.src_id, pt.dst_id
+                );
             }
         }
     }
     if trans_errors > 0 {
-        return Err(format!("{} transition errors", trans_errors));
+        return Err(format!(
+            "{} transition errors ({} ok)",
+            trans_errors, trans_ok
+        ));
     }
     eprintln!(
         "  All {} transitions verified in {:.2?}",
