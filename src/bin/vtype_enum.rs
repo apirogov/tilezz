@@ -86,6 +86,8 @@ struct ParsedVtype {
     inner: Vec<EdgeInfo>,
     ccw_tile_id: usize,
     ccw_offset: usize,
+    cw_nbr: usize,
+    ccw_nbr: usize,
     kind: String,
     cursed: bool,
 }
@@ -114,6 +116,7 @@ struct ParsedFile {
     vtypes: Vec<ParsedVtype>,
     witnesses: Vec<ParsedWitness>,
     transitions: Vec<ParsedTransition>,
+    segments: Vec<(usize, usize)>,
 }
 
 fn write_collection<T: IsComplex + IsRingOrField + Units>(
@@ -137,7 +140,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         let vt = info.vtype();
         let kind_str = if info.is_dead() { "dead" } else { "open" };
         out.push_str(&format!(
-            "VTYPE {} {} {} {} {} {} {} {} {} {}\n",
+            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {}\n",
             id,
             info.gap_angle(),
             vt.cw.tile_id,
@@ -150,6 +153,8 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
                 .join(" "),
             vt.ccw.tile_id,
             vt.ccw.tile_offset,
+            info.cw_neighbor_offset(),
+            info.ccw_neighbor_offset(),
             kind_str,
             if info.is_cursed() { 1 } else { 0 },
         ));
@@ -223,12 +228,16 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         ));
     }
 
+    for seg in idx.segments() {
+        out.push_str(&format!("SEG {} {}\n", seg.v1_id, seg.v2_id));
+    }
+
     std::fs::write(path, &out).unwrap();
     let n_alive = idx.entries().iter().filter(|e| e.is_alive()).count();
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} unique witnesses, {} transitions in {:.2?}",
+        "  Written {} bytes, {} types ({} alive, {} dead, {} cursed), {} unique witnesses, {} transitions, {} segments in {:.2?}",
         out.len(),
         idx.num_types(),
         n_alive,
@@ -236,6 +245,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         n_cursed,
         witness_keys.len(),
         idx.transitions().len(),
+        idx.segments().len(),
         t0.elapsed(),
     );
 }
@@ -247,6 +257,7 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
     let mut vtypes: Vec<ParsedVtype> = Vec::new();
     let mut witnesses: Vec<ParsedWitness> = Vec::new();
     let mut transitions: Vec<ParsedTransition> = Vec::new();
+    let mut segments: Vec<(usize, usize)> = Vec::new();
 
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -301,8 +312,14 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                 let ccw_offset: usize = parts[base + 1]
                     .parse()
                     .map_err(|e| format!("VTYPE ccw_off: {}", e))?;
-                let kind = parts[base + 2].to_string();
-                let cursed: bool = parts[base + 3] != "0";
+                let cw_nbr: usize = parts[base + 2]
+                    .parse()
+                    .map_err(|e| format!("VTYPE cw_nbr: {}", e))?;
+                let ccw_nbr: usize = parts[base + 3]
+                    .parse()
+                    .map_err(|e| format!("VTYPE ccw_nbr: {}", e))?;
+                let kind = parts[base + 4].to_string();
+                let cursed: bool = parts[base + 5] != "0";
                 vtypes.push(ParsedVtype {
                     id,
                     angle,
@@ -311,6 +328,8 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     inner,
                     ccw_tile_id,
                     ccw_offset,
+                    cw_nbr,
+                    ccw_nbr,
                     kind,
                     cursed,
                 });
@@ -408,6 +427,11 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
                     tile_id,
                 });
             }
+            "SEG" => {
+                let v1_id: usize = parts[1].parse().unwrap();
+                let v2_id: usize = parts[2].parse().unwrap();
+                segments.push((v1_id, v2_id));
+            }
             _ => {}
         }
     }
@@ -418,6 +442,7 @@ fn parse_file(path: &str) -> Result<ParsedFile, String> {
         vtypes,
         witnesses,
         transitions,
+        segments,
     })
 }
 
@@ -477,7 +502,18 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
         let gp = reconstructed
             .get(&pv.id)
             .ok_or_else(|| format!("VTYPE {}: no witness found", pv.id))?;
-        let pvt = gp.full_vertex_type_at(witnesses_by_id[&pv.id].pos);
+        let pos = witnesses_by_id[&pv.id].pos;
+        let (expected_cw, expected_ccw) = gp.neighbor_junction_offsets(pos).unwrap_or((0, 0));
+        if expected_cw != pv.cw_nbr || expected_ccw != pv.ccw_nbr {
+            vtype_errors += 1;
+            if vtype_errors <= 5 {
+                eprintln!(
+                    "  ERROR: VTYPE {} neighbor offsets: expected ({}, {}), got ({}, {})",
+                    pv.id, expected_cw, expected_ccw, pv.cw_nbr, pv.ccw_nbr
+                );
+            }
+        }
+        let pvt = gp.full_vertex_type_at(pos);
         let expected = VertexType {
             cw: EdgeInfo {
                 tile_id: pv.cw_tile_id,
@@ -656,6 +692,60 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
         t4.elapsed(),
     );
 
+    eprintln!("  Phase 5: Verifying segment types...");
+    let t5 = Instant::now();
+    let mut seg_errors = 0usize;
+    for &(v1_id, v2_id) in &pf.segments {
+        if !known_ids.contains(&v1_id) || !known_ids.contains(&v2_id) {
+            seg_errors += 1;
+            if seg_errors <= 5 {
+                eprintln!("  ERROR: SEG {} -> {}: unknown id", v1_id, v2_id);
+            }
+            continue;
+        }
+        let gp1 = match reconstructed.get(&v1_id) {
+            Some(g) => g,
+            None => continue,
+        };
+        let pos1 = match witnesses_by_id.get(&v1_id) {
+            Some(w) => w.pos,
+            None => continue,
+        };
+        let gp2 = match reconstructed.get(&v2_id) {
+            Some(g) => g,
+            None => continue,
+        };
+        let pos2 = match witnesses_by_id.get(&v2_id) {
+            Some(w) => w.pos,
+            None => continue,
+        };
+        let vt1 = match gp1.full_vertex_type_at(pos1) {
+            Some(vt) => vt,
+            None => continue,
+        };
+        let vt2 = match gp2.full_vertex_type_at(pos2) {
+            Some(vt) => vt,
+            None => continue,
+        };
+        if vt1.ccw.tile_id != vt2.cw.tile_id {
+            seg_errors += 1;
+            if seg_errors <= 5 {
+                eprintln!(
+                    "  ERROR: SEG {} -> {}: V1 CCW tile {} != V2 CW tile {}",
+                    v1_id, v2_id, vt1.ccw.tile_id, vt2.cw.tile_id
+                );
+            }
+        }
+    }
+    if seg_errors > 0 {
+        return Err(format!("{} segment type errors", seg_errors));
+    }
+    eprintln!(
+        "  All {} segment types verified in {:.2?}",
+        pf.segments.len(),
+        t5.elapsed(),
+    );
+
     eprintln!("  Validation PASSED in {:.2?}", t0.elapsed());
     Ok(())
 }
@@ -675,13 +765,14 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
     let n_cursed = idx.entries().iter().filter(|e| e.is_cursed()).count();
     eprintln!(
-        "[{}] types={} (alive={}, dead={}, cursed={}) transitions={} time={:.2?}",
+        "[{}] types={} (alive={}, dead={}, cursed={}) transitions={} segments={} time={:.2?}",
         label,
         idx.num_types(),
         n_alive,
         n_dead,
         n_cursed,
         idx.transitions().len(),
+        idx.segments().len(),
         elapsed,
     );
 

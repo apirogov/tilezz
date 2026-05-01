@@ -450,6 +450,34 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         tile.seq()[ei.tile_offset] != self.angles()[i]
     }
 
+    pub fn neighbor_junction_offsets(&self, pos: usize) -> Option<(usize, usize)> {
+        let (edges, n) = match &self.state {
+            PatchState::Growing { edges, .. } => (edges, edges.len()),
+            _ => return None,
+        };
+        if n == 0 || pos >= n {
+            return None;
+        }
+
+        let mut j_cw = (pos + n - 1) % n;
+        while j_cw != pos && !self.is_junction(j_cw) {
+            j_cw = (j_cw + n - 1) % n;
+        }
+
+        let mut j_ccw = (pos + 1) % n;
+        while j_ccw != pos && !self.is_junction(j_ccw) {
+            j_ccw = (j_ccw + 1) % n;
+        }
+
+        let cw_offset = edges[j_cw].tile_offset;
+        let ccw_prev = (j_ccw + n - 1) % n;
+        let ccw_edge = edges[ccw_prev];
+        let tile_len = self.match_index.tileset().rat(ccw_edge.tile_id).len();
+        let ccw_offset = (ccw_edge.tile_offset + 1) % tile_len;
+
+        Some((cw_offset, ccw_offset))
+    }
+
     pub fn junction_vertices(&self) -> Vec<(usize, PatchVertexType)> {
         let n = self.boundary_len();
         let mut result = Vec::new();
