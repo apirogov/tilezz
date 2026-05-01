@@ -174,6 +174,23 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     }
                 }
             }
+
+            {
+                let (gp, _, _) = &witness_store[&vt];
+                let all_matches: Vec<PatchMatch> = gp.get_all_matches();
+                for pm in &all_matches {
+                    if cyclic_range_contains(pm.start_a, pm.len, pos, n)
+                        || cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n)
+                    {
+                        continue;
+                    }
+                    let mut gp2 = gp.clone_for_mutation();
+                    if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+                        continue;
+                    }
+                    collect_adjacent_pairs(&gp2, &mut raw_segments);
+                }
+            }
         }
 
         let entries: Vec<VertexType> = all_types.into_iter().collect();
@@ -366,9 +383,137 @@ fn collect_adjacent_pairs<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
+fn try_build_segment_witness<T: IsComplex + IsRingOrField + Units>(
+    v1_info: &VertexTypeInfo<T>,
+    v2_type: &VertexType,
+) -> Option<GrowingPatch<T>> {
+    let mut patch = v1_info.witness.clone_for_mutation();
+
+    let mut targets = v2_type.inner.clone();
+    targets.push(v2_type.ccw);
+
+    for (step, target) in targets.iter().enumerate() {
+        let expected_inner: Vec<EdgeInfo> = v2_type.inner[..step].to_vec();
+        let candidates: Vec<PatchMatch> = patch.get_matches_for_tile(target.tile_id).collect();
+
+        let mut found = false;
+        for pm in &candidates {
+            let mut trial = patch.clone_for_mutation();
+            if trial.add_tile(pm).is_none() {
+                continue;
+            }
+
+            let trial_n = trial.boundary_len();
+            for pos in 0..trial_n {
+                let vt = match trial.full_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+                if vt.cw == v2_type.cw && vt.ccw == *target && vt.inner == expected_inner {
+                    patch = trial;
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+
+        if !found {
+            return None;
+        }
+    }
+
+    let mut v2_pos_opt = None;
+    for pos in 0..patch.boundary_len() {
+        if let Some(vt) = patch.full_vertex_type_at(pos) {
+            if vt == *v2_type {
+                v2_pos_opt = Some(pos);
+                break;
+            }
+        }
+    }
+    let v2_pos = v2_pos_opt?;
+
+    let mut v1_pos_found = None;
+    for pos in 0..patch.boundary_len() {
+        if let Some(vt) = patch.full_vertex_type_at(pos) {
+            if vt == *v1_info.vtype() {
+                v1_pos_found = Some(pos);
+                break;
+            }
+        }
+    }
+    let v1_pos = v1_pos_found?;
+
+    let common_tile_id = v1_info.vtype().ccw.tile_id;
+    if !verify_adjacency(&patch, v1_pos, v2_pos, common_tile_id) {
+        return None;
+    }
+
+    Some(patch)
+}
+
 impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
     pub fn find_segment_types(&self) -> Vec<SegmentType> {
         self.segments.clone()
+    }
+
+    pub fn verify_segment_completeness(&self) -> Vec<SegmentType> {
+        let bfs_set: BTreeSet<(usize, usize)> =
+            self.segments.iter().map(|s| (s.v1_id, s.v2_id)).collect();
+
+        let mut missing = Vec::new();
+
+        for id1 in 1..=self.num_types() {
+            let info1 = self.get_info(id1);
+            let vt1 = info1.vtype();
+            let common_tile_id = vt1.ccw.tile_id;
+            let off1 = vt1.ccw.tile_offset;
+            let ccw_nbr = info1.ccw_neighbor_offset();
+            let tile_len = self.tileset.rat(common_tile_id).len();
+
+            for id2 in 1..=self.num_types() {
+                if bfs_set.contains(&(id1, id2)) {
+                    continue;
+                }
+
+                let vt2 = self.get_type(id2);
+                if vt2.cw.tile_id != common_tile_id {
+                    continue;
+                }
+
+                let off2 = vt2.cw.tile_offset;
+                let range_len = (ccw_nbr as i64 - off1 as i64 + tile_len as i64)
+                    .rem_euclid(tile_len as i64) as usize;
+                if range_len == 0 {
+                    continue;
+                }
+                if !cyclic_range_contains(off1, range_len, off2, tile_len) {
+                    continue;
+                }
+
+                let first_target = vt2.inner.first().unwrap_or(&vt2.ccw);
+                if info1
+                    .witness
+                    .get_matches_for_tile(first_target.tile_id)
+                    .next()
+                    .is_none()
+                {
+                    continue;
+                }
+
+                if try_build_segment_witness(info1, vt2).is_some() {
+                    missing.push(SegmentType {
+                        v1_id: id1,
+                        v2_id: id2,
+                    });
+                }
+            }
+        }
+
+        missing
     }
 }
 
@@ -540,5 +685,29 @@ mod tests {
                 "V1 CCW tile must match V2 CW tile"
             );
         }
+    }
+
+    #[test]
+    fn hex_segment_completeness() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = VertexTypeIndex::new(ts);
+
+        let t0 = std::time::Instant::now();
+        let missing = idx.verify_segment_completeness();
+        eprintln!(
+            "hex completeness: {} segments, {} missing in {:.2?}",
+            idx.segments().len(),
+            missing.len(),
+            t0.elapsed(),
+        );
+
+        assert!(
+            missing.is_empty(),
+            "found {} missing segments: {:?}",
+            missing.len(),
+            missing.iter().take(10).collect::<Vec<_>>()
+        );
     }
 }
