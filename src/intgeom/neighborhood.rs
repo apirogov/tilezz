@@ -1,5 +1,7 @@
-use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+use rustc_hash::{FxHashMap, FxHasher};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
@@ -24,7 +26,59 @@ impl OpenNeighborhoodType {
     }
 }
 
-type DedupKey = (usize, Vec<i8>, Vec<EdgeInfo>, u8, u8);
+fn dedup_hash(
+    central_tile_id: usize,
+    angles: &[i8],
+    edges: &[EdgeInfo],
+    gap_start: u8,
+    gap_len: u8,
+) -> u64 {
+    let mut h = FxHasher::default();
+    central_tile_id.hash(&mut h);
+    angles.hash(&mut h);
+    edges.hash(&mut h);
+    gap_start.hash(&mut h);
+    gap_len.hash(&mut h);
+    h.finish()
+}
+
+struct SeenIndex {
+    by_hash: FxHashMap<u64, Vec<usize>>,
+}
+
+impl SeenIndex {
+    fn new() -> Self {
+        SeenIndex {
+            by_hash: FxHashMap::default(),
+        }
+    }
+
+    fn insert(
+        &mut self,
+        all_types: &[OpenNeighborhoodType],
+        central_tile_id: usize,
+        ca: &[i8],
+        ce: &[EdgeInfo],
+        gap_start: u8,
+        gap_len: u8,
+    ) -> bool {
+        let hash = dedup_hash(central_tile_id, ca, ce, gap_start, gap_len);
+        let indices = self.by_hash.entry(hash).or_default();
+        for &idx in indices.iter() {
+            let t = &all_types[idx];
+            if t.central_tile_id == central_tile_id
+                && t.gap_start == gap_start
+                && t.gap_len == gap_len
+                && t.angles == ca
+                && t.edges == ce
+            {
+                return false;
+            }
+        }
+        indices.push(all_types.len());
+        true
+    }
+}
 
 fn find_best_rotation(angles: &[i8], edges: &[EdgeInfo]) -> usize {
     let n = angles.len();
@@ -166,8 +220,8 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut all_types: Vec<OpenNeighborhoodType> = Vec::new();
-        let mut seen: HashSet<DedupKey> = HashSet::new();
-        let mut queue: VecDeque<BfsState> = VecDeque::new();
+        let mut seen = SeenIndex::new();
+        let mut current_level: Vec<BfsState> = Vec::new();
 
         for tile_id in 0..tileset.num_tiles() {
             let n = tileset.rat(tile_id).seq().len();
@@ -214,8 +268,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
                     }
 
                     let (ca, ce, _rot) = canonicalize(&new_angles, &new_edges);
-                    let key = (tile_id, ca.clone(), ce.clone(), new_gap_start, new_gap_len);
-                    if !seen.insert(key) {
+                    if !seen.insert(&all_types, tile_id, &ca, &ce, new_gap_start, new_gap_len) {
                         continue;
                     }
 
@@ -226,10 +279,11 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
                         gap_len: new_gap_len,
                         angles: ca,
                         edges: ce,
-                        inner_chains: vec![vec![]; new_angles.len()],
+                        inner_chains: vec![],
                     });
                     seed_types += 1;
-                    queue.push_back(BfsState {
+
+                    current_level.push(BfsState {
                         angles: new_angles,
                         edges: new_edges,
                         gap_start: new_gap_start,
@@ -243,97 +297,120 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
                 "  tile {} seeds done: {} types, {} queue, {} seen",
                 tile_id,
                 seed_types,
-                queue.len(),
-                seen.len()
+                current_level.len(),
+                seen.by_hash.len()
             );
         }
 
         let mut explored: usize = 0;
-        while let Some(state) = queue.pop_front() {
-            let boundary_n = state.angles.len();
-            explored += 1;
-            if explored.is_multiple_of(5000) {
-                eprintln!(
-                    "  explored {}, queue {}, seen {}, types {}",
-                    explored,
-                    queue.len(),
-                    seen.len(),
-                    all_types.len()
-                );
-            }
-
-            let candidates =
-                GrowingPatch::compute_all_candidates(&match_index, &state.angles, &state.edges);
-
-            for matches in &candidates {
-                for pm in matches {
-                    if !in_consumed_range(0, pm.start_a, pm.len, boundary_n) {
-                        continue;
-                    }
-
-                    let covered_count =
-                        count_covered_gap_edges(state.gap_len, pm.start_a, pm.len, boundary_n);
-                    if covered_count == 0 {
-                        continue;
-                    }
-
-                    let m = tileset.rat(pm.tile_id).seq().len();
-                    let new_angles = match compute_glue_angles::<T>(&state.angles, pm, &tileset) {
-                        Some(a) => a,
-                        None => continue,
-                    };
-                    let snake = match Snake::<T>::try_from(new_angles.as_slice()) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    };
-                    if !snake.is_closed() {
-                        continue;
-                    }
-
-                    let new_edges = compute_new_edges_growing(&state.edges, boundary_n, pm, m);
-                    let new_gap_start =
-                        (state.gap_start as usize + covered_count) % state.central_n;
-                    let new_gap_len = state.gap_len as usize - covered_count;
-                    if new_gap_len == 0 {
-                        continue;
-                    }
-
-                    let (ca, ce, _rot) = canonicalize(&new_angles, &new_edges);
-                    let key = (
-                        state.central_tile_id,
-                        ca.clone(),
-                        ce.clone(),
-                        new_gap_start as u8,
-                        new_gap_len as u8,
-                    );
-                    if !seen.insert(key) {
-                        continue;
-                    }
-
-                    all_types.push(OpenNeighborhoodType {
-                        id: 0,
-                        central_tile_id: state.central_tile_id,
-                        gap_start: new_gap_start as u8,
-                        gap_len: new_gap_len as u8,
-                        angles: ca,
-                        edges: ce,
-                        inner_chains: vec![vec![]; new_angles.len()],
-                    });
-                    queue.push_back(BfsState {
-                        angles: new_angles,
-                        edges: new_edges,
-                        gap_start: new_gap_start as u8,
-                        gap_len: new_gap_len as u8,
-                        central_tile_id: state.central_tile_id,
-                        central_n: state.central_n,
-                    });
+        while !current_level.is_empty() {
+            let mut next_level: Vec<BfsState> = Vec::new();
+            for state in current_level {
+                if state.gap_len <= 1 {
+                    continue;
                 }
+                let boundary_n = state.angles.len();
+                explored += 1;
+                if explored.is_multiple_of(5000) {
+                    eprintln!(
+                        "  explored {}, next {}, seen {}, types {}",
+                        explored,
+                        next_level.len(),
+                        seen.by_hash.len(),
+                        all_types.len(),
+                    );
+                }
+
+                let candidates =
+                    GrowingPatch::compute_all_candidates(&match_index, &state.angles, &state.edges);
+
+                for matches in &candidates {
+                    for pm in matches {
+                        if !in_consumed_range(0, pm.start_a, pm.len, boundary_n) {
+                            continue;
+                        }
+
+                        let covered_count =
+                            count_covered_gap_edges(state.gap_len, pm.start_a, pm.len, boundary_n);
+                        if covered_count == 0 {
+                            continue;
+                        }
+
+                        let m = tileset.rat(pm.tile_id).seq().len();
+                        let new_angles = match compute_glue_angles::<T>(&state.angles, pm, &tileset)
+                        {
+                            Some(a) => a,
+                            None => continue,
+                        };
+                        let snake = match Snake::<T>::try_from(new_angles.as_slice()) {
+                            Ok(s) => s,
+                            Err(_) => continue,
+                        };
+                        if !snake.is_closed() {
+                            continue;
+                        }
+
+                        let new_edges = compute_new_edges_growing(&state.edges, boundary_n, pm, m);
+                        let new_gap_start =
+                            (state.gap_start as usize + covered_count) % state.central_n;
+                        let new_gap_len = state.gap_len as usize - covered_count;
+                        if new_gap_len == 0 {
+                            continue;
+                        }
+
+                        let (ca, ce, _rot) = canonicalize(&new_angles, &new_edges);
+                        if !seen.insert(
+                            &all_types,
+                            state.central_tile_id,
+                            &ca,
+                            &ce,
+                            new_gap_start as u8,
+                            new_gap_len as u8,
+                        ) {
+                            continue;
+                        }
+
+                        all_types.push(OpenNeighborhoodType {
+                            id: 0,
+                            central_tile_id: state.central_tile_id,
+                            gap_start: new_gap_start as u8,
+                            gap_len: new_gap_len as u8,
+                            angles: ca,
+                            edges: ce,
+                            inner_chains: vec![],
+                        });
+
+                        next_level.push(BfsState {
+                            angles: new_angles,
+                            edges: new_edges,
+                            gap_start: new_gap_start as u8,
+                            gap_len: new_gap_len as u8,
+                            central_tile_id: state.central_tile_id,
+                            central_n: state.central_n,
+                        });
+                    }
+                }
+            }
+            eprintln!(
+                "  level done: explored {}, next_level {}, total types {}",
+                explored,
+                next_level.len(),
+                all_types.len(),
+            );
+            current_level = next_level;
+        }
+
+        for nt in &mut all_types {
+            if nt.inner_chains.is_empty() {
+                nt.inner_chains = vec![vec![]; nt.angles.len()];
             }
         }
 
         for (i, nt) in all_types.iter_mut().enumerate() {
             nt.id = i + 1;
         }
+
+        eprintln!("  total: {} types", all_types.len());
 
         OpenNeighborhoodIndex {
             tileset,
@@ -369,7 +446,6 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
         nhood: &OpenNeighborhoodType,
         match_index: &Arc<MatchTypeIndex<T>>,
     ) -> bool {
-        let n = self.tileset.rat(nhood.central_tile_id).seq().len();
         if nhood.gap_len == 0 {
             return false;
         }

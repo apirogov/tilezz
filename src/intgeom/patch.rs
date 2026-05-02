@@ -83,6 +83,51 @@ enum PatchState<T: IsComplex> {
     _Phantom(std::marker::PhantomData<T>),
 }
 
+pub fn full_vertex_type_from(
+    edges: &[EdgeInfo],
+    inner_chains: &[Vec<EdgeInfo>],
+    pos: usize,
+) -> VertexType {
+    let n = edges.len();
+    VertexType {
+        cw: edges[(pos + n - 1) % n],
+        inner: inner_chains[pos].clone(),
+        ccw: edges[pos],
+    }
+}
+
+pub fn update_inner_chains(
+    old_inner: &[Vec<EdgeInfo>],
+    old_edges: &[EdgeInfo],
+    pm: &PatchMatch,
+    new_n: usize,
+) -> Vec<Vec<EdgeInfo>> {
+    let n = old_edges.len();
+    let seg_len_old = n - pm.len;
+    let ccw_pos = (pm.start_a + pm.len) % n;
+    let cw_end_matched = (pm.start_a + pm.len - 1) % n;
+
+    let mut new_inner = vec![Vec::new(); new_n];
+
+    for i in 1..seg_len_old {
+        new_inner[i] = old_inner[(ccw_pos + i) % n].clone();
+    }
+
+    new_inner[0] = old_inner[ccw_pos]
+        .iter()
+        .chain(std::iter::once(&old_edges[cw_end_matched]))
+        .cloned()
+        .collect();
+
+    new_inner[seg_len_old] = old_inner[pm.start_a]
+        .iter()
+        .chain(std::iter::once(&old_edges[pm.start_a]))
+        .cloned()
+        .collect();
+
+    new_inner
+}
+
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
@@ -426,11 +471,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 edges,
                 inner_chains,
                 ..
-            } => Some(VertexType {
-                cw: edges[(i + n - 1) % n],
-                inner: inner_chains[i].clone(),
-                ccw: edges[i],
-            }),
+            } => Some(full_vertex_type_from(edges, inner_chains, i)),
             _ => None,
         }
     }
@@ -651,24 +692,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let new_candidates =
             Self::compute_all_candidates(&self.match_index, &new_angles, &new_edges);
 
-        let mut new_inner = vec![Vec::new(); new_len];
-
-        for i in 1..seg_len_old {
-            new_inner[i] = old_inner[(ccw_pos + i) % n].clone();
-        }
-
-        let cw_end_matched = (pm.start_a + mlen - 1) % n;
-        new_inner[0] = old_inner[ccw_pos]
-            .iter()
-            .chain(std::iter::once(&edges[cw_end_matched]))
-            .cloned()
-            .collect();
-
-        new_inner[seg_len_old] = old_inner[pm.start_a]
-            .iter()
-            .chain(std::iter::once(&edges[pm.start_a]))
-            .cloned()
-            .collect();
+        let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len);
 
         self.state = PatchState::Growing {
             angles: new_angles,
