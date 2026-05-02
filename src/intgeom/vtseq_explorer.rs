@@ -179,6 +179,7 @@ pub struct PatchSeqExplorer<T: IsComplex> {
     trie: SeqTrie,
     witnesses: Vec<GrowingPatch<T>>,
     provenances: Vec<Provenance>,
+    #[allow(dead_code)]
     rat_to_id: BTreeMap<Rat<T>, usize>,
     witness_indices: Vec<usize>,
     max_subseq_len: usize,

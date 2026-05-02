@@ -3,7 +3,6 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
-use tilezz::intgeom::patch::GrowingPatch;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
