@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch};
+use crate::intgeom::patch::{compute_glue_angles, EdgeInfo, GrowingPatch, PatchMatch};
+use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,15 +24,9 @@ impl OpenNeighborhoodType {
     }
 }
 
-type DedupKey = (
-    usize,
-    Vec<i8>,
-    Vec<EdgeInfo>,
-    Vec<Vec<EdgeInfo>>,
-    Vec<usize>,
-);
+type DedupKey = (usize, Vec<i8>, Vec<EdgeInfo>, u32);
 
-fn find_best_rotation(angles: &[i8], edges: &[EdgeInfo], inner_chains: &[Vec<EdgeInfo>]) -> usize {
+fn find_best_rotation(angles: &[i8], edges: &[EdgeInfo]) -> usize {
     let n = angles.len();
     if n == 0 {
         return 0;
@@ -53,16 +48,7 @@ fn find_best_rotation(angles: &[i8], edges: &[EdgeInfo], inner_chains: &[Vec<Edg
                         break;
                     }
                     std::cmp::Ordering::Greater => break,
-                    std::cmp::Ordering::Equal => {
-                        match inner_chains[idx_r].cmp(&inner_chains[idx_b]) {
-                            std::cmp::Ordering::Less => {
-                                best = r;
-                                break;
-                            }
-                            std::cmp::Ordering::Greater => break,
-                            std::cmp::Ordering::Equal => continue,
-                        }
-                    }
+                    std::cmp::Ordering::Equal => continue,
                 },
             }
         }
@@ -70,29 +56,13 @@ fn find_best_rotation(angles: &[i8], edges: &[EdgeInfo], inner_chains: &[Vec<Edg
     best
 }
 
-fn canonicalize_boundary(
-    angles: &[i8],
-    edges: &[EdgeInfo],
-    inner_chains: &[Vec<EdgeInfo>],
-) -> (Vec<i8>, Vec<EdgeInfo>, Vec<Vec<EdgeInfo>>, usize) {
-    let n = angles.len();
-    if n == 0 {
-        return (vec![], vec![], vec![], 0);
-    }
-    let rot = find_best_rotation(angles, edges, inner_chains);
+fn canonicalize(angles: &[i8], edges: &[EdgeInfo]) -> (Vec<i8>, Vec<EdgeInfo>, usize) {
+    let rot = find_best_rotation(angles, edges);
     let mut a = angles.to_vec();
     let mut e = edges.to_vec();
-    let mut ic = inner_chains.to_vec();
     a.rotate_left(rot);
     e.rotate_left(rot);
-    ic.rotate_left(rot);
-    (a, e, ic, rot)
-}
-
-fn rotate_positions(positions: &[usize], rot: usize, n: usize) -> Vec<usize> {
-    let mut result: Vec<usize> = positions.iter().map(|&p| (p + n - rot) % n).collect();
-    result.sort();
-    result
+    (a, e, rot)
 }
 
 fn has_one_contiguous_run(bitmask: u32, n: usize) -> bool {
@@ -161,6 +131,63 @@ fn compute_gap_bitmask(edges: &[EdgeInfo], positions: &[usize], central_tile_id:
     bitmask
 }
 
+fn compute_new_edges_seed(tile_id: usize, n: usize, pm: &PatchMatch, m: usize) -> Vec<EdgeInfo> {
+    let ccw_pos = (pm.start_a + pm.len) % n;
+    let seg_len_old = n - pm.len;
+    let seg_len_new = m - pm.len;
+    let mut edges = Vec::with_capacity(seg_len_old + seg_len_new);
+    for i in 0..seg_len_old {
+        edges.push(EdgeInfo {
+            tile_id,
+            tile_offset: (ccw_pos + i) % n,
+        });
+    }
+    edges.push(EdgeInfo {
+        tile_id: pm.tile_id,
+        tile_offset: pm.start_b,
+    });
+    for k in 1..seg_len_new {
+        edges.push(EdgeInfo {
+            tile_id: pm.tile_id,
+            tile_offset: (pm.start_b + pm.len + k) % m,
+        });
+    }
+    edges
+}
+
+fn compute_new_edges_growing(
+    edges: &[EdgeInfo],
+    n: usize,
+    pm: &PatchMatch,
+    m: usize,
+) -> Vec<EdgeInfo> {
+    let ccw_pos = (pm.start_a + pm.len) % n;
+    let seg_len_old = n - pm.len;
+    let seg_len_new = m - pm.len;
+    let mut new_edges = Vec::with_capacity(seg_len_old + seg_len_new);
+    for i in 0..seg_len_old {
+        new_edges.push(edges[(ccw_pos + i) % n]);
+    }
+    new_edges.push(EdgeInfo {
+        tile_id: pm.tile_id,
+        tile_offset: pm.start_b,
+    });
+    for k in 1..seg_len_new {
+        new_edges.push(EdgeInfo {
+            tile_id: pm.tile_id,
+            tile_offset: (pm.start_b + pm.len + k) % m,
+        });
+    }
+    new_edges
+}
+
+struct BfsState {
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    positions: Vec<usize>,
+    bitmask: u32,
+}
+
 pub struct OpenNeighborhoodIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<OpenNeighborhoodType>,
@@ -168,49 +195,69 @@ pub struct OpenNeighborhoodIndex<T: IsComplex> {
 
 impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut all_types: Vec<OpenNeighborhoodType> = Vec::new();
         let mut seen: HashSet<DedupKey> = HashSet::new();
-        let mut queue: VecDeque<(GrowingPatch<T>, Vec<usize>, usize)> = VecDeque::new();
+        let mut queue: VecDeque<BfsState> = VecDeque::new();
 
         for tile_id in 0..tileset.num_tiles() {
             let n = tileset.rat(tile_id).seq().len();
             assert!(n <= 32, "tile edge count exceeds 32");
-            let initial_positions: Vec<usize> = (0..n).collect();
+            let seed_angles: Vec<i8> = tileset.rat(tile_id).seq().to_vec();
+            let seed_edges: Vec<EdgeInfo> = (0..n)
+                .map(|i| EdgeInfo {
+                    tile_id,
+                    tile_offset: i,
+                })
+                .collect();
+            let init_positions: Vec<usize> = (0..n).collect();
 
-            let seed = GrowingPatch::new(Arc::clone(&tileset), tile_id);
-            let seed_matches = seed.get_all_matches();
+            let seed_candidates =
+                GrowingPatch::compute_all_candidates(&match_index, &seed_angles, &seed_edges);
             eprintln!(
-                "  tile {}: {} edges, {} seed matches",
+                "  tile {}: {} edges, {} seed candidates",
                 tile_id,
                 n,
-                seed_matches.len()
+                seed_candidates.iter().map(|v| v.len()).sum::<usize>()
             );
 
             let mut seed_types = 0;
-            for pm in seed_matches {
-                let mut gp = seed.clone_for_mutation();
-                if gp.add_tile(&pm).is_none() || !gp.is_growing() {
-                    continue;
-                }
+            for matches in &seed_candidates {
+                for pm in matches {
+                    let m = tileset.rat(pm.tile_id).seq().len();
+                    let new_angles = match compute_glue_angles::<T>(&seed_angles, pm, &tileset) {
+                        Some(a) => a,
+                        None => continue,
+                    };
+                    if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
+                        continue;
+                    }
 
-                let new_positions = update_positions(&initial_positions, pm.start_a, pm.len, n);
+                    let new_edges = compute_new_edges_seed(tile_id, n, pm, m);
+                    let new_positions = update_positions(&init_positions, pm.start_a, pm.len, n);
+                    if new_positions.is_empty() {
+                        continue;
+                    }
+                    let bitmask = compute_gap_bitmask(&new_edges, &new_positions, tile_id);
+                    if !has_one_contiguous_run(bitmask, n) {
+                        continue;
+                    }
 
-                if new_positions.is_empty() {
-                    continue;
-                }
+                    let (ca, ce, rot) = canonicalize(&new_angles, &new_edges);
+                    let key = (tile_id, ca.clone(), ce.clone(), bitmask);
+                    if !seen.insert(key) {
+                        continue;
+                    }
 
-                let bitmask = compute_gap_bitmask(gp.edges(), &new_positions, tile_id);
+                    let cp = {
+                        let mut r: Vec<usize> = new_positions
+                            .iter()
+                            .map(|&p| (p + ca.len() - rot) % ca.len())
+                            .collect();
+                        r.sort();
+                        r
+                    };
 
-                let (ca, ce, ci, rot) =
-                    canonicalize_boundary(gp.angles(), gp.edges(), gp.inner_chains());
-                let cp = rotate_positions(&new_positions, rot, ca.len());
-
-                let key = (tile_id, ca.clone(), ce.clone(), ci.clone(), cp.clone());
-                if !seen.insert(key) {
-                    continue;
-                }
-
-                if has_one_contiguous_run(bitmask, n) {
                     all_types.push(OpenNeighborhoodType {
                         id: 0,
                         central_tile_id: tile_id,
@@ -218,87 +265,104 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
                         gap_positions: cp,
                         angles: ca,
                         edges: ce,
-                        inner_chains: ci,
+                        inner_chains: vec![vec![]; new_angles.len()],
                     });
                     seed_types += 1;
-                    queue.push_back((gp, new_positions, tile_id));
+                    queue.push_back(BfsState {
+                        angles: new_angles,
+                        edges: new_edges,
+                        positions: new_positions,
+                        bitmask,
+                    });
                 }
             }
             eprintln!(
-                "  tile {} seeds done: {} queue, {} types, {} seen",
+                "  tile {} seeds done: {} types, {} queue, {} seen",
                 tile_id,
-                queue.len(),
                 seed_types,
+                queue.len(),
                 seen.len()
             );
         }
 
         let mut explored: usize = 0;
-        let max_states = 100_000;
-        while let Some((gp, positions, tile_id)) = queue.pop_front() {
-            if seen.len() > max_states {
-                eprintln!(
-                    "  WARNING: exceeded {} states, stopping BFS for tile {}",
-                    max_states, tile_id
-                );
-                break;
-            }
-            let n = tileset.rat(tile_id).seq().len();
-            let boundary_n = gp.boundary_len();
-            let matches = gp.get_all_matches();
+        while let Some(state) = queue.pop_front() {
+            let n = tileset.rat(0).seq().len();
+            let boundary_n = state.angles.len();
             explored += 1;
-            if explored <= 10 || explored.is_multiple_of(1000) {
+            if explored.is_multiple_of(5000) {
                 eprintln!(
-                    "  explored {}, queue {}, seen {}, types {}, matches {}",
+                    "  explored {}, queue {}, seen {}, types {}",
                     explored,
                     queue.len(),
                     seen.len(),
-                    all_types.len(),
-                    matches.len()
+                    all_types.len()
                 );
             }
 
-            for pm in matches {
-                let touches_central = positions
-                    .iter()
-                    .any(|&p| in_consumed_range(p, pm.start_a, pm.len, boundary_n));
-                if !touches_central {
-                    continue;
-                }
+            let candidates =
+                GrowingPatch::compute_all_candidates(&match_index, &state.angles, &state.edges);
 
-                let new_positions = update_positions(&positions, pm.start_a, pm.len, boundary_n);
+            for matches in &candidates {
+                for pm in matches {
+                    let touches = state
+                        .positions
+                        .iter()
+                        .any(|&p| in_consumed_range(p, pm.start_a, pm.len, boundary_n));
+                    if !touches {
+                        continue;
+                    }
 
-                if new_positions.is_empty() {
-                    continue;
-                }
+                    let m = tileset.rat(pm.tile_id).seq().len();
+                    let new_angles = match compute_glue_angles::<T>(&state.angles, pm, &tileset) {
+                        Some(a) => a,
+                        None => continue,
+                    };
+                    if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
+                        continue;
+                    }
 
-                let mut gp2 = gp.clone_for_mutation();
-                if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
-                    continue;
-                }
+                    let new_edges = compute_new_edges_growing(&state.edges, boundary_n, pm, m);
+                    let new_positions =
+                        update_positions(&state.positions, pm.start_a, pm.len, boundary_n);
+                    if new_positions.is_empty() {
+                        continue;
+                    }
+                    let bitmask = compute_gap_bitmask(&new_edges, &new_positions, 0);
+                    if !has_one_contiguous_run(bitmask, n) {
+                        continue;
+                    }
 
-                let bitmask = compute_gap_bitmask(gp2.edges(), &new_positions, tile_id);
+                    let (ca, ce, rot) = canonicalize(&new_angles, &new_edges);
+                    let key = (0, ca.clone(), ce.clone(), bitmask);
+                    if !seen.insert(key) {
+                        continue;
+                    }
 
-                let (ca, ce, ci, rot) =
-                    canonicalize_boundary(gp2.angles(), gp2.edges(), gp2.inner_chains());
-                let cp = rotate_positions(&new_positions, rot, ca.len());
+                    let cp = {
+                        let mut r: Vec<usize> = new_positions
+                            .iter()
+                            .map(|&p| (p + ca.len() - rot) % ca.len())
+                            .collect();
+                        r.sort();
+                        r
+                    };
 
-                let key = (tile_id, ca.clone(), ce.clone(), ci.clone(), cp.clone());
-                if !seen.insert(key) {
-                    continue;
-                }
-
-                if has_one_contiguous_run(bitmask, n) {
                     all_types.push(OpenNeighborhoodType {
                         id: 0,
-                        central_tile_id: tile_id,
+                        central_tile_id: 0,
                         gap_bitmask: bitmask,
                         gap_positions: cp,
                         angles: ca,
                         edges: ce,
-                        inner_chains: ci,
+                        inner_chains: vec![vec![]; new_angles.len()],
                     });
-                    queue.push_back((gp2, new_positions, tile_id));
+                    queue.push_back(BfsState {
+                        angles: new_angles,
+                        edges: new_edges,
+                        positions: new_positions,
+                        bitmask,
+                    });
                 }
             }
         }
@@ -328,13 +392,11 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
     pub fn validate(&self) -> Vec<usize> {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&self.tileset)));
         let mut invalid = Vec::new();
-
         for nhood in &self.entries {
             if !self.validate_one(nhood, &match_index) {
                 invalid.push(nhood.id);
             }
         }
-
         invalid
     }
 
@@ -344,25 +406,15 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
         match_index: &Arc<MatchTypeIndex<T>>,
     ) -> bool {
         let n = self.tileset.rat(nhood.central_tile_id).seq().len();
-
-        if nhood.gap_bitmask == 0 {
+        if nhood.gap_bitmask == 0 || !has_one_contiguous_run(nhood.gap_bitmask, n) {
             return false;
         }
-
-        if !has_one_contiguous_run(nhood.gap_bitmask, n) {
-            return false;
-        }
-
-        if nhood.angles.len() != nhood.edges.len()
-            || nhood.inner_chains.len() != nhood.angles.len()
-            || nhood.angles.is_empty()
-        {
+        if nhood.angles.len() != nhood.edges.len() || nhood.angles.is_empty() {
             return false;
         }
 
         let candidates =
             GrowingPatch::compute_all_candidates(match_index, &nhood.angles, &nhood.edges);
-
         let patch = match GrowingPatch::from_parts(
             Arc::clone(match_index),
             nhood.angles.clone(),
@@ -374,35 +426,33 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
             None => return false,
         };
 
-        let boundary_n = patch.boundary_len();
-        if boundary_n != nhood.angles.len() {
+        if patch.boundary_len() != nhood.angles.len() {
             return false;
         }
-
-        if nhood.gap_positions.is_empty() {
+        if patch.edges().len() != nhood.edges.len() {
             return false;
         }
-
-        for &p in &nhood.gap_positions {
-            if p >= boundary_n {
+        for (i, (a, b)) in patch.angles().iter().zip(nhood.angles.iter()).enumerate() {
+            if a != b {
+                eprintln!("  angle mismatch at {}: {} vs {}", i, a, b);
                 return false;
             }
-            let ei = patch.edges()[p];
-            if ei.tile_id != nhood.central_tile_id {
-                return false;
-            }
-            let bit = 1u32 << ei.tile_offset;
-            if nhood.gap_bitmask & bit == 0 {
+        }
+        for (i, (a, b)) in patch.edges().iter().zip(nhood.edges.iter()).enumerate() {
+            if a != b {
+                eprintln!(
+                    "  edge mismatch at {}: {}.{} vs {}.{}",
+                    i, a.tile_id, a.tile_offset, b.tile_id, b.tile_offset
+                );
                 return false;
             }
         }
 
-        let observed_bitmask =
+        let observed =
             compute_gap_bitmask(patch.edges(), &nhood.gap_positions, nhood.central_tile_id);
-        if observed_bitmask != nhood.gap_bitmask {
+        if observed != nhood.gap_bitmask {
             return false;
         }
-
         true
     }
 
@@ -462,7 +512,6 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
 
     pub fn parse_file(tileset: Arc<TileSet<T>>, input: &str) -> Result<Self, String> {
         let mut entries = Vec::new();
-
         for line in input.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -570,7 +619,6 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
                 inner_chains,
             });
         }
-
         Ok(OpenNeighborhoodIndex { tileset, entries })
     }
 }
@@ -598,6 +646,7 @@ mod tests {
     use crate::cyclotomic::ZZ12;
     use crate::intgeom::rat::Rat;
     use crate::intgeom::tiles;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_has_one_contiguous_run() {
@@ -612,18 +661,50 @@ mod tests {
     }
 
     #[test]
+    fn test_square_neighborhood_types() {
+        let sq: crate::intgeom::snake::Snake<ZZ12> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenNeighborhoodIndex::new(ts);
+        eprintln!("square: {} neighborhood types", idx.num_types());
+
+        let mut by_gap_len: BTreeMap<usize, Vec<&OpenNeighborhoodType>> = BTreeMap::new();
+        for nhood in idx.entries() {
+            by_gap_len.entry(nhood.gap_len()).or_default().push(nhood);
+        }
+        for (gl, types) in &by_gap_len {
+            eprintln!("  gap_len={}: {} types", gl, types.len());
+        }
+
+        let invalid = idx.validate();
+        assert!(
+            invalid.is_empty(),
+            "found {} invalid: {:?}",
+            invalid.len(),
+            &invalid[..invalid.len().min(10)],
+        );
+    }
+
+    #[test]
     fn test_hexagon_neighborhood_types() {
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenNeighborhoodIndex::new(ts);
-        assert!(idx.num_types() > 0, "should find some neighborhood types");
         eprintln!("hex: {} neighborhood types", idx.num_types());
+
+        let mut by_gap_len: BTreeMap<usize, Vec<&OpenNeighborhoodType>> = BTreeMap::new();
+        for nhood in idx.entries() {
+            by_gap_len.entry(nhood.gap_len()).or_default().push(nhood);
+        }
+        for (gl, types) in &by_gap_len {
+            eprintln!("  gap_len={}: {} types", gl, types.len());
+        }
 
         let invalid = idx.validate();
         assert!(
             invalid.is_empty(),
-            "found {} invalid neighborhood types: {:?}",
+            "found {} invalid: {:?}",
             invalid.len(),
             &invalid[..invalid.len().min(10)],
         );
