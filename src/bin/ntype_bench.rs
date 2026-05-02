@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
-use tilezz::cyclotomic::ZZ12;
+use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::neighborhood::OpenNeighborhoodIndex;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::Snake;
@@ -29,10 +29,11 @@ enum TileSetKind {
     Hex,
     Mixed,
     Spectre,
+    Penrose,
 }
 
-fn main() {
-    let args = Args::parse();
+fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<T>>) {
+    eprintln!("=== Neighborhood types: {} ===", label);
 
     #[cfg(feature = "pprof")]
     let guard = ProfilerGuardBuilder::default()
@@ -40,29 +41,6 @@ fn main() {
         .blocklist(&["libc", "libgcc", "pthread", "vdso"])
         .build()
         .unwrap();
-
-    let ts: Arc<TileSet<ZZ12>> = match args.tile {
-        TileSetKind::Square => {
-            let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Hex => {
-            let rat = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Mixed => {
-            let sq = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            let hex = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![sq, hex]))
-        }
-        TileSetKind::Spectre => {
-            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-    };
-
-    let label = format!("{:?}", args.tile);
-    eprintln!("=== Neighborhood types: {} ===", label);
 
     let t0 = Instant::now();
     let idx = OpenNeighborhoodIndex::new(Arc::clone(&ts));
@@ -87,6 +65,35 @@ fn main() {
             let mut file = std::fs::File::create(flamegraph_file).unwrap();
             report.flamegraph(&mut file).unwrap();
             eprintln!("\nFlame graph written to {}", flamegraph_file);
+        }
+    }
+}
+
+fn main() {
+    let args = Args::parse();
+
+    match args.tile {
+        TileSetKind::Square => {
+            let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
+            run_bench("Square", Arc::new(TileSet::new(vec![rat])));
+        }
+        TileSetKind::Hex => {
+            let rat = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
+            run_bench("Hex", Arc::new(TileSet::new(vec![rat])));
+        }
+        TileSetKind::Mixed => {
+            let sq = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
+            let hex = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
+            run_bench("Mixed", Arc::new(TileSet::new(vec![sq, hex])));
+        }
+        TileSetKind::Spectre => {
+            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
+            run_bench("Spectre", Arc::new(TileSet::new(vec![rat])));
+        }
+        TileSetKind::Penrose => {
+            let n = Rat::try_from(&tiles::penrose_p3_narrow::<ZZ10>()).unwrap();
+            let w = Rat::try_from(&tiles::penrose_p3_wide::<ZZ10>()).unwrap();
+            run_bench("Penrose", Arc::new(TileSet::new(vec![n, w])));
         }
     }
 }
