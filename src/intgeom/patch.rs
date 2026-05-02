@@ -863,7 +863,7 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     }
 }
 
-pub(crate) fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
+pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
