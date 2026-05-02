@@ -1,4 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
+
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
@@ -226,6 +228,93 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         None
     }
 
+    pub fn compute_candidates_covering_position(
+        match_index: &Arc<MatchTypeIndex<T>>,
+        angles: &[i8],
+        edges: &[EdgeInfo],
+        target: usize,
+    ) -> Vec<PatchMatch> {
+        let n = angles.len();
+        let rat = Rat::from_slice_unchecked(angles);
+        let tileset = match_index.tileset();
+        let max_tile_len = tileset.rats().iter().map(|r| r.len()).max().unwrap_or(0);
+        let mut global_seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
+        let mut result: Vec<PatchMatch> = Vec::new();
+
+        let segments = compute_segments(angles, edges, tileset);
+        let junctions_set: FxHashSet<usize> = compute_junctions(angles, edges, tileset)
+            .into_iter()
+            .collect();
+
+        for offset in 0..max_tile_len.min(n) {
+            let pos = (target + n - offset) % n;
+
+            if let Some(segment) = segments
+                .iter()
+                .find(|s| pos >= s.patch_start && pos < s.patch_end)
+            {
+                let tile_id = segment.tile_id;
+                let tile_offset = (segment.offset_start + (pos - segment.patch_start))
+                    % tileset.rat(tile_id).len();
+                let mut tmp_by_start: Vec<Vec<PatchMatch>> = vec![Vec::new(); n];
+                compute_candidates_at_position(
+                    pos,
+                    angles,
+                    &rat,
+                    n,
+                    tile_id,
+                    tile_offset,
+                    match_index,
+                    tileset,
+                    &mut global_seen,
+                    &mut tmp_by_start,
+                );
+                for pm in tmp_by_start.into_iter().flatten() {
+                    if cyclic_range_contains(pm.start_a, pm.len, target, n) {
+                        result.push(pm);
+                    }
+                }
+            }
+
+            if junctions_set.contains(&pos) {
+                for tile_id_b in 0..tileset.num_tiles() {
+                    let tile_b = tileset.rat(tile_id_b);
+                    let b_seq = tile_b.seq();
+                    let m = b_seq.len();
+                    for ib in 0..m {
+                        if !is_single_edge_candidate(angles, pos, b_seq, ib) {
+                            continue;
+                        }
+                        let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
+                        if len != 1 {
+                            continue;
+                        }
+                        let ns_u = ns.rem_euclid(n as i64) as usize;
+                        let ne_u = ne.rem_euclid(m as i64) as usize;
+                        let key = (ns_u, len, ne_u, tile_id_b);
+                        if !global_seen.insert(key) {
+                            continue;
+                        }
+                        if cyclic_range_contains(ns_u, len, target, n)
+                            && rat
+                                .try_glue_precomputed((ns, len, ne), tile_b, true)
+                                .is_ok()
+                        {
+                            result.push(PatchMatch {
+                                start_a: ns_u,
+                                len,
+                                start_b: ne_u,
+                                tile_id: tile_id_b,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
     pub fn compute_all_candidates(
         match_index: &Arc<MatchTypeIndex<T>>,
         angles: &[i8],
@@ -239,7 +328,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let segments = compute_segments(angles, edges, tileset);
         let junctions = compute_junctions(angles, edges, tileset);
 
-        let mut global_seen: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
+        let mut global_seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
 
         for segment in &segments {
             let tile_id = segment.tile_id;
@@ -727,7 +816,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let seed = tileset.rat(seed_tile_id);
         let seed_seq = seed.seq();
         let n = seed_seq.len();
-        let mut seen: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
+        let mut seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
         let mut matches = Vec::new();
 
         for offset in 0..n {
@@ -820,7 +909,7 @@ fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
     tile_offset: usize,
     match_index: &MatchTypeIndex<T>,
     tileset: &TileSet<T>,
-    global_seen: &mut BTreeSet<(usize, usize, usize, usize)>,
+    global_seen: &mut FxHashSet<(usize, usize, usize, usize)>,
     result: &mut [Vec<PatchMatch>],
 ) {
     for cand in match_index.candidates_starting_at(tile_id, tile_offset) {
@@ -835,7 +924,7 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
     n: usize,
     cand: &CandidateMatch,
     tileset: &TileSet<T>,
-    seen: &mut BTreeSet<(usize, usize, usize, usize)>,
+    seen: &mut FxHashSet<(usize, usize, usize, usize)>,
     result: &mut [Vec<PatchMatch>],
 ) {
     let tile_b = tileset.rat(cand.tile_b);
