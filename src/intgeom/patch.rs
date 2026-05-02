@@ -87,7 +87,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let seed_matches =
-            Self::compute_seed_matches(&match_index, &match_index.tileset(), seed_tile_id);
+            Self::compute_seed_matches(&match_index, match_index.tileset(), seed_tile_id);
         GrowingPatch {
             match_index,
             state: PatchState::Seed {
@@ -128,7 +128,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     ) -> Option<(Self, usize)> {
         let tileset = match_index.tileset();
 
-        let mut patch = GrowingPatch::new(Arc::clone(&tileset), vtype.cw.tile_id);
+        let mut patch = GrowingPatch::new(Arc::clone(tileset), vtype.cw.tile_id);
 
         let mut targets = vtype.inner.clone();
         targets.push(vtype.ccw);

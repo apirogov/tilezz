@@ -316,7 +316,7 @@ fn validate_common<
     let batch_size = 500;
     let mut new_found = 0usize;
     let mut total_matches = 0usize;
-    let num_batches = (witness_rats.len() + batch_size - 1) / batch_size;
+    let num_batches = witness_rats.len().div_ceil(batch_size);
 
     for (batch_num, chunk) in witness_rats.chunks(batch_size).enumerate() {
         let chunk_ts = Arc::new(TileSet::new(chunk.to_vec()));

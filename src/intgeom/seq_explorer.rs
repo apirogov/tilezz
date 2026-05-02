@@ -279,11 +279,11 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
             let mut new_rat_entries: Vec<(Rat<T>, Provenance)> = Vec::new();
             let mut seen_new: FxHashSet<Rat<T>> = FxHashSet::default();
             let mut seen_invalid: FxHashSet<Rat<T>> = FxHashSet::default();
-            let mut layer_skipped = 0usize;
+            let layer_skipped = 0usize;
             let mut layer_considered = 0usize;
 
             for batch_idx in 0..batch_ts.num_tiles() {
-                let n = batch_ts.rat(batch_idx).len();
+                let _n = batch_ts.rat(batch_idx).len();
                 let active = &batch_active[batch_idx];
                 let global_source = global_from_batch[batch_idx];
 

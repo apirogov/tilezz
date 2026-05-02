@@ -23,3 +23,5 @@ pub mod patch;
 pub mod vtseq_explorer;
 
 pub mod growing;
+
+pub mod neighborhood;

@@ -42,8 +42,11 @@ impl VTypeKind {
 
 pub struct VertexTypeInfo<T: IsComplex> {
     vtype: VertexType,
+    #[allow(dead_code)]
     has_transitions: HasTransitions,
+    #[allow(dead_code)]
     successors: Vec<usize>,
+    #[allow(dead_code)]
     predecessors: Vec<usize>,
     kind: VTypeKind,
     is_initial: bool,
