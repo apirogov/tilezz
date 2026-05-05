@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::MatchTypeIndex;
 use tilezz::intgeom::patch::{
-    candidates_from_flat, cyclic_range_contains, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
+    cyclic_range_contains, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
 };
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
@@ -467,7 +467,6 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
     let mut reconstructed: HashMap<usize, GrowingPatch<T>> = HashMap::new();
     for pw in &pf.witnesses {
         let n = pw.angles.len();
-        let cands = candidates_from_flat(n, pw.candidates.clone());
         let inner_chains = if pw.inner_chains.len() == n {
             pw.inner_chains.clone()
         } else {
@@ -477,7 +476,6 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             Arc::clone(&mi),
             pw.angles.clone(),
             pw.edges.clone(),
-            cands,
             inner_chains,
         )
         .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
@@ -689,7 +687,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             total_match_checks += 1;
             let old_n = gp.boundary_len();
             let mut gp2 = gp.clone();
-            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+            if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
                 continue;
             }
             let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };

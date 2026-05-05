@@ -79,7 +79,7 @@ enum PatchState<T: IsComplex> {
     Growing {
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
-        candidates_by_start: Vec<Vec<PatchMatch>>,
+        candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
         inner_chains: Vec<Vec<EdgeInfo>>,
         positions: Vec<T>,
         grid: UnitSquareGrid,
@@ -153,14 +153,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         match_index: Arc<MatchTypeIndex<T>>,
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
-        candidates_by_start: Vec<Vec<PatchMatch>>,
         inner_chains: Vec<Vec<EdgeInfo>>,
     ) -> Option<Self> {
-        if angles.is_empty()
-            || angles.len() != edges.len()
-            || candidates_by_start.len() != angles.len()
-            || inner_chains.len() != angles.len()
-        {
+        if angles.is_empty() || angles.len() != edges.len() || inner_chains.len() != angles.len() {
             return None;
         }
         let n = angles.len();
@@ -172,7 +167,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             state: PatchState::Growing {
                 angles,
                 edges,
-                candidates_by_start,
+                candidates_by_start: None,
                 inner_chains,
                 positions,
                 grid,
@@ -417,7 +412,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 PatchState::Growing {
                     angles,
                     edges,
-                    candidates_by_start,
+                    candidates_by_start: _,
                     inner_chains,
                     positions,
                     grid,
@@ -427,7 +422,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 } => PatchState::Growing {
                     angles: angles.clone(),
                     edges: edges.clone(),
-                    candidates_by_start: candidates_by_start.clone(),
+                    candidates_by_start: None,
                     inner_chains: inner_chains.clone(),
                     positions: positions.clone(),
                     grid: grid.clone(),
@@ -435,7 +430,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     boundary_edge_ids: boundary_edge_ids.clone(),
                     next_edge_id: *next_edge_id,
                 },
-                PatchState::_Phantom(p) => PatchState::_Phantom(p.clone()),
+                PatchState::_Phantom(p) => PatchState::_Phantom(*p),
             },
         }
     }
@@ -444,9 +439,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         match &self.state {
             PatchState::Seed { cached_matches, .. } => cached_matches.clone(),
             PatchState::Growing {
+                angles,
+                edges,
                 candidates_by_start,
                 ..
-            } => candidates_by_start.iter().flatten().cloned().collect(),
+            } => match candidates_by_start {
+                Some(cbs) => cbs.iter().flatten().cloned().collect(),
+                None => Self::compute_all_candidates(&self.match_index, angles, edges)
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            },
             PatchState::_Phantom(_) => Vec::new(),
         }
     }
@@ -457,46 +460,88 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             .filter(move |m| m.tile_id == tile_id)
     }
 
-    pub fn get_matches_touching_vertex(
-        &self,
-        vertex_index: usize,
-    ) -> impl Iterator<Item = &PatchMatch> {
+    pub fn get_matches_touching_vertex(&self, vertex_index: usize) -> Vec<PatchMatch> {
         match &self.state {
             PatchState::Seed { cached_matches, .. } => {
                 let n = self.match_index.tileset().rat(0).len();
                 cached_matches
                     .iter()
-                    .filter(move |pm| cyclic_range_contains(pm.start_a, pm.len, vertex_index, n))
-                    .collect::<Vec<_>>()
-                    .into_iter()
+                    .filter(|pm| cyclic_range_contains(pm.start_a, pm.len, vertex_index, n))
+                    .cloned()
+                    .collect()
             }
             PatchState::Growing {
                 candidates_by_start,
                 angles,
+                edges,
                 ..
             } => {
                 let n = angles.len();
-                let k = self
-                    .match_index
-                    .tileset()
-                    .rats()
-                    .iter()
-                    .map(|r| r.len())
-                    .max()
-                    .unwrap_or(0)
-                    .min(n);
-                let mut result = Vec::new();
-                for offset in 0..=k {
-                    let start = (vertex_index + n - offset) % n;
-                    for pm in &candidates_by_start[start] {
-                        if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
-                            result.push(pm);
+                match candidates_by_start {
+                    Some(cbs) => {
+                        let k = self
+                            .match_index
+                            .tileset()
+                            .rats()
+                            .iter()
+                            .map(|r| r.len())
+                            .max()
+                            .unwrap_or(0)
+                            .min(n);
+                        let mut result = Vec::new();
+                        for offset in 0..=k {
+                            let start = (vertex_index + n - offset) % n;
+                            for pm in &cbs[start] {
+                                if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
+                                    result.push(pm.clone());
+                                }
+                            }
                         }
+                        result
+                    }
+                    None => {
+                        let all = Self::compute_all_candidates(&self.match_index, angles, edges);
+                        let k = self
+                            .match_index
+                            .tileset()
+                            .rats()
+                            .iter()
+                            .map(|r| r.len())
+                            .max()
+                            .unwrap_or(0)
+                            .min(n);
+                        let mut result = Vec::new();
+                        for offset in 0..=k {
+                            let start = (vertex_index + n - offset) % n;
+                            for pm in &all[start] {
+                                if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
+                                    result.push(pm.clone());
+                                }
+                            }
+                        }
+                        result
                     }
                 }
-                result.into_iter()
             }
-            PatchState::_Phantom(_) => Vec::new().into_iter(),
+            PatchState::_Phantom(_) => Vec::new(),
+        }
+    }
+
+    pub fn ensure_candidates_materialized(&mut self) {
+        if let PatchState::Growing {
+            angles,
+            edges,
+            candidates_by_start,
+            ..
+        } = &mut self.state
+        {
+            if candidates_by_start.is_none() {
+                *candidates_by_start = Some(Self::compute_all_candidates(
+                    &self.match_index,
+                    angles,
+                    edges,
+                ));
+            }
         }
     }
 
@@ -552,7 +597,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             PatchState::Growing {
                 candidates_by_start,
                 ..
-            } => candidates_by_start,
+            } => candidates_by_start.as_deref().unwrap_or(&[]),
             _ => &[],
         }
     }
@@ -725,15 +770,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         debug_assert_eq!(edges.len(), new_len);
 
-        let candidates_by_start =
-            Self::compute_all_candidates(&self.match_index, &new_angles, &edges);
-
         let inner_chains = vec![vec![]; new_len];
 
         self.state = PatchState::Growing {
             angles: new_angles,
             edges,
-            candidates_by_start,
+            candidates_by_start: None,
             inner_chains,
             positions,
             grid,
@@ -749,7 +791,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let (
             angles,
             edges,
-            old_candidates,
             old_inner,
             positions,
             mut grid,
@@ -760,7 +801,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             PatchState::Growing {
                 angles,
                 edges,
-                candidates_by_start,
+                candidates_by_start: _,
                 inner_chains,
                 positions,
                 grid,
@@ -770,7 +811,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             } => (
                 std::mem::take(angles),
                 std::mem::take(edges),
-                std::mem::take(candidates_by_start),
                 std::mem::take(inner_chains),
                 std::mem::take(positions),
                 std::mem::take(grid),
@@ -790,7 +830,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             self.restore_growing(
                 angles,
                 edges,
-                old_candidates,
                 old_inner,
                 positions,
                 grid,
@@ -807,7 +846,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 self.restore_growing(
                     angles,
                     edges,
-                    old_candidates,
                     old_inner,
                     positions,
                     grid,
@@ -881,7 +919,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             self.restore_growing(
                 angles,
                 edges,
-                old_candidates,
                 old_inner,
                 positions,
                 grid,
@@ -935,15 +972,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         debug_assert_eq!(new_edges.len(), new_len);
 
-        let new_candidates =
-            Self::compute_all_candidates(&self.match_index, &new_angles, &new_edges);
-
         let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len);
 
         self.state = PatchState::Growing {
             angles: new_angles,
             edges: new_edges,
-            candidates_by_start: new_candidates,
+            candidates_by_start: None,
             inner_chains: new_inner,
             positions: new_positions,
             grid,
@@ -955,11 +989,11 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Some(AddTileDiff)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn restore_growing(
         &mut self,
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
-        candidates_by_start: Vec<Vec<PatchMatch>>,
         inner_chains: Vec<Vec<EdgeInfo>>,
         positions: Vec<T>,
         grid: UnitSquareGrid,
@@ -970,7 +1004,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         self.state = PatchState::Growing {
             angles,
             edges,
-            candidates_by_start,
+            candidates_by_start: None,
             inner_chains,
             positions,
             grid,
@@ -1003,9 +1037,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 if !junction_gap_nonnegative(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
                     continue;
                 }
-                if let Ok(_glued) =
-                    seed.try_glue_precomputed((ns as i64, len, ne as i64), tile_b, true)
-                {
+                if let Ok(_glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
                     let key = (ns_u, len, ne_u, cand.tile_b);
                     if seen.insert(key) {
                         matches.push(PatchMatch {
@@ -1072,6 +1104,7 @@ fn compute_junctions<T: IsComplex + IsRingOrField + Units>(
     juncs
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
     pos: usize,
     angles: &[i8],
@@ -1089,6 +1122,7 @@ fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
     pos: usize,
     angles: &[i8],
@@ -1927,6 +1961,83 @@ mod tests {
             let (witness, wpos) = result.unwrap();
             let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
             assert_eq!(reconstructed, vt, "roundtrip failed for vt={vt:?}");
+        }
+    }
+
+    #[test]
+    fn get_matches_touching_vertex_lazy_matches_eager() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mi: Arc<MatchTypeIndex<ZZ12>> = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let pm = gp.get_all_matches().into_iter().next().unwrap();
+        gp.add_tile(&pm).unwrap();
+        gp.ensure_candidates_materialized();
+
+        let n = gp.boundary_len();
+        for target in 0..n {
+            let lazy = {
+                let mut gp2 = gp.clone_for_mutation();
+                gp2.get_matches_touching_vertex(target)
+            };
+            let eager = gp.get_matches_touching_vertex(target);
+            let mut lazy_sorted = lazy;
+            lazy_sorted.sort_by_key(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
+            let mut eager_sorted = eager;
+            eager_sorted.sort_by_key(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
+            assert_eq!(
+                lazy_sorted,
+                eager_sorted,
+                "Mismatch at target={target}: lazy={}, eager={}",
+                lazy_sorted.len(),
+                eager_sorted.len()
+            );
+        }
+    }
+
+    #[test]
+    fn compute_candidates_covering_position_is_subset_of_all_candidates() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mi: Arc<MatchTypeIndex<ZZ12>> = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let pm = gp.get_all_matches().into_iter().next().unwrap();
+        gp.add_tile(&pm).unwrap();
+
+        let all_cands = GrowingPatch::compute_all_candidates(&mi, gp.angles(), gp.edges());
+        let n = gp.angles().len();
+        let max_tile_len = ts.rats().iter().map(|r| r.len()).max().unwrap_or(0);
+        let k = max_tile_len.min(n);
+
+        for target in 0..n {
+            let covering = GrowingPatch::compute_candidates_covering_position(
+                &mi,
+                gp.angles(),
+                gp.edges(),
+                target,
+            );
+
+            let mut touching_from_all: Vec<_> = Vec::new();
+            for offset in 0..=k {
+                let start = (target + n - offset) % n;
+                for pm in &all_cands[start] {
+                    if cyclic_range_contains(pm.start_a, pm.len, target, n) {
+                        touching_from_all.push(pm.clone());
+                    }
+                }
+            }
+
+            for pm in &covering {
+                assert!(
+                    touching_from_all.contains(pm),
+                    "covering returned extra match at target={target}: {:?}",
+                    pm
+                );
+            }
         }
     }
 }

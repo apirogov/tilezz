@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{
-    cyclic_range_contains, EdgeInfo, GrowingPatch, PatchMatch, TransitionSide, VertexType,
+    cyclic_range_contains, GrowingPatch, PatchMatch, TransitionSide, VertexType,
 };
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
@@ -199,7 +199,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             }
 
             bfs_processed += 1;
-            if bfs_processed % 100 == 0 || queue.is_empty() {
+            if bfs_processed.is_multiple_of(100) || queue.is_empty() {
                 eprintln!(
                     "[VT BFS] processed {} | queue {} | types {} | {:.1?}",
                     bfs_processed,
@@ -212,7 +212,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             let touching = {
                 let (gp, pos, _gap) = &witness_store[&vt];
                 let n = gp.boundary_len();
-                let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos).cloned().collect();
+                let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos);
                 if t.is_empty() {
                     transition_map.insert(vt, HasTransitions::No);
                     continue;
