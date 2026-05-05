@@ -140,7 +140,6 @@ pub struct VertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<VertexTypeInfo<T>>,
     transitions: Vec<TransitionInfo>,
-    segments: Vec<SegmentType>,
     reverse: HashMap<VertexType, usize>,
 }
 
@@ -156,7 +155,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             usize,
             usize,
         )> = BTreeSet::new();
-        let mut raw_segments: BTreeSet<(VertexType, VertexType)> = BTreeSet::new();
 
         let mut visited: BTreeSet<VertexType> = BTreeSet::new();
         let mut queue: VecDeque<VertexType> = VecDeque::new();
@@ -169,7 +167,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 if gp.add_tile(&pm).is_none() || !gp.is_growing() {
                     continue;
                 }
-                collect_adjacent_pairs(&gp, &mut raw_segments);
                 for pos in 0..gp.boundary_len() {
                     if !gp.is_junction(pos) {
                         continue;
@@ -215,8 +212,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
                     continue;
                 }
-
-                collect_adjacent_pairs(&gp2, &mut raw_segments);
 
                 let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, n);
                 let covers_cw = cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n);
@@ -281,7 +276,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
                         continue;
                     }
-                    collect_adjacent_pairs(&gp2, &mut raw_segments);
                 }
             }
         }
@@ -329,18 +323,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         let is_cursed = compute_cursed(&entries, &transition_map, &succ_sets);
         let is_blessed = compute_blessed(&entries, &transition_infos);
 
-        let segment_list: Vec<SegmentType> = raw_segments
-            .into_iter()
-            .filter_map(|(vt1, vt2)| {
-                let v1_id = reverse.get(&vt1)?;
-                let v2_id = reverse.get(&vt2)?;
-                Some(SegmentType {
-                    v1_id: *v1_id,
-                    v2_id: *v2_id,
-                })
-            })
-            .collect();
-
         let info_entries: Vec<VertexTypeInfo<T>> = entries
             .into_iter()
             .enumerate()
@@ -386,7 +368,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             tileset,
             entries: info_entries,
             transitions: transition_infos,
-            segments: segment_list,
             reverse,
         }
     }
@@ -397,10 +378,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
     pub fn transitions(&self) -> &[TransitionInfo] {
         &self.transitions
-    }
-
-    pub fn segments(&self) -> &[SegmentType] {
-        &self.segments
     }
 
     pub fn entries(&self) -> &[VertexTypeInfo<T>] {
@@ -439,203 +416,6 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SegmentType {
-    pub v1_id: usize,
-    pub v2_id: usize,
-}
-
-fn verify_adjacency<T: IsComplex + IsRingOrField + Units>(
-    patch: &GrowingPatch<T>,
-    v1_pos: usize,
-    v2_pos: usize,
-    common_tile_id: usize,
-) -> bool {
-    let edges = patch.edges();
-    let n = edges.len();
-    if n == 0 || v1_pos >= n || v2_pos >= n {
-        return false;
-    }
-
-    let mut pos = (v1_pos + 1) % n;
-    while pos != v2_pos {
-        if patch.is_junction(pos) {
-            return false;
-        }
-        if edges[pos].tile_id != common_tile_id {
-            return false;
-        }
-        pos = (pos + 1) % n;
-    }
-    true
-}
-
-fn collect_adjacent_pairs<T: IsComplex + IsRingOrField + Units>(
-    patch: &GrowingPatch<T>,
-    segments: &mut BTreeSet<(VertexType, VertexType)>,
-) {
-    let n = patch.boundary_len();
-    if n == 0 {
-        return;
-    }
-    let junctions: Vec<(usize, VertexType)> = (0..n)
-        .filter_map(|i| patch.full_vertex_type_at(i).map(|vt| (i, vt)))
-        .collect();
-
-    for i in 0..junctions.len() {
-        for j in 0..junctions.len() {
-            if i == j {
-                continue;
-            }
-            let (pos1, ref vt1) = junctions[i];
-            let (pos2, ref vt2) = junctions[j];
-
-            if vt1.ccw.tile_id != vt2.cw.tile_id {
-                continue;
-            }
-
-            let common_tile_id = vt1.ccw.tile_id;
-            if verify_adjacency(patch, pos1, pos2, common_tile_id) {
-                segments.insert((vt1.clone(), vt2.clone()));
-            }
-        }
-    }
-}
-
-fn try_build_segment_witness<T: IsComplex + IsRingOrField + Units>(
-    v1_info: &VertexTypeInfo<T>,
-    v2_type: &VertexType,
-) -> Option<GrowingPatch<T>> {
-    let mut patch = v1_info.witness.clone_for_mutation();
-
-    let mut targets = v2_type.inner.clone();
-    targets.push(v2_type.ccw);
-
-    for (step, target) in targets.iter().enumerate() {
-        let expected_inner: Vec<EdgeInfo> = v2_type.inner[..step].to_vec();
-        let candidates: Vec<PatchMatch> = patch.get_matches_for_tile(target.tile_id).collect();
-
-        let mut found = false;
-        for pm in &candidates {
-            let mut trial = patch.clone_for_mutation();
-            if trial.add_tile(pm).is_none() {
-                continue;
-            }
-
-            let trial_n = trial.boundary_len();
-            for pos in 0..trial_n {
-                let vt = match trial.full_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-                if vt.cw == v2_type.cw && vt.ccw == *target && vt.inner == expected_inner {
-                    patch = trial;
-                    found = true;
-                    break;
-                }
-            }
-            if found {
-                break;
-            }
-        }
-
-        if !found {
-            return None;
-        }
-    }
-
-    let mut v2_pos_opt = None;
-    for pos in 0..patch.boundary_len() {
-        if let Some(vt) = patch.full_vertex_type_at(pos) {
-            if vt == *v2_type {
-                v2_pos_opt = Some(pos);
-                break;
-            }
-        }
-    }
-    let v2_pos = v2_pos_opt?;
-
-    let mut v1_pos_found = None;
-    for pos in 0..patch.boundary_len() {
-        if let Some(vt) = patch.full_vertex_type_at(pos) {
-            if vt == *v1_info.vtype() {
-                v1_pos_found = Some(pos);
-                break;
-            }
-        }
-    }
-    let v1_pos = v1_pos_found?;
-
-    let common_tile_id = v1_info.vtype().ccw.tile_id;
-    if !verify_adjacency(&patch, v1_pos, v2_pos, common_tile_id) {
-        return None;
-    }
-
-    Some(patch)
-}
-
-impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
-    pub fn find_segment_types(&self) -> Vec<SegmentType> {
-        self.segments.clone()
-    }
-
-    pub fn verify_segment_completeness(&self) -> Vec<SegmentType> {
-        let bfs_set: BTreeSet<(usize, usize)> =
-            self.segments.iter().map(|s| (s.v1_id, s.v2_id)).collect();
-
-        let mut missing = Vec::new();
-
-        for id1 in 1..=self.num_types() {
-            let info1 = self.get_info(id1);
-            let vt1 = info1.vtype();
-            let common_tile_id = vt1.ccw.tile_id;
-            let off1 = vt1.ccw.tile_offset;
-            let ccw_nbr = info1.ccw_neighbor_offset();
-            let tile_len = self.tileset.rat(common_tile_id).len();
-
-            for id2 in 1..=self.num_types() {
-                if bfs_set.contains(&(id1, id2)) {
-                    continue;
-                }
-
-                let vt2 = self.get_type(id2);
-                if vt2.cw.tile_id != common_tile_id {
-                    continue;
-                }
-
-                let off2 = vt2.cw.tile_offset;
-                let range_len = (ccw_nbr as i64 - off1 as i64 + tile_len as i64)
-                    .rem_euclid(tile_len as i64) as usize;
-                if range_len == 0 {
-                    continue;
-                }
-                if !cyclic_range_contains(off1, range_len, off2, tile_len) {
-                    continue;
-                }
-
-                let first_target = vt2.inner.first().unwrap_or(&vt2.ccw);
-                if info1
-                    .witness
-                    .get_matches_for_tile(first_target.tile_id)
-                    .next()
-                    .is_none()
-                {
-                    continue;
-                }
-
-                if try_build_segment_witness(info1, vt2).is_some() {
-                    missing.push(SegmentType {
-                        v1_id: id1,
-                        v2_id: id2,
-                    });
-                }
-            }
-        }
-
-        missing
     }
 }
 
@@ -824,47 +604,6 @@ mod tests {
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = VertexTypeIndex::new(ts);
-
-        let segments = idx.find_segment_types();
-        assert!(!segments.is_empty(), "should find some segment types");
-        eprintln!("hex: {} segment types", segments.len());
-
-        for seg in &segments {
-            assert_ne!(seg.v1_id, 0);
-            assert_ne!(seg.v2_id, 0);
-            assert!(seg.v1_id <= idx.num_types());
-            assert!(seg.v2_id <= idx.num_types());
-
-            let vt1 = idx.get_type(seg.v1_id);
-            let vt2 = idx.get_type(seg.v2_id);
-            assert_eq!(
-                vt1.ccw.tile_id, vt2.cw.tile_id,
-                "V1 CCW tile must match V2 CW tile"
-            );
-        }
-    }
-
-    #[test]
-    fn hex_segment_completeness() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
-        let rat = Rat::try_from(&hex).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
-
-        let t0 = std::time::Instant::now();
-        let missing = idx.verify_segment_completeness();
-        eprintln!(
-            "hex completeness: {} segments, {} missing in {:.2?}",
-            idx.segments().len(),
-            missing.len(),
-            t0.elapsed(),
-        );
-
-        assert!(
-            missing.is_empty(),
-            "found {} missing segments: {:?}",
-            missing.len(),
-            missing.iter().take(10).collect::<Vec<_>>()
-        );
+        eprintln!("hex: {} vertex types", idx.num_types());
     }
 }
