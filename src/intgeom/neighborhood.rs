@@ -476,13 +476,10 @@ impl<T: IsComplex + IsRingOrField + Units> OpenNeighborhoodIndex<T> {
             return false;
         }
 
-        let candidates =
-            GrowingPatch::compute_all_candidates(match_index, &nhood.angles, &nhood.edges);
         let patch = match GrowingPatch::from_parts(
             Arc::clone(match_index),
             nhood.angles.clone(),
             nhood.edges.clone(),
-            candidates,
             nhood.inner_chains.clone(),
         ) {
             Some(p) => p,
