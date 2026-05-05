@@ -2,5 +2,5 @@
 .vscode/
 scratch*
 .ipynb_checkpoints/
-flamegraph.svg
+flamegraph*.svg
 perf.data
