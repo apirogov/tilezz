@@ -391,12 +391,6 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
         self.try_glue(matched_indices, other).unwrap()
     }
 
-    pub fn glue_unchecked(&self, matched_indices: (i64, i64), other: &Self) -> Self {
-        let match_info = self.get_match(matched_indices, other);
-        self.try_glue_with_match_info(match_info, other, true)
-            .unwrap()
-    }
-
     // ----
 
     /// Return sequence of coordinates of the line segment chain describing a
@@ -594,7 +588,8 @@ mod tests {
         let r1 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0, 3]);
         let r2 = Rat::<ZZ12>::from_slice_unchecked(&[0, 0, 3, 3, 0, 0, 3, 3]);
 
-        let g2 = r1.glue_unchecked((1, 4), &r2);
+        let mi = r1.get_match((1, 4), &r2);
+        let g2 = r1.try_glue_precomputed(mi, &r2, true).unwrap();
         assert_eq!(g2.seq(), &[0, 0, 3, 3, -3, -3, 3, 3, 0, 0, 3, 0, 0, 3]);
 
         // assert_eq!(g2, r1.glue((2, 3), &r2));  // FIXME: some bug
@@ -603,7 +598,8 @@ mod tests {
 
         assert!(r1.try_glue((8, 0), &r2).is_err());
         let self_isect_hole = &[0, 0, 3, 0, 0, 3, 0, 3, 3, -3, -3, -3, 0, 3, 3, 0, 0, 3];
-        let g3 = r1.glue_unchecked((8, 0), &r2);
+        let mi = r1.get_match((8, 0), &r2);
+        let g3 = r1.try_glue_precomputed(mi, &r2, true).unwrap();
         assert_eq!(g3.seq(), self_isect_hole);
 
         // test case where we have vertices touching outside the match
