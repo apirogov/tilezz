@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
-
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
+use crate::cyclotomic::geometry::intersect;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles::normalize_angle;
+use crate::intgeom::grid::UnitSquareGrid;
 use crate::intgeom::matchtypes::{
     is_single_edge_candidate, junction_gap_nonnegative, CandidateMatch, MatchTypeIndex,
 };
@@ -81,6 +81,11 @@ enum PatchState<T: IsComplex> {
         edges: Vec<EdgeInfo>,
         candidates_by_start: Vec<Vec<PatchMatch>>,
         inner_chains: Vec<Vec<EdgeInfo>>,
+        positions: Vec<T>,
+        grid: UnitSquareGrid,
+        seg_data: Vec<(T, T)>,
+        boundary_edge_ids: Vec<usize>,
+        next_edge_id: usize,
     },
     _Phantom(std::marker::PhantomData<T>),
 }
@@ -158,6 +163,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         {
             return None;
         }
+        let n = angles.len();
+        let positions = trace_boundary_positions::<T>(&angles);
+        let (grid, seg_data, boundary_edge_ids, next_edge_id) =
+            build_boundary_grid::<T>(&positions, n);
         Some(GrowingPatch {
             match_index,
             state: PatchState::Growing {
@@ -165,6 +174,11 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 edges,
                 candidates_by_start,
                 inner_chains,
+                positions,
+                grid,
+                seg_data,
+                boundary_edge_ids,
+                next_edge_id,
             },
         })
     }
@@ -405,11 +419,21 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     edges,
                     candidates_by_start,
                     inner_chains,
+                    positions,
+                    grid,
+                    seg_data,
+                    boundary_edge_ids,
+                    next_edge_id,
                 } => PatchState::Growing {
                     angles: angles.clone(),
                     edges: edges.clone(),
                     candidates_by_start: candidates_by_start.clone(),
                     inner_chains: inner_chains.clone(),
+                    positions: positions.clone(),
+                    grid: grid.clone(),
+                    seg_data: seg_data.clone(),
+                    boundary_edge_ids: boundary_edge_ids.clone(),
+                    next_edge_id: *next_edge_id,
                 },
                 PatchState::_Phantom(p) => PatchState::_Phantom(p.clone()),
             },
@@ -675,6 +699,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return None;
         }
 
+        let positions = trace_boundary_positions::<T>(&new_angles);
+        let (grid, seg_data, boundary_edge_ids, next_edge_id) =
+            build_boundary_grid::<T>(&positions, new_len);
+
         let ccw_pos = (pm.start_a + mlen) % n;
 
         let mut edges = Vec::with_capacity(new_len);
@@ -707,23 +735,48 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             edges,
             candidates_by_start,
             inner_chains,
+            positions,
+            grid,
+            seg_data,
+            boundary_edge_ids,
+            next_edge_id,
         };
 
         Some(AddTileDiff)
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> Option<AddTileDiff> {
-        let (angles, edges, old_candidates, old_inner) = match &mut self.state {
+        let (
+            angles,
+            edges,
+            old_candidates,
+            old_inner,
+            positions,
+            mut grid,
+            seg_data,
+            boundary_edge_ids,
+            next_edge_id,
+        ) = match &mut self.state {
             PatchState::Growing {
                 angles,
                 edges,
                 candidates_by_start,
                 inner_chains,
+                positions,
+                grid,
+                seg_data,
+                boundary_edge_ids,
+                next_edge_id,
             } => (
                 std::mem::take(angles),
                 std::mem::take(edges),
                 std::mem::take(candidates_by_start),
                 std::mem::take(inner_chains),
+                std::mem::take(positions),
+                std::mem::take(grid),
+                std::mem::take(seg_data),
+                std::mem::take(boundary_edge_ids),
+                *next_edge_id,
             ),
             _ => return None,
         };
@@ -734,14 +787,34 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let m = tileset.rat(pm.tile_id).seq().len();
 
         if mlen == 0 || mlen > n || mlen > m {
-            self.restore_growing(angles, edges, old_candidates, old_inner);
+            self.restore_growing(
+                angles,
+                edges,
+                old_candidates,
+                old_inner,
+                positions,
+                grid,
+                seg_data,
+                boundary_edge_ids,
+                next_edge_id,
+            );
             return None;
         }
 
         let new_angles = match compute_glue_angles::<T>(&angles, pm, tileset) {
             Some(a) => a,
             None => {
-                self.restore_growing(angles, edges, old_candidates, old_inner);
+                self.restore_growing(
+                    angles,
+                    edges,
+                    old_candidates,
+                    old_inner,
+                    positions,
+                    grid,
+                    seg_data,
+                    boundary_edge_ids,
+                    next_edge_id,
+                );
                 return None;
             }
         };
@@ -754,12 +827,96 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return None;
         }
 
-        if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
-            self.restore_growing(angles, edges, old_candidates, old_inner);
+        let ccw_pos = (pm.start_a + mlen) % n;
+
+        let removed_ids: Vec<usize> = (0..mlen)
+            .map(|i| boundary_edge_ids[(pm.start_a + i) % n])
+            .collect();
+
+        for &id in &removed_ids {
+            unregister_segment::<T>(&mut grid, &seg_data, id);
+        }
+
+        let abs_dir_at_cw: i8 = {
+            let prev = (pm.start_a + n - 1) % n;
+            dir_of_edge::<T>(positions[prev], positions[pm.start_a])
+        };
+
+        let cw_junction = positions[pm.start_a];
+        let ccw_junction = positions[ccw_pos];
+        let mut new_tile_positions = vec![cw_junction];
+        let mut dir = abs_dir_at_cw;
+        for &a in &new_angles[seg_len_old..] {
+            dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
+            let last = *new_tile_positions.last().unwrap();
+            new_tile_positions.push(last + T::unit(dir));
+        }
+
+        debug_assert_eq!(
+            *new_tile_positions.last().unwrap(),
+            ccw_junction,
+            "new tile trace should end at CCW junction"
+        );
+
+        let mut all_clear = true;
+        for i in 0..seg_len_new {
+            let p1 = new_tile_positions[i];
+            let p2 = new_tile_positions[i + 1];
+            let allowed = if i == seg_len_new - 1 {
+                Some(ccw_junction)
+            } else {
+                None
+            };
+            if !check_segment_clear::<T>(&grid, &seg_data, p1, p2, allowed) {
+                all_clear = false;
+                break;
+            }
+        }
+
+        if !all_clear {
+            for &id in &removed_ids {
+                let (p1, p2) = seg_data[id];
+                register_segment::<T>(&mut grid, p1, p2, id);
+            }
+            self.restore_growing(
+                angles,
+                edges,
+                old_candidates,
+                old_inner,
+                positions,
+                grid,
+                seg_data,
+                boundary_edge_ids,
+                next_edge_id,
+            );
             return None;
         }
 
-        let ccw_pos = (pm.start_a + mlen) % n;
+        let mut new_positions = Vec::with_capacity(new_len + 1);
+        for i in 0..=seg_len_old {
+            new_positions.push(positions[(ccw_pos + i) % n]);
+        }
+        for p in new_tile_positions.iter().take(seg_len_new + 1).skip(1) {
+            new_positions.push(*p);
+        }
+
+        let mut new_boundary_edge_ids = Vec::with_capacity(new_len);
+        let mut new_seg_data = seg_data;
+        let mut next_id = next_edge_id;
+
+        for i in 0..seg_len_old {
+            new_boundary_edge_ids.push(boundary_edge_ids[(ccw_pos + i) % n]);
+        }
+
+        for i in 0..seg_len_new {
+            let id = next_id;
+            next_id += 1;
+            new_boundary_edge_ids.push(id);
+            let p1 = new_tile_positions[i];
+            let p2 = new_tile_positions[i + 1];
+            new_seg_data.push((p1, p2));
+            register_segment::<T>(&mut grid, p1, p2, id);
+        }
 
         let mut new_edges = Vec::with_capacity(new_len);
         for i in 0..seg_len_old {
@@ -788,6 +945,11 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             edges: new_edges,
             candidates_by_start: new_candidates,
             inner_chains: new_inner,
+            positions: new_positions,
+            grid,
+            seg_data: new_seg_data,
+            boundary_edge_ids: new_boundary_edge_ids,
+            next_edge_id: next_id,
         };
 
         Some(AddTileDiff)
@@ -799,12 +961,22 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         edges: Vec<EdgeInfo>,
         candidates_by_start: Vec<Vec<PatchMatch>>,
         inner_chains: Vec<Vec<EdgeInfo>>,
+        positions: Vec<T>,
+        grid: UnitSquareGrid,
+        seg_data: Vec<(T, T)>,
+        boundary_edge_ids: Vec<usize>,
+        next_edge_id: usize,
     ) {
         self.state = PatchState::Growing {
             angles,
             edges,
             candidates_by_start,
             inner_chains,
+            positions,
+            grid,
+            seg_data,
+            boundary_edge_ids,
+            next_edge_id,
         };
     }
 
@@ -1040,6 +1212,94 @@ pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     }
 
     Some(new_angles)
+}
+
+fn trace_boundary_positions<T: IsComplex + IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
+    let n = angles.len();
+    let mut positions = Vec::with_capacity(n + 1);
+    positions.push(T::zero());
+    let mut dir: i8 = 0;
+    for &a in angles {
+        dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
+        let last = *positions.last().unwrap();
+        positions.push(last + T::unit(dir));
+    }
+    positions
+}
+
+fn build_boundary_grid<T: IsComplex + IsRingOrField + Units>(
+    positions: &[T],
+    n: usize,
+) -> (UnitSquareGrid, Vec<(T, T)>, Vec<usize>, usize) {
+    let mut grid = UnitSquareGrid::new();
+    let mut seg_data = Vec::with_capacity(n);
+    let boundary_edge_ids: Vec<usize> = (0..n).collect();
+    for i in 0..n {
+        let p1 = positions[i];
+        let p2 = positions[i + 1];
+        seg_data.push((p1, p2));
+        let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
+        for &cell in &cells {
+            grid.add(cell, i);
+        }
+    }
+    (grid, seg_data, boundary_edge_ids, n)
+}
+
+fn register_segment<T: IsComplex + IsRingOrField + Units>(
+    grid: &mut UnitSquareGrid,
+    p1: T,
+    p2: T,
+    id: usize,
+) {
+    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
+    for &cell in &cells {
+        grid.add(cell, id);
+    }
+}
+
+fn unregister_segment<T: IsComplex + IsRingOrField + Units>(
+    grid: &mut UnitSquareGrid,
+    seg_data: &[(T, T)],
+    id: usize,
+) {
+    let (p1, p2) = seg_data[id];
+    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
+    for &cell in &cells {
+        grid.remove(cell, id);
+    }
+}
+
+fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
+    grid: &UnitSquareGrid,
+    seg_data: &[(T, T)],
+    p1: T,
+    p2: T,
+    allowed_endpoint: Option<T>,
+) -> bool {
+    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
+    let near_ids = grid.get_cells(&cells);
+    for &id in &near_ids {
+        let (x, y) = seg_data[id];
+        let is_allowed = allowed_endpoint == Some(p2);
+        if !is_allowed && (p2 == x || p2 == y) {
+            return false;
+        }
+        if intersect(&(p1, p2), &(x, y)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn dir_of_edge<T: IsComplex + IsRingOrField + Units>(from: T, to: T) -> i8 {
+    let d = to - from;
+    for dir in 0..T::turn() {
+        if T::unit(dir) == d {
+            return dir;
+        }
+    }
+    panic!("edge is not a unit vector");
 }
 
 #[cfg(test)]
