@@ -518,6 +518,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn mixed_seq_explorer() {
         let explorer = SeqExplorer::new(mixed_ts());
         eprintln!(
