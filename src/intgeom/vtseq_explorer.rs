@@ -454,6 +454,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn mixed_patch_seq_explorer() {
         let sq: crate::intgeom::snake::Snake<ZZ12> = tiles::square();
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();

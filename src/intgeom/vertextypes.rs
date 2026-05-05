@@ -161,6 +161,11 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         let mut witness_store: HashMap<VertexType, (GrowingPatch<T>, usize, i8)> = HashMap::new();
 
         for seed_id in 0..tileset.num_tiles() {
+            eprintln!(
+                "[VT BFS] seeding tile {}/{}...",
+                seed_id,
+                tileset.num_tiles()
+            );
             let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
             for pm in seed.get_all_matches() {
                 let mut gp = seed.clone_for_mutation();
@@ -185,9 +190,23 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             }
         }
 
+        let mut bfs_processed: usize = 0;
+        let bfs_start = std::time::Instant::now();
+
         while let Some(vt) = queue.pop_front() {
             if transition_map.get(&vt) == Some(&HasTransitions::No) {
                 continue;
+            }
+
+            bfs_processed += 1;
+            if bfs_processed % 100 == 0 || queue.is_empty() {
+                eprintln!(
+                    "[VT BFS] processed {} | queue {} | types {} | {:.1?}",
+                    bfs_processed,
+                    queue.len(),
+                    visited.len(),
+                    bfs_start.elapsed(),
+                );
             }
 
             let touching = {
