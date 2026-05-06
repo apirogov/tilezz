@@ -18,8 +18,13 @@ pub struct EdgeInfo {
     pub tile_offset: usize,
 }
 
+/// Auxiliary per-vertex info on a patch boundary.
+///
+/// Each boundary position has an angle and two adjacent edges (cw, ccw).
+/// This is instrumental infrastructure — the interesting structure lives
+/// in [`VertexType`] at actual junction vertices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PatchVertexType {
+pub struct PatchVertexInfo {
     pub angle: i8,
     pub cw: EdgeInfo,
     pub ccw: EdgeInfo,
@@ -40,6 +45,12 @@ pub struct PatchMatch {
     pub tile_id: usize,
 }
 
+/// Junction vertex type: the arrangement of tiles meeting at a single junction vertex.
+///
+/// At a junction (where the boundary angle differs from the tile's internal angle),
+/// multiple tile instances converge. `cw` is the edge arriving from the CW direction,
+/// `ccw` is the edge departing in the CCW direction, and `inner` lists any enclosed
+/// tile edges between them. Only meaningful at junction positions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VertexType {
     pub cw: EdgeInfo,
@@ -90,7 +101,12 @@ enum PatchState<T: IsComplex> {
     _Phantom(std::marker::PhantomData<T>),
 }
 
-pub fn full_vertex_type_from(
+/// Raw vertex type extraction at a boundary position (no junction check).
+///
+/// Constructs the (cw, inner, ccw) triple from boundary edge/inner-chain data.
+/// Used internally; prefer [`GrowingPatch::junction_vertex_type_at`] which
+/// returns `None` at non-junction positions.
+pub(crate) fn vertex_type_raw_from(
     edges: &[EdgeInfo],
     inner_chains: &[Vec<EdgeInfo>],
     pos: usize,
@@ -101,6 +117,25 @@ pub fn full_vertex_type_from(
         inner: inner_chains[pos].clone(),
         ccw: edges[pos],
     }
+}
+
+/// Extract the junction vertex type at a boundary position.
+///
+/// Returns `None` if `pos` is not a junction vertex (i.e. the boundary angle
+/// equals the tile's internal angle at that edge).
+pub fn junction_vertex_type_from<T: IsComplex + IsRingOrField + Units>(
+    edges: &[EdgeInfo],
+    inner_chains: &[Vec<EdgeInfo>],
+    angles: &[i8],
+    tileset: &TileSet<T>,
+    pos: usize,
+) -> Option<VertexType> {
+    let ei = edges[pos];
+    let tile = tileset.rat(ei.tile_id);
+    if tile.seq()[ei.tile_offset] == angles[pos] {
+        return None;
+    }
+    Some(vertex_type_raw_from(edges, inner_chains, pos))
 }
 
 pub fn update_inner_chains(
@@ -205,11 +240,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 }
 
                 let trial_n = trial.boundary_len();
+                let trial_edges = trial.edges();
+                let trial_inner = trial.inner_chains();
                 for pos in 0..trial_n {
-                    let vt = match trial.full_vertex_type_at(pos) {
-                        Some(vt) => vt,
-                        None => continue,
-                    };
+                    let vt = vertex_type_raw_from(trial_edges, trial_inner, pos);
 
                     if vt.cw == vtype.cw && vt.ccw == *target && vt.inner == expected_inner {
                         patch = trial;
@@ -228,7 +262,18 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         for pos in 0..patch.boundary_len() {
-            let vt = patch.full_vertex_type_at(pos)?;
+            if patch.is_junction(pos) {
+                let vt = patch.junction_vertex_type_at(pos).unwrap();
+                if vt == *vtype {
+                    return Some((patch, pos));
+                }
+            }
+        }
+
+        let final_edges = patch.edges();
+        let final_inner = patch.inner_chains();
+        for pos in 0..patch.boundary_len() {
+            let vt = vertex_type_raw_from(final_edges, final_inner, pos);
             if vt == *vtype {
                 return Some((patch, pos));
             }
@@ -602,7 +647,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn vertex_type_at(&self, i: usize) -> Option<PatchVertexType> {
+    pub fn vertex_type_at(&self, i: usize) -> Option<PatchVertexInfo> {
         let n = self.boundary_len();
         if n == 0 || i >= n {
             return None;
@@ -612,14 +657,15 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             _ => return None,
         };
         let angles = self.angles();
-        Some(PatchVertexType {
+        Some(PatchVertexInfo {
             angle: angles[i],
             cw: edges[(i + n - 1) % n],
             ccw: edges[i],
         })
     }
 
-    pub fn full_vertex_type_at(&self, i: usize) -> Option<VertexType> {
+    /// Return the junction vertex type at position `i`, or `None` if not a junction.
+    pub fn junction_vertex_type_at(&self, i: usize) -> Option<VertexType> {
         let n = self.boundary_len();
         if n == 0 || i >= n {
             return None;
@@ -629,7 +675,17 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 edges,
                 inner_chains,
                 ..
-            } => Some(full_vertex_type_from(edges, inner_chains, i)),
+            } => {
+                if !self.is_junction(i) {
+                    return None;
+                }
+                let n = edges.len();
+                Some(VertexType {
+                    cw: edges[(i + n - 1) % n],
+                    inner: inner_chains[i].clone(),
+                    ccw: edges[i],
+                })
+            }
             _ => None,
         }
     }
@@ -677,7 +733,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Some((cw_offset, ccw_offset))
     }
 
-    pub fn junction_vertices(&self) -> Vec<(usize, PatchVertexType)> {
+    pub fn junction_vertices(&self) -> Vec<(usize, PatchVertexInfo)> {
         let n = self.boundary_len();
         let mut result = Vec::new();
         for i in 0..n {
@@ -1535,7 +1591,7 @@ mod tests {
             if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
                 continue;
             }
-            verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
+            verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-sq pm {:?}", pm));
         }
         let gp_hex: GrowingPatch<ZZ12> = hex_patch();
         for pm in gp_hex.get_all_matches() {
@@ -1543,11 +1599,11 @@ mod tests {
             if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
                 continue;
             }
-            verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
+            verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-hex pm {:?}", pm));
             for pm2 in gp2.get_all_matches() {
                 let mut gp3 = gp2.clone();
                 if gp3.add_tile(&pm2).is_some() && gp3.is_growing() {
-                    verify_edges_consistency(&gp3, &gp3.tileset(), "3-hex");
+                    verify_edges_consistency(&gp3, gp3.tileset(), "3-hex");
                 }
             }
         }
@@ -1563,22 +1619,22 @@ mod tests {
         let edges = gp.edges();
         assert_eq!(edges.len(), n, "[{}] edges length", label);
 
-        for i in 0..n {
+        for (i, edge) in edges.iter().enumerate().take(n) {
             assert!(
-                edges[i].tile_id < ts.num_tiles(),
+                edge.tile_id < ts.num_tiles(),
                 "[{}] pos {}: invalid tile_id {}",
                 label,
                 i,
-                edges[i].tile_id
+                edge.tile_id
             );
-            let tile_len = ts.rat(edges[i].tile_id).len();
+            let tile_len = ts.rat(edge.tile_id).len();
             assert!(
-                edges[i].tile_offset < tile_len,
+                edge.tile_offset < tile_len,
                 "[{}] pos {}: invalid offset {} for tile {} (len {})",
                 label,
                 i,
-                edges[i].tile_offset,
-                edges[i].tile_id,
+                edge.tile_offset,
+                edge.tile_id,
                 tile_len
             );
         }
@@ -1606,7 +1662,7 @@ mod tests {
         for pm in gp.get_all_matches() {
             let mut gp2 = hex_patch();
             if gp2.add_tile(&pm).is_some() && gp2.is_growing() {
-                verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-hex pm {:?}", pm));
+                verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-hex pm {:?}", pm));
             }
         }
     }
@@ -1617,7 +1673,7 @@ mod tests {
         for pm in gp.get_all_matches() {
             let mut gp2 = square_patch();
             if gp2.add_tile(&pm).is_some() && gp2.is_growing() {
-                verify_edges_consistency(&gp2, &gp2.tileset(), &format!("bi-sq pm {:?}", pm));
+                verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-sq pm {:?}", pm));
             }
         }
     }
@@ -1631,11 +1687,11 @@ mod tests {
             if gp2.add_tile(pm1).is_none() || !gp2.is_growing() {
                 continue;
             }
-            verify_edges_consistency(&gp2, &gp2.tileset(), "2-hex");
+            verify_edges_consistency(&gp2, gp2.tileset(), "2-hex");
             for pm2 in gp2.get_all_matches() {
                 let mut gp3 = gp2.clone();
                 if gp3.add_tile(&pm2).is_some() && gp3.is_growing() {
-                    verify_edges_consistency(&gp3, &gp3.tileset(), "3-hex");
+                    verify_edges_consistency(&gp3, gp3.tileset(), "3-hex");
                 }
             }
         }
@@ -1833,7 +1889,7 @@ mod tests {
         let mut gp2 = gp.clone();
         gp2.add_tile(&first_match).expect("first add");
 
-        let n = gp2.boundary_len();
+        let _n = gp2.boundary_len();
         let candidates = gp2.get_all_matches();
         let second = candidates
             .iter()
@@ -1868,16 +1924,20 @@ mod tests {
     }
 
     #[test]
-    fn full_vertex_type_roundtrip_after_first_glue() {
+    fn junction_vertex_type_roundtrip_after_first_glue() {
         let gp = hex_patch();
         let pm = gp.get_all_matches()[0].clone();
         let mut gp2 = gp.clone();
         gp2.add_tile(&pm).expect("first add");
         let n = gp2.boundary_len();
+        let mut junction_count = 0;
         for i in 0..n {
-            let vt = gp2.full_vertex_type_at(i).expect("should have vertex type");
-            assert!(vt.inner.is_empty(), "inner should be empty at pos {i}");
+            if let Some(vt) = gp2.junction_vertex_type_at(i) {
+                assert!(vt.inner.is_empty(), "inner should be empty at pos {i}");
+                junction_count += 1;
+            }
         }
+        assert!(junction_count > 0, "should have at least one junction");
     }
 
     #[test]
@@ -1891,14 +1951,19 @@ mod tests {
             glued.add_tile(pm).expect("glue should succeed");
             let n = glued.boundary_len();
             for pos in 0..n {
-                let vt = glued.full_vertex_type_at(pos).expect("vertex type");
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
                 let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
                 assert!(
                     result.is_some(),
                     "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
                 );
                 let (witness, wpos) = result.unwrap();
-                let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+                let w_edges = witness.edges();
+                let w_inner = witness.inner_chains();
+                let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
                 assert_eq!(
                     reconstructed, vt,
                     "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
@@ -1918,14 +1983,19 @@ mod tests {
             glued.add_tile(pm).expect("glue should succeed");
             let n = glued.boundary_len();
             for pos in 0..n {
-                let vt = glued.full_vertex_type_at(pos).expect("vertex type");
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
                 let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
                 assert!(
                     result.is_some(),
                     "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
                 );
                 let (witness, wpos) = result.unwrap();
-                let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+                let w_edges = witness.edges();
+                let w_inner = witness.inner_chains();
+                let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
                 assert_eq!(
                     reconstructed, vt,
                     "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
@@ -1952,14 +2022,19 @@ mod tests {
         gp3.add_tile(&len1_match).expect("second add");
 
         for pos in 0..gp3.boundary_len() {
-            let vt = gp3.full_vertex_type_at(pos).expect("vertex type");
+            let vt = match gp3.junction_vertex_type_at(pos) {
+                Some(vt) => vt,
+                None => continue,
+            };
             let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
             assert!(
                 result.is_some(),
                 "construct_minimal_witness should succeed for vt={vt:?} with inner"
             );
             let (witness, wpos) = result.unwrap();
-            let reconstructed = witness.full_vertex_type_at(wpos).expect("witness vt");
+            let w_edges = witness.edges();
+            let w_inner = witness.inner_chains();
+            let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
             assert_eq!(reconstructed, vt, "roundtrip failed for vt={vt:?}");
         }
     }
@@ -1978,7 +2053,7 @@ mod tests {
         let n = gp.boundary_len();
         for target in 0..n {
             let lazy = {
-                let mut gp2 = gp.clone_for_mutation();
+                let gp2 = gp.clone_for_mutation();
                 gp2.get_matches_touching_vertex(target)
             };
             let eager = gp.get_matches_touching_vertex(target);
