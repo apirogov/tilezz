@@ -4,9 +4,9 @@ use std::time::Instant;
 
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
-use tilezz::intgeom::neighborhood::OpenNeighborhoodIndex;
+use tilezz::intgeom::neighborhood::NeighborhoodIndex;
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::snake::Snake;
+
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
 
@@ -43,7 +43,7 @@ fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<
         .unwrap();
 
     let t0 = Instant::now();
-    let idx = OpenNeighborhoodIndex::new(Arc::clone(&ts));
+    let idx = NeighborhoodIndex::new(Arc::clone(&ts));
     let elapsed = t0.elapsed();
 
     let mut by_gap: BTreeMap<usize, usize> = BTreeMap::new();
