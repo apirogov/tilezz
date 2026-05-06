@@ -12,7 +12,7 @@ use crate::intgeom::patch::{
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
-const MAX_BOUNDARY_SIZE: usize = 256;
+const MAX_BOUNDARY_SIZE: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NeighborhoodType {
@@ -361,12 +361,10 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             let mut stat_glue: usize = 0;
             let mut stat_snake: usize = 0;
             let mut stat_dedup: usize = 0;
+            let mut stat_update: usize = 0;
             let mut stat_max_bsize: usize = 0;
 
             for state in &current_level {
-                if state.gap_len <= 1 {
-                    continue;
-                }
                 let boundary_n = state.angles.len();
                 if boundary_n > MAX_BOUNDARY_SIZE {
                     continue;
@@ -388,6 +386,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 stat_candidates += all_candidates.iter().map(|v| v.len()).sum::<usize>();
 
                 let cw_prev = boundary_n - 1;
+
+                struct DeferredUpdate {
+                    pm: PatchMatch,
+                    new_angles: Vec<i8>,
+                    new_n: usize,
+                }
+                let mut deferred_updates: Vec<DeferredUpdate> = Vec::new();
+                let mut had_close_success = false;
+
                 for pm in all_candidates.iter().flatten() {
                     let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, 0, boundary_n);
                     let covers_cw = cyclic_range_contains(pm.start_a, pm.len, cw_prev, boundary_n);
@@ -395,6 +402,18 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
                     stat_touching += 1;
+
+                    let covered_count = count_covered_gap_edges(
+                        state.gap_len as usize,
+                        pm.start_a,
+                        pm.len,
+                        boundary_n,
+                    );
+                    let new_gap_len = state.gap_len as usize - covered_count;
+                    if new_gap_len == 0 || new_gap_len > u8::MAX as usize {
+                        continue;
+                    }
+                    let is_update = covered_count == 0;
 
                     let m = tileset.rat(pm.tile_id).seq().len();
                     let new_angles = match compute_glue_angles::<T>(&state.angles, pm, &tileset) {
@@ -417,20 +436,12 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
 
-                    let covered_count = count_covered_gap_edges(
-                        state.gap_len as usize,
-                        pm.start_a,
-                        pm.len,
-                        boundary_n,
-                    );
-                    if covered_count == 0 {
-                        continue;
-                    }
-                    let new_gap_len = state.gap_len as usize - covered_count;
-                    if new_gap_len == 0 {
-                        continue;
-                    }
-                    if new_gap_len > u8::MAX as usize {
+                    if is_update {
+                        deferred_updates.push(DeferredUpdate {
+                            pm: pm.clone(),
+                            new_angles,
+                            new_n,
+                        });
                         continue;
                     }
 
@@ -443,6 +454,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
                     stat_dedup += 1;
+                    had_close_success = true;
 
                     let context_vts = extract_covered_vertex_types(
                         &canon.edges,
@@ -473,11 +485,60 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     });
                 }
 
+                if !had_close_success && state.gap_len >= 2 {
+                    for du in deferred_updates {
+                        stat_update += 1;
+                        let m = tileset.rat(du.pm.tile_id).seq().len();
+                        let new_edges =
+                            compute_new_edges_growing(&state.edges, boundary_n, &du.pm, m);
+                        let new_inner = update_inner_chains(
+                            &state.inner_chains,
+                            &state.edges,
+                            &du.pm,
+                            du.new_n,
+                        );
+
+                        let canon = canonicalize_state(&du.new_angles, &new_edges, &new_inner);
+                        if !seen.insert(&all_types, state.central_tile_id, &canon, state.gap_len) {
+                            continue;
+                        }
+                        stat_dedup += 1;
+
+                        let context_vts = extract_covered_vertex_types(
+                            &canon.edges,
+                            &canon.inner_chains,
+                            canon.gap_start,
+                            state.gap_len as usize,
+                        );
+                        let central_anchor = canon.edges[canon.gap_start].tile_offset;
+
+                        all_types.push(NeighborhoodType {
+                            id: 0,
+                            central_tile_id: state.central_tile_id,
+                            central_anchor_edge: central_anchor,
+                            gap_len: state.gap_len,
+                            context_vertex_types: context_vts,
+                            angles: canon.angles.clone(),
+                            edges: canon.edges.clone(),
+                            inner_chains: canon.inner_chains.clone(),
+                            gap_start: canon.gap_start,
+                        });
+
+                        next_level.push(NtBfsState {
+                            angles: du.new_angles,
+                            edges: new_edges,
+                            inner_chains: new_inner,
+                            gap_len: state.gap_len,
+                            central_tile_id: state.central_tile_id,
+                        });
+                    }
+                }
+
                 stat_max_bsize = stat_max_bsize.max(boundary_n);
             }
             level_num += 1;
             eprintln!(
-                "  level {}: explored {}, next {}, types {} | cands={} touch={} glue={} snake={} new={} maxbs={}",
+                "  level {}: explored {}, next {}, types {} | cands={} touch={} glue={} snake={} update={} new={} maxbs={}",
                 level_num,
                 explored,
                 next_level.len(),
@@ -486,6 +547,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 stat_touching,
                 stat_glue,
                 stat_snake,
+                stat_update,
                 stat_dedup,
                 stat_max_bsize,
             );
