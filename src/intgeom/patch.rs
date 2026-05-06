@@ -610,6 +610,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
     pub fn to_rat(&self) -> Rat<T> {
         match &self.state {
+            PatchState::Seed { tile_id, .. } => self.match_index.tileset().rat(*tile_id).clone(),
             PatchState::Growing { angles, .. } => Rat::from_slice_unchecked(angles),
             _ => panic!("patch has no boundary"),
         }
