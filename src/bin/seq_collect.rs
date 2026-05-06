@@ -303,7 +303,7 @@ fn validate_common<
     let t2 = Instant::now();
 
     let witness_ids: Vec<usize> = {
-        let mut ids: BTreeSet<usize> = pf.subseqs.iter().map(|(id, _)| *id).collect();
+        let ids: BTreeSet<usize> = pf.subseqs.iter().map(|(id, _)| *id).collect();
         ids.into_iter().collect()
     };
     let witness_rats: Vec<Rat<T>> = witness_ids.iter().map(|&id| rats[id].clone()).collect();

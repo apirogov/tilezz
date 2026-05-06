@@ -455,7 +455,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
         pf.transitions.len(),
     );
 
-    let num_types = pf.vtypes.len();
+    let _num_types = pf.vtypes.len();
     let mut witnesses_by_id: HashMap<usize, &ParsedWitness> = HashMap::new();
     for w in &pf.witnesses {
         witnesses_by_id.insert(w.vtype_id, w);
@@ -505,7 +505,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                 );
             }
         }
-        let pvt = gp.full_vertex_type_at(pos);
+        let pvt = gp.junction_vertex_type_at(pos);
         let expected = VertexType {
             cw: EdgeInfo {
                 tile_id: pv.cw_tile_id,
@@ -628,7 +628,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                     break;
                 }
             } else if !covers_both {
-                if let Some(actual) = gp2.full_vertex_type_at(junction_pos) {
+                if let Some(actual) = gp2.junction_vertex_type_at(junction_pos) {
                     let dst_gp = match reconstructed.get(&pt.dst_id) {
                         Some(g) => g,
                         None => continue,
@@ -637,7 +637,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                         Some(w) => w.pos,
                         None => continue,
                     };
-                    if let Some(expected) = dst_gp.full_vertex_type_at(dst_pos) {
+                    if let Some(expected) = dst_gp.junction_vertex_type_at(dst_pos) {
                         if actual.cw == expected.cw && actual.ccw == expected.ccw {
                             found = true;
                             break;
@@ -697,7 +697,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             if covers_cw && covers_ccw {
                 continue;
             }
-            if let Some(jvt) = gp2.full_vertex_type_at(junction_pos) {
+            if let Some(jvt) = gp2.junction_vertex_type_at(junction_pos) {
                 let found = pf.vtypes.iter().any(|pv| {
                     let gp = match reconstructed.get(&pv.id) {
                         Some(g) => g,
@@ -707,7 +707,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
                         Some(w) => w.pos,
                         None => return false,
                     };
-                    match gp.full_vertex_type_at(wp) {
+                    match gp.junction_vertex_type_at(wp) {
                         Some(stored) => stored == jvt,
                         None => false,
                     }

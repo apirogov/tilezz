@@ -511,7 +511,7 @@ pub(crate) fn junction_gap_nonnegative(
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tiles::{hexagon, spectre, square, triangle};
+    use crate::intgeom::tiles::{hexagon, spectre, square};
     use std::collections::{BTreeSet, HashSet};
 
     const MYSTIC_ZZ12: &[i8] = &[

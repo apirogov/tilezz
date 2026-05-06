@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHasher};
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{
-    compute_glue_angles, cyclic_range_contains, full_vertex_type_from, update_inner_chains,
+    compute_glue_angles, cyclic_range_contains, update_inner_chains, vertex_type_raw_from,
     EdgeInfo, GrowingPatch, PatchMatch, VertexType,
 };
 use crate::intgeom::snake::Snake;
@@ -71,7 +71,7 @@ fn extract_covered_vertex_types(
     let mut result = Vec::with_capacity(num_inner);
     for k in 1..=num_inner {
         let pos = (gap_start + n - k) % n;
-        result.push(full_vertex_type_from(edges, inner_chains, pos));
+        result.push(vertex_type_raw_from(edges, inner_chains, pos));
     }
     result
 }

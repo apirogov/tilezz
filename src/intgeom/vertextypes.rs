@@ -176,7 +176,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     if !gp.is_junction(pos) {
                         continue;
                     }
-                    if let Some(vt) = gp.full_vertex_type_at(pos) {
+                    if let Some(vt) = gp.junction_vertex_type_at(pos) {
                         all_types.insert(vt.clone());
                         initial_types.insert(vt.clone());
                         witness_store
@@ -257,7 +257,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 
                 if covers_both {
                     raw_transitions.insert((vt.clone(), None, side, pm.tile_id, tile_offset));
-                } else if let Some(new_vt) = gp2.full_vertex_type_at(junction_pos) {
+                } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
                     raw_transitions.insert((
                         vt.clone(),
                         Some(new_vt),
@@ -271,7 +271,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                     if !gp2.is_junction(new_pos) {
                         continue;
                     }
-                    if let Some(nv) = gp2.full_vertex_type_at(new_pos) {
+                    if let Some(nv) = gp2.junction_vertex_type_at(new_pos) {
                         all_types.insert(nv.clone());
                         if visited.insert(nv.clone()) {
                             witness_store
@@ -553,7 +553,7 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = VertexTypeIndex::new(ts);
         for info in &idx.entries {
-            let vt = info.witness().full_vertex_type_at(info.witness_pos());
+            let vt = info.witness().junction_vertex_type_at(info.witness_pos());
             assert_eq!(
                 vt,
                 Some(info.vtype.clone()),
@@ -603,8 +603,11 @@ mod tests {
             n,
             "partition must cover all types"
         );
-        assert!(sq_slice.len() > 0, "should have types starting with square");
-        assert!(hex_slice.len() > 0, "should have types starting with hex");
+        assert!(
+            !sq_slice.is_empty(),
+            "should have types starting with square"
+        );
+        assert!(!hex_slice.is_empty(), "should have types starting with hex");
 
         for info in sq_slice {
             assert_eq!(info.vtype().cw.tile_id, 0);
