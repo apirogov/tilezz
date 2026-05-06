@@ -511,7 +511,7 @@ pub(crate) fn junction_gap_nonnegative(
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tiles::{hexagon, spectre, square};
+    use crate::intgeom::tiles::{hexagon, spectre, square, triangle};
     use std::collections::{BTreeSet, HashSet};
 
     const MYSTIC_ZZ12: &[i8] = &[
@@ -1561,6 +1561,102 @@ mod tests {
                 "match ({}, {}, {}, {}, {}) not found in secondary index",
                 mt.tile_a, mt.start_a, mt.tile_b, mt.start_b, mt.len
             );
+        }
+    }
+
+    #[test]
+    fn match_type_index_matches_brute_force_for_all_tilesets() {
+        let single_tile_cases: Vec<(&str, Rat<ZZ12>)> = vec![
+            ("spectre self", Rat::try_from(&spectre()).unwrap()),
+            ("hexagon self", Rat::try_from(&hexagon()).unwrap()),
+            ("square self", Rat::try_from(&square()).unwrap()),
+        ];
+
+        for (label, rat) in &single_tile_cases {
+            let ts = Arc::new(TileSet::new(vec![rat.clone()]));
+            let mf = MatchFinder::new(Arc::clone(&ts));
+            let idx = MatchTypeIndex::new(Arc::clone(&ts));
+
+            let mf_matches = mf.valid_matches(0, 0);
+            let bf_matches = brute_force_valid_matches(rat, rat, 0, 0);
+            assert_match_sets_match(
+                &mf_matches,
+                &bf_matches,
+                mf.set_a().rats(),
+                mf.set_b().rats(),
+                label,
+            );
+
+            let all_mf = mf.all_valid_matches();
+            let mut mf_sorted = all_mf.clone();
+            mf_sorted.sort_by(|x, y| {
+                x.start_a
+                    .cmp(&y.start_a)
+                    .then_with(|| x.start_b.cmp(&y.start_b))
+            });
+
+            let mut bf_all = bf_matches.clone();
+            bf_all.sort_by(|x, y| {
+                x.start_a
+                    .cmp(&y.start_a)
+                    .then_with(|| x.start_b.cmp(&y.start_b))
+            });
+
+            assert_eq!(
+                mf_sorted, bf_all,
+                "{label}: MatchFinder.all_valid_matches differs from brute force"
+            );
+
+            let mut idx_all: Vec<MatchType> = Vec::new();
+            for entry in &idx.entries {
+                idx_all.push(entry.first);
+                idx_all.push(entry.second);
+            }
+            idx_all.sort_by(|x, y| {
+                x.start_a
+                    .cmp(&y.start_a)
+                    .then_with(|| x.start_b.cmp(&y.start_b))
+            });
+            idx_all.dedup();
+
+            assert_eq!(
+                idx_all.len(),
+                bf_all.len(),
+                "{label}: MatchTypeIndex has {} unique matches but brute force found {}",
+                idx_all.len(),
+                bf_all.len(),
+            );
+
+            for (i, (idx_mt, bf_mt)) in idx_all.iter().zip(bf_all.iter()).enumerate() {
+                assert_eq!(
+                    (idx_mt.start_a, idx_mt.len, idx_mt.start_b),
+                    (bf_mt.start_a, bf_mt.len, bf_mt.start_b),
+                    "{label}: tuple mismatch at index {i}",
+                );
+            }
+
+            for offset in 0..rat.len() {
+                for cm in idx.candidates_starting_at(0, offset) {
+                    let found_direct = bf_all.iter().any(|mt| {
+                        mt.start_a == offset
+                            && mt.tile_b == 0
+                            && mt.start_b == cm.start_b
+                            && mt.len == cm.len
+                    });
+                    let found_inv = bf_all.iter().any(|mt| {
+                        mt.start_a == cm.start_b
+                            && mt.tile_b == 0
+                            && mt.start_b == offset
+                            && mt.len == cm.len
+                    });
+                    assert!(
+                        found_direct || found_inv,
+                        "{label}: secondary (0,{offset})->(sb={},len={}) not in brute force",
+                        cm.start_b,
+                        cm.len,
+                    );
+                }
+            }
         }
     }
 }

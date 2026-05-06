@@ -1970,7 +1970,6 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mi: Arc<MatchTypeIndex<ZZ12>> = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
         let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
         let pm = gp.get_all_matches().into_iter().next().unwrap();
         gp.add_tile(&pm).unwrap();
