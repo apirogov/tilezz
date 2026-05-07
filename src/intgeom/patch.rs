@@ -398,22 +398,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         if vtypes.is_empty() {
             return None;
         }
-
-        if let Some(result) =
-            Self::construct_witness_from_vt_sequence_inner(vtypes, 0, &match_index)
-        {
-            return Some(result);
-        }
-
-        for start in 1..vtypes.len() {
-            if let Some(result) =
-                Self::construct_witness_from_vt_sequence_inner(vtypes, start, &match_index)
-            {
-                return Some(result);
-            }
-        }
-
-        None
+        Self::construct_witness_from_vt_sequence_inner(vtypes, 0, &match_index)
     }
 
     fn construct_witness_from_vt_sequence_inner(
@@ -453,19 +438,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 t
             };
 
-            let cw_candidates: Vec<usize> = if raw.edges[advance_pos] == curr_cw {
-                vec![(advance_pos + 1) % n]
-            } else {
-                let edge_cands: Vec<usize> = (0..n)
-                    .filter(|&i| raw.edges[i] == curr_cw)
-                    .map(|i| (i + 1) % n)
-                    .collect();
-                if edge_cands.is_empty() {
-                    (0..n).collect()
-                } else {
-                    edge_cands
-                }
-            };
+            let mut cw_candidates: Vec<usize> = (0..n)
+                .filter(|&i| raw.edges[i] == curr_cw)
+                .map(|i| (i + 1) % n)
+                .collect();
+            let advance_junc = (advance_pos + 1) % n;
+            if let Some(pos) = cw_candidates.iter().position(|&j| j == advance_junc) {
+                cw_candidates.swap(0, pos);
+            }
 
             let mut found = false;
             for junc_k in cw_candidates {
@@ -476,17 +456,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     .position(|&a| a == boundary_angle)
                     .unwrap_or(0);
 
-                if skip > all_targets.len() {
-                    continue;
-                }
+                let skip = skip.min(all_targets.len().saturating_sub(1));
 
                 let targets = &all_targets[skip..];
-
-                if targets.is_empty() {
-                    junc_positions.push(junc_k);
-                    found = true;
-                    break;
-                }
 
                 if let Some((new_raw, new_junc)) = flower_petal_glue::<T>(
                     RawBoundary {

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
-use tilezz::intgeom::neighborhood::NeighborhoodIndex;
+use tilezz::intgeom::neighborhood::{NeighborhoodIndex, NtKind, NT_CLOSED_ID};
 use tilezz::intgeom::rat::Rat;
 
 use tilezz::intgeom::tiles;
@@ -46,17 +46,63 @@ fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<
     let idx = NeighborhoodIndex::new(Arc::clone(&ts));
     let elapsed = t0.elapsed();
 
+    let t1 = Instant::now();
+    let kinds = idx.classify_all();
+    let classify_time = t1.elapsed();
+
+    let transitions = idx.transitions();
+    let closed_transitions = transitions
+        .iter()
+        .filter(|t| t.dst_id == NT_CLOSED_ID)
+        .count();
+    let close_branch = transitions.len() - closed_transitions;
+
     let mut by_gap: BTreeMap<usize, usize> = BTreeMap::new();
-    for nhood in idx.entries() {
+    let mut by_gap_kind: BTreeMap<(usize, NtKind), usize> = BTreeMap::new();
+    for (i, nhood) in idx.entries().iter().enumerate() {
         *by_gap.entry(nhood.gap_len()).or_insert(0) += 1;
+        *by_gap_kind.entry((nhood.gap_len(), kinds[i])).or_insert(0) += 1;
     }
 
+    let dead = kinds.iter().filter(|&&k| k == NtKind::Dead).count();
+    let undead = kinds.iter().filter(|&&k| k == NtKind::Undead).count();
+    let blessed = kinds.iter().filter(|&&k| k == NtKind::Blessed).count();
+    let free = kinds.iter().filter(|&&k| k == NtKind::Free).count();
+
     println!("=== {} ===", label);
-    for (gl, cnt) in &by_gap {
-        println!("  gap_len={}: {} types", gl, cnt);
-    }
     println!("  total: {} types", idx.num_types());
-    println!("  time:  {:.2?}", elapsed);
+    println!("  time:  {:.2?} (classify: {:.2?})", elapsed, classify_time);
+    println!();
+    println!("  Classification:");
+    println!(
+        "    dead={} undead={} blessed={} free={}",
+        dead, undead, blessed, free
+    );
+    println!();
+    println!(
+        "  Transitions: {} (close-branch={}, CLOSED={})",
+        transitions.len(),
+        close_branch,
+        closed_transitions
+    );
+    println!();
+    println!("  By gap_len:");
+    for (gl, cnt) in &by_gap {
+        let d = by_gap_kind.get(&(*gl, NtKind::Dead)).copied().unwrap_or(0);
+        let u = by_gap_kind
+            .get(&(*gl, NtKind::Undead))
+            .copied()
+            .unwrap_or(0);
+        let b = by_gap_kind
+            .get(&(*gl, NtKind::Blessed))
+            .copied()
+            .unwrap_or(0);
+        let f = by_gap_kind.get(&(*gl, NtKind::Free)).copied().unwrap_or(0);
+        println!(
+            "    gap_len={}: {} (d={} u={} b={} f={})",
+            gl, cnt, d, u, b, f
+        );
+    }
 
     #[cfg(feature = "pprof")]
     {
