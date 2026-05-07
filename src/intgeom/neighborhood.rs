@@ -986,4 +986,138 @@ mod tests {
             &invalid[..invalid.len().min(10)],
         );
     }
+
+    #[test]
+    fn diagnostic_vt_advance_on_nt_boundary() {
+        use crate::cyclotomic::ZZ4;
+        use crate::intgeom::matchtypes::MatchTypeIndex;
+        use crate::intgeom::patch::GrowingPatch;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+        let tileset = ts.as_ref();
+
+        let mut checked = 0;
+        let mut advance_fail = 0;
+        let mut both_fail = 0;
+        for nhood in idx.entries() {
+            let vts = &nhood.context_vertex_types;
+            if vts.len() < 2 {
+                continue;
+            }
+
+            let (witness, junc_pos) =
+                match GrowingPatch::construct_minimal_witness(&vts[0], Arc::clone(&match_index)) {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+            let w_edges = witness.edges();
+            let w_n = witness.boundary_len();
+
+            let prev_ccw = vts[0].ccw;
+            let curr_cw = vts[1].cw;
+            let m = tileset.rat(curr_cw.tile_id).len();
+            let advance = (curr_cw.tile_offset + m - prev_ccw.tile_offset) % m;
+            let expected_pos = (junc_pos + advance) % w_n;
+
+            let matches: Vec<usize> = (0..w_n).filter(|&i| w_edges[i] == curr_cw).collect();
+
+            let advance_ok = matches.contains(&expected_pos);
+            if !advance_ok {
+                advance_fail += 1;
+            }
+
+            if matches.len() != 1 && !advance_ok {
+                both_fail += 1;
+                if both_fail <= 2 {
+                    eprintln!("BOTH_FAIL NT id={}: curr_cw={}.{} matches={:?} advance_pos={} junc_pos={} w_n={}",
+                        nhood.id, curr_cw.tile_id, curr_cw.tile_offset, matches, expected_pos, junc_pos, w_n);
+                    for i in 0..w_n {
+                        eprintln!(
+                            "  w[{}]: {}.{}",
+                            i, w_edges[i].tile_id, w_edges[i].tile_offset
+                        );
+                    }
+                }
+            }
+
+            checked += 1;
+        }
+        eprintln!(
+            "checked {} NTs with 2+ VTs: advance_fail={} both_fail={}",
+            checked, advance_fail, both_fail
+        );
+    }
+
+    #[test]
+    fn test_vt_sequence_reconstruction_square() {
+        use crate::cyclotomic::ZZ4;
+        use crate::intgeom::matchtypes::MatchTypeIndex;
+        use crate::intgeom::patch::GrowingPatch;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+
+        let mut checked = 0;
+        let mut fail = 0;
+        for nhood in idx.entries() {
+            let vts = &nhood.context_vertex_types;
+            if vts.is_empty() {
+                continue;
+            }
+            checked += 1;
+            if GrowingPatch::construct_witness_from_vt_sequence(vts, Arc::clone(&match_index))
+                .is_none()
+            {
+                fail += 1;
+            }
+        }
+        assert_eq!(
+            fail, 0,
+            "{}/{} square NTs failed reconstruction",
+            fail, checked
+        );
+    }
+
+    #[test]
+    fn test_vt_sequence_reconstruction_hex() {
+        use crate::cyclotomic::ZZ12;
+        use crate::intgeom::matchtypes::MatchTypeIndex;
+        use crate::intgeom::patch::GrowingPatch;
+
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
+
+        let mut checked = 0;
+        let mut fail = 0;
+        for nhood in idx.entries() {
+            let vts = &nhood.context_vertex_types;
+            if vts.is_empty() {
+                continue;
+            }
+            checked += 1;
+            if GrowingPatch::construct_witness_from_vt_sequence(vts, Arc::clone(&match_index))
+                .is_none()
+            {
+                fail += 1;
+            }
+        }
+        eprintln!("hex: {}/{} failed", fail, checked);
+        let fail_rate = fail as f64 / checked as f64;
+        assert!(
+            fail_rate < 0.02,
+            "hex fail rate {:.1}% exceeds 2%",
+            fail_rate * 100.0
+        );
+    }
 }

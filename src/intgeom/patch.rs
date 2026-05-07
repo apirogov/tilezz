@@ -191,6 +191,93 @@ pub fn update_inner_chains(
     new_inner
 }
 
+struct RawBoundary {
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    inner_chains: Vec<Vec<EdgeInfo>>,
+}
+
+fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
+    boundary: RawBoundary,
+    junc_pos: usize,
+    targets: &[EdgeInfo],
+    tileset: &TileSet<T>,
+    first_step: bool,
+) -> Option<(RawBoundary, usize)> {
+    let RawBoundary {
+        mut angles,
+        mut edges,
+        mut inner_chains,
+    } = boundary;
+
+    let mut junc_pos = junc_pos;
+    let mut first_step = first_step;
+
+    for target in targets {
+        let tile_seq = tileset.rat(target.tile_id).seq();
+        let m = tile_seq.len();
+        let tile_junc = target.tile_offset;
+        let n = angles.len();
+
+        let mlen = forward_match_length(&angles, junc_pos, tile_seq, tile_junc);
+        if mlen == 0 || mlen > n || mlen > m {
+            return None;
+        }
+
+        let ccw_pos = (junc_pos + mlen) % n;
+        let seg_len_old = n - mlen;
+        let seg_len_new = m - mlen;
+        if seg_len_new == 0 {
+            return None;
+        }
+        let new_n = seg_len_old + seg_len_new;
+
+        let mut new_edges = Vec::with_capacity(new_n);
+        for i in 0..seg_len_old {
+            new_edges.push(edges[(ccw_pos + i) % n]);
+        }
+        new_edges.push(EdgeInfo {
+            tile_id: target.tile_id,
+            tile_offset: tile_junc,
+        });
+        for k in 1..seg_len_new {
+            new_edges.push(EdgeInfo {
+                tile_id: target.tile_id,
+                tile_offset: (tile_junc + k) % m,
+            });
+        }
+
+        let new_inner = if first_step {
+            first_step = false;
+            vec![vec![]; new_n]
+        } else {
+            let pm = PatchMatch {
+                start_a: junc_pos,
+                len: mlen,
+                start_b: tile_junc,
+                tile_id: target.tile_id,
+            };
+            update_inner_chains(&inner_chains, &edges, &pm, new_n)
+        };
+
+        let gr = angles::glue_raw_angles::<T>(&angles, tile_seq, junc_pos, mlen, tile_junc)?;
+        angles = gr.angles;
+        edges = new_edges;
+        inner_chains = new_inner;
+
+        junc_pos = seg_len_old;
+    }
+
+    Some((
+        RawBoundary {
+            angles,
+            edges,
+            inner_chains,
+        },
+        junc_pos,
+    ))
+}
+
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
@@ -243,85 +330,30 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let seed_seq = tileset.rat(seed_id).seq();
         let n_seed = seed_seq.len();
 
-        let mut boundary_angles = seed_seq.to_vec();
-        let mut boundary_edges: Vec<EdgeInfo> = (0..n_seed)
-            .map(|i| EdgeInfo {
-                tile_id: seed_id,
-                tile_offset: i,
-            })
-            .collect();
-        let mut boundary_inner: Vec<Vec<EdgeInfo>> = vec![vec![]; n_seed];
+        let boundary = RawBoundary {
+            angles: seed_seq.to_vec(),
+            edges: (0..n_seed)
+                .map(|i| EdgeInfo {
+                    tile_id: seed_id,
+                    tile_offset: i,
+                })
+                .collect(),
+            inner_chains: vec![vec![]; n_seed],
+        };
 
-        let mut junc_pos = (vtype.cw.tile_offset + 1) % n_seed;
+        let junc_pos = (vtype.cw.tile_offset + 1) % n_seed;
 
         let mut targets = vtype.inner.clone();
         targets.push(vtype.ccw);
 
-        let mut first_step = true;
-
-        for target in &targets {
-            let tile_seq = tileset.rat(target.tile_id).seq();
-            let m = tile_seq.len();
-            let tile_junc = target.tile_offset;
-            let n = boundary_angles.len();
-
-            let mlen = forward_match_length(&boundary_angles, junc_pos, tile_seq, tile_junc);
-            if mlen == 0 || mlen > n || mlen > m {
-                return None;
-            }
-
-            let ccw_pos = (junc_pos + mlen) % n;
-            let seg_len_old = n - mlen;
-            let seg_len_new = m - mlen;
-            let new_n = seg_len_old + seg_len_new;
-
-            let mut new_edges = Vec::with_capacity(new_n);
-            for i in 0..seg_len_old {
-                new_edges.push(boundary_edges[(ccw_pos + i) % n]);
-            }
-            new_edges.push(EdgeInfo {
-                tile_id: target.tile_id,
-                tile_offset: tile_junc,
-            });
-            for k in 1..seg_len_new {
-                new_edges.push(EdgeInfo {
-                    tile_id: target.tile_id,
-                    tile_offset: (tile_junc + k) % m,
-                });
-            }
-
-            let new_inner = if first_step {
-                first_step = false;
-                vec![vec![]; new_n]
-            } else {
-                let pm = PatchMatch {
-                    start_a: junc_pos,
-                    len: mlen,
-                    start_b: tile_junc,
-                    tile_id: target.tile_id,
-                };
-                update_inner_chains(&boundary_inner, &boundary_edges, &pm, new_n)
-            };
-
-            let gr = angles::glue_raw_angles::<T>(
-                &boundary_angles,
-                tile_seq,
-                junc_pos,
-                mlen,
-                tile_junc,
-            )?;
-            boundary_angles = gr.angles;
-            boundary_edges = new_edges;
-            boundary_inner = new_inner;
-
-            junc_pos = seg_len_old;
-        }
+        let (boundary, _final_junc) =
+            flower_petal_glue::<T>(boundary, junc_pos, &targets, tileset.as_ref(), true)?;
 
         let patch = GrowingPatch::from_parts(
             Arc::clone(&match_index),
-            boundary_angles,
-            boundary_edges,
-            boundary_inner,
+            boundary.angles,
+            boundary.edges,
+            boundary.inner_chains,
         )?;
 
         let final_edges = patch.edges();
@@ -334,6 +366,82 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         None
+    }
+
+    pub fn construct_witness_from_vt_sequence(
+        vtypes: &[VertexType],
+        match_index: Arc<MatchTypeIndex<T>>,
+    ) -> Option<(Self, Vec<usize>)> {
+        if vtypes.is_empty() {
+            return None;
+        }
+
+        let tileset = match_index.tileset();
+
+        let (first_patch, first_junc) =
+            Self::construct_minimal_witness(&vtypes[0], Arc::clone(&match_index))?;
+
+        let mut raw = RawBoundary {
+            angles: first_patch.angles().to_vec(),
+            edges: first_patch.edges().to_vec(),
+            inner_chains: first_patch.inner_chains().to_vec(),
+        };
+        let mut junc_positions = vec![first_junc];
+
+        for k in 1..vtypes.len() {
+            let prev_ccw = vtypes[k - 1].ccw;
+            let curr_cw = vtypes[k].cw;
+            let n = raw.edges.len();
+            let m = tileset.rat(curr_cw.tile_id).len();
+
+            let advance = (curr_cw.tile_offset + m - prev_ccw.tile_offset) % m;
+            let advance_pos = (junc_positions[k - 1] + advance) % n;
+
+            let mut targets = vtypes[k].inner.clone();
+            targets.push(vtypes[k].ccw);
+
+            let cw_candidates: Vec<usize> = if raw.edges[advance_pos] == curr_cw {
+                vec![(advance_pos + 1) % n]
+            } else {
+                (0..n)
+                    .filter(|&i| raw.edges[i] == curr_cw)
+                    .map(|i| (i + 1) % n)
+                    .collect()
+            };
+
+            let mut found = false;
+            for junc_k in cw_candidates {
+                if let Some((new_raw, new_junc)) = flower_petal_glue::<T>(
+                    RawBoundary {
+                        angles: raw.angles.clone(),
+                        edges: raw.edges.clone(),
+                        inner_chains: raw.inner_chains.clone(),
+                    },
+                    junc_k,
+                    &targets,
+                    tileset.as_ref(),
+                    false,
+                ) {
+                    raw = new_raw;
+                    junc_positions.push(new_junc);
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                return None;
+            }
+        }
+
+        let patch = GrowingPatch::from_parts(
+            Arc::clone(&match_index),
+            raw.angles,
+            raw.edges,
+            raw.inner_chains,
+        )?;
+
+        Some((patch, junc_positions))
     }
 
     pub fn compute_candidates_covering_position(
