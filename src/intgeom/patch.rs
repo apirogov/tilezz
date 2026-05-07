@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::geometry::intersect;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::angles::normalize_angle;
+use crate::intgeom::angles;
 use crate::intgeom::grid::UnitSquareGrid;
 use crate::intgeom::matchtypes::{
     is_single_edge_candidate, junction_gap_nonnegative, CandidateMatch, MatchTypeIndex,
@@ -138,6 +138,27 @@ pub fn junction_vertex_type_from<T: IsComplex + IsRingOrField + Units>(
     Some(vertex_type_raw_from(edges, inner_chains, pos))
 }
 
+fn forward_match_length(
+    self_angles: &[i8],
+    self_start: usize,
+    other_angles: &[i8],
+    other_junction: usize,
+) -> usize {
+    let n = self_angles.len();
+    let m = other_angles.len();
+    let max_len = n.min(m);
+    let mut len = 1;
+    for i in 1..max_len {
+        let xi = self_angles[(self_start + i) % n];
+        let yi = -other_angles[(other_junction + m - i) % m];
+        if xi != yi {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
 pub fn update_inner_chains(
     old_inner: &[Vec<EdgeInfo>],
     old_edges: &[EdgeInfo],
@@ -218,57 +239,90 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         match_index: Arc<MatchTypeIndex<T>>,
     ) -> Option<(Self, usize)> {
         let tileset = match_index.tileset();
+        let seed_id = vtype.cw.tile_id;
+        let seed_seq = tileset.rat(seed_id).seq();
+        let n_seed = seed_seq.len();
 
-        let mut patch = GrowingPatch::new(Arc::clone(tileset), vtype.cw.tile_id);
+        let mut boundary_angles = seed_seq.to_vec();
+        let mut boundary_edges: Vec<EdgeInfo> = (0..n_seed)
+            .map(|i| EdgeInfo {
+                tile_id: seed_id,
+                tile_offset: i,
+            })
+            .collect();
+        let mut boundary_inner: Vec<Vec<EdgeInfo>> = vec![vec![]; n_seed];
+
+        let mut junc_pos = (vtype.cw.tile_offset + 1) % n_seed;
 
         let mut targets = vtype.inner.clone();
         targets.push(vtype.ccw);
 
-        for (step, target) in targets.iter().enumerate() {
-            let expected_inner: Vec<EdgeInfo> = vtype.inner[..step].to_vec();
-            let candidates = patch.get_all_matches();
+        let mut first_step = true;
 
-            let mut found = false;
-            for pm in &candidates {
-                if pm.tile_id != target.tile_id {
-                    continue;
-                }
+        for target in &targets {
+            let tile_seq = tileset.rat(target.tile_id).seq();
+            let m = tile_seq.len();
+            let tile_junc = target.tile_offset;
+            let n = boundary_angles.len();
 
-                let mut trial = patch.clone();
-                if trial.add_tile(pm).is_none() {
-                    continue;
-                }
-
-                let trial_n = trial.boundary_len();
-                let trial_edges = trial.edges();
-                let trial_inner = trial.inner_chains();
-                for pos in 0..trial_n {
-                    let vt = vertex_type_raw_from(trial_edges, trial_inner, pos);
-
-                    if vt.cw == vtype.cw && vt.ccw == *target && vt.inner == expected_inner {
-                        patch = trial;
-                        found = true;
-                        break;
-                    }
-                }
-                if found {
-                    break;
-                }
-            }
-
-            if !found {
+            let mlen = forward_match_length(&boundary_angles, junc_pos, tile_seq, tile_junc);
+            if mlen == 0 || mlen > n || mlen > m {
                 return None;
             }
+
+            let ccw_pos = (junc_pos + mlen) % n;
+            let seg_len_old = n - mlen;
+            let seg_len_new = m - mlen;
+            let new_n = seg_len_old + seg_len_new;
+
+            let mut new_edges = Vec::with_capacity(new_n);
+            for i in 0..seg_len_old {
+                new_edges.push(boundary_edges[(ccw_pos + i) % n]);
+            }
+            new_edges.push(EdgeInfo {
+                tile_id: target.tile_id,
+                tile_offset: tile_junc,
+            });
+            for k in 1..seg_len_new {
+                new_edges.push(EdgeInfo {
+                    tile_id: target.tile_id,
+                    tile_offset: (tile_junc + mlen + k) % m,
+                });
+            }
+
+            let new_inner = if first_step {
+                first_step = false;
+                vec![vec![]; new_n]
+            } else {
+                let pm = PatchMatch {
+                    start_a: junc_pos,
+                    len: mlen,
+                    start_b: tile_junc,
+                    tile_id: target.tile_id,
+                };
+                update_inner_chains(&boundary_inner, &boundary_edges, &pm, new_n)
+            };
+
+            let gr = angles::glue_raw_angles::<T>(
+                &boundary_angles,
+                tile_seq,
+                junc_pos,
+                mlen,
+                tile_junc,
+            )?;
+            boundary_angles = gr.angles;
+            boundary_edges = new_edges;
+            boundary_inner = new_inner;
+
+            junc_pos = seg_len_old;
         }
 
-        for pos in 0..patch.boundary_len() {
-            if patch.is_junction(pos) {
-                let vt = patch.junction_vertex_type_at(pos).unwrap();
-                if vt == *vtype {
-                    return Some((patch, pos));
-                }
-            }
-        }
+        let patch = GrowingPatch::from_parts(
+            Arc::clone(&match_index),
+            boundary_angles,
+            boundary_edges,
+            boundary_inner,
+        )?;
 
         let final_edges = patch.edges();
         let final_inner = patch.inner_chains();
@@ -1244,65 +1298,14 @@ pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
 ) -> Option<Vec<i8>> {
-    let n = angles.len();
-    let mlen = pm.len;
-    let seed_seq = tileset.rat(pm.tile_id).seq();
-    let m = seed_seq.len();
-
-    let x_raw_len = n - mlen + 1;
-    let y_raw_len = m - mlen + 1;
-
-    if x_raw_len <= 1 && y_raw_len <= 1 {
-        return None;
+    let other_seq = tileset.rat(pm.tile_id).seq();
+    let gr = angles::glue_raw_angles::<T>(angles, other_seq, pm.start_a, pm.len, pm.start_b)?;
+    if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
+        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
+            return None;
+        }
     }
-
-    let x: Vec<i8> = (0..x_raw_len)
-        .map(|i| angles[(pm.start_a + mlen + i) % n])
-        .collect();
-    let y: Vec<i8> = (0..y_raw_len)
-        .map(|i| seed_seq[(pm.start_b + i) % m])
-        .collect();
-
-    let seg_len_old = x_raw_len - 1;
-    let seg_len_new = y_raw_len - 1;
-
-    let mut new_angles = Vec::with_capacity(seg_len_old + seg_len_new);
-    if seg_len_old > 0 {
-        new_angles.extend_from_slice(&x[..seg_len_old]);
-    }
-    if seg_len_new > 0 {
-        new_angles.extend_from_slice(&y[..seg_len_new]);
-    }
-
-    if new_angles.is_empty() {
-        return None;
-    }
-
-    let a_yx = if x_raw_len > 1 && y_raw_len > 1 {
-        normalize_angle::<T>(x[0] + y[y_raw_len - 1] - T::hturn())
-    } else {
-        new_angles[0]
-    };
-    let a_xy = if x_raw_len > 1 && y_raw_len > 1 {
-        normalize_angle::<T>(y[0] + x[x_raw_len - 1] - T::hturn())
-    } else {
-        new_angles[0]
-    };
-
-    if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-        return None;
-    }
-
-    if seg_len_old > 0 {
-        new_angles[0] = a_yx;
-    }
-    if seg_len_old > 0 && seg_len_new > 0 {
-        new_angles[seg_len_old] = a_xy;
-    } else if seg_len_new > 0 {
-        new_angles[0] = a_xy;
-    }
-
-    Some(new_angles)
+    Some(gr.angles)
 }
 
 fn trace_boundary_positions<T: IsComplex + IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
@@ -2114,5 +2117,187 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn construct_minimal_witness_hex_boundary_matches_brute_force() {
+        let gp = hex_patch();
+        let ts = gp.match_index.clone();
+
+        for pm in &gp.get_all_matches() {
+            let mut brute = gp.clone();
+            brute.add_tile(pm).expect("brute glue");
+            let brute_angles = brute.angles().to_vec();
+            let brute_edges = brute.edges().to_vec();
+            let brute_inner = brute.inner_chains().to_vec();
+
+            for pos in 0..brute.boundary_len() {
+                let vt = match brute.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let (witness, _wpos) =
+                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
+                        .expect("reconstruction should succeed");
+
+                let w_edges = witness.edges();
+                let w_inner = witness.inner_chains();
+
+                let mut found = false;
+                for wpos in 0..witness.boundary_len() {
+                    let wvt = vertex_type_raw_from(w_edges, w_inner, wpos);
+                    if wvt == vt {
+                        let brute_vt = vertex_type_raw_from(&brute_edges, &brute_inner, pos);
+                        assert_eq!(
+                            wvt, brute_vt,
+                            "reconstructed VT should match brute-force VT"
+                        );
+                        found = true;
+                        break;
+                    }
+                }
+                assert!(found, "should find matching position in witness");
+
+                let mut wa: Vec<i8> = witness.angles().to_vec();
+                let mut ba = brute_angles.clone();
+                wa.sort();
+                ba.sort();
+                assert_eq!(
+                    wa, ba,
+                    "reconstructed angles should be a rotation of brute-force angles"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn construct_minimal_witness_square_boundary_matches_brute_force() {
+        let gp = square_patch();
+        let ts = gp.match_index.clone();
+
+        for pm in &gp.get_all_matches() {
+            let mut brute = gp.clone();
+            brute.add_tile(pm).expect("brute glue");
+            let brute_edges = brute.edges().to_vec();
+            let brute_inner = brute.inner_chains().to_vec();
+
+            for pos in 0..brute.boundary_len() {
+                let vt = match brute.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let (witness, _wpos) =
+                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
+                        .expect("reconstruction should succeed");
+
+                let w_edges = witness.edges();
+                let w_inner = witness.inner_chains();
+
+                let mut found = false;
+                for wpos in 0..witness.boundary_len() {
+                    let wvt = vertex_type_raw_from(w_edges, w_inner, wpos);
+                    if wvt == vt {
+                        let brute_vt = vertex_type_raw_from(&brute_edges, &brute_inner, pos);
+                        assert_eq!(wvt, brute_vt);
+                        found = true;
+                        break;
+                    }
+                }
+                assert!(
+                    found,
+                    "should find matching position in witness for vt={vt:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn construct_minimal_witness_spectre_roundtrip() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+
+        let pm = gp.get_all_matches().into_iter().next().unwrap();
+        gp.add_tile(&pm).expect("first spectre glue");
+
+        let mi = gp.match_index.clone();
+        for pos in 0..gp.boundary_len() {
+            let vt = match gp.junction_vertex_type_at(pos) {
+                Some(vt) => vt,
+                None => continue,
+            };
+            let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&mi));
+            assert!(
+                result.is_some(),
+                "spectre witness should succeed for vt={vt:?} at pos={pos}"
+            );
+            let (witness, wpos) = result.unwrap();
+            let w_edges = witness.edges();
+            let w_inner = witness.inner_chains();
+            let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
+            assert_eq!(reconstructed, vt, "spectre roundtrip failed for vt={vt:?}");
+        }
+    }
+
+    #[test]
+    fn forward_match_length_hex_basic() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let seq = rat.seq();
+
+        assert_eq!(forward_match_length(seq, 0, seq, 0), 1);
+        assert_eq!(forward_match_length(seq, 3, seq, 3), 1);
+        assert_eq!(forward_match_length(seq, 0, seq, 1), 1);
+
+        let boundary: Vec<i8> = vec![-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
+        assert_eq!(forward_match_length(&boundary, 5, seq, 0), 1);
+        assert_eq!(forward_match_length(&boundary, 0, seq, 0), 1);
+    }
+
+    #[test]
+    fn forward_match_length_square_basic() {
+        let sq: Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let seq = rat.seq();
+
+        assert_eq!(forward_match_length(seq, 0, seq, 0), 1);
+        assert_eq!(forward_match_length(seq, 2, seq, 2), 1);
+    }
+
+    #[test]
+    fn glue_raw_angles_hex_self_glue() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let seq = rat.seq().to_vec();
+
+        let result = angles::glue_raw_angles::<ZZ12>(&seq, &seq, 0, 1, 0);
+        assert!(result.is_some());
+        let gr = result.unwrap();
+        assert_eq!(gr.angles.len(), 10);
+        assert_eq!(gr.a_yx, Some(-2));
+        assert_eq!(gr.a_xy, Some(-2));
+    }
+
+    #[test]
+    fn glue_raw_angles_matches_rat_glue() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let seq = rat.seq();
+
+        let rat_result = rat.try_glue((0, 0), &rat).expect("rat glue");
+        let raw_result = angles::glue_raw_angles::<ZZ12>(seq, seq, 0, 1, 0).expect("raw glue");
+
+        let rat_seq = rat_result.seq();
+        let raw_seq = &raw_result.angles;
+
+        let mut rat_sorted: Vec<i8> = rat_seq.to_vec();
+        let mut raw_sorted = raw_seq.clone();
+        rat_sorted.sort();
+        raw_sorted.sort();
+        assert_eq!(rat_sorted, raw_sorted);
     }
 }

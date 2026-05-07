@@ -345,31 +345,24 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
             return Err("Cannot glue rats of opposite chirality (not implemented)!");
         }
 
-        // get boundaries without the match (but keep the endpoints)
-        let x = self.slice_from(norm_start + mlen as i64, self.len() - mlen + 1);
-        let y = other.slice_from(norm_end, other.len() - mlen + 1);
+        let ns_u = norm_start.rem_euclid(self.len() as i64) as usize;
+        let ne_u = norm_end.rem_euclid(other.len() as i64) as usize;
 
-        // concatenate the sequences (without duplicating the endpoints)
-        let mut glued_seq: Vec<i8> = x[..x.len() - 1].to_vec();
-        glued_seq.extend_from_slice(&y[..y.len() - 1]);
+        let self_seq = self.seq();
+        let other_seq = other.seq();
+        let gr = super::angles::glue_raw_angles::<T>(self_seq, other_seq, ns_u, mlen, ne_u)
+            .ok_or("Glue produces empty boundary")?;
 
-        // fix glued vertex angles at the transition of the boundaries
-        use super::angles::normalize_angle;
-
-        let a_yx = normalize_angle::<T>(x[0] + y[y.len() - 1] - T::hturn());
-        let a_xy = normalize_angle::<T>(y[0] + x[x.len() - 1] - T::hturn());
-        glued_seq[0] = a_yx;
-        glued_seq[x.len() - 1] = a_xy;
-
-        // a ±hturn junction angle means the path backtracks (degenerate glue)
-        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-            return Err("Glue produces degenerate ±hturn junction angle");
+        if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
+            if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
+                return Err("Glue produces degenerate ±hturn junction angle");
+            }
         }
 
         if unchecked {
-            Ok(Self::from_slice_unchecked(glued_seq.as_slice()))
+            Ok(Self::from_slice_unchecked(gr.angles.as_slice()))
         } else {
-            Snake::try_from(glued_seq.as_slice()).map(|s| Self::from_unchecked(&s))
+            Snake::try_from(gr.angles.as_slice()).map(|s| Self::from_unchecked(&s))
         }
     }
 
