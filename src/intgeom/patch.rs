@@ -286,7 +286,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             for k in 1..seg_len_new {
                 new_edges.push(EdgeInfo {
                     tile_id: target.tile_id,
-                    tile_offset: (tile_junc + mlen + k) % m,
+                    tile_offset: (tile_junc + k) % m,
                 });
             }
 
@@ -875,7 +875,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         for k in 1..seg_len_new {
             edges.push(EdgeInfo {
                 tile_id: pm.tile_id,
-                tile_offset: (pm.start_b + mlen + k) % m,
+                tile_offset: (pm.start_b + k) % m,
             });
         }
 
@@ -1077,7 +1077,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         for k in 1..seg_len_new {
             new_edges.push(EdgeInfo {
                 tile_id: pm.tile_id,
-                tile_offset: (pm.start_b + mlen + k) % m,
+                tile_offset: (pm.start_b + k) % m,
             });
         }
 
