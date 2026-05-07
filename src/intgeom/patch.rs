@@ -197,6 +197,29 @@ struct RawBoundary {
     inner_chains: Vec<Vec<EdgeInfo>>,
 }
 
+pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
+    vtype: &VertexType,
+    tileset: &TileSet<T>,
+) -> Vec<i8> {
+    let seed_seq = tileset.rat(vtype.cw.tile_id).seq();
+    let n_seed = seed_seq.len();
+    let junc_vertex = (vtype.cw.tile_offset + 1) % n_seed;
+    let mut result = vec![seed_seq[junc_vertex]];
+
+    let mut petals = vtype.inner.clone();
+    petals.push(vtype.ccw);
+
+    for petal in &petals {
+        let petal_seq = tileset.rat(petal.tile_id).seq();
+        let petal_angle = petal_seq[petal.tile_offset];
+        let prev = *result.last().unwrap();
+        let next = angles::normalize_angle::<T>(petal_angle + prev - T::hturn());
+        result.push(next);
+    }
+
+    result
+}
+
 fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     boundary: RawBoundary,
     junc_pos: usize,
@@ -376,10 +399,33 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return None;
         }
 
+        if let Some(result) =
+            Self::construct_witness_from_vt_sequence_inner(vtypes, 0, &match_index)
+        {
+            return Some(result);
+        }
+
+        for start in 1..vtypes.len() {
+            if let Some(result) =
+                Self::construct_witness_from_vt_sequence_inner(vtypes, start, &match_index)
+            {
+                return Some(result);
+            }
+        }
+
+        None
+    }
+
+    fn construct_witness_from_vt_sequence_inner(
+        vtypes: &[VertexType],
+        start: usize,
+        match_index: &Arc<MatchTypeIndex<T>>,
+    ) -> Option<(Self, Vec<usize>)> {
         let tileset = match_index.tileset();
+        let n_vts = vtypes.len();
 
         let (first_patch, first_junc) =
-            Self::construct_minimal_witness(&vtypes[0], Arc::clone(&match_index))?;
+            Self::construct_minimal_witness(&vtypes[start], Arc::clone(match_index))?;
 
         let mut raw = RawBoundary {
             angles: first_patch.angles().to_vec(),
@@ -388,29 +434,60 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         };
         let mut junc_positions = vec![first_junc];
 
-        for k in 1..vtypes.len() {
-            let prev_ccw = vtypes[k - 1].ccw;
+        for step in 1..n_vts {
+            let k = (start + step) % n_vts;
+            let prev_k = (start + step - 1) % n_vts;
+            let prev_ccw = vtypes[prev_k].ccw;
             let curr_cw = vtypes[k].cw;
             let n = raw.edges.len();
             let m = tileset.rat(curr_cw.tile_id).len();
 
             let advance = (curr_cw.tile_offset + m - prev_ccw.tile_offset) % m;
-            let advance_pos = (junc_positions[k - 1] + advance) % n;
+            let advance_pos = (junc_positions[step - 1] + advance) % n;
 
-            let mut targets = vtypes[k].inner.clone();
-            targets.push(vtypes[k].ccw);
+            let angle_seq = junction_angle_sequence(&vtypes[k], tileset.as_ref());
+
+            let all_targets = {
+                let mut t = vtypes[k].inner.clone();
+                t.push(vtypes[k].ccw);
+                t
+            };
 
             let cw_candidates: Vec<usize> = if raw.edges[advance_pos] == curr_cw {
                 vec![(advance_pos + 1) % n]
             } else {
-                (0..n)
+                let edge_cands: Vec<usize> = (0..n)
                     .filter(|&i| raw.edges[i] == curr_cw)
                     .map(|i| (i + 1) % n)
-                    .collect()
+                    .collect();
+                if edge_cands.is_empty() {
+                    (0..n).collect()
+                } else {
+                    edge_cands
+                }
             };
 
             let mut found = false;
             for junc_k in cw_candidates {
+                let boundary_angle = raw.angles[junc_k];
+
+                let skip = angle_seq
+                    .iter()
+                    .position(|&a| a == boundary_angle)
+                    .unwrap_or(0);
+
+                if skip > all_targets.len() {
+                    continue;
+                }
+
+                let targets = &all_targets[skip..];
+
+                if targets.is_empty() {
+                    junc_positions.push(junc_k);
+                    found = true;
+                    break;
+                }
+
                 if let Some((new_raw, new_junc)) = flower_petal_glue::<T>(
                     RawBoundary {
                         angles: raw.angles.clone(),
@@ -418,7 +495,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                         inner_chains: raw.inner_chains.clone(),
                     },
                     junc_k,
-                    &targets,
+                    targets,
                     tileset.as_ref(),
                     false,
                 ) {
@@ -435,7 +512,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         let patch = GrowingPatch::from_parts(
-            Arc::clone(&match_index),
+            Arc::clone(match_index),
             raw.angles,
             raw.edges,
             raw.inner_chains,
@@ -2407,5 +2484,103 @@ mod tests {
         rat_sorted.sort();
         raw_sorted.sort();
         assert_eq!(rat_sorted, raw_sorted);
+    }
+
+    #[test]
+    fn test_junction_angle_sequence_hex() {
+        let gp = hex_patch();
+        let matches = gp.get_all_matches();
+        let ts = gp.match_index.clone();
+        let tileset = ts.tileset();
+
+        let mut checked = 0;
+        for pm in &matches {
+            let mut glued = gp.clone();
+            glued.add_tile(pm).expect("glue");
+            for pos in 0..glued.boundary_len() {
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let angles = junction_angle_sequence::<ZZ12>(&vt, tileset.as_ref());
+
+                let (witness, wpos) =
+                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts)).expect("witness");
+                let witness_angle = witness.angles()[wpos];
+
+                assert_eq!(
+                    *angles.last().unwrap(),
+                    witness_angle,
+                    "last angle should match witness junction angle for vt={:?}",
+                    vt
+                );
+
+                assert!(
+                    angles[0] > 0,
+                    "seed angle should be positive for vt={:?}",
+                    vt
+                );
+
+                for i in 1..angles.len() {
+                    assert!(
+                        angles[i] <= angles[i - 1],
+                        "angles should be monotonically decreasing at i={} for vt={:?}: {:?}",
+                        i,
+                        vt,
+                        angles
+                    );
+                }
+
+                checked += 1;
+            }
+        }
+        eprintln!("hex: checked {} VTs", checked);
+        assert!(checked > 0);
+    }
+
+    #[test]
+    fn test_junction_angle_sequence_square() {
+        let gp = square_patch();
+        let matches = gp.get_all_matches();
+        let ts = gp.match_index.clone();
+        let tileset = ts.tileset();
+
+        let mut checked = 0;
+        for pm in &matches {
+            let mut glued = gp.clone();
+            glued.add_tile(pm).expect("glue");
+            for pos in 0..glued.boundary_len() {
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let angles = junction_angle_sequence::<ZZ4>(&vt, tileset.as_ref());
+
+                let (witness, wpos) =
+                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts)).expect("witness");
+                assert_eq!(
+                    *angles.last().unwrap(),
+                    witness.angles()[wpos],
+                    "last angle mismatch for vt={:?}",
+                    vt
+                );
+
+                for i in 1..angles.len() {
+                    assert!(
+                        angles[i] <= angles[i - 1],
+                        "non-decreasing at i={} for vt={:?}: {:?}",
+                        i,
+                        vt,
+                        angles
+                    );
+                }
+
+                checked += 1;
+            }
+        }
+        eprintln!("square: checked {} VTs", checked);
+        assert!(checked > 0);
     }
 }

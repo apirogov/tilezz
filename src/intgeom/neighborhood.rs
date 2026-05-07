@@ -1112,12 +1112,10 @@ mod tests {
                 fail += 1;
             }
         }
-        eprintln!("hex: {}/{} failed", fail, checked);
-        let fail_rate = fail as f64 / checked as f64;
-        assert!(
-            fail_rate < 0.02,
-            "hex fail rate {:.1}% exceeds 2%",
-            fail_rate * 100.0
+        assert_eq!(
+            fail, 0,
+            "{}/{} hex NTs failed reconstruction",
+            fail, checked
         );
     }
 }
