@@ -55,6 +55,102 @@ pub fn normalize_angle<T: SymNum>(angle: i8) -> i8 {
     }
 }
 
+/// Result of gluing two boundary angle sequences.
+pub struct GlueResult {
+    /// The new boundary angle sequence.
+    pub angles: Vec<i8>,
+    /// Index in `angles` of the CW junction (where old boundary meets new tile).
+    /// `None` if one side is empty (no junction to fix).
+    pub cw_junction_idx: Option<usize>,
+    /// Index in `angles` of the CCW junction (where new tile meets old boundary).
+    /// `None` if one side is empty (no junction to fix).
+    pub ccw_junction_idx: Option<usize>,
+    /// The CW junction angle (already written into `angles`).
+    pub a_xy: Option<i8>,
+    /// The CCW junction angle (already written into `angles`).
+    pub a_yx: Option<i8>,
+}
+
+/// Compute the angle sequence resulting from gluing two boundary segments.
+///
+/// Given two cyclic angle sequences (`self_angles` and `other_angles`) and a
+/// match described by `(start_a, mlen, start_b)`, computes the new boundary
+/// formed by the non-matched portions of both sequences.
+///
+/// The match covers `mlen` consecutive positions starting at `start_a` on
+/// `self_angles` (cyclically) and ends at `start_b` on `other_angles` (cyclically).
+/// The surviving portions are concatenated with corrected junction angles.
+///
+/// Returns `None` if the result would be empty. Does **not** check for ±hturn
+/// degeneracy — the caller is responsible for rejecting degenerate junctions.
+pub fn glue_raw_angles<T: SymNum>(
+    self_angles: &[i8],
+    other_angles: &[i8],
+    start_a: usize,
+    mlen: usize,
+    start_b: usize,
+) -> Option<GlueResult> {
+    let n = self_angles.len();
+    let m = other_angles.len();
+
+    let x_raw_len = n - mlen + 1;
+    let y_raw_len = m - mlen + 1;
+
+    if x_raw_len <= 1 && y_raw_len <= 1 {
+        return None;
+    }
+
+    let seg_len_old = x_raw_len - 1;
+    let seg_len_new = y_raw_len - 1;
+
+    let mut result = Vec::with_capacity(seg_len_old + seg_len_new);
+    for i in 0..seg_len_old {
+        result.push(self_angles[(start_a + mlen + i) % n]);
+    }
+    for i in 0..seg_len_new {
+        result.push(other_angles[(start_b + i) % m]);
+    }
+
+    if result.is_empty() {
+        return None;
+    }
+
+    let (a_yx, a_xy) = if x_raw_len > 1 && y_raw_len > 1 {
+        let x_first = self_angles[(start_a + mlen) % n];
+        let x_last = self_angles[(start_a + mlen + seg_len_old) % n];
+        let y_first = other_angles[start_b % m];
+        let y_last = other_angles[(start_b + seg_len_new) % m];
+        let ayx = normalize_angle::<T>(x_first + y_last - T::hturn());
+        let axy = normalize_angle::<T>(y_first + x_last - T::hturn());
+        if seg_len_old > 0 {
+            result[0] = ayx;
+        }
+        if seg_len_old > 0 && seg_len_new > 0 {
+            result[seg_len_old] = axy;
+        } else if seg_len_new > 0 {
+            result[0] = axy;
+        }
+        (Some(ayx), Some(axy))
+    } else {
+        (None, None)
+    };
+
+    let cw_junction_idx = if seg_len_old > 0 && seg_len_new > 0 {
+        Some(seg_len_old)
+    } else {
+        None
+    };
+    let ccw_junction_idx = if seg_len_old > 0 { Some(0) } else { None };
+
+    Some(GlueResult {
+        angles: result,
+        cw_junction_idx,
+        ccw_junction_idx,
+        a_yx,
+        a_xy,
+    })
+}
+
 /// Rescale the angle sequence from one complex integer ring to another.
 /// Assumes that the target ring contains the original ring of the sequence.
 pub fn upscale_angles<T: SymNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
