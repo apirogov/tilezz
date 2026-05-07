@@ -31,6 +31,76 @@ impl NeighborhoodType {
     pub fn gap_len(&self) -> usize {
         self.gap_len as usize
     }
+
+    pub fn validate<T: IsComplex + IsRingOrField + Units>(
+        &self,
+        tileset: &TileSet<T>,
+    ) -> Result<(), String> {
+        let n = self.angles.len();
+        if n == 0 {
+            return Err("empty boundary".into());
+        }
+        if self.edges.len() != n || self.inner_chains.len() != n {
+            return Err(format!(
+                "length mismatch: angles={} edges={} inner={}",
+                n,
+                self.edges.len(),
+                self.inner_chains.len()
+            ));
+        }
+        if self.gap_len() >= n {
+            return Err(format!("gap_len {} >= boundary_len {}", self.gap_len(), n));
+        }
+        if self.gap_len() == 0 {
+            return Err("gap_len is zero".into());
+        }
+
+        let tile_rat = tileset.rat(self.central_tile_id);
+        let tile_seq = tile_rat.seq();
+        let m = tile_seq.len();
+
+        for i in 0..self.gap_len() {
+            let pos = (self.gap_start + i) % n;
+            let expected_offset = (self.central_anchor_edge + i) % m;
+            let edge = &self.edges[pos];
+            if edge.tile_id != self.central_tile_id {
+                return Err(format!(
+                    "gap edge at pos={} has tile_id={} expected={}",
+                    pos, edge.tile_id, self.central_tile_id
+                ));
+            }
+            if edge.tile_offset != expected_offset {
+                return Err(format!(
+                    "gap edge at pos={} has tile_offset={} expected={}",
+                    pos, edge.tile_offset, expected_offset
+                ));
+            }
+        }
+
+        let covered_len = n - self.gap_len();
+        if covered_len >= 2 {
+            let num_vts = covered_len - 1;
+            if self.context_vertex_types.len() != num_vts {
+                return Err(format!(
+                    "context_vertex_types len={} expected={}",
+                    self.context_vertex_types.len(),
+                    num_vts
+                ));
+            }
+            for k in 0..num_vts {
+                let pos = (self.gap_start + n - 1 - k) % n;
+                let expected_vt = vertex_type_raw_from(&self.edges, &self.inner_chains, pos);
+                if self.context_vertex_types[k] != expected_vt {
+                    return Err(format!(
+                        "context VT[{}] at pos={} mismatch: stored={:?} boundary={:?}",
+                        k, pos, self.context_vertex_types[k], expected_vt
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn in_consumed_range(pos: usize, start_a: usize, match_len: usize, n: usize) -> bool {
@@ -50,9 +120,35 @@ fn in_consumed_range(pos: usize, start_a: usize, match_len: usize, n: usize) -> 
     }
 }
 
-fn count_covered_gap_edges(gap_len: usize, start_a: usize, match_len: usize, n: usize) -> usize {
+fn compute_new_gap_start(
+    old_gap_start: usize,
+    old_gap_len: usize,
+    start_a: usize,
+    match_len: usize,
+    old_n: usize,
+) -> usize {
+    let ccw_pos = (start_a + match_len) % old_n;
+    let seg_len_old = old_n - match_len;
+    for i in 0..old_gap_len {
+        let old_pos = (old_gap_start + i) % old_n;
+        if !in_consumed_range(old_pos, start_a, match_len, old_n) {
+            let new_pos =
+                (old_pos as isize - ccw_pos as isize).rem_euclid(seg_len_old as isize) as usize;
+            return new_pos;
+        }
+    }
+    0
+}
+
+fn count_covered_gap_edges(
+    gap_start: usize,
+    gap_len: usize,
+    start_a: usize,
+    match_len: usize,
+    n: usize,
+) -> usize {
     (0..gap_len)
-        .filter(|&p| in_consumed_range(p, start_a, match_len, n))
+        .filter(|&i| in_consumed_range((gap_start + i) % n, start_a, match_len, n))
         .count()
 }
 
@@ -117,6 +213,7 @@ fn canonicalize_state(
     angles: &[i8],
     edges: &[EdgeInfo],
     inner_chains: &[Vec<EdgeInfo>],
+    gap_start: usize,
 ) -> CanonicalState {
     let rot = find_best_rotation(angles, edges);
     let n = angles.len();
@@ -130,7 +227,7 @@ fn canonicalize_state(
         angles: a,
         edges: e,
         inner_chains: ic,
-        gap_start: rot % n,
+        gap_start: (gap_start + n - rot) % n,
     }
 }
 
@@ -247,6 +344,7 @@ struct NtBfsState {
     edges: Vec<EdgeInfo>,
     inner_chains: Vec<Vec<EdgeInfo>>,
     gap_len: u8,
+    gap_start: usize,
     central_tile_id: usize,
 }
 
@@ -308,7 +406,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
 
-                    let canon = canonicalize_state(&new_angles, &new_edges, &new_inner);
+                    let canon = canonicalize_state(&new_angles, &new_edges, &new_inner, 0);
                     if !seen.insert(&all_types, tile_id, &canon, gap_len as u8) {
                         continue;
                     }
@@ -339,6 +437,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         edges: new_edges,
                         inner_chains: new_inner,
                         gap_len: gap_len as u8,
+                        gap_start: 0,
                         central_tile_id: tile_id,
                     });
                 }
@@ -385,8 +484,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
                 stat_candidates += all_candidates.iter().map(|v| v.len()).sum::<usize>();
 
-                let cw_prev = boundary_n - 1;
-
                 struct DeferredUpdate {
                     pm: PatchMatch,
                     new_angles: Vec<i8>,
@@ -396,14 +493,21 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 let mut had_close_success = false;
 
                 for pm in all_candidates.iter().flatten() {
-                    let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, 0, boundary_n);
-                    let covers_cw = cyclic_range_contains(pm.start_a, pm.len, cw_prev, boundary_n);
-                    if !covers_ccw && !covers_cw {
+                    let covers_gap =
+                        cyclic_range_contains(pm.start_a, pm.len, state.gap_start, boundary_n);
+                    let covers_ctx_cw = cyclic_range_contains(
+                        pm.start_a,
+                        pm.len,
+                        (state.gap_start + boundary_n - 1) % boundary_n,
+                        boundary_n,
+                    );
+                    if !covers_gap && !covers_ctx_cw {
                         continue;
                     }
                     stat_touching += 1;
 
                     let covered_count = count_covered_gap_edges(
+                        state.gap_start,
                         state.gap_len as usize,
                         pm.start_a,
                         pm.len,
@@ -449,7 +553,16 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     let new_inner =
                         update_inner_chains(&state.inner_chains, &state.edges, pm, new_n);
 
-                    let canon = canonicalize_state(&new_angles, &new_edges, &new_inner);
+                    let new_gap_start = compute_new_gap_start(
+                        state.gap_start,
+                        state.gap_len as usize,
+                        pm.start_a,
+                        pm.len,
+                        boundary_n,
+                    );
+
+                    let canon =
+                        canonicalize_state(&new_angles, &new_edges, &new_inner, new_gap_start);
                     if !seen.insert(&all_types, state.central_tile_id, &canon, new_gap_len as u8) {
                         continue;
                     }
@@ -481,6 +594,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         edges: new_edges,
                         inner_chains: new_inner,
                         gap_len: new_gap_len as u8,
+                        gap_start: new_gap_start,
                         central_tile_id: state.central_tile_id,
                     });
                 }
@@ -498,7 +612,20 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                             du.new_n,
                         );
 
-                        let canon = canonicalize_state(&du.new_angles, &new_edges, &new_inner);
+                        let new_gap_start = compute_new_gap_start(
+                            state.gap_start,
+                            state.gap_len as usize,
+                            du.pm.start_a,
+                            du.pm.len,
+                            boundary_n,
+                        );
+
+                        let canon = canonicalize_state(
+                            &du.new_angles,
+                            &new_edges,
+                            &new_inner,
+                            new_gap_start,
+                        );
                         if !seen.insert(&all_types, state.central_tile_id, &canon, state.gap_len) {
                             continue;
                         }
@@ -529,6 +656,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                             edges: new_edges,
                             inner_chains: new_inner,
                             gap_len: state.gap_len,
+                            gap_start: new_gap_start,
                             central_tile_id: state.central_tile_id,
                         });
                     }
@@ -1084,6 +1212,94 @@ mod tests {
             "{}/{} square NTs failed reconstruction",
             fail, checked
         );
+    }
+
+    #[test]
+    fn test_nt_gap_start_square() {
+        use crate::cyclotomic::ZZ4;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+        let tileset = ts.as_ref();
+
+        let mut checked = 0;
+        let mut wrong = 0;
+        for nhood in idx.entries() {
+            checked += 1;
+            let n = nhood.angles.len();
+            let tile_rat = tileset.rat(nhood.central_tile_id);
+            let m = tile_rat.seq().len();
+
+            let mut gap_correct = true;
+            for i in 0..nhood.gap_len() {
+                let pos = (nhood.gap_start + i) % n;
+                let edge = &nhood.edges[pos];
+                let expected_offset = (nhood.central_anchor_edge + i) % m;
+                if edge.tile_id != nhood.central_tile_id || edge.tile_offset != expected_offset {
+                    if wrong < 3 {
+                        eprintln!(
+                            "NT id={}: gap_start={} gap_len={} anchor={} n={}",
+                            nhood.id,
+                            nhood.gap_start,
+                            nhood.gap_len(),
+                            nhood.central_anchor_edge,
+                            n
+                        );
+                        eprintln!(
+                            "  pos={} edge={:?} expected_offset={}",
+                            pos, edge, expected_offset
+                        );
+                        eprintln!("  edges: {:?}", nhood.edges);
+                        eprintln!("  angles: {:?}", nhood.angles);
+                    }
+                    gap_correct = false;
+                    wrong += 1;
+                    break;
+                }
+            }
+        }
+        eprintln!("checked {} NTs, {} wrong gap_start", checked, wrong);
+        assert_eq!(wrong, 0, "{} NTs have wrong gap edges", wrong);
+    }
+
+    #[test]
+    fn test_nt_validate_square() {
+        use crate::cyclotomic::ZZ4;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let mut checked = 0;
+        for nhood in idx.entries() {
+            checked += 1;
+            if let Err(e) = nhood.validate::<ZZ4>(ts.as_ref()) {
+                panic!("square NT id={} failed validation: {}", nhood.id, e);
+            }
+        }
+        assert!(checked > 0, "no square NTs found");
+    }
+
+    #[test]
+    fn test_nt_validate_hex() {
+        use crate::cyclotomic::ZZ12;
+
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let mut checked = 0;
+        for nhood in idx.entries() {
+            checked += 1;
+            if let Err(e) = nhood.validate::<ZZ12>(ts.as_ref()) {
+                panic!("hex NT id={} failed validation: {}", nhood.id, e);
+            }
+        }
+        assert!(checked > 0, "no hex NTs found");
     }
 
     #[test]
