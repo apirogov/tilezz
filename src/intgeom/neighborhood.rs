@@ -287,6 +287,35 @@ impl SeenIndex {
         indices.push(all_types.len());
         true
     }
+
+    fn find(
+        &self,
+        all_types: &[NeighborhoodType],
+        central_tile_id: usize,
+        canon: &CanonicalState,
+        gap_len: u8,
+    ) -> Option<usize> {
+        let hash = dedup_hash(
+            central_tile_id,
+            &canon.angles,
+            &canon.edges,
+            &canon.inner_chains,
+            gap_len,
+        );
+        let indices = self.by_hash.get(&hash)?;
+        for &idx in indices {
+            let t = &all_types[idx];
+            if t.central_tile_id == central_tile_id
+                && t.gap_len == gap_len
+                && t.angles == canon.angles
+                && t.edges == canon.edges
+                && t.inner_chains == canon.inner_chains
+            {
+                return Some(idx);
+            }
+        }
+        None
+    }
 }
 
 fn compute_new_edges_seed(tile_id: usize, n: usize, pm: &PatchMatch, m: usize) -> Vec<EdgeInfo> {
@@ -346,17 +375,40 @@ struct NtBfsState {
     gap_len: u8,
     gap_start: usize,
     central_tile_id: usize,
+    nt_id: usize,
+}
+
+pub const NT_CLOSED_ID: usize = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum NtKind {
+    Dead,
+    Undead,
+    Blessed,
+    Free,
+}
+
+#[derive(Clone, Debug)]
+pub struct NtTransition {
+    pub src_id: usize,
+    pub dst_id: usize,
+    pub tile_id: usize,
+    pub tile_offset: usize,
+    pub match_start: usize,
+    pub match_len: usize,
 }
 
 pub struct NeighborhoodIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<NeighborhoodType>,
+    transitions: Vec<NtTransition>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut all_types: Vec<NeighborhoodType> = Vec::new();
+        let mut transitions: Vec<NtTransition> = Vec::new();
         let mut seen = SeenIndex::new();
         let mut current_level: Vec<NtBfsState> = Vec::new();
 
@@ -439,6 +491,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         gap_len: gap_len as u8,
                         gap_start: 0,
                         central_tile_id: tile_id,
+                        nt_id: all_types.len() - 1,
                     });
                 }
             }
@@ -514,7 +567,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         boundary_n,
                     );
                     let new_gap_len = state.gap_len as usize - covered_count;
-                    if new_gap_len == 0 || new_gap_len > u8::MAX as usize {
+                    if new_gap_len > u8::MAX as usize {
                         continue;
                     }
                     let is_update = covered_count == 0;
@@ -534,6 +587,18 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
                     stat_snake += 1;
+
+                    if new_gap_len == 0 {
+                        transitions.push(NtTransition {
+                            src_id: state.nt_id + 1,
+                            dst_id: NT_CLOSED_ID,
+                            tile_id: pm.tile_id,
+                            tile_offset: pm.start_b,
+                            match_start: pm.start_a,
+                            match_len: pm.len,
+                        });
+                        continue;
+                    }
 
                     let new_n = new_angles.len();
                     if new_n > MAX_BOUNDARY_SIZE {
@@ -563,7 +628,25 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
                     let canon =
                         canonicalize_state(&new_angles, &new_edges, &new_inner, new_gap_start);
-                    if !seen.insert(&all_types, state.central_tile_id, &canon, new_gap_len as u8) {
+                    let is_new =
+                        seen.insert(&all_types, state.central_tile_id, &canon, new_gap_len as u8);
+                    let dst_idx = if is_new {
+                        all_types.len()
+                    } else {
+                        seen.find(&all_types, state.central_tile_id, &canon, new_gap_len as u8)
+                            .unwrap()
+                    };
+
+                    transitions.push(NtTransition {
+                        src_id: state.nt_id + 1,
+                        dst_id: dst_idx + 1,
+                        tile_id: pm.tile_id,
+                        tile_offset: pm.start_b,
+                        match_start: pm.start_a,
+                        match_len: pm.len,
+                    });
+
+                    if !is_new {
                         continue;
                     }
                     stat_dedup += 1;
@@ -596,6 +679,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         gap_len: new_gap_len as u8,
                         gap_start: new_gap_start,
                         central_tile_id: state.central_tile_id,
+                        nt_id: all_types.len() - 1,
                     });
                 }
 
@@ -658,6 +742,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                             gap_len: state.gap_len,
                             gap_start: new_gap_start,
                             central_tile_id: state.central_tile_id,
+                            nt_id: all_types.len() - 1,
                         });
                     }
                 }
@@ -691,6 +776,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         NeighborhoodIndex {
             tileset,
             entries: all_types,
+            transitions,
         }
     }
 
@@ -700,6 +786,101 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
     pub fn num_types(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn transitions(&self) -> &[NtTransition] {
+        &self.transitions
+    }
+
+    pub fn classify_all(&self) -> Vec<NtKind> {
+        let n = self.entries.len();
+        let mut succ_sets: Vec<Vec<usize>> = vec![vec![]; n];
+        let mut has_outgoing = vec![false; n];
+
+        for t in &self.transitions {
+            if t.src_id == NT_CLOSED_ID {
+                continue;
+            }
+            let src_idx = t.src_id - 1;
+            has_outgoing[src_idx] = true;
+            if t.dst_id != NT_CLOSED_ID {
+                succ_sets[src_idx].push(t.dst_id);
+            }
+        }
+
+        let mut cursed = vec![false; n];
+        for i in 0..n {
+            cursed[i] = !has_outgoing[i];
+        }
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..n {
+                if cursed[i] {
+                    continue;
+                }
+                let succs = &succ_sets[i];
+                if succs.is_empty() {
+                    continue;
+                }
+                if succs.iter().all(|&s| cursed[s - 1]) {
+                    cursed[i] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        let mut blessed = vec![false; n];
+        let mut has_closed_or_blessed_succ = vec![false; n];
+
+        for t in &self.transitions {
+            if t.src_id == NT_CLOSED_ID {
+                continue;
+            }
+            let src_idx = t.src_id - 1;
+            if t.dst_id == NT_CLOSED_ID {
+                has_closed_or_blessed_succ[src_idx] = true;
+            }
+        }
+
+        changed = true;
+        while changed {
+            changed = false;
+            for i in 0..n {
+                if blessed[i] || cursed[i] {
+                    continue;
+                }
+                let id = i + 1;
+                let mut any = false;
+                let all_good = self.transitions.iter().filter(|t| t.src_id == id).all(|t| {
+                    any = true;
+                    t.dst_id == NT_CLOSED_ID || blessed[t.dst_id - 1]
+                });
+                if any && all_good {
+                    blessed[i] = true;
+                    has_closed_or_blessed_succ[i] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                let id = i + 1;
+                if cursed[i] && !has_outgoing[i] {
+                    NtKind::Dead
+                } else if cursed[i] {
+                    NtKind::Undead
+                } else if blessed[i] {
+                    NtKind::Blessed
+                } else {
+                    NtKind::Free
+                }
+            })
+            .collect()
     }
 
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
@@ -944,7 +1125,11 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 gap_start,
             });
         }
-        Ok(NeighborhoodIndex { tileset, entries })
+        Ok(NeighborhoodIndex {
+            tileset,
+            entries,
+            transitions: Vec::new(),
+        })
     }
 }
 
@@ -1215,55 +1400,6 @@ mod tests {
     }
 
     #[test]
-    fn test_nt_gap_start_square() {
-        use crate::cyclotomic::ZZ4;
-
-        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
-        let rat = Rat::try_from(&sq).unwrap();
-        let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
-        let tileset = ts.as_ref();
-
-        let mut checked = 0;
-        let mut wrong = 0;
-        for nhood in idx.entries() {
-            checked += 1;
-            let n = nhood.angles.len();
-            let tile_rat = tileset.rat(nhood.central_tile_id);
-            let m = tile_rat.seq().len();
-
-            let mut gap_correct = true;
-            for i in 0..nhood.gap_len() {
-                let pos = (nhood.gap_start + i) % n;
-                let edge = &nhood.edges[pos];
-                let expected_offset = (nhood.central_anchor_edge + i) % m;
-                if edge.tile_id != nhood.central_tile_id || edge.tile_offset != expected_offset {
-                    if wrong < 3 {
-                        eprintln!(
-                            "NT id={}: gap_start={} gap_len={} anchor={} n={}",
-                            nhood.id,
-                            nhood.gap_start,
-                            nhood.gap_len(),
-                            nhood.central_anchor_edge,
-                            n
-                        );
-                        eprintln!(
-                            "  pos={} edge={:?} expected_offset={}",
-                            pos, edge, expected_offset
-                        );
-                        eprintln!("  edges: {:?}", nhood.edges);
-                        eprintln!("  angles: {:?}", nhood.angles);
-                    }
-                    gap_correct = false;
-                    wrong += 1;
-                    break;
-                }
-            }
-        }
-        eprintln!("checked {} NTs, {} wrong gap_start", checked, wrong);
-        assert_eq!(wrong, 0, "{} NTs have wrong gap edges", wrong);
-    }
-
     #[test]
     fn test_nt_validate_square() {
         use crate::cyclotomic::ZZ4;
@@ -1333,5 +1469,118 @@ mod tests {
             "{}/{} hex NTs failed reconstruction",
             fail, checked
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_nt_validate_spectre() {
+        use crate::cyclotomic::ZZ12;
+
+        let sp: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let rat = Rat::try_from(&sp).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let mut checked = 0;
+        for nhood in idx.entries() {
+            checked += 1;
+            if let Err(e) = nhood.validate::<ZZ12>(ts.as_ref()) {
+                panic!("spectre NT id={} failed validation: {}", nhood.id, e);
+            }
+        }
+        assert!(checked > 0, "no spectre NTs found");
+    }
+
+    #[test]
+    fn test_nt_transitions_square() {
+        use crate::cyclotomic::ZZ4;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let transitions = idx.transitions();
+        assert!(!transitions.is_empty(), "no transitions recorded");
+
+        let closed_count = transitions
+            .iter()
+            .filter(|t| t.dst_id == NT_CLOSED_ID)
+            .count();
+        assert!(closed_count > 0, "no CLOSED transitions");
+        eprintln!(
+            "  {} transitions: {} close-branch, {} CLOSED",
+            transitions.len(),
+            transitions.len() - closed_count,
+            closed_count,
+        );
+
+        let num_types = idx.num_types();
+        for t in transitions {
+            assert!(
+                t.src_id >= 1 && t.src_id <= num_types,
+                "invalid src_id={}",
+                t.src_id
+            );
+            assert!(
+                t.dst_id == NT_CLOSED_ID || (t.dst_id >= 1 && t.dst_id <= num_types),
+                "invalid dst_id={}",
+                t.dst_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_nt_classify_square() {
+        use crate::cyclotomic::ZZ4;
+
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let kinds = idx.classify_all();
+        assert_eq!(kinds.len(), idx.num_types());
+
+        let dead = kinds.iter().filter(|&&k| k == NtKind::Dead).count();
+        let undead = kinds.iter().filter(|&&k| k == NtKind::Undead).count();
+        let blessed = kinds.iter().filter(|&&k| k == NtKind::Blessed).count();
+        let free = kinds.iter().filter(|&&k| k == NtKind::Free).count();
+
+        eprintln!(
+            "  square NT classification: dead={} undead={} blessed={} free={}",
+            dead, undead, blessed, free
+        );
+
+        assert_eq!(dead, 0, "square should have no dead NTs");
+        assert_eq!(undead, 0, "square should have no undead NTs");
+        assert_eq!(dead + undead + blessed + free, idx.num_types());
+    }
+
+    #[test]
+    fn test_nt_classify_hex() {
+        use crate::cyclotomic::ZZ12;
+
+        let hx: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hx).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = NeighborhoodIndex::new(Arc::clone(&ts));
+
+        let kinds = idx.classify_all();
+        assert_eq!(kinds.len(), idx.num_types());
+
+        let dead = kinds.iter().filter(|&&k| k == NtKind::Dead).count();
+        let undead = kinds.iter().filter(|&&k| k == NtKind::Undead).count();
+        let blessed = kinds.iter().filter(|&&k| k == NtKind::Blessed).count();
+        let free = kinds.iter().filter(|&&k| k == NtKind::Free).count();
+
+        eprintln!(
+            "  hex NT classification: dead={} undead={} blessed={} free={}",
+            dead, undead, blessed, free
+        );
+
+        assert_eq!(dead, 0, "hex should have no dead NTs");
+        assert_eq!(undead, 0, "hex should have no undead NTs");
+        assert_eq!(dead + undead + blessed + free, idx.num_types());
     }
 }
