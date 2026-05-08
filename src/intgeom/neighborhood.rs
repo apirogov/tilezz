@@ -132,8 +132,7 @@ fn compute_new_gap_start(
     for i in 0..old_gap_len {
         let old_pos = (old_gap_start + i) % old_n;
         if !in_consumed_range(old_pos, start_a, match_len, old_n) {
-            let new_pos =
-                (old_pos as isize - ccw_pos as isize).rem_euclid(seg_len_old as isize) as usize;
+            let new_pos = (old_pos as isize - ccw_pos as isize).rem_euclid(old_n as isize) as usize;
             return new_pos;
         }
     }
@@ -1472,7 +1471,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_nt_validate_spectre() {
         use crate::cyclotomic::ZZ12;
 
