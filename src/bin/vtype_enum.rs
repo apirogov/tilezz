@@ -477,6 +477,8 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             pw.angles.clone(),
             pw.edges.clone(),
             inner_chains,
+            vec![0; pw.angles.len()],
+            1,
         )
         .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
         reconstructed.insert(pw.vtype_id, gp);
