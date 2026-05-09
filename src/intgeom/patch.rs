@@ -3131,4 +3131,91 @@ mod tests {
         );
         assert_eq!(snap1, snap2, "normalize should be idempotent");
     }
+
+    fn t_tetromino_angles() -> Vec<i8> {
+        let snake: Snake<ZZ4> = tiles::tetromino_T();
+        let rat = Rat::try_from(&snake).unwrap();
+        rat.seq().to_vec()
+    }
+
+    fn t_tetromino() -> GrowingPatch<ZZ4> {
+        let mut gp = square_patch();
+        let ms: Vec<_> = gp.get_all_matches();
+        let pm1 = ms
+            .iter()
+            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 0)
+            .expect("first match");
+        gp.add_tile(pm1).expect("glue 1");
+        let ms: Vec<_> = gp.get_all_matches();
+        let pm2 = ms
+            .iter()
+            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
+            .expect("second match");
+        gp.add_tile(pm2).expect("glue 2");
+        let ms: Vec<_> = gp.get_all_matches();
+        let pm3 = ms
+            .iter()
+            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
+            .expect("third match");
+        gp.add_tile(pm3).expect("glue 3");
+        gp
+    }
+
+    #[test]
+    fn reconstruct_t_tetromino() {
+        let gp = t_tetromino();
+        let mi = gp.match_index().clone();
+        let n = gp.boundary_len();
+        assert_eq!(n, 10);
+
+        let ref_angles = t_tetromino_angles();
+        let mut ref_sorted = ref_angles.clone();
+        ref_sorted.sort();
+        let mut angles_sorted = gp.angles().to_vec();
+        angles_sorted.sort();
+        assert_eq!(
+            angles_sorted, ref_sorted,
+            "built patch should be T tetromino"
+        );
+
+        let mut vt_seq: Vec<VertexType> = Vec::new();
+        for i in 0..n {
+            if gp.is_junction(i) {
+                let vt = gp.junction_vertex_type_at(i).unwrap();
+                vt_seq.push(vt);
+            }
+        }
+        assert!(!vt_seq.is_empty(), "T should have junctions");
+
+        let has_inner = vt_seq.iter().any(|vt| !vt.inner.is_empty());
+        assert!(
+            has_inner,
+            "T tetromino should have junctions with non-empty inner"
+        );
+
+        let result = GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, mi);
+        let (reconstructed, _junc_positions) = result.expect("reconstruction should succeed");
+
+        assert_eq!(
+            reconstructed.boundary_len(),
+            n,
+            "boundary length should match"
+        );
+
+        let mut recon_sorted = reconstructed.angles().to_vec();
+        recon_sorted.sort();
+        assert_eq!(
+            recon_sorted, ref_sorted,
+            "reconstructed angles should match T"
+        );
+
+        let recon_juncs: Vec<usize> = (0..reconstructed.boundary_len())
+            .filter(|&i| reconstructed.is_junction(i))
+            .collect();
+        assert_eq!(
+            recon_juncs.len(),
+            vt_seq.len(),
+            "junction count should match"
+        );
+    }
 }
