@@ -78,6 +78,7 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
     Arc::new(TileSet::new(vec![n, w]))
 }
 
+#[expect(dead_code)]
 struct ParsedVtype {
     id: usize,
     angle: i8,
@@ -92,6 +93,7 @@ struct ParsedVtype {
     initial: bool,
 }
 
+#[expect(dead_code)]
 struct ParsedWitness {
     vtype_id: usize,
     pos: usize,
