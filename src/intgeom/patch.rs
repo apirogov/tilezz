@@ -3218,4 +3218,82 @@ mod tests {
             "junction count should match"
         );
     }
+
+    #[test]
+    fn single_vt_seq_matches_minimal_witness_hex() {
+        let gp = hex_patch();
+        let ts = gp.match_index().clone();
+        let matches: Vec<_> = gp.get_all_matches();
+        for pm in &matches {
+            let mut glued = gp.clone_for_mutation();
+            glued.add_tile(pm).expect("glue");
+            for pos in 0..glued.boundary_len() {
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let (mw, _mw_junc) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
+                    .expect("minimal witness");
+
+                let (seq, _seq_juncs) = GrowingPatch::construct_witness_from_vt_sequence(
+                    &[vt.clone()],
+                    Arc::clone(&ts),
+                )
+                .expect("seq witness");
+
+                assert_eq!(
+                    seq.boundary_len(),
+                    mw.boundary_len(),
+                    "boundary length mismatch for vt={:?}",
+                    vt
+                );
+
+                let mut mw_a = mw.angles().to_vec();
+                let mut seq_a = seq.angles().to_vec();
+                mw_a.sort();
+                seq_a.sort();
+                assert_eq!(seq_a, mw_a, "sorted angles mismatch for vt={:?}", vt);
+            }
+        }
+    }
+
+    #[test]
+    fn single_vt_seq_matches_minimal_witness_square() {
+        let gp = square_patch();
+        let ts = gp.match_index().clone();
+        let matches: Vec<_> = gp.get_all_matches();
+        for pm in &matches {
+            let mut glued = gp.clone_for_mutation();
+            glued.add_tile(pm).expect("glue");
+            for pos in 0..glued.boundary_len() {
+                let vt = match glued.junction_vertex_type_at(pos) {
+                    Some(vt) => vt,
+                    None => continue,
+                };
+
+                let (mw, _mw_junc) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
+                    .expect("minimal witness");
+
+                let (seq, _seq_juncs) = GrowingPatch::construct_witness_from_vt_sequence(
+                    &[vt.clone()],
+                    Arc::clone(&ts),
+                )
+                .expect("seq witness");
+
+                assert_eq!(
+                    seq.boundary_len(),
+                    mw.boundary_len(),
+                    "boundary length mismatch for vt={:?}",
+                    vt
+                );
+
+                let mut mw_a = mw.angles().to_vec();
+                let mut seq_a = seq.angles().to_vec();
+                mw_a.sort();
+                seq_a.sort();
+                assert_eq!(seq_a, mw_a, "sorted angles mismatch for vt={:?}", vt);
+            }
+        }
+    }
 }
