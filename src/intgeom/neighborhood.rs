@@ -6,8 +6,9 @@ use rustc_hash::FxHashMap;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{
-    compute_glue_angles, glue_match_to_raw_boundary, glue_tile_to_raw_boundary,
-    vertex_type_raw_from, EdgeInfo, GrowingPatch, PatchMatch, RawBoundary, VertexType,
+    compute_glue_angles, forward_match_length, glue_match_to_raw_boundary,
+    glue_tile_to_raw_boundary, vertex_type_raw_from, EdgeInfo, GrowingPatch, PatchMatch,
+    RawBoundary, VertexType,
 };
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
@@ -183,136 +184,60 @@ struct NtBfsState {
     cw_junc_on_seed: usize,
     seed_match_len: usize,
     cw_junc_on_ctx: usize,
-    nt_id: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum NtStateKey {
-    Seed {
-        central_tile_id: usize,
-        cw_anchor_on_central: usize,
-        seed_tile_id: usize,
-        cw_junc_on_seed: usize,
-        seed_match_len: usize,
-    },
-    Sequence {
-        central_tile_id: usize,
-        cw_anchor_on_central: usize,
-        vt_seq: Vec<VertexType>,
-    },
+struct NtStateKey {
+    central_tile_id: usize,
+    cw_anchor_on_central: usize,
+    vt_seq: Vec<VertexType>,
 }
 
 impl NtBfsState {
     fn key(&self) -> NtStateKey {
-        if self.vt_seq.is_empty() {
-            NtStateKey::Seed {
-                central_tile_id: self.central_tile_id,
-                cw_anchor_on_central: self.cw_anchor_on_central,
-                seed_tile_id: self.seed_tile_id,
-                cw_junc_on_seed: self.cw_junc_on_seed,
-                seed_match_len: self.seed_match_len,
-            }
-        } else {
-            NtStateKey::Sequence {
-                central_tile_id: self.central_tile_id,
-                cw_anchor_on_central: self.cw_anchor_on_central,
-                vt_seq: self.vt_seq.clone(),
-            }
+        NtStateKey {
+            central_tile_id: self.central_tile_id,
+            cw_anchor_on_central: self.cw_anchor_on_central,
+            vt_seq: self.vt_seq.clone(),
         }
     }
 }
 
-struct ContextBoundary {
-    boundary: RawBoundary,
-    cw_junc_on_ctx: usize,
-}
-
-struct CentralAttachment {
+struct AttachResult {
     augmented: RawBoundary,
     covered_len: usize,
     gap_len: usize,
     gap_start: usize,
-    augmented_frontier: usize,
+    frontier: usize,
+}
+
+fn frontier_distance(ctx_n: usize, cw_junc: usize, ctx_frontier: usize) -> usize {
+    (cw_junc + ctx_n - ctx_frontier) % ctx_n
 }
 
 fn reconstruct_context<T: IsComplex + IsRingOrField + Units>(
     state: &NtBfsState,
     match_index: &Arc<MatchTypeIndex<T>>,
-) -> Option<ContextBoundary> {
+) -> Option<(RawBoundary, usize)> {
     if state.vt_seq.is_empty() {
-        return Some(ContextBoundary {
-            boundary: tile_boundary(match_index.tileset().as_ref(), state.seed_tile_id),
-            cw_junc_on_ctx: state.cw_junc_on_ctx,
-        });
+        return Some((
+            tile_boundary(match_index.tileset().as_ref(), state.seed_tile_id),
+            state.cw_junc_on_ctx,
+        ));
     }
 
     let (patch, _) =
         GrowingPatch::construct_witness_from_vt_sequence(&state.vt_seq, Arc::clone(match_index))?;
-    let n = patch.boundary_len();
-    if n == 0 {
-        return None;
-    }
 
-    let boundary = RawBoundary {
-        angles: patch.angles().to_vec(),
-        edges: patch.edges().to_vec(),
-        inner_chains: patch.inner_chains().to_vec(),
-        patch_tile_ids: patch.patch_tile_ids().to_vec(),
-    };
-
-    let tileset = match_index.tileset();
-    let central_rat = tileset.rat(state.central_tile_id);
-    let central_n = central_rat.len();
-    let ctx_rat = Rat::from_slice_unchecked(&boundary.angles);
-
-    let mut recovered_anchor: Option<usize> = None;
-    for p in 0..n {
-        let (ctx_start, covered_len, central_end) =
-            ctx_rat.get_match((p as i64, state.cw_anchor_on_central as i64), central_rat);
-        if covered_len == 0 || covered_len >= central_n {
-            continue;
-        }
-        if ctx_start.rem_euclid(n as i64) as usize != p
-            || central_end.rem_euclid(central_n as i64) as usize != state.cw_anchor_on_central
-        {
-            continue;
-        }
-        let pm = PatchMatch {
-            start_a: p,
-            len: covered_len,
-            start_b: state.cw_anchor_on_central,
-            tile_id: state.central_tile_id,
-        };
-        let Some(glue) =
-            glue_match_to_raw_boundary::<T>(&boundary, &pm, tileset.as_ref(), false, 0)
-        else {
-            continue;
-        };
-        if !validate_raw_boundary::<T>(&glue.boundary) {
-            continue;
-        }
-        let gap_len = central_n - covered_len;
-        if gap_len == 0 {
-            continue;
-        }
-        let vts = extract_covered_vertex_types(
-            &glue.boundary.edges,
-            &glue.boundary.inner_chains,
-            glue.old_survivor_len,
-            gap_len,
-        );
-        if vts == state.vt_seq {
-            recovered_anchor = Some(p);
-            break;
-        }
-    }
-
-    let cw_junc_on_ctx = recovered_anchor?;
-
-    Some(ContextBoundary {
-        boundary,
-        cw_junc_on_ctx,
-    })
+    Some((
+        RawBoundary {
+            angles: patch.angles().to_vec(),
+            edges: patch.edges().to_vec(),
+            inner_chains: patch.inner_chains().to_vec(),
+            patch_tile_ids: patch.patch_tile_ids().to_vec(),
+        },
+        state.cw_junc_on_ctx,
+    ))
 }
 
 fn find_gap_frontier<T: IsComplex + IsRingOrField + Units>(
@@ -338,7 +263,7 @@ fn attach_central<T: IsComplex + IsRingOrField + Units>(
     cw_anchor_on_central: usize,
     tileset: &Arc<TileSet<T>>,
     first_step: bool,
-) -> Option<Option<CentralAttachment>> {
+) -> Option<Option<AttachResult>> {
     let ctx_n = context.angles.len();
     if ctx_n == 0 || cw_junc_on_ctx >= ctx_n {
         return None;
@@ -378,21 +303,20 @@ fn attach_central<T: IsComplex + IsRingOrField + Units>(
     }
 
     let gap_start = glue.old_survivor_len;
-    let augmented_frontier =
-        find_gap_frontier(&glue.boundary, tileset.as_ref(), gap_start, gap_len);
-    Some(Some(CentralAttachment {
+    let frontier = find_gap_frontier(&glue.boundary, tileset.as_ref(), gap_start, gap_len);
+    Some(Some(AttachResult {
         augmented: glue.boundary,
         covered_len,
         gap_len,
         gap_start,
-        augmented_frontier,
+        frontier,
     }))
 }
 
 fn make_neighborhood_entry(
     id: usize,
     state: &NtBfsState,
-    attachment: CentralAttachment,
+    attachment: AttachResult,
 ) -> Option<NeighborhoodType> {
     let gap_len = u8::try_from(attachment.gap_len).ok()?;
     Some(NeighborhoodType {
@@ -483,7 +407,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     }
 
-                    let mut state = NtBfsState {
+                    let state = NtBfsState {
                         central_tile_id,
                         cw_anchor_on_central: central_anchor,
                         vt_seq: Vec::new(),
@@ -491,7 +415,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         cw_junc_on_seed: context_anchor,
                         seed_match_len: pm.len,
                         cw_junc_on_ctx: context_anchor,
-                        nt_id: 0,
                     };
 
                     let context = tile_boundary(tileset.as_ref(), context_tile_id);
@@ -503,7 +426,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         &tileset,
                         true,
                     ) {
-                        Some(Some(attachment)) => attachment,
+                        Some(Some(a)) => a,
                         _ => continue,
                     };
 
@@ -513,7 +436,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     }
 
                     let id = entries.len() + 1;
-                    state.nt_id = id;
                     let Some(entry) = make_neighborhood_entry(id, &state, attachment) else {
                         continue;
                     };
@@ -525,17 +447,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         }
 
         let mut explored = 0usize;
-        let mut stat_touching = 0usize;
-        let mut stat_reattach = 0usize;
-        let mut stat_frontier_vt = 0usize;
-        let mut stat_new_states = 0usize;
-        let mut stat_closed = 0usize;
-        let mut stat_reconstruct_fail = 0usize;
-        let mut stat_attach_fail = 0usize;
-        let mut stat_cov_same = 0usize;
-        let mut stat_cov_inc = 0usize;
-        let mut stat_aug_closed = 0usize;
-        let mut stat_cov_inc_by_gap: FxHashMap<usize, usize> = FxHashMap::default();
         while let Some(state) = queue.pop_front() {
             explored += 1;
             if explored.is_multiple_of(5000) {
@@ -548,57 +459,66 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 );
             }
 
-            let context = match reconstruct_context(&state, &match_index) {
-                Some(context) => context,
-                None => {
-                    stat_reconstruct_fail += 1;
-                    continue;
-                }
+            let state_id = *seen
+                .get(&state.key())
+                .expect("dequeued state must be in seen");
+
+            let Some((context, cw_junc_on_ctx)) = reconstruct_context(&state, &match_index) else {
+                continue;
             };
-            let source_attachment = match attach_central(
-                &context.boundary,
-                context.cw_junc_on_ctx,
+
+            let Some(Some(source_att)) = attach_central(
+                &context,
+                cw_junc_on_ctx,
                 state.central_tile_id,
                 state.cw_anchor_on_central,
                 &tileset,
                 state.vt_seq.is_empty(),
-            ) {
-                Some(Some(attachment)) => attachment,
-                _ => {
-                    stat_attach_fail += 1;
-                    continue;
-                }
+            ) else {
+                continue;
             };
 
-            if source_attachment.augmented.angles.len() > MAX_BOUNDARY_SIZE {
+            if source_att.augmented.angles.len() > MAX_BOUNDARY_SIZE {
                 continue;
             }
 
-            let ctx_n = context.boundary.angles.len();
-            let ctx_frontier = (context.cw_junc_on_ctx + source_attachment.covered_len) % ctx_n;
+            let ctx_n = context.angles.len();
+            let ctx_frontier = (cw_junc_on_ctx + source_att.covered_len) % ctx_n;
+            let src_frontier_dist = frontier_distance(ctx_n, cw_junc_on_ctx, ctx_frontier);
+
             for tile_id in 0..tileset.num_tiles() {
-                let tile_len = tileset.rat(tile_id).len();
+                let tile_rat = tileset.rat(tile_id);
+                let tile_seq = tile_rat.seq();
+                let tile_len = tile_rat.len();
                 for tile_offset in 0..tile_len {
+                    let fml = forward_match_length(
+                        &source_att.augmented.angles,
+                        source_att.frontier,
+                        tile_seq,
+                        tile_offset,
+                    );
+                    if fml == 0 {
+                        continue;
+                    }
+
                     let target = EdgeInfo {
                         tile_id,
                         tile_offset,
                     };
 
-                    let aug_glue = match glue_tile_to_raw_boundary::<T>(
-                        &source_attachment.augmented,
-                        source_attachment.augmented_frontier,
+                    let Some(aug_glue) = glue_tile_to_raw_boundary::<T>(
+                        &source_att.augmented,
+                        source_att.frontier,
                         target,
                         tileset.as_ref(),
                         false,
                         0,
-                    ) {
-                        Some(glue) => glue,
-                        None => continue,
+                    ) else {
+                        continue;
                     };
                     if !validate_raw_boundary::<T>(&aug_glue.boundary) {
                         continue;
                     }
-                    stat_touching += 1;
 
                     if !aug_glue
                         .boundary
@@ -606,39 +526,35 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         .iter()
                         .any(|e| e.tile_id == state.central_tile_id)
                     {
-                        stat_aug_closed += 1;
-                        stat_closed += 1;
                         transitions.push(NtTransition {
-                            src_id: state.nt_id,
+                            src_id: state_id,
                             dst_id: NT_CLOSED_ID,
-                            tile_id: target.tile_id,
-                            tile_offset: target.tile_offset,
-                            match_start: source_attachment.augmented_frontier,
+                            tile_id,
+                            tile_offset,
+                            match_start: source_att.frontier,
                             match_len: aug_glue.match_len,
                         });
                         continue;
                     }
 
-                    let replay_glue = match glue_tile_to_raw_boundary::<T>(
-                        &context.boundary,
+                    let Some(replay_glue) = glue_tile_to_raw_boundary::<T>(
+                        &context,
                         ctx_frontier,
                         target,
                         tileset.as_ref(),
                         state.vt_seq.is_empty(),
                         0,
-                    ) {
-                        Some(glue) => glue,
-                        None => continue,
+                    ) else {
+                        continue;
                     };
                     if replay_glue.boundary.angles.len() > MAX_BOUNDARY_SIZE
                         || !validate_raw_boundary::<T>(&replay_glue.boundary)
                     {
                         continue;
                     }
-                    let context_glue = replay_glue.boundary;
 
-                    let Some(new_cw_junc_on_ctx) = remap_surviving_position(
-                        context.cw_junc_on_ctx,
+                    let Some(new_cw_junc) = remap_surviving_position(
+                        cw_junc_on_ctx,
                         ctx_frontier,
                         replay_glue.match_len,
                         ctx_n,
@@ -646,55 +562,50 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         continue;
                     };
 
-                    let new_attachment = match attach_central(
-                        &context_glue,
-                        new_cw_junc_on_ctx,
+                    let new_context = replay_glue.boundary;
+
+                    let new_att = match attach_central(
+                        &new_context,
+                        new_cw_junc,
                         state.central_tile_id,
                         state.cw_anchor_on_central,
                         &tileset,
                         false,
                     ) {
-                        Some(attachment) => attachment,
+                        Some(Some(a)) => a,
+                        Some(None) => {
+                            transitions.push(NtTransition {
+                                src_id: state_id,
+                                dst_id: NT_CLOSED_ID,
+                                tile_id,
+                                tile_offset,
+                                match_start: source_att.frontier,
+                                match_len: aug_glue.match_len,
+                            });
+                            continue;
+                        }
                         None => continue,
                     };
-                    stat_reattach += 1;
 
-                    if new_attachment.is_none() {
-                        stat_closed += 1;
-                        transitions.push(NtTransition {
-                            src_id: state.nt_id,
-                            dst_id: NT_CLOSED_ID,
-                            tile_id: target.tile_id,
-                            tile_offset: target.tile_offset,
-                            match_start: source_attachment.augmented_frontier,
-                            match_len: aug_glue.match_len,
-                        });
+                    if new_att.covered_len < source_att.covered_len {
                         continue;
-                    }
-                    let new_attachment = new_attachment.unwrap();
-
-                    if new_attachment.covered_len < source_attachment.covered_len {
-                        continue;
-                    }
-                    if new_attachment.covered_len == source_attachment.covered_len {
-                        stat_cov_same += 1;
-                    } else {
-                        stat_cov_inc += 1;
-                        *stat_cov_inc_by_gap
-                            .entry(source_attachment.gap_len)
-                            .or_insert(0) += 1;
                     }
 
                     let new_frontier_vt = vertex_type_raw_from(
-                        &new_attachment.augmented.edges,
-                        &new_attachment.augmented.inner_chains,
-                        new_attachment.augmented_frontier,
+                        &new_att.augmented.edges,
+                        &new_att.augmented.inner_chains,
+                        new_att.frontier,
                     );
+
+                    let new_ctx_n = new_context.angles.len();
+                    let new_ctx_frontier = (new_cw_junc + new_att.covered_len) % new_ctx_n;
+                    let new_frontier_dist =
+                        frontier_distance(new_ctx_n, new_cw_junc, new_ctx_frontier);
 
                     let mut new_vt_seq = state.vt_seq.clone();
                     if new_vt_seq.is_empty() {
                         new_vt_seq.push(new_frontier_vt);
-                    } else if new_attachment.covered_len == source_attachment.covered_len {
+                    } else if new_frontier_dist == src_frontier_dist {
                         *new_vt_seq.last_mut().expect("non-empty") = new_frontier_vt;
                     } else {
                         new_vt_seq.push(new_frontier_vt);
@@ -702,17 +613,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     if new_vt_seq.len() > MAX_BOUNDARY_SIZE {
                         continue;
                     }
-                    stat_frontier_vt += 1;
 
-                    let mut new_state = NtBfsState {
+                    let new_state = NtBfsState {
                         central_tile_id: state.central_tile_id,
                         cw_anchor_on_central: state.cw_anchor_on_central,
                         vt_seq: new_vt_seq,
                         seed_tile_id: state.seed_tile_id,
                         cw_junc_on_seed: state.cw_junc_on_seed,
                         seed_match_len: state.seed_match_len,
-                        cw_junc_on_ctx: new_cw_junc_on_ctx,
-                        nt_id: 0,
+                        cw_junc_on_ctx: new_cw_junc,
                     };
 
                     let key = new_state.key();
@@ -720,24 +629,21 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         id
                     } else {
                         let id = entries.len() + 1;
-                        new_state.nt_id = id;
-                        let Some(entry) = make_neighborhood_entry(id, &new_state, new_attachment)
-                        else {
+                        let Some(entry) = make_neighborhood_entry(id, &new_state, new_att) else {
                             continue;
                         };
                         seen.insert(key, id);
                         entries.push(entry);
                         queue.push_back(new_state);
-                        stat_new_states += 1;
                         id
                     };
 
                     transitions.push(NtTransition {
-                        src_id: state.nt_id,
+                        src_id: state_id,
                         dst_id,
-                        tile_id: target.tile_id,
-                        tile_offset: target.tile_offset,
-                        match_start: source_attachment.augmented_frontier,
+                        tile_id,
+                        tile_offset,
+                        match_start: source_att.frontier,
                         match_len: aug_glue.match_len,
                     });
                 }
@@ -745,24 +651,11 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         }
 
         eprintln!(
-            "  total: {} types | touch={} reattach={} vt={} new={} closed={} aug_closed={} recon_fail={} attach_fail={} cov_same={} cov_inc={}",
+            "  total: {} types, {} transitions, {} explored",
             entries.len(),
-            stat_touching,
-            stat_reattach,
-            stat_frontier_vt,
-            stat_new_states,
-            stat_closed,
-            stat_aug_closed,
-            stat_reconstruct_fail,
-            stat_attach_fail,
-            stat_cov_same,
-            stat_cov_inc,
+            transitions.len(),
+            explored,
         );
-        if !stat_cov_inc_by_gap.is_empty() {
-            let mut entries: Vec<_> = stat_cov_inc_by_gap.into_iter().collect();
-            entries.sort_by_key(|(g, _)| *g);
-            eprintln!("  cov_inc_by_gap: {:?}", entries);
-        }
 
         NeighborhoodIndex {
             tileset,
