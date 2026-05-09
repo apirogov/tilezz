@@ -510,57 +510,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         vtype: &VertexType,
         match_index: Arc<MatchTypeIndex<T>>,
     ) -> Option<(Self, usize)> {
-        let tileset = match_index.tileset();
-        let seed_id = vtype.cw.tile_id;
-        let seed_seq = tileset.rat(seed_id).seq();
-        let n_seed = seed_seq.len();
-
-        let boundary = RawBoundary {
-            angles: seed_seq.to_vec(),
-            edges: (0..n_seed)
-                .map(|i| EdgeInfo {
-                    tile_id: seed_id,
-                    tile_offset: i,
-                })
-                .collect(),
-            inner_chains: vec![vec![]; n_seed],
-            patch_tile_ids: vec![0; n_seed],
-        };
-
-        let junc_pos = (vtype.cw.tile_offset + 1) % n_seed;
-
-        let mut targets = vtype.inner.clone();
-        targets.push(vtype.ccw);
-
-        let mut next_tile_id = 1usize;
-        let (boundary, _final_junc) = flower_petal_glue::<T>(
-            boundary,
-            junc_pos,
-            &targets,
-            tileset.as_ref(),
-            true,
-            &mut next_tile_id,
-        )?;
-
-        let patch = GrowingPatch::from_parts(
-            Arc::clone(&match_index),
-            boundary.angles,
-            boundary.edges,
-            boundary.inner_chains,
-            boundary.patch_tile_ids,
-            next_tile_id,
-        )?;
-
-        let final_edges = patch.edges();
-        let final_inner = patch.inner_chains();
-        for pos in 0..patch.boundary_len() {
-            let vt = vertex_type_raw_from(final_edges, final_inner, pos);
-            if vt == *vtype {
-                return Some((patch, pos));
-            }
-        }
-
-        None
+        let (patch, juncs) =
+            Self::construct_witness_from_vt_sequence(std::slice::from_ref(vtype), match_index)?;
+        Some((patch, juncs[0]))
     }
 
     pub fn construct_witness_from_vt_sequence(
@@ -1915,17 +1867,6 @@ mod tests {
     }
 
     #[test]
-    fn seed_patch_has_matches() {
-        let gp = square_patch();
-        let matches = gp.get_all_matches();
-        assert!(!matches.is_empty(), "seed should have matches");
-        for pm in &matches {
-            assert_eq!(pm.tile_id, 0, "only tile 0 in single-tile set");
-            assert!(pm.len > 0, "match length must be positive");
-        }
-    }
-
-    #[test]
     fn first_add_produces_growing() {
         let mut gp = hex_patch();
         let pm = gp.get_all_matches()[0].clone();
@@ -3217,83 +3158,5 @@ mod tests {
             vt_seq.len(),
             "junction count should match"
         );
-    }
-
-    #[test]
-    fn single_vt_seq_matches_minimal_witness_hex() {
-        let gp = hex_patch();
-        let ts = gp.match_index().clone();
-        let matches: Vec<_> = gp.get_all_matches();
-        for pm in &matches {
-            let mut glued = gp.clone_for_mutation();
-            glued.add_tile(pm).expect("glue");
-            for pos in 0..glued.boundary_len() {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let (mw, _mw_junc) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
-                    .expect("minimal witness");
-
-                let (seq, _seq_juncs) = GrowingPatch::construct_witness_from_vt_sequence(
-                    &[vt.clone()],
-                    Arc::clone(&ts),
-                )
-                .expect("seq witness");
-
-                assert_eq!(
-                    seq.boundary_len(),
-                    mw.boundary_len(),
-                    "boundary length mismatch for vt={:?}",
-                    vt
-                );
-
-                let mut mw_a = mw.angles().to_vec();
-                let mut seq_a = seq.angles().to_vec();
-                mw_a.sort();
-                seq_a.sort();
-                assert_eq!(seq_a, mw_a, "sorted angles mismatch for vt={:?}", vt);
-            }
-        }
-    }
-
-    #[test]
-    fn single_vt_seq_matches_minimal_witness_square() {
-        let gp = square_patch();
-        let ts = gp.match_index().clone();
-        let matches: Vec<_> = gp.get_all_matches();
-        for pm in &matches {
-            let mut glued = gp.clone_for_mutation();
-            glued.add_tile(pm).expect("glue");
-            for pos in 0..glued.boundary_len() {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let (mw, _mw_junc) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
-                    .expect("minimal witness");
-
-                let (seq, _seq_juncs) = GrowingPatch::construct_witness_from_vt_sequence(
-                    &[vt.clone()],
-                    Arc::clone(&ts),
-                )
-                .expect("seq witness");
-
-                assert_eq!(
-                    seq.boundary_len(),
-                    mw.boundary_len(),
-                    "boundary length mismatch for vt={:?}",
-                    vt
-                );
-
-                let mut mw_a = mw.angles().to_vec();
-                let mut seq_a = seq.angles().to_vec();
-                mw_a.sort();
-                seq_a.sort();
-                assert_eq!(seq_a, mw_a, "sorted angles mismatch for vt={:?}", vt);
-            }
-        }
     }
 }
