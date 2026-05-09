@@ -167,6 +167,8 @@ pub fn update_inner_chains(
     old_edges: &[EdgeInfo],
     pm: &PatchMatch,
     new_n: usize,
+    old_ptids: &[usize],
+    _new_ptids: &[usize],
 ) -> Vec<Vec<EdgeInfo>> {
     let n = old_edges.len();
     let seg_len_old = n - pm.len;
@@ -179,17 +181,21 @@ pub fn update_inner_chains(
         new_inner[i] = old_inner[(ccw_pos + i) % n].clone();
     }
 
-    new_inner[0] = old_inner[ccw_pos]
-        .iter()
-        .chain(std::iter::once(&old_edges[cw_end_matched]))
-        .cloned()
-        .collect();
+    let consumed_cw_ptid = old_ptids[cw_end_matched];
+    let ccw_survivor_ptid = old_ptids[ccw_pos];
+    let mut chain_ccw: Vec<EdgeInfo> = old_inner[ccw_pos].clone();
+    if consumed_cw_ptid != ccw_survivor_ptid {
+        chain_ccw.push(old_edges[cw_end_matched]);
+    }
+    new_inner[0] = chain_ccw;
 
-    new_inner[seg_len_old] = old_inner[pm.start_a]
-        .iter()
-        .chain(std::iter::once(&old_edges[pm.start_a]))
-        .cloned()
-        .collect();
+    let consumed_ccw_ptid = old_ptids[pm.start_a];
+    let cw_survivor_ptid = old_ptids[(pm.start_a + n - 1) % n];
+    let mut chain_cw: Vec<EdgeInfo> = old_inner[pm.start_a].clone();
+    if consumed_ccw_ptid != cw_survivor_ptid {
+        chain_cw.push(old_edges[pm.start_a]);
+    }
+    new_inner[seg_len_old] = chain_cw;
 
     new_inner
 }
@@ -231,6 +237,7 @@ impl RawBoundary {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
@@ -240,6 +247,7 @@ pub(crate) fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
     tileset.rat(edge.tile_id).seq()[edge.tile_offset] != boundary.angles[pos]
 }
 
+#[cfg(test)]
 pub(crate) fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
@@ -342,7 +350,14 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     let new_inner = if first_step {
         vec![vec![]; new_n]
     } else {
-        update_inner_chains(&boundary.inner_chains, &boundary.edges, pm, new_n)
+        update_inner_chains(
+            &boundary.inner_chains,
+            &boundary.edges,
+            pm,
+            new_n,
+            &boundary.patch_tile_ids,
+            &new_patch_tile_ids,
+        )
     };
 
     let gr =
@@ -565,50 +580,75 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     ) -> Option<(Self, Vec<usize>)> {
         let tileset = match_index.tileset();
         let n_vts = vtypes.len();
-
-        let (first_patch, first_junc) =
-            Self::construct_minimal_witness(&vtypes[start], Arc::clone(match_index))?;
+        let seed_id = vtypes[start].cw.tile_id;
+        let seed_seq = tileset.rat(seed_id).seq();
+        let n_seed = seed_seq.len();
 
         let mut raw = RawBoundary {
-            angles: first_patch.angles().to_vec(),
-            edges: first_patch.edges().to_vec(),
-            inner_chains: first_patch.inner_chains().to_vec(),
-            patch_tile_ids: first_patch.patch_tile_ids().to_vec(),
+            angles: seed_seq.to_vec(),
+            edges: (0..n_seed)
+                .map(|i| EdgeInfo {
+                    tile_id: seed_id,
+                    tile_offset: i,
+                })
+                .collect(),
+            inner_chains: vec![vec![]; n_seed],
+            patch_tile_ids: vec![0; n_seed],
         };
-        let mut next_tile_id = first_patch.next_tile_id();
-        let mut junc_positions = vec![first_junc];
+        let mut next_tile_id = 1usize;
+        let mut junc_positions = Vec::new();
+
+        let vt0 = &vtypes[start];
+        let junc_pos = (vt0.cw.tile_offset + 1) % n_seed;
+        let mut all_targets = vt0.inner.clone();
+        all_targets.push(vt0.ccw);
+
+        let (new_raw, new_junc) = flower_petal_glue::<T>(
+            RawBoundary {
+                angles: raw.angles.clone(),
+                edges: raw.edges.clone(),
+                inner_chains: raw.inner_chains.clone(),
+                patch_tile_ids: raw.patch_tile_ids.clone(),
+            },
+            junc_pos,
+            &all_targets,
+            tileset.as_ref(),
+            true,
+            &mut next_tile_id,
+        )?;
+        raw = new_raw;
+        junc_positions.push(new_junc);
 
         for step in 1..n_vts {
+            let k_prev = (start + step - 1) % n_vts;
             let k = (start + step) % n_vts;
-            let curr_cw = vtypes[k].cw;
+            let vt = &vtypes[k];
+            let vt_prev = &vtypes[k_prev];
+
+            let tile_size = tileset.rat(vt_prev.ccw.tile_id).seq().len();
+            let offset = ((vt.cw.tile_offset as isize - vt_prev.ccw.tile_offset as isize
+                + tile_size as isize) as usize)
+                % tile_size
+                + 1;
+            let prev_junc = junc_positions[step - 1];
             let n = raw.edges.len();
+            let junc_k = (prev_junc + offset) % n;
 
-            let junc_k =
-                next_junction_on_raw_boundary(&raw, tileset.as_ref(), junc_positions[step - 1])?;
-
-            let cw_edge = raw.edges[(junc_k + n - 1) % n];
-            if cw_edge != curr_cw {
-                return None;
-            }
-
-            let angle_seq = junction_angle_sequence(&vtypes[k], tileset.as_ref());
-
-            let all_targets = {
-                let mut t = vtypes[k].inner.clone();
-                t.push(vtypes[k].ccw);
-                t
-            };
+            let angle_seq = junction_angle_sequence(vt, tileset.as_ref());
+            let mut all_targets = vt.inner.clone();
+            all_targets.push(vt.ccw);
 
             let boundary_angle = raw.angles[junc_k];
-
             let skip = angle_seq
                 .iter()
                 .position(|&a| a == boundary_angle)
                 .unwrap_or(0);
-
-            let skip = skip.min(all_targets.len().saturating_sub(1));
-
             let targets = &all_targets[skip..];
+
+            if targets.is_empty() {
+                junc_positions.push(junc_k);
+                continue;
+            }
 
             let (new_raw, new_junc) = flower_petal_glue::<T>(
                 RawBoundary {
@@ -623,7 +663,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 false,
                 &mut next_tile_id,
             )?;
-
             raw = new_raw;
             junc_positions.push(new_junc);
         }
@@ -1518,7 +1557,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         debug_assert_eq!(new_edges.len(), new_len);
 
-        let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len);
+        let new_inner = update_inner_chains(
+            &old_inner,
+            &edges,
+            pm,
+            new_len,
+            &patch_tile_ids,
+            &new_patch_tile_ids,
+        );
 
         self.state = PatchState::Growing {
             angles: new_angles,
@@ -2335,38 +2381,38 @@ mod tests {
         let mut gp2 = gp.clone();
         gp2.add_tile(&first_match).expect("first add");
 
-        let _n = gp2.boundary_len();
         let candidates = gp2.get_all_matches();
         let second = candidates
             .iter()
             .find(|pm| pm.len == 1)
             .expect("need len-1 match");
-        let pos_of_match = second.start_a;
         let mut gp3 = gp2.clone();
         gp3.add_tile(second).expect("second add");
 
-        let inner = match &gp3.state {
-            PatchState::Growing { inner_chains, .. } => inner_chains.clone(),
-            _ => panic!("expected Growing"),
-        };
+        let n = gp3.boundary_len();
+        let edges = gp3.edges();
+        let ptids = gp3.patch_tile_ids();
+        let inners = gp3.inner_chains();
 
-        let new_n = gp3.boundary_len();
-        let mut found_nonempty = false;
-        for (i, chain) in inner.iter().enumerate() {
-            if !chain.is_empty() {
-                found_nonempty = true;
-                assert_eq!(
-                    chain.len(),
-                    1,
-                    "inner chain at position {i} should have exactly 1 entry after second glue"
+        for pos in 0..n {
+            let prev = (pos + n - 1) % n;
+            let cw_ptid = ptids[prev];
+            let ccw_ptid = ptids[pos];
+            for entry in &inners[pos] {
+                assert_ne!(
+                    entry.tile_id, edges[prev].tile_id,
+                    "inner at {pos} should not be from CW tile"
                 );
-                assert_eq!(
-                    chain[0].tile_id, 0,
-                    "inner entry should be the original hex tile"
+                assert_ne!(
+                    entry.tile_id, edges[pos].tile_id,
+                    "inner at {pos} should not be from CCW tile"
+                );
+                assert!(
+                    cw_ptid != ccw_ptid || inners[pos].is_empty(),
+                    "when CW and CCW have same ptid, inner should be empty at {pos}"
                 );
             }
         }
-        assert!(found_nonempty, "at least one inner chain should be non-empty after second glue on a {new_n}-edge boundary, pos_of_match={pos_of_match}");
     }
 
     #[test]
@@ -2916,8 +2962,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "VT sequence reconstruction needs frontier-growth VTs, not final-state VTs"]
-    fn construct_witness_from_vt_sequence_five_hex() {
+    fn reconstruct_five_hex_cross() {
         let gp = five_hex_cross();
         let mi = gp.match_index().clone();
 
@@ -2925,30 +2970,35 @@ mod tests {
         let mut vt_seq: Vec<VertexType> = Vec::new();
         for i in 0..n {
             if gp.is_junction(i) {
-                vt_seq.push(gp.junction_vertex_type_at(i).unwrap());
+                let vt = gp.junction_vertex_type_at(i).unwrap();
+                assert!(
+                    vt.inner.is_empty(),
+                    "hex boundary junctions should have empty inner"
+                );
+                vt_seq.push(vt);
             }
         }
-        eprintln!(
-            "5-hex cross: {} boundary edges, {} junction VTs",
-            n,
-            vt_seq.len()
-        );
-        for (i, vt) in vt_seq.iter().enumerate() {
-            eprintln!(
-                "  VT[{}]: cw=({},{}) inner={:?} ccw=({},{})",
-                i, vt.cw.tile_id, vt.cw.tile_offset, vt.inner, vt.ccw.tile_id, vt.ccw.tile_offset
-            );
-        }
+        assert_eq!(vt_seq.len(), 6);
 
-        let (reconstructed, _junc_positions) =
-            GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, mi)
-                .expect("reconstruction should succeed");
+        let result = GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, mi);
+        let (reconstructed, _junc_positions) = result.expect("reconstruction should succeed");
 
         let mut orig_angles: Vec<i8> = gp.angles().to_vec();
         let mut recon_angles: Vec<i8> = reconstructed.angles().to_vec();
         orig_angles.sort();
         recon_angles.sort();
         assert_eq!(orig_angles, recon_angles, "sorted angles should match");
+
+        assert_eq!(
+            reconstructed.boundary_len(),
+            gp.boundary_len(),
+            "boundary length should match"
+        );
+
+        let recon_juncs: Vec<usize> = (0..reconstructed.boundary_len())
+            .filter(|&i| reconstructed.is_junction(i))
+            .collect();
+        assert_eq!(recon_juncs.len(), 6, "should have 6 junctions");
     }
 
     #[test]
