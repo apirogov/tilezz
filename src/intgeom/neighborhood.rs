@@ -50,48 +50,39 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
         for id in 1..=match_index.num_types() {
             let mt = match_index.get(id);
-            let contexts = [
-                (mt.tile_a, mt.start_a, mt.tile_b, mt.start_b),
-                (mt.tile_b, mt.start_b, mt.tile_a, mt.start_a),
-            ];
-            for (seed_tile, seed_start, other_tile, other_start) in contexts {
-                let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), seed_tile);
-                let pm = PatchMatch {
-                    start_a: seed_start,
-                    len: mt.len,
-                    start_b: other_start,
-                    tile_id: other_tile,
+            let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.tile_a);
+            let pm = PatchMatch {
+                start_a: mt.start_a,
+                len: mt.len,
+                start_b: mt.start_b,
+                tile_id: mt.tile_b,
+            };
+            if patch.add_tile(&pm).is_none() {
+                continue;
+            }
+            patch.normalize();
+            let vt_seq = extract_context_vt_seq(&patch);
+            if vt_seq.is_empty() {
+                continue;
+            }
+
+            for third_pm in patch.get_all_matches() {
+                let central_tile_id = third_pm.tile_id;
+                let cw_anchor_on_central = third_pm.start_b;
+                let cw_anchor_on_context = third_pm.start_a;
+                let nt = NeighborhoodType {
+                    central_tile_id,
+                    cw_anchor_on_central,
+                    cw_anchor_on_context,
+                    vt_seq: vt_seq.clone(),
                 };
-                if patch.add_tile(&pm).is_none() {
+                if seen.contains_key(&nt) {
                     continue;
                 }
-
-                for third_pm in patch.get_all_matches() {
-                    let mut three = patch.clone();
-                    if three.add_tile(&third_pm).is_none() {
-                        continue;
-                    }
-                    let central_tile_id = third_pm.tile_id;
-                    let cw_anchor_on_central = third_pm.start_b;
-                    let cw_anchor_on_context = third_pm.start_a;
-                    let vt_seq = extract_context_vt_seq(&three, central_tile_id);
-                    if vt_seq.is_empty() {
-                        continue;
-                    }
-                    let nt = NeighborhoodType {
-                        central_tile_id,
-                        cw_anchor_on_central,
-                        cw_anchor_on_context,
-                        vt_seq,
-                    };
-                    if seen.contains_key(&nt) {
-                        continue;
-                    }
-                    let idx = entries.len();
-                    seen.insert(nt.clone(), idx);
-                    entries.push(nt.clone());
-                    queue.push_back(nt);
-                }
+                let idx = entries.len();
+                seen.insert(nt.clone(), idx);
+                entries.push(nt.clone());
+                queue.push_back(nt);
             }
         }
 
@@ -235,16 +226,14 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
 fn extract_context_vt_seq<T: IsComplex + IsRingOrField + Units>(
     patch: &GrowingPatch<T>,
-    central_tile_id: usize,
 ) -> Vec<VertexType> {
-    let edges = patch.edges();
-    let n = edges.len();
+    let n = patch.edges().len();
     if n == 0 {
         return Vec::new();
     }
     let mut vts = Vec::new();
-    for (pos, edge) in edges.iter().enumerate() {
-        if patch.is_junction(pos) && edge.tile_id == central_tile_id {
+    for pos in 0..n {
+        if patch.is_junction(pos) {
             if let Some(vt) = patch.junction_vertex_type_at(pos) {
                 vts.push(vt);
             }
@@ -257,6 +246,8 @@ fn extract_context_vt_seq<T: IsComplex + IsRingOrField + Units>(
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
+    use crate::intgeom::matchtypes::MatchTypeIndex;
+    use crate::intgeom::patch::GrowingPatch;
     use crate::intgeom::rat::Rat;
     use crate::intgeom::tiles;
 
@@ -323,5 +314,64 @@ mod tests {
         let hex_idx = NeighborhoodIndex::new(hex_tileset());
         assert!(hex_idx.num_types() > 0);
         assert!(hex_idx.transitions().is_empty());
+    }
+
+    fn validate_seeds<T: IsComplex + IsRingOrField + Units>(
+        idx: &NeighborhoodIndex<T>,
+    ) -> Vec<String> {
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        let mut errors = Vec::new();
+        for nt in idx.entries() {
+            let Some((mut ctx, _)) =
+                GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(&mi))
+            else {
+                errors.push(format!(
+                    "nt c={} ac={} ax={}: reconstruct failed",
+                    nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
+                ));
+                continue;
+            };
+            let found = ctx.get_all_matches().into_iter().find(|pm| {
+                pm.tile_id == nt.central_tile_id
+                    && pm.start_a == nt.cw_anchor_on_context
+                    && pm.start_b == nt.cw_anchor_on_central
+            });
+            let Some(pm) = found else {
+                errors.push(format!(
+                    "nt c={} ac={} ax={}: no match at anchor positions",
+                    nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
+                ));
+                continue;
+            };
+            if ctx.add_tile(&pm).is_none() {
+                errors.push(format!(
+                    "nt c={} ac={} ax={}: add_tile failed",
+                    nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
+                ));
+            }
+        }
+        errors
+    }
+
+    #[test]
+    fn square_seeds_validate() {
+        let idx = NeighborhoodIndex::new(square_tileset());
+        let errors = validate_seeds(&idx);
+        assert!(
+            errors.is_empty(),
+            "validation errors:\n{}",
+            errors.join("\n")
+        );
+    }
+
+    #[test]
+    fn hex_seeds_validate() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        let errors = validate_seeds(&idx);
+        assert!(
+            errors.is_empty(),
+            "validation errors:\n{}",
+            errors.join("\n")
+        );
     }
 }
