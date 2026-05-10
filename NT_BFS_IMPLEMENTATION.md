@@ -14,6 +14,7 @@ records how each NT evolves when a new tile (petal) is attached.
 struct NeighborhoodType {
     central_tile_id: usize,
     cw_anchor_on_central: usize,
+    cw_anchor_on_context: usize,
     vt_seq: Vec<VertexType>,
 }
 
@@ -35,9 +36,15 @@ struct NeighborhoodIndex<T> {
 }
 ```
 
-An NT is uniquely identified by `(central_tile_id, cw_anchor_on_central, vt_seq)`.
-All other data (augmented boundary, gap_start, gap_len, frontier) is derived on
-demand from these three fields plus the tileset.
+An NT is uniquely identified by all four fields:
+`(central_tile_id, cw_anchor_on_central, cw_anchor_on_context, vt_seq)`.
+
+- `cw_anchor_on_central` — fixed edge on the central tile where the context attaches
+- `cw_anchor_on_context` — position on the context boundary matching that anchor
+- `vt_seq` — vertex type sequence describing the context patch frontier
+
+All derived data (augmented boundary, gap_start, gap_len, frontier) is computed on
+demand from these fields plus the tileset.
 
 ## Algorithm Pseudocode
 
@@ -51,15 +58,15 @@ fn new(tileset) -> NeighborhoodIndex:
 
     // --- Phase 1: Seed Generation ---
     for each match_type in match_index (tile_a, start_a, tile_b, start_b, len):
-        for each orientation (central, context, central_anchor, context_anchor):
-            if len >= central_tile_edge_count: skip  // already closed
-            nt = NeighborhoodType { central_tile_id=central,
-                                    cw_anchor_on_central=central_anchor,
-                                    vt_seq=[] }
-            if seen.contains(nt): skip
-            seen.insert(nt, entries.len())
-            entries.push(nt)
-            queue.push_back(nt)
+        for each orientation:
+            (central=tile_a, anchor=start_a, ctx_anchor=start_b)
+            (central=tile_b, anchor=start_b, ctx_anchor=start_a)
+        nt = NeighborhoodType { central_tile_id, cw_anchor_on_central,
+                                cw_anchor_on_context, vt_seq=[] }
+        if seen.contains(nt): skip
+        seen.insert(nt, entries.len())
+        entries.push(nt)
+        queue.push_back(nt)
 
     // --- Phase 2: BFS Growth ---
     while let Some(state) = queue.pop_front():
@@ -90,6 +97,7 @@ fn new(tileset) -> NeighborhoodIndex:
 
             new_nt = NeighborhoodType { state.central_tile_id,
                                         state.cw_anchor_on_central,
+                                        new_cw_anchor_on_context,
                                         new_vt_seq }
 
             dst_id = seen.get(new_nt), or:
@@ -115,7 +123,7 @@ fn new(tileset) -> NeighborhoodIndex:
 ### Stage B: Seed generation (Phase 1) via MatchTypeIndex
 2. In `new()`, create `MatchTypeIndex`, iterate all match types, create both
    orientations of `NeighborhoodType`, dedup via `FxHashMap`.
-   → Test: seed count for square tileset
+   → Test: seed count (square=13, hex=31)
 
 ### Stage C: BFS loop skeleton (Phase 2 framework)
 3. Add queue + dequeue loop with empty body.
