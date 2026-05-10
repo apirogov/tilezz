@@ -39,12 +39,25 @@ struct NeighborhoodIndex<T> {
 An NT is uniquely identified by all four fields:
 `(central_tile_id, cw_anchor_on_central, cw_anchor_on_context, vt_seq)`.
 
-- `cw_anchor_on_central` — fixed edge on the central tile where the context attaches
-- `cw_anchor_on_context` — position on the context boundary matching that anchor
-- `vt_seq` — vertex type sequence describing the context patch frontier
+- `cw_anchor_on_central` — edge on the central tile where the context attaches
+- `cw_anchor_on_context` — position on the reconstructed context boundary
+- `vt_seq` — junction vertex types of the context patch boundary (always non-empty)
 
 All derived data (augmented boundary, gap_start, gap_len, frontier) is computed on
-demand from these fields plus the tileset.
+demand by reconstructing the context from `vt_seq` via
+`GrowingPatch::construct_witness_from_vt_sequence`, then attaching the central tile.
+
+## Key Conventions
+
+- Context patches are always **normalized** (lex-min-rot) before extracting VTs or
+  anchors. This ensures positions are consistent between seed generation and
+  reconstruction.
+- `vt_seq` contains the junction vertex types of the context patch boundary — the
+  VTs where context tiles meet each other. These do NOT include central tile edges.
+- `construct_witness_from_vt_sequence` always has a non-empty input (empty vt_seq
+  never occurs). The empty-vt-seed edge case is eliminated by design.
+- Seeds are three-tile configurations: two-tile context + central tile added third.
+  No two-tile (empty vt_seq) seeds exist.
 
 ## Algorithm Pseudocode
 
@@ -57,21 +70,33 @@ fn new(tileset) -> NeighborhoodIndex:
     queue = Deque<NeighborhoodType>
 
     // --- Phase 1: Seed Generation ---
+    // For each match type, build a normalized two-tile context patch,
+    // then try adding every possible third tile as "central".
     for each match_type in match_index (tile_a, start_a, tile_b, start_b, len):
-        for each orientation:
-            (central=tile_a, anchor=start_a, ctx_anchor=start_b)
-            (central=tile_b, anchor=start_b, ctx_anchor=start_a)
-        nt = NeighborhoodType { central_tile_id, cw_anchor_on_central,
-                                cw_anchor_on_context, vt_seq=[] }
-        if seen.contains(nt): skip
-        seen.insert(nt, entries.len())
-        entries.push(nt)
-        queue.push_back(nt)
+        patch = GrowingPatch::new(tileset, tile_a)
+        patch.add_tile(PatchMatch { start_a, len, start_b, tile_id: tile_b })
+        patch.normalize()
+        vt_seq = extract junction vertex types from patch boundary
+
+        for each third_tile_match in patch.get_all_matches():
+            central_tile_id = third_tile_match.tile_id
+            cw_anchor_on_central = third_tile_match.start_b
+            cw_anchor_on_context = third_tile_match.start_a
+
+            nt = NeighborhoodType { central_tile_id, cw_anchor_on_central,
+                                    cw_anchor_on_context, vt_seq }
+            if seen.contains(nt): skip
+            seen.insert(nt, entries.len())
+            entries.push(nt)
+            queue.push_back(nt)
 
     // --- Phase 2: BFS Growth ---
     while let Some(state) = queue.pop_front():
         state_id = seen[state]
-        (augmented, gap_start, gap_len, frontier) = reconstruct_and_attach(state, tileset)
+
+        // Reconstruct context from vt_seq, attach central tile
+        context = construct_witness_from_vt_sequence(state.vt_seq, match_index)
+        augmented = attach_central(context, state, tileset)
 
         for each candidate petal (tile_id, tile_offset) at frontier:
             glued = glue_petal(augmented, frontier, petal)
@@ -84,16 +109,15 @@ fn new(tileset) -> NeighborhoodIndex:
 
             // Replay on context (without central tile)
             new_context = replay_on_context(state, frontier, petal, tileset)
-            new_augmented, new_gap = re_attach_central(new_context, state, tileset)
+            new_augmented = re_attach_central(new_context, state, tileset)
 
             if new_augmented fully covers central:
                 transitions.push(closed transition)
                 continue
 
-            // Update VT sequence
-            new_vt = vertex_type_at_frontier(new_augmented, new_frontier)
-            new_vt_seq = update_vt_seq(state.vt_seq, new_vt,
-                                        old_frontier_dist, new_frontier_dist)
+            // Update VT sequence and context anchor
+            new_vt_seq = update_vt_seq(...)
+            new_cw_anchor_on_context = remapped anchor on new context
 
             new_nt = NeighborhoodType { state.central_tile_id,
                                         state.cw_anchor_on_central,
@@ -113,54 +137,37 @@ fn new(tileset) -> NeighborhoodIndex:
     return NeighborhoodIndex { tileset, entries, transitions }
 ```
 
+## Validation
+
+Every seed is validated by:
+1. Reconstructing context from `vt_seq` via `construct_witness_from_vt_sequence`
+2. Finding the match at `(cw_anchor_on_context, cw_anchor_on_central)`
+3. Adding the central tile via `add_tile` — must succeed
+
 ## Incremental Implementation Plan
 
-### Stage A: Minimal API shell
-1. Rewrite `neighborhood.rs` with approved data types. `new()` panics,
-   `validate`/`classify_all`/`write_collection`/`parse_file` are stubs.
-   → `cargo check` passes
+### Stage A: Minimal API shell ✓
+- Approved data types, stub methods.
 
-### Stage B: Seed generation (Phase 1) via MatchTypeIndex
-2. In `new()`, create `MatchTypeIndex`, iterate all match types, create both
-   orientations of `NeighborhoodType`, dedup via `FxHashMap`.
-   → Test: seed count (square=13, hex=31)
+### Stage B+C: Seed generation + BFS skeleton ✓
+- Three-tile seeds via normalized two-tile context + third-tile addition.
+- Context VTs extracted from normalized two-tile patch boundary junctions.
+- BFS dequeue loop (empty body for now).
+- Validation test: all seeds reconstruct and re-attach.
+- Counts: square=240, hex=1008.
 
-### Stage C: BFS loop skeleton (Phase 2 framework)
-3. Add queue + dequeue loop with empty body.
-   → Test: dequeue count matches seed count
+### Stage D: BFS growth body
+- Reconstruction via `construct_witness_from_vt_sequence`.
+- Attach central tile, find gap frontier.
+- Enumerate petal candidates.
 
-### Stage D: Reconstruction + attach
-4. `reconstruct_context(nt, match_index)` — empty vt_seq returns seed tile
-   boundary; non-empty uses `construct_witness_from_vt_sequence`.
-   → Test: seed reconstruction roundtrip
-5. `attach_central(context, nt, tileset)` — returns augmented boundary + gap info.
-   → Test: known augmented boundary for square seed
+### Stage E: VT sequence update + dedup
+- Append vs replace logic for frontier VTs.
+- Dedup + enqueue — full BFS loop.
+- Test: BFS terminates, correct entry count for square.
 
-### Stage E: Frontier + petal candidates
-6. `find_gap_frontier(augmented, gap_start, gap_len)`.
-   → Test: known frontier position
-7. Enumerate petal candidates at frontier.
-   → Test: candidate count at known frontier
-
-### Stage F: Growth logic
-8. Glue petal + closed detection.
-   → Test: closed transitions appear
-9. Replay on context + remap surviving position.
-   → Test: new context is valid
-10. Re-attach central to new context.
-    → Test: new augmented boundary valid
-
-### Stage G: VT sequence update + dedup
-11. VT sequence update (append vs replace logic).
-    → Test: correct vt_seq after growth
-12. Dedup + enqueue — full BFS loop.
-    → Test: BFS terminates, correct entry count for square
-
-### Stage H: Remaining API
-13. `classify_all()` — reuse existing classification logic.
-    → Test: correct classification for square
-14. `validate()` — reconstruct + check well-formedness.
-    → Test: all square entries valid
-15. `write_collection()` + `parse_file()`.
-    → Test: roundtrip
-16. Full integration — `cargo test --release` including spectre.
+### Stage F: Remaining API
+- `classify_all()` — reuse existing classification logic.
+- `validate()` — reconstruct + check well-formedness.
+- `write_collection()` + `parse_file()`.
+- Full integration — `cargo test --release` including spectre.
