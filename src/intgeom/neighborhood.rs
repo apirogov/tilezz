@@ -71,10 +71,18 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             }
         }
 
+        let mut explored = 0usize;
+        while let Some(state) = queue.pop_front() {
+            explored += 1;
+            let _state_id = seen.get(&state).expect("dequeued state must be in seen");
+            // BFS body will be added in subsequent stages
+        }
+
         eprintln!(
-            "  seeds: {} types, {} transitions",
+            "  total: {} types, {} transitions, {} explored",
             entries.len(),
             transitions.len(),
+            explored,
         );
 
         let _ = match_index;
@@ -260,5 +268,16 @@ mod tests {
                 nt.cw_anchor_on_context,
             );
         }
+    }
+
+    #[test]
+    fn bfs_explores_all_seeds() {
+        let sq_idx = NeighborhoodIndex::new(square_tileset());
+        assert!(sq_idx.num_types() > 0);
+        assert!(sq_idx.transitions().is_empty());
+
+        let hex_idx = NeighborhoodIndex::new(hex_tileset());
+        assert!(hex_idx.num_types() > 0);
+        assert!(hex_idx.transitions().is_empty());
     }
 }
