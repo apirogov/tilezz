@@ -69,7 +69,11 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             for third_pm in patch.get_all_matches() {
                 let central_tile_id = third_pm.tile_id;
                 let cw_anchor_on_central = third_pm.start_b;
-                let cw_anchor_on_context = third_pm.start_a;
+                let patch_n = patch.boundary_len();
+                let first_junc = (0..patch_n)
+                    .find(|&i| patch.is_junction(i))
+                    .expect("vt_seq non-empty implies at least one junction");
+                let cw_anchor_on_context = (third_pm.start_a + patch_n - first_junc) % patch_n;
                 let nt = NeighborhoodType {
                     central_tile_id,
                     cw_anchor_on_central,
@@ -262,6 +266,7 @@ enum ExploreOutcome<T: IsComplex> {
         nt: NeighborhoodType,
         trial: GrowingPatch<T>,
         central_ptid: usize,
+        petal_pm: PatchMatch,
     },
 }
 
@@ -270,17 +275,20 @@ fn attach_central<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<AugmentedContext<T>> {
-    let (mut context, _) =
+    let (mut context, junc_positions) =
         GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))?;
+    let first_junc = junc_positions[0];
+    let ctx_n = context.boundary_len();
+    let anchor_pos = (first_junc + nt.cw_anchor_on_context) % ctx_n;
 
     let pm = PatchMatch {
-        start_a: nt.cw_anchor_on_context,
+        start_a: anchor_pos,
         len: {
             let tileset = match_index.tileset();
             let central_seq = tileset.rat(nt.central_tile_id).seq();
             crate::intgeom::patch::forward_match_length(
                 context.angles(),
-                nt.cw_anchor_on_context,
+                anchor_pos,
                 central_seq,
                 nt.cw_anchor_on_central,
             )
@@ -381,6 +389,7 @@ fn explore_step<T: IsComplex + IsRingOrField + Units>(
                 nt: nt.clone(),
                 trial,
                 central_ptid,
+                petal_pm: petal_pm.clone(),
             });
         }
     }
@@ -426,7 +435,7 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Vec<ExploreOutcome<T>> {
-    let (aug, frontier, outcomes) = match explore_step(nt, match_index) {
+    let (_aug, frontier, outcomes) = match explore_step(nt, match_index) {
         Some(r) => r,
         None => return Vec::new(),
     };
@@ -442,44 +451,44 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
             ExploreOutcome::Open {
                 trial,
                 central_ptid,
+                petal_pm,
                 ..
             } => {
-                let gap = match find_remaining_gap(&trial, central_ptid) {
-                    Some(g) => g,
-                    None => {
-                        results.push(ExploreOutcome::Closed);
-                        continue;
-                    }
-                };
+                if find_remaining_gap(&trial, central_ptid).is_none() {
+                    results.push(ExploreOutcome::Closed);
+                    continue;
+                }
 
-                let trial_n = trial.boundary_len();
-                let new_gap_end = (gap.0 + gap.1) % trial_n;
-                let petal_ptid = *trial.patch_tile_ids().iter().max().unwrap();
-
-                let petal_edge_info = match find_petal_edge_adjacent_to_gap(
-                    &trial,
-                    new_gap_end,
-                    central_ptid,
-                    petal_ptid,
-                ) {
-                    Some(e) => e,
-                    None => continue,
+                let tileset = match_index.tileset();
+                let petal_seq_len = tileset.rat(petal_pm.tile_id).seq().len();
+                let petal_edge = EdgeInfo {
+                    tile_id: petal_pm.tile_id,
+                    tile_offset: (petal_pm.start_b + 1) % petal_seq_len,
                 };
 
                 let mut new_vt_seq = nt.vt_seq.clone();
                 if dist_to_frontier > 0 {
-                    let new_junc_aug_pos = aug.gap_start - dist_to_frontier;
-                    let aug_n = aug.augmented.boundary_len();
-                    let cw_edge = aug.augmented.edges()[(new_junc_aug_pos + aug_n - 1) % aug_n];
+                    let (context, _) = GrowingPatch::construct_witness_from_vt_sequence(
+                        &nt.vt_seq,
+                        Arc::clone(match_index),
+                    )
+                    .expect("vt_seq should reconstruct");
+                    let ctx_n = context.boundary_len();
+                    let last_junc = (0..ctx_n)
+                        .rev()
+                        .find(|&i| context.is_junction(i))
+                        .expect("vt_seq non-empty implies at least one junction");
+                    let cw_pos = (last_junc + dist_to_frontier - 1) % ctx_n;
+                    let cw_edge = context.edges()[cw_pos];
                     new_vt_seq.push(VertexType {
                         cw: cw_edge,
                         inner: vec![],
-                        ccw: petal_edge_info,
+                        ccw: petal_edge,
                     });
                 } else {
                     let last = new_vt_seq.last_mut().expect("vt_seq is non-empty");
                     last.inner.push(last.ccw);
-                    last.ccw = petal_edge_info;
+                    last.ccw = petal_edge;
                 }
 
                 let new_nt = NeighborhoodType {
@@ -493,6 +502,7 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
                     nt: new_nt,
                     trial,
                     central_ptid,
+                    petal_pm,
                 });
             }
         }
@@ -818,6 +828,66 @@ mod tests {
     }
 
     #[test]
+    fn explore_one_hex_seeds_reconstruct() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        let mut checked = 0usize;
+        let mut errors = Vec::new();
+        for (i, nt) in idx.entries().iter().enumerate() {
+            for outcome in explore_one(nt, &mi) {
+                let new_nt = match &outcome {
+                    ExploreOutcome::Closed => continue,
+                    ExploreOutcome::Open { nt, .. } => nt.clone(),
+                };
+                let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
+                    &new_nt.vt_seq,
+                    Arc::clone(&mi),
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "seed {} result: reconstruct failed for new_nt {:?}",
+                        i, new_nt
+                    )
+                });
+                let first_junc = junc_pos[0];
+                let anchor_pos = (first_junc + new_nt.cw_anchor_on_context) % ctx.boundary_len();
+                let found = ctx.get_all_matches().into_iter().find(|pm| {
+                    pm.tile_id == new_nt.central_tile_id
+                        && pm.start_a == anchor_pos
+                        && pm.start_b == new_nt.cw_anchor_on_central
+                });
+                let Some(pm) = found else {
+                    errors.push(format!(
+                        "seed {}: no match c={} ac={} ax={} (ctx_n={})",
+                        i,
+                        new_nt.central_tile_id,
+                        new_nt.cw_anchor_on_central,
+                        new_nt.cw_anchor_on_context,
+                        ctx.boundary_len()
+                    ));
+                    continue;
+                };
+                if ctx.add_tile(&pm).is_none() {
+                    errors.push(format!(
+                        "seed {}: add_tile failed for new_nt {:?}",
+                        i, new_nt
+                    ));
+                    continue;
+                }
+                checked += 1;
+            }
+        }
+        eprintln!("validated {} new NTs from hex seeds", checked);
+        assert!(checked > 0);
+        if !errors.is_empty() {
+            for e in &errors[..errors.len().min(10)] {
+                eprintln!("  {}", e);
+            }
+            panic!("{} reattach errors", errors.len());
+        }
+    }
+
+    #[test]
     fn petal_edge_found_at_gap_boundary() {
         let idx = NeighborhoodIndex::new(square_tileset());
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
@@ -872,7 +942,7 @@ mod tests {
                     ExploreOutcome::Closed => continue,
                     ExploreOutcome::Open { nt, .. } => nt.clone(),
                 };
-                let (mut ctx, _) = GrowingPatch::construct_witness_from_vt_sequence(
+                let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
                     Arc::clone(&mi),
                 )
@@ -882,9 +952,11 @@ mod tests {
                         i, new_nt
                     )
                 });
+                let first_junc = junc_pos[0];
+                let anchor_pos = (first_junc + new_nt.cw_anchor_on_context) % ctx.boundary_len();
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
                     pm.tile_id == new_nt.central_tile_id
-                        && pm.start_a == new_nt.cw_anchor_on_context
+                        && pm.start_a == anchor_pos
                         && pm.start_b == new_nt.cw_anchor_on_central
                 });
                 let Some(pm) = found else {
@@ -908,7 +980,7 @@ mod tests {
                 checked += 1;
             }
         }
-        eprintln!("validated {} new NTs from hex seeds", checked);
+        eprintln!("validated {} new NTs from square seeds", checked);
         assert!(checked > 0);
         if !errors.is_empty() {
             for e in &errors[..errors.len().min(10)] {
