@@ -1,6 +1,10 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
+
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::VertexType;
 use crate::intgeom::tileset::TileSet;
 
@@ -8,6 +12,7 @@ use crate::intgeom::tileset::TileSet;
 pub struct NeighborhoodType {
     pub central_tile_id: usize,
     pub cw_anchor_on_central: usize,
+    pub cw_anchor_on_context: usize,
     pub vt_seq: Vec<VertexType>,
 }
 
@@ -36,8 +41,49 @@ pub struct NeighborhoodIndex<T: IsComplex> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
-    pub fn new(_tileset: Arc<TileSet<T>>) -> Self {
-        todo!("NT BFS enumeration")
+    pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+        let mut entries: Vec<NeighborhoodType> = Vec::new();
+        let transitions: Vec<NtTransition> = Vec::new();
+        let mut seen: FxHashMap<NeighborhoodType, usize> = FxHashMap::default();
+        let mut queue: VecDeque<NeighborhoodType> = VecDeque::new();
+
+        for id in 1..=match_index.num_types() {
+            let mt = match_index.get(id);
+            let specs = [
+                (mt.tile_a, mt.start_a, mt.start_b),
+                (mt.tile_b, mt.start_b, mt.start_a),
+            ];
+            for (central_tile_id, cw_anchor_on_central, cw_anchor_on_context) in specs {
+                let nt = NeighborhoodType {
+                    central_tile_id,
+                    cw_anchor_on_central,
+                    cw_anchor_on_context,
+                    vt_seq: Vec::new(),
+                };
+                if seen.contains_key(&nt) {
+                    continue;
+                }
+                let idx = entries.len();
+                seen.insert(nt.clone(), idx);
+                entries.push(nt.clone());
+                queue.push_back(nt);
+            }
+        }
+
+        eprintln!(
+            "  seeds: {} types, {} transitions",
+            entries.len(),
+            transitions.len(),
+        );
+
+        let _ = match_index;
+
+        NeighborhoodIndex {
+            tileset,
+            entries,
+            transitions,
+        }
     }
 
     pub fn entries(&self) -> &[NeighborhoodType] {
@@ -155,5 +201,64 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
     pub fn parse_file(_tileset: Arc<TileSet<T>>, _input: &str) -> Result<Self, String> {
         todo!("parse_file")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cyclotomic::ZZ12;
+    use crate::intgeom::rat::Rat;
+    use crate::intgeom::tiles;
+
+    fn square_tileset() -> Arc<TileSet<ZZ12>> {
+        let sq = tiles::square::<ZZ12>();
+        let rat = Rat::try_from(&sq).unwrap();
+        Arc::new(TileSet::new(vec![rat]))
+    }
+
+    fn hex_tileset() -> Arc<TileSet<ZZ12>> {
+        let hex = tiles::hexagon::<ZZ12>();
+        let rat = Rat::try_from(&hex).unwrap();
+        Arc::new(TileSet::new(vec![rat]))
+    }
+
+    #[test]
+    fn square_seed_count() {
+        let idx = NeighborhoodIndex::new(square_tileset());
+        assert!(idx.num_types() > 0, "expected non-empty seed collection");
+        for nt in idx.entries() {
+            assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
+            assert!(nt.vt_seq.is_empty(), "seeds have empty vt_seq");
+        }
+    }
+
+    #[test]
+    fn hex_seed_count() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        assert!(idx.num_types() > 0, "expected non-empty seed collection");
+        for nt in idx.entries() {
+            assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
+            assert!(nt.vt_seq.is_empty(), "seeds have empty vt_seq");
+        }
+    }
+
+    #[test]
+    fn seeds_have_no_duplicate_keys() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        let mut keys = std::collections::HashSet::new();
+        for nt in idx.entries() {
+            assert!(
+                keys.insert((
+                    nt.central_tile_id,
+                    nt.cw_anchor_on_central,
+                    nt.cw_anchor_on_context,
+                )),
+                "duplicate seed key: central={}, anchor={}, ctx_anchor={}",
+                nt.central_tile_id,
+                nt.cw_anchor_on_central,
+                nt.cw_anchor_on_context,
+            );
+        }
     }
 }
