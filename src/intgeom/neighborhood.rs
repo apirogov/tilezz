@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::patch::VertexType;
+use crate::intgeom::patch::{GrowingPatch, PatchMatch, VertexType};
 use crate::intgeom::tileset::TileSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -50,24 +50,48 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
 
         for id in 1..=match_index.num_types() {
             let mt = match_index.get(id);
-            let specs = [
-                (mt.tile_a, mt.start_a, mt.start_b),
-                (mt.tile_b, mt.start_b, mt.start_a),
+            let contexts = [
+                (mt.tile_a, mt.start_a, mt.tile_b, mt.start_b),
+                (mt.tile_b, mt.start_b, mt.tile_a, mt.start_a),
             ];
-            for (central_tile_id, cw_anchor_on_central, cw_anchor_on_context) in specs {
-                let nt = NeighborhoodType {
-                    central_tile_id,
-                    cw_anchor_on_central,
-                    cw_anchor_on_context,
-                    vt_seq: Vec::new(),
+            for (seed_tile, seed_start, other_tile, other_start) in contexts {
+                let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), seed_tile);
+                let pm = PatchMatch {
+                    start_a: seed_start,
+                    len: mt.len,
+                    start_b: other_start,
+                    tile_id: other_tile,
                 };
-                if seen.contains_key(&nt) {
+                if patch.add_tile(&pm).is_none() {
                     continue;
                 }
-                let idx = entries.len();
-                seen.insert(nt.clone(), idx);
-                entries.push(nt.clone());
-                queue.push_back(nt);
+
+                for third_pm in patch.get_all_matches() {
+                    let mut three = patch.clone();
+                    if three.add_tile(&third_pm).is_none() {
+                        continue;
+                    }
+                    let central_tile_id = third_pm.tile_id;
+                    let cw_anchor_on_central = third_pm.start_b;
+                    let cw_anchor_on_context = third_pm.start_a;
+                    let vt_seq = extract_context_vt_seq(&three, central_tile_id);
+                    if vt_seq.is_empty() {
+                        continue;
+                    }
+                    let nt = NeighborhoodType {
+                        central_tile_id,
+                        cw_anchor_on_central,
+                        cw_anchor_on_context,
+                        vt_seq,
+                    };
+                    if seen.contains_key(&nt) {
+                        continue;
+                    }
+                    let idx = entries.len();
+                    seen.insert(nt.clone(), idx);
+                    entries.push(nt.clone());
+                    queue.push_back(nt);
+                }
             }
         }
 
@@ -75,7 +99,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         while let Some(state) = queue.pop_front() {
             explored += 1;
             let _state_id = seen.get(&state).expect("dequeued state must be in seen");
-            // BFS body will be added in subsequent stages
         }
 
         eprintln!(
@@ -84,8 +107,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             transitions.len(),
             explored,
         );
-
-        let _ = match_index;
 
         NeighborhoodIndex {
             tileset,
@@ -212,6 +233,26 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     }
 }
 
+fn extract_context_vt_seq<T: IsComplex + IsRingOrField + Units>(
+    patch: &GrowingPatch<T>,
+    central_tile_id: usize,
+) -> Vec<VertexType> {
+    let edges = patch.edges();
+    let n = edges.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut vts = Vec::new();
+    for (pos, edge) in edges.iter().enumerate() {
+        if patch.is_junction(pos) && edge.tile_id == central_tile_id {
+            if let Some(vt) = patch.junction_vertex_type_at(pos) {
+                vts.push(vt);
+            }
+        }
+    }
+    vts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,7 +278,7 @@ mod tests {
         assert!(idx.num_types() > 0, "expected non-empty seed collection");
         for nt in idx.entries() {
             assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
-            assert!(nt.vt_seq.is_empty(), "seeds have empty vt_seq");
+            assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
         }
     }
 
@@ -247,7 +288,7 @@ mod tests {
         assert!(idx.num_types() > 0, "expected non-empty seed collection");
         for nt in idx.entries() {
             assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
-            assert!(nt.vt_seq.is_empty(), "seeds have empty vt_seq");
+            assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
         }
     }
 
@@ -255,17 +296,20 @@ mod tests {
     fn seeds_have_no_duplicate_keys() {
         let idx = NeighborhoodIndex::new(hex_tileset());
         let mut keys = std::collections::HashSet::new();
-        for nt in idx.entries() {
+        for (i, nt) in idx.entries().iter().enumerate() {
             assert!(
                 keys.insert((
                     nt.central_tile_id,
                     nt.cw_anchor_on_central,
                     nt.cw_anchor_on_context,
+                    nt.vt_seq.clone(),
                 )),
-                "duplicate seed key: central={}, anchor={}, ctx_anchor={}",
+                "[{}] duplicate seed key: central={}, anchor={}, ctx_anchor={}, vt_seq={:?}",
+                i,
                 nt.central_tile_id,
                 nt.cw_anchor_on_central,
                 nt.cw_anchor_on_context,
+                nt.vt_seq,
             );
         }
     }
