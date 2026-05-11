@@ -61,24 +61,43 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 continue;
             }
             patch.normalize();
-            let vt_seq = extract_context_vt_seq(&patch);
-            if vt_seq.is_empty() {
-                continue;
-            }
+            let patch_n = patch.boundary_len();
+
+            // Collect all ctx-ctx junctions with their positions, sorted by
+            // boundary position. We then filter per third_pm to only those
+            // incident with the match (= within the covered segment).
+            let all_juncs: Vec<(usize, VertexType)> = (0..patch_n)
+                .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
+                .collect();
 
             for third_pm in patch.get_all_matches() {
                 let central_tile_id = third_pm.tile_id;
                 let cw_anchor_on_central = third_pm.start_b;
-                let patch_n = patch.boundary_len();
-                let first_junc = (0..patch_n)
-                    .find(|&i| patch.is_junction(i))
-                    .expect("vt_seq non-empty implies at least one junction");
-                let cw_anchor_on_context = (third_pm.start_a + patch_n - first_junc) % patch_n;
+
+                // vt_seq is the junctions incident with the central match:
+                // those at positions in [anchor, anchor + match_len], i.e.
+                // CCW distance from the anchor is at most match_len.
+                let filtered: Vec<&(usize, VertexType)> = all_juncs
+                    .iter()
+                    .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
+                    .collect();
+                if filtered.is_empty() {
+                    continue;
+                }
+                let first_junc = filtered[0].0;
+                let vt_seq: Vec<VertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
+                // cw_anchor_on_context = CW distance from first_junc back to
+                // the anchor (equivalently, CCW distance from anchor to
+                // first_junc). The first VT sits at or CCW of the anchor, so
+                // this distance is small and invariant under BFS growth
+                // (which only adds edges CCW of the last VT, never between
+                // the anchor and first_junc).
+                let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a) % patch_n;
                 let nt = NeighborhoodType {
                     central_tile_id,
                     cw_anchor_on_central,
                     cw_anchor_on_context,
-                    vt_seq: vt_seq.clone(),
+                    vt_seq,
                 };
                 if seen.contains_key(&nt) {
                     continue;
@@ -228,24 +247,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     }
 }
 
-fn extract_context_vt_seq<T: IsComplex + IsRingOrField + Units>(
-    patch: &GrowingPatch<T>,
-) -> Vec<VertexType> {
-    let n = patch.edges().len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut vts = Vec::new();
-    for pos in 0..n {
-        if patch.is_junction(pos) {
-            if let Some(vt) = patch.junction_vertex_type_at(pos) {
-                vts.push(vt);
-            }
-        }
-    }
-    vts
-}
-
 #[allow(dead_code)]
 struct AugmentedContext<T: IsComplex> {
     augmented: GrowingPatch<T>,
@@ -259,7 +260,7 @@ struct FrontierInfo {
     dist_to_frontier: usize,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::large_enum_variant)]
 enum ExploreOutcome<T: IsComplex> {
     Closed,
     Open {
@@ -279,7 +280,7 @@ fn attach_central<T: IsComplex + IsRingOrField + Units>(
         GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))?;
     let first_junc = junc_positions[0];
     let ctx_n = context.boundary_len();
-    let anchor_pos = (first_junc + nt.cw_anchor_on_context) % ctx_n;
+    let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
 
     let pm = PatchMatch {
         start_a: anchor_pos,
@@ -413,21 +414,79 @@ fn find_remaining_gap<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[allow(dead_code)]
-fn find_petal_edge_adjacent_to_gap<T: IsComplex + IsRingOrField + Units>(
-    trial: &GrowingPatch<T>,
-    new_gap_end: usize,
+struct AttachedContext<T: IsComplex> {
+    aug: GrowingPatch<T>,
     central_ptid: usize,
-    petal_ptid: usize,
-) -> Option<EdgeInfo> {
-    let n = trial.boundary_len();
-    let ptids = trial.patch_tile_ids();
-    let edges = trial.edges();
-    let pos_before_gap = (new_gap_end + n - 1) % n;
-    if ptids[pos_before_gap] == petal_ptid {
-        Some(edges[pos_before_gap])
-    } else {
-        None
+    frontier_pos_on_aug: usize,
+    frontier_is_junction_in_ctx: bool,
+    last_covered_ctx_edge: EdgeInfo,
+}
+
+#[allow(dead_code)]
+fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
+    nt: &NeighborhoodType,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> Option<AttachedContext<T>> {
+    let (ctx, junc_positions) =
+        GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))?;
+    let ctx_n = ctx.boundary_len();
+    if ctx_n == 0 {
+        return None;
     }
+    let first_junc = junc_positions[0];
+    let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
+
+    let tileset = match_index.tileset();
+    let central_seq = tileset.rat(nt.central_tile_id).seq();
+    let central_n = central_seq.len();
+    let match_len = crate::intgeom::patch::forward_match_length(
+        ctx.angles(),
+        anchor_pos,
+        central_seq,
+        nt.cw_anchor_on_central,
+    );
+    if match_len == 0 || match_len >= central_n {
+        return None;
+    }
+
+    let frontier_on_ctx = (anchor_pos + match_len) % ctx_n;
+    let frontier_is_junction_in_ctx = ctx.is_junction(frontier_on_ctx);
+    let last_covered_ctx_edge = ctx.edges()[(anchor_pos + match_len - 1) % ctx_n];
+
+    let central_pm = PatchMatch {
+        start_a: anchor_pos,
+        len: match_len,
+        start_b: nt.cw_anchor_on_central,
+        tile_id: nt.central_tile_id,
+    };
+    let mut aug = ctx.clone_for_mutation();
+    aug.add_tile(&central_pm)?;
+
+    let aug_n = aug.boundary_len();
+    let gap_start = ctx_n - match_len;
+    let central_ptid = aug.patch_tile_ids()[gap_start];
+
+    // gap_end == 0 by construction; advance CCW until a junction is found.
+    let mut frontier_pos_on_aug = 0usize;
+    let mut found = false;
+    for _ in 0..aug_n {
+        if aug.is_junction(frontier_pos_on_aug) {
+            found = true;
+            break;
+        }
+        frontier_pos_on_aug = (frontier_pos_on_aug + 1) % aug_n;
+    }
+    if !found {
+        return None;
+    }
+
+    Some(AttachedContext {
+        aug,
+        central_ptid,
+        frontier_pos_on_aug,
+        frontier_is_junction_in_ctx,
+        last_covered_ctx_edge,
+    })
 }
 
 #[allow(dead_code)]
@@ -435,77 +494,71 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Vec<ExploreOutcome<T>> {
-    let (_aug, frontier, outcomes) = match explore_step(nt, match_index) {
-        Some(r) => r,
+    let ac = match build_attached_context(nt, match_index) {
+        Some(a) => a,
         None => return Vec::new(),
     };
 
-    let dist_to_frontier = frontier.dist_to_frontier;
+    let candidates = GrowingPatch::compute_candidates_covering_position(
+        ac.aug.match_index(),
+        ac.aug.angles(),
+        ac.aug.edges(),
+        ac.frontier_pos_on_aug,
+    );
 
     let mut results = Vec::new();
-    for outcome in outcomes {
-        match outcome {
-            ExploreOutcome::Closed => {
-                results.push(ExploreOutcome::Closed);
-            }
-            ExploreOutcome::Open {
-                trial,
-                central_ptid,
-                petal_pm,
-                ..
-            } => {
-                if find_remaining_gap(&trial, central_ptid).is_none() {
-                    results.push(ExploreOutcome::Closed);
-                    continue;
-                }
-
-                let tileset = match_index.tileset();
-                let petal_seq_len = tileset.rat(petal_pm.tile_id).seq().len();
-                let petal_edge = EdgeInfo {
-                    tile_id: petal_pm.tile_id,
-                    tile_offset: (petal_pm.start_b + 1) % petal_seq_len,
-                };
-
-                let mut new_vt_seq = nt.vt_seq.clone();
-                if dist_to_frontier > 0 {
-                    let (context, _) = GrowingPatch::construct_witness_from_vt_sequence(
-                        &nt.vt_seq,
-                        Arc::clone(match_index),
-                    )
-                    .expect("vt_seq should reconstruct");
-                    let ctx_n = context.boundary_len();
-                    let last_junc = (0..ctx_n)
-                        .rev()
-                        .find(|&i| context.is_junction(i))
-                        .expect("vt_seq non-empty implies at least one junction");
-                    let cw_pos = (last_junc + dist_to_frontier - 1) % ctx_n;
-                    let cw_edge = context.edges()[cw_pos];
-                    new_vt_seq.push(VertexType {
-                        cw: cw_edge,
-                        inner: vec![],
-                        ccw: petal_edge,
-                    });
-                } else {
-                    let last = new_vt_seq.last_mut().expect("vt_seq is non-empty");
-                    last.inner.push(last.ccw);
-                    last.ccw = petal_edge;
-                }
-
-                let new_nt = NeighborhoodType {
-                    central_tile_id: nt.central_tile_id,
-                    cw_anchor_on_central: nt.cw_anchor_on_central,
-                    cw_anchor_on_context: nt.cw_anchor_on_context,
-                    vt_seq: new_vt_seq,
-                };
-
-                results.push(ExploreOutcome::Open {
-                    nt: new_nt,
-                    trial,
-                    central_ptid,
-                    petal_pm,
-                });
-            }
+    for petal_pm in candidates {
+        let mut trial = ac.aug.clone_for_mutation();
+        if trial.add_tile(&petal_pm).is_none() {
+            continue;
         }
+
+        // Closed: petal absorbed all central edges.
+        if !trial.patch_tile_ids().contains(&ac.central_ptid) {
+            results.push(ExploreOutcome::Closed);
+            continue;
+        }
+
+        // The first surviving petal edge has tile_offset == petal_pm.start_b
+        // (see add_tile_growing in patch.rs). That edge starts at the OLD
+        // frontier vertex on ctx, and is the ccw side of the new VT.
+        let petal_edge = EdgeInfo {
+            tile_id: petal_pm.tile_id,
+            tile_offset: petal_pm.start_b,
+        };
+
+        let mut new_vt_seq = nt.vt_seq.clone();
+        if ac.frontier_is_junction_in_ctx {
+            // Frontier vertex was already a ctx-ctx junction (last VT in vt_seq).
+            // The petal becomes the new ccw-most tile at this junction; the old
+            // ccw tile is pushed into `inner`.
+            let last = new_vt_seq.last_mut().expect("vt_seq is non-empty");
+            let old_ccw = last.ccw;
+            last.inner.push(old_ccw);
+            last.ccw = petal_edge;
+        } else {
+            // Frontier vertex was not a ctx-ctx junction; the petal creates a
+            // new junction there. cw side is the last covered ctx edge.
+            new_vt_seq.push(VertexType {
+                cw: ac.last_covered_ctx_edge,
+                inner: vec![],
+                ccw: petal_edge,
+            });
+        }
+
+        let new_nt = NeighborhoodType {
+            central_tile_id: nt.central_tile_id,
+            cw_anchor_on_central: nt.cw_anchor_on_central,
+            cw_anchor_on_context: nt.cw_anchor_on_context,
+            vt_seq: new_vt_seq,
+        };
+
+        results.push(ExploreOutcome::Open {
+            nt: new_nt,
+            trial,
+            central_ptid: ac.central_ptid,
+            petal_pm,
+        });
     }
     results
 }
@@ -590,7 +643,7 @@ mod tests {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut errors = Vec::new();
         for nt in idx.entries() {
-            let Some((mut ctx, _)) =
+            let Some((mut ctx, junc_positions)) =
                 GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(&mi))
             else {
                 errors.push(format!(
@@ -599,9 +652,12 @@ mod tests {
                 ));
                 continue;
             };
+            let ctx_n = ctx.boundary_len();
+            let first_junc = junc_positions[0];
+            let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
             let found = ctx.get_all_matches().into_iter().find(|pm| {
                 pm.tile_id == nt.central_tile_id
-                    && pm.start_a == nt.cw_anchor_on_context
+                    && pm.start_a == anchor_pos
                     && pm.start_b == nt.cw_anchor_on_central
             });
             let Some(pm) = found else {
@@ -850,7 +906,8 @@ mod tests {
                     )
                 });
                 let first_junc = junc_pos[0];
-                let anchor_pos = (first_junc + new_nt.cw_anchor_on_context) % ctx.boundary_len();
+                let ctx_n = ctx.boundary_len();
+                let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
                     pm.tile_id == new_nt.central_tile_id
                         && pm.start_a == anchor_pos
@@ -884,34 +941,6 @@ mod tests {
                 eprintln!("  {}", e);
             }
             panic!("{} reattach errors", errors.len());
-        }
-    }
-
-    #[test]
-    fn petal_edge_found_at_gap_boundary() {
-        let idx = NeighborhoodIndex::new(square_tileset());
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, _frontier, petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
-            for outcome in &petal_outcomes {
-                let trial = match outcome {
-                    ExploreOutcome::Open { trial, .. } => trial,
-                    _ => continue,
-                };
-                let central_ptid = aug.central_ptid;
-                let gap = match find_remaining_gap(trial, central_ptid) {
-                    Some(g) => g,
-                    None => continue,
-                };
-                let n = trial.boundary_len();
-                let gap_end = (gap.0 + gap.1) % n;
-                let petal_ptid = *trial.patch_tile_ids().iter().max().unwrap();
-                let petal_edge =
-                    find_petal_edge_adjacent_to_gap(trial, gap_end, central_ptid, petal_ptid);
-                let _pei = petal_edge
-                    .unwrap_or_else(|| panic!("seed {}: no petal edge adjacent to gap found", i));
-            }
         }
     }
 
@@ -953,7 +982,8 @@ mod tests {
                     )
                 });
                 let first_junc = junc_pos[0];
-                let anchor_pos = (first_junc + new_nt.cw_anchor_on_context) % ctx.boundary_len();
+                let ctx_n = ctx.boundary_len();
+                let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
                     pm.tile_id == new_nt.central_tile_id
                         && pm.start_a == anchor_pos
