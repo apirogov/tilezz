@@ -400,6 +400,15 @@ pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
     result
 }
 
+// FIXME: glue_match_to_raw_boundary rotates the boundary so that new_pos 0
+// equals old_pos ccw_pos. That rotation forces every caller that wants to
+// retain a stable position across multiple glues to remap their tracked
+// positions after each call (see `prior_juncs` below, and the NT BFS in
+// neighborhood.rs which assumes junction positions are stable). A cleaner
+// convention would keep surviving edges at their original indices and append
+// the new tile's surviving edges contiguously. That is a wider refactor
+// (touches the glue helpers and every test that pins boundary positions), so
+// for now we remap explicitly here.
 fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     boundary: RawBoundary,
     junc_pos: usize,
@@ -407,6 +416,7 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     tileset: &TileSet<T>,
     first_step: bool,
     next_tile_id: &mut usize,
+    prior_juncs: &mut [usize],
 ) -> Option<(RawBoundary, usize)> {
     let RawBoundary {
         mut angles,
@@ -421,6 +431,7 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     for target in targets {
         let tile_id = *next_tile_id;
         *next_tile_id += 1;
+        let n_old = angles.len();
         let result = glue_tile_to_raw_boundary::<T>(
             &RawBoundary {
                 angles,
@@ -434,6 +445,13 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
             first_step,
             tile_id,
         )?;
+
+        // Remap previously tracked junction positions to the new boundary
+        // indexing. See FIXME on this function.
+        let ccw_pos = (junc_pos + result.match_len) % n_old;
+        for j in prior_juncs.iter_mut() {
+            *j = (*j + n_old - ccw_pos) % n_old;
+        }
 
         first_step = false;
         angles = result.boundary.angles;
@@ -567,6 +585,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             tileset.as_ref(),
             true,
             &mut next_tile_id,
+            &mut junc_positions,
         )?;
         raw = new_raw;
         junc_positions.push(new_junc);
@@ -614,6 +633,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 tileset.as_ref(),
                 false,
                 &mut next_tile_id,
+                &mut junc_positions,
             )?;
             raw = new_raw;
             junc_positions.push(new_junc);
