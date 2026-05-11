@@ -5,14 +5,40 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, VertexType};
+use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, TransitionSide, VertexType};
 use crate::intgeom::tileset::TileSet;
 
+/// A neighborhood type: a central tile, a context patch matched against a
+/// contiguous segment of the central's perimeter, and the open gap that
+/// remains on the central.
+///
+/// The matched segment is the CCW range `[cw_anchor_on_central,
+/// ccw_anchor_on_central)` on the central tile (mod `central_n`); its
+/// length is `(ccw_anchor_on_central - cw_anchor_on_central) mod
+/// central_n`. The corresponding covered segment on the context boundary
+/// is described by `vt_seq`: the sequence of context-context junctions
+/// incident with the match, in CCW order from `vt_seq[0]` (the CCW-most
+/// junction reachable CW from the CW frontier) to `vt_seq.last()` (the
+/// CW-most junction reachable CCW from the CCW frontier).
+///
+/// Frontier positions on context are parameterized by short distances
+/// from `vt_seq`'s endpoints:
+/// * `cw_anchor_on_context` = CW distance from `vt_seq[0]`'s junction to
+///   the CW frontier vertex on context.
+/// * `ccw_anchor_on_context` = CCW distance from `vt_seq.last()`'s
+///   junction to the CCW frontier vertex on context.
+///
+/// `num_ctx_tiles` records the number of context tiles in the matched
+/// patch; it grows by exactly 1 per BFS step regardless of direction, so
+/// it gives the natural DAG layering for both CCW and CW transitions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NeighborhoodType {
     pub central_tile_id: usize,
     pub cw_anchor_on_central: usize,
+    pub ccw_anchor_on_central: usize,
     pub cw_anchor_on_context: usize,
+    pub ccw_anchor_on_context: usize,
+    pub num_ctx_tiles: usize,
     pub vt_seq: Vec<VertexType>,
 }
 
@@ -30,6 +56,7 @@ pub enum NtKind {
 pub struct NtTransition {
     pub src_id: usize,
     pub dst_id: usize,
+    pub side: TransitionSide,
     pub tile_id: usize,
     pub tile_offset: usize,
 }
@@ -83,7 +110,9 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 }
 
                 let central_tile_id = third_pm.tile_id;
+                let central_n = match_index.tileset().rat(central_tile_id).seq().len();
                 let cw_anchor_on_central = third_pm.start_b;
+                let ccw_anchor_on_central = (cw_anchor_on_central + third_pm.len) % central_n;
 
                 // vt_seq is the junctions incident with the central match:
                 // those at positions in [anchor, anchor + match_len], i.e.
@@ -96,18 +125,23 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     continue;
                 }
                 let first_junc = filtered[0].0;
+                let last_junc = filtered[filtered.len() - 1].0;
                 let vt_seq: Vec<VertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
-                // cw_anchor_on_context = CW distance from first_junc back to
-                // the anchor (equivalently, CCW distance from anchor to
-                // first_junc). The first VT sits at or CCW of the anchor, so
-                // this distance is small and invariant under BFS growth
-                // (which only adds edges CCW of the last VT, never between
-                // the anchor and first_junc).
+                // cw_anchor_on_context = CW distance from first_junc to the
+                // CW anchor on context. ccw_anchor_on_context = CCW distance
+                // from last_junc to the CCW anchor on context. Both stay
+                // small as the BFS only adds edges OUTSIDE [cw_anchor,
+                // ccw_anchor].
                 let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a) % patch_n;
+                let ccw_anchor_pos = (third_pm.start_a + third_pm.len) % patch_n;
+                let ccw_anchor_on_context = (ccw_anchor_pos + patch_n - last_junc) % patch_n;
                 let nt = NeighborhoodType {
                     central_tile_id,
                     cw_anchor_on_central,
+                    ccw_anchor_on_central,
                     cw_anchor_on_context,
+                    ccw_anchor_on_context,
+                    num_ctx_tiles: 2,
                     vt_seq,
                 };
                 if seen.contains_key(&nt) {
@@ -149,6 +183,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 transitions.push(NtTransition {
                     src_id,
                     dst_id,
+                    side: TransitionSide::Ccw,
                     tile_id: outcome.petal_pm.tile_id,
                     tile_offset: outcome.petal_pm.start_b,
                 });
@@ -322,12 +357,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             };
             write!(
                 out,
-                "NTYPE {} {} {} {} {} {}",
+                "NTYPE {} {} {} {} {} {} {} {} {}",
                 id,
                 kind,
                 nt.central_tile_id,
                 nt.cw_anchor_on_central,
+                nt.ccw_anchor_on_central,
                 nt.cw_anchor_on_context,
+                nt.ccw_anchor_on_context,
+                nt.num_ctx_tiles,
                 nt.vt_seq.len(),
             )?;
             for vt in &nt.vt_seq {
@@ -349,10 +387,14 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             writeln!(out)?;
         }
         for t in &self.transitions {
+            let side = match t.side {
+                TransitionSide::Cw => "cw",
+                TransitionSide::Ccw => "ccw",
+            };
             writeln!(
                 out,
-                "TRANS {} {} {} {}",
-                t.src_id, t.dst_id, t.tile_id, t.tile_offset,
+                "TRANS {} {} {} {} {}",
+                t.src_id, t.dst_id, side, t.tile_id, t.tile_offset,
             )?;
         }
         Ok(())
@@ -386,11 +428,26 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     };
                     let src_id = parse_usize(tok.next(), "src_id")?;
                     let dst_id = parse_usize(tok.next(), "dst_id")?;
+                    let side_tok = tok
+                        .next()
+                        .ok_or_else(|| format!("line {}: missing side", lineno + 1))?;
+                    let side = match side_tok {
+                        "cw" => TransitionSide::Cw,
+                        "ccw" => TransitionSide::Ccw,
+                        other => {
+                            return Err(format!(
+                                "line {}: unknown transition side `{}`",
+                                lineno + 1,
+                                other
+                            ));
+                        }
+                    };
                     let tile_id = parse_usize(tok.next(), "tile_id")?;
                     let tile_offset = parse_usize(tok.next(), "tile_offset")?;
                     transitions.push(NtTransition {
                         src_id,
                         dst_id,
+                        side,
                         tile_id,
                         tile_offset,
                     });
@@ -464,12 +521,21 @@ fn parse_ntype_line(
     let central_tile_id: usize = next("central_id")?
         .parse()
         .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
-    let cw_anchor_on_central: usize = next("ac")?
+    let cw_anchor_on_central: usize = next("cw_ac")?
         .parse()
-        .map_err(|e| format!("line {}: bad ac: {}", lineno, e))?;
-    let cw_anchor_on_context: usize = next("ax")?
+        .map_err(|e| format!("line {}: bad cw_ac: {}", lineno, e))?;
+    let ccw_anchor_on_central: usize = next("ccw_ac")?
         .parse()
-        .map_err(|e| format!("line {}: bad ax: {}", lineno, e))?;
+        .map_err(|e| format!("line {}: bad ccw_ac: {}", lineno, e))?;
+    let cw_anchor_on_context: usize = next("cw_ax")?
+        .parse()
+        .map_err(|e| format!("line {}: bad cw_ax: {}", lineno, e))?;
+    let ccw_anchor_on_context: usize = next("ccw_ax")?
+        .parse()
+        .map_err(|e| format!("line {}: bad ccw_ax: {}", lineno, e))?;
+    let num_ctx_tiles: usize = next("num_ctx_tiles")?
+        .parse()
+        .map_err(|e| format!("line {}: bad num_ctx_tiles: {}", lineno, e))?;
     let n_vts: usize = next("n_vts")?
         .parse()
         .map_err(|e| format!("line {}: bad n_vts: {}", lineno, e))?;
@@ -481,7 +547,10 @@ fn parse_ntype_line(
     Ok(NeighborhoodType {
         central_tile_id,
         cw_anchor_on_central,
+        ccw_anchor_on_central,
         cw_anchor_on_context,
+        ccw_anchor_on_context,
+        num_ctx_tiles,
         vt_seq,
     })
 }
@@ -664,14 +733,24 @@ fn find_remaining_gap<T: IsComplex + IsRingOrField + Units>(
 struct AttachedContext<T: IsComplex> {
     aug: GrowingPatch<T>,
     central_ptid: usize,
+    /// CCW frontier position on aug (gap_end vertex, always a junction).
     frontier_pos_on_aug: usize,
+    /// CW frontier (= anchor) position on aug = gap_start.
+    cw_frontier_pos_on_aug: usize,
     frontier_is_junction_in_ctx: bool,
+    cw_anchor_is_junction_in_ctx: bool,
     last_covered_ctx_edge: EdgeInfo,
+    /// The first covered ctx edge (ctx.edges()[cw_anchor_pos]).
+    first_covered_ctx_edge: EdgeInfo,
     /// Number of context boundary edges on `aug` (= `ctx_n - match_len`).
     /// On `aug`, positions `[0, gap_start)` are surviving context edges
     /// and `[gap_start, aug_n)` are the central tile gap edges.
     gap_start: usize,
     aug_n: usize,
+    /// Old `match_len = (ccw_anchor_on_central - cw_anchor_on_central) mod
+    /// central_n`. Cached here so the BFS step can compute the new
+    /// match_len = old + petal_gap_consumed without recomputing.
+    match_len: usize,
 }
 
 #[allow(dead_code)]
@@ -703,7 +782,9 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
 
     let frontier_on_ctx = (anchor_pos + match_len) % ctx_n;
     let frontier_is_junction_in_ctx = ctx.is_junction(frontier_on_ctx);
+    let cw_anchor_is_junction_in_ctx = ctx.is_junction(anchor_pos);
     let last_covered_ctx_edge = ctx.edges()[(anchor_pos + match_len - 1) % ctx_n];
+    let first_covered_ctx_edge = ctx.edges()[anchor_pos];
 
     let central_pm = PatchMatch {
         start_a: anchor_pos,
@@ -718,7 +799,7 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
     let gap_start = ctx_n - match_len;
     let central_ptid = aug.patch_tile_ids()[gap_start];
 
-    // gap_end == 0 by construction; advance CCW until a junction is found.
+    // CCW frontier on aug: gap_end == 0 by construction.
     let mut frontier_pos_on_aug = 0usize;
     let mut found = false;
     for _ in 0..aug_n {
@@ -731,15 +812,22 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
     if !found {
         return None;
     }
+    // CW frontier on aug: gap_start vertex (always a junction since the
+    // central tile begins there).
+    let cw_frontier_pos_on_aug = gap_start;
 
     Some(AttachedContext {
         aug,
         central_ptid,
         frontier_pos_on_aug,
+        cw_frontier_pos_on_aug,
         frontier_is_junction_in_ctx,
+        cw_anchor_is_junction_in_ctx,
         last_covered_ctx_edge,
+        first_covered_ctx_edge,
         gap_start,
         aug_n,
+        match_len,
     })
 }
 
@@ -821,21 +909,20 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
             });
         }
 
-        let new_nt = NeighborhoodType {
-            central_tile_id: nt.central_tile_id,
-            cw_anchor_on_central: nt.cw_anchor_on_central,
-            cw_anchor_on_context: nt.cw_anchor_on_context,
-            vt_seq: new_vt_seq,
-        };
-
-        // Verify the abstract vt_seq update produced a valid NT: it must
-        // reconstruct + glue the central. The petal glue itself was already
-        // validated on the augmented patch (`trial.add_tile` succeeded), but
-        // the abstract Case A / Case B update may not always capture the
-        // geometry (e.g. for non-convex tiles like spectre).
-        if !nt_is_valid(&new_nt, match_index) {
+        // Reconstruct the new NT from the partial info (cw side preserved,
+        // ccw side derived). The petal glue itself succeeded on aug, but
+        // the abstract Case A/B may produce a vt_seq that doesn't
+        // reconstruct for non-convex tiles - finalize filters those.
+        let Some(new_nt) = try_construct_nt_from_cw(
+            nt.central_tile_id,
+            nt.cw_anchor_on_central,
+            nt.cw_anchor_on_context,
+            nt.num_ctx_tiles + 1,
+            new_vt_seq,
+            match_index,
+        ) else {
             continue;
-        }
+        };
 
         results.push(ExploreOutcome {
             petal_pm,
@@ -849,40 +936,76 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
     results
 }
 
+/// Reconstruct an NT from its vt_seq + CW-side anchor fields, deriving the
+/// CCW-side anchors from the geometry, and verifying the central can be
+/// glued. Returns None if reconstruction fails, the match length is 0, the
+/// match closes the central, or the central glue collides.
+fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
+    central_tile_id: usize,
+    cw_anchor_on_central: usize,
+    cw_anchor_on_context: usize,
+    num_ctx_tiles: usize,
+    vt_seq: Vec<VertexType>,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> Option<NeighborhoodType> {
+    let (mut ctx, jp) =
+        GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, Arc::clone(match_index))?;
+    let ctx_n = ctx.boundary_len();
+    if ctx_n == 0 || jp.is_empty() {
+        return None;
+    }
+    let first_junc = jp[0];
+    let last_junc = jp[jp.len() - 1];
+    let cw_anchor_pos = (first_junc + ctx_n - cw_anchor_on_context) % ctx_n;
+    let tileset = match_index.tileset();
+    let central_seq = tileset.rat(central_tile_id).seq();
+    let central_n = central_seq.len();
+    let match_len = crate::intgeom::patch::forward_match_length(
+        ctx.angles(),
+        cw_anchor_pos,
+        central_seq,
+        cw_anchor_on_central,
+    );
+    if match_len == 0 || match_len >= central_n {
+        return None;
+    }
+    let ccw_anchor_on_central = (cw_anchor_on_central + match_len) % central_n;
+    let ccw_anchor_pos = (cw_anchor_pos + match_len) % ctx_n;
+    let ccw_anchor_on_context = (ccw_anchor_pos + ctx_n - last_junc) % ctx_n;
+    let pm = PatchMatch {
+        start_a: cw_anchor_pos,
+        len: match_len,
+        start_b: cw_anchor_on_central,
+        tile_id: central_tile_id,
+    };
+    ctx.add_tile(&pm)?;
+    Some(NeighborhoodType {
+        central_tile_id,
+        cw_anchor_on_central,
+        ccw_anchor_on_central,
+        cw_anchor_on_context,
+        ccw_anchor_on_context,
+        num_ctx_tiles,
+        vt_seq,
+    })
+}
+
 fn nt_is_valid<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> bool {
-    let Some((mut ctx, jp)) =
-        GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))
-    else {
-        return false;
-    };
-    let ctx_n = ctx.boundary_len();
-    if ctx_n == 0 || jp.is_empty() {
-        return false;
-    }
-    let first_junc = jp[0];
-    let anchor = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
-    let tileset = match_index.tileset();
-    let central_seq = tileset.rat(nt.central_tile_id).seq();
-    let central_n = central_seq.len();
-    let mlen = crate::intgeom::patch::forward_match_length(
-        ctx.angles(),
-        anchor,
-        central_seq,
+    let Some(reconstructed) = try_construct_nt_from_cw(
+        nt.central_tile_id,
         nt.cw_anchor_on_central,
-    );
-    if mlen == 0 || mlen >= central_n {
+        nt.cw_anchor_on_context,
+        nt.num_ctx_tiles,
+        nt.vt_seq.clone(),
+        match_index,
+    ) else {
         return false;
-    }
-    let pm = PatchMatch {
-        start_a: anchor,
-        len: mlen,
-        start_b: nt.cw_anchor_on_central,
-        tile_id: nt.central_tile_id,
     };
-    ctx.add_tile(&pm).is_some()
+    reconstructed.ccw_anchor_on_central == nt.ccw_anchor_on_central
+        && reconstructed.ccw_anchor_on_context == nt.ccw_anchor_on_context
 }
 
 #[cfg(test)]
