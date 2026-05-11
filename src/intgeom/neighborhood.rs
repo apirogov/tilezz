@@ -261,17 +261,242 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             .collect()
     }
 
+    /// Return the 1-based ids of entries that fail to reconstruct or that
+    /// cannot accept the central tile at the stored anchor. Empty result
+    /// means every entry is well-formed.
     pub fn validate(&self) -> Vec<usize> {
-        todo!("validate")
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&self.tileset)));
+        let mut bad = Vec::new();
+        for (idx, nt) in self.entries.iter().enumerate() {
+            let id = idx + 1;
+            let Some((mut ctx, junc_positions)) = GrowingPatch::construct_witness_from_vt_sequence(
+                &nt.vt_seq,
+                Arc::clone(&match_index),
+            ) else {
+                bad.push(id);
+                continue;
+            };
+            let ctx_n = ctx.boundary_len();
+            if ctx_n == 0 || junc_positions.is_empty() {
+                bad.push(id);
+                continue;
+            }
+            let first_junc = junc_positions[0];
+            let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
+            let central_seq = self.tileset.rat(nt.central_tile_id).seq();
+            let central_n = central_seq.len();
+            let match_len = crate::intgeom::patch::forward_match_length(
+                ctx.angles(),
+                anchor_pos,
+                central_seq,
+                nt.cw_anchor_on_central,
+            );
+            if match_len == 0 || match_len >= central_n {
+                bad.push(id);
+                continue;
+            }
+            let pm = PatchMatch {
+                start_a: anchor_pos,
+                len: match_len,
+                start_b: nt.cw_anchor_on_central,
+                tile_id: nt.central_tile_id,
+            };
+            if ctx.add_tile(&pm).is_none() {
+                bad.push(id);
+            }
+        }
+        bad
     }
 
-    pub fn write_collection(&self, _out: &mut impl std::io::Write) -> std::io::Result<()> {
-        todo!("write_collection")
+    /// Serialize the entries + transitions to a text format.
+    ///
+    /// Format (one record per line, whitespace-separated tokens):
+    ///
+    /// ```text
+    /// NTYPE <id> <kind> <central_id> <ac> <ax> <n_vts> <vt0> <vt1> ...
+    /// TRANS <src_id> <dst_id> <tile_id> <tile_offset>
+    /// ```
+    ///
+    /// Each `<vti>` encodes a single VertexType as
+    /// `<cw_id>.<cw_off>|<inner_list>|<ccw_id>.<ccw_off>` where
+    /// `<inner_list>` is either `-` (empty) or a comma-separated list of
+    /// `<tile_id>.<tile_offset>` edges. `<kind>` is one of `dead`,
+    /// `undead`, `blessed`, `free`. The tileset is not serialized: callers
+    /// must pass a matching tileset to `parse_file`.
+    pub fn write_collection(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        let kinds = self.classify_all();
+        for (idx, nt) in self.entries.iter().enumerate() {
+            let id = idx + 1;
+            let kind = match kinds[idx] {
+                NtKind::Dead => "dead",
+                NtKind::Undead => "undead",
+                NtKind::Blessed => "blessed",
+                NtKind::Free => "free",
+            };
+            write!(
+                out,
+                "NTYPE {} {} {} {} {} {}",
+                id,
+                kind,
+                nt.central_tile_id,
+                nt.cw_anchor_on_central,
+                nt.cw_anchor_on_context,
+                nt.vt_seq.len(),
+            )?;
+            for vt in &nt.vt_seq {
+                let inner = if vt.inner.is_empty() {
+                    "-".to_string()
+                } else {
+                    vt.inner
+                        .iter()
+                        .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                write!(
+                    out,
+                    " {}.{}|{}|{}.{}",
+                    vt.cw.tile_id, vt.cw.tile_offset, inner, vt.ccw.tile_id, vt.ccw.tile_offset,
+                )?;
+            }
+            writeln!(out)?;
+        }
+        for t in &self.transitions {
+            writeln!(
+                out,
+                "TRANS {} {} {} {}",
+                t.src_id, t.dst_id, t.tile_id, t.tile_offset,
+            )?;
+        }
+        Ok(())
     }
 
-    pub fn parse_file(_tileset: Arc<TileSet<T>>, _input: &str) -> Result<Self, String> {
-        todo!("parse_file")
+    /// Parse a collection previously written by [`write_collection`]. The
+    /// tileset must match the one used to produce the file (we do not store
+    /// or verify it here).
+    pub fn parse_file(tileset: Arc<TileSet<T>>, input: &str) -> Result<Self, String> {
+        let mut entries: Vec<NeighborhoodType> = Vec::new();
+        let mut transitions: Vec<NtTransition> = Vec::new();
+        for (lineno, line) in input.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut tok = line.split_whitespace();
+            let kw = tok
+                .next()
+                .ok_or_else(|| format!("line {}: empty record", lineno + 1))?;
+            match kw {
+                "NTYPE" => {
+                    let nt = parse_ntype_line(&mut tok, lineno + 1)?;
+                    entries.push(nt);
+                }
+                "TRANS" => {
+                    let parse_usize = |s: Option<&str>, what: &str| -> Result<usize, String> {
+                        s.ok_or_else(|| format!("line {}: missing {}", lineno + 1, what))?
+                            .parse::<usize>()
+                            .map_err(|e| format!("line {}: bad {}: {}", lineno + 1, what, e))
+                    };
+                    let src_id = parse_usize(tok.next(), "src_id")?;
+                    let dst_id = parse_usize(tok.next(), "dst_id")?;
+                    let tile_id = parse_usize(tok.next(), "tile_id")?;
+                    let tile_offset = parse_usize(tok.next(), "tile_offset")?;
+                    transitions.push(NtTransition {
+                        src_id,
+                        dst_id,
+                        tile_id,
+                        tile_offset,
+                    });
+                }
+                other => {
+                    return Err(format!(
+                        "line {}: unknown record kind `{}`",
+                        lineno + 1,
+                        other
+                    ));
+                }
+            }
+        }
+        Ok(NeighborhoodIndex {
+            tileset,
+            entries,
+            transitions,
+        })
     }
+}
+
+fn parse_edge_info(s: &str) -> Result<EdgeInfo, String> {
+    let (id, off) = s
+        .split_once('.')
+        .ok_or_else(|| format!("bad edge `{}`: expected `id.offset`", s))?;
+    let tile_id: usize = id
+        .parse()
+        .map_err(|e| format!("bad edge tile_id `{}`: {}", id, e))?;
+    let tile_offset: usize = off
+        .parse()
+        .map_err(|e| format!("bad edge tile_offset `{}`: {}", off, e))?;
+    Ok(EdgeInfo {
+        tile_id,
+        tile_offset,
+    })
+}
+
+fn parse_vt_token(tok: &str) -> Result<VertexType, String> {
+    let parts: Vec<&str> = tok.split('|').collect();
+    if parts.len() != 3 {
+        return Err(format!(
+            "bad VT `{}`: expected `cw|inner|ccw`, got {} parts",
+            tok,
+            parts.len()
+        ));
+    }
+    let cw = parse_edge_info(parts[0])?;
+    let inner = if parts[1] == "-" {
+        Vec::new()
+    } else {
+        parts[1]
+            .split(',')
+            .map(parse_edge_info)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let ccw = parse_edge_info(parts[2])?;
+    Ok(VertexType { cw, inner, ccw })
+}
+
+fn parse_ntype_line(
+    tok: &mut std::str::SplitWhitespace<'_>,
+    lineno: usize,
+) -> Result<NeighborhoodType, String> {
+    let mut next = |what: &str| -> Result<String, String> {
+        tok.next()
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("line {}: missing {}", lineno, what))
+    };
+    let _id = next("id")?; // id is implicit in order; we ignore it
+    let _kind = next("kind")?; // kind is informational; recomputed via classify_all
+    let central_tile_id: usize = next("central_id")?
+        .parse()
+        .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
+    let cw_anchor_on_central: usize = next("ac")?
+        .parse()
+        .map_err(|e| format!("line {}: bad ac: {}", lineno, e))?;
+    let cw_anchor_on_context: usize = next("ax")?
+        .parse()
+        .map_err(|e| format!("line {}: bad ax: {}", lineno, e))?;
+    let n_vts: usize = next("n_vts")?
+        .parse()
+        .map_err(|e| format!("line {}: bad n_vts: {}", lineno, e))?;
+    let mut vt_seq = Vec::with_capacity(n_vts);
+    for i in 0..n_vts {
+        let s = next(&format!("vt[{}]", i))?;
+        vt_seq.push(parse_vt_token(&s).map_err(|e| format!("line {}: {}", lineno, e))?);
+    }
+    Ok(NeighborhoodType {
+        central_tile_id,
+        cw_anchor_on_central,
+        cw_anchor_on_context,
+        vt_seq,
+    })
 }
 
 #[allow(dead_code)]
@@ -663,6 +888,90 @@ mod tests {
                 nt.cw_anchor_on_context,
                 nt.vt_seq,
             );
+        }
+    }
+
+    fn assert_roundtrip<T: IsComplex + IsRingOrField + Units>(idx: &NeighborhoodIndex<T>) {
+        let mut buf: Vec<u8> = Vec::new();
+        idx.write_collection(&mut buf).expect("write");
+        let text = std::str::from_utf8(&buf).expect("utf8");
+        let parsed = NeighborhoodIndex::parse_file(Arc::clone(idx.tileset()), text).expect("parse");
+        assert_eq!(
+            parsed.num_types(),
+            idx.num_types(),
+            "entries count mismatch"
+        );
+        for (i, (a, b)) in idx
+            .entries()
+            .iter()
+            .zip(parsed.entries().iter())
+            .enumerate()
+        {
+            assert_eq!(a, b, "entry {} mismatch", i);
+        }
+        assert_eq!(
+            parsed.transitions().len(),
+            idx.transitions().len(),
+            "transitions count mismatch"
+        );
+        for (i, (a, b)) in idx
+            .transitions()
+            .iter()
+            .zip(parsed.transitions().iter())
+            .enumerate()
+        {
+            assert_eq!(a.src_id, b.src_id, "transition {} src", i);
+            assert_eq!(a.dst_id, b.dst_id, "transition {} dst", i);
+            assert_eq!(a.tile_id, b.tile_id, "transition {} tile_id", i);
+            assert_eq!(a.tile_offset, b.tile_offset, "transition {} tile_offset", i);
+        }
+    }
+
+    #[test]
+    fn square_roundtrip_collection() {
+        let idx = NeighborhoodIndex::new(square_tileset());
+        assert_roundtrip(&idx);
+    }
+
+    #[test]
+    fn hex_roundtrip_collection() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        assert_roundtrip(&idx);
+    }
+
+    #[test]
+    fn validate_returns_empty_for_square_and_hex() {
+        let sq = NeighborhoodIndex::new(square_tileset());
+        let bad = sq.validate();
+        assert!(
+            bad.is_empty(),
+            "square has {} invalid entries (first few: {:?})",
+            bad.len(),
+            &bad[..bad.len().min(5)]
+        );
+        let hex = NeighborhoodIndex::new(hex_tileset());
+        let bad = hex.validate();
+        assert!(
+            bad.is_empty(),
+            "hex has {} invalid entries (first few: {:?})",
+            bad.len(),
+            &bad[..bad.len().min(5)]
+        );
+    }
+
+    #[test]
+    fn classify_all_returns_one_per_entry() {
+        for idx in [
+            NeighborhoodIndex::new(square_tileset()),
+            NeighborhoodIndex::new(hex_tileset()),
+        ] {
+            let kinds = idx.classify_all();
+            assert_eq!(kinds.len(), idx.num_types());
+            // BFS reaches a frontier where every petal closes, so there must
+            // be at least one Blessed entry (= all outgoing transitions go to
+            // closed).
+            let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
+            assert!(n_blessed > 0, "expected at least one Blessed entry");
         }
     }
 
