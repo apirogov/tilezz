@@ -1084,7 +1084,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             inner_chains.rotate_left(rot);
             patch_tile_ids.rotate_left(rot);
             boundary_edge_ids.rotate_left(rot);
+            // `positions` has n + 1 entries (closing vertex repeated). Rotate
+            // only the first n; the closing entry is always positions[0].
+            let last_idx = positions.len() - 1;
+            positions.truncate(last_idx);
             positions.rotate_left(rot);
+            let first = positions[0];
+            positions.push(first);
         }
 
         let mut remap: rustc_hash::FxHashMap<usize, usize> = rustc_hash::FxHashMap::default();
