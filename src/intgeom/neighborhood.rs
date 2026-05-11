@@ -667,6 +667,11 @@ struct AttachedContext<T: IsComplex> {
     frontier_pos_on_aug: usize,
     frontier_is_junction_in_ctx: bool,
     last_covered_ctx_edge: EdgeInfo,
+    /// Number of context boundary edges on `aug` (= `ctx_n - match_len`).
+    /// On `aug`, positions `[0, gap_start)` are surviving context edges
+    /// and `[gap_start, aug_n)` are the central tile gap edges.
+    gap_start: usize,
+    aug_n: usize,
 }
 
 #[allow(dead_code)]
@@ -733,6 +738,8 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
         frontier_pos_on_aug,
         frontier_is_junction_in_ctx,
         last_covered_ctx_edge,
+        gap_start,
+        aug_n,
     })
 }
 
@@ -769,12 +776,30 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
             continue;
         }
 
-        // The first surviving petal edge has tile_offset == petal_pm.start_b
-        // (see add_tile_growing in patch.rs). That edge starts at the OLD
-        // frontier vertex on ctx, and is the ccw side of the new VT.
+        // Count how many of the petal's matched edges (on aug) are in the
+        // gap region [gap_start, aug_n). Those edges are NOT matched in the
+        // ctx-only view (the central tile is absent there) and become
+        // surviving boundary edges of the petal in ctx-only.
+        //
+        // In aug, the petal's matched edges are at petal tile offsets
+        // (start_b - 1), (start_b - 2), ..., (start_b - mlen) (mod petal_n);
+        // the first surviving is at offset start_b. In ctx-only the matched
+        // offsets are only the ones whose corresponding aug positions are
+        // context positions (i.e. in [0, gap_start)). The remaining matched
+        // offsets (gap-consumed) become the first surviving offsets going
+        // CCW from the old frontier in ctx-only, so the ctx-only first
+        // surviving offset is `start_b - petal_gap_consumed`.
+        let petal_n = match_index.tileset().rat(petal_pm.tile_id).seq().len();
+        let mut petal_gap_consumed = 0usize;
+        for i in 0..petal_pm.len {
+            let p = (petal_pm.start_a + i) % ac.aug_n;
+            if p >= ac.gap_start {
+                petal_gap_consumed += 1;
+            }
+        }
         let petal_edge = EdgeInfo {
             tile_id: petal_pm.tile_id,
-            tile_offset: petal_pm.start_b,
+            tile_offset: (petal_pm.start_b + petal_n - petal_gap_consumed) % petal_n,
         };
 
         let mut new_vt_seq = nt.vt_seq.clone();
@@ -978,178 +1003,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "remove once spectre BFS converges; this was a one-shot diagnostic"]
-    fn spectre_one_bad_seed_compare() {
-        // Find a bad seed and compare normalized vs reconstructed angles.
-        let tileset = spectre_tileset();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        for id in 1..=mi.num_types() {
-            let mt = mi.get(id);
-            let mut patch = GrowingPatch::new(Arc::clone(mi.tileset()), mt.tile_a);
-            let pm = PatchMatch {
-                start_a: mt.start_a,
-                len: mt.len,
-                start_b: mt.start_b,
-                tile_id: mt.tile_b,
-            };
-            if patch.add_tile(&pm).is_none() {
-                continue;
-            }
-            patch.normalize();
-            let patch_n = patch.boundary_len();
-            let all_juncs: Vec<(usize, VertexType)> = (0..patch_n)
-                .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
-                .collect();
-            for third_pm in patch.get_all_matches() {
-                let filtered: Vec<&(usize, VertexType)> = all_juncs
-                    .iter()
-                    .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
-                    .collect();
-                if filtered.is_empty() {
-                    continue;
-                }
-                let first_junc = filtered[0].0;
-                let vt_seq: Vec<VertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
-                let ax = (first_junc + patch_n - third_pm.start_a) % patch_n;
-
-                // Reconstruct and compare.
-                let Some((mut ctx_r, jp)) =
-                    GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, Arc::clone(&mi))
-                else {
-                    continue;
-                };
-                let ctx_n = ctx_r.boundary_len();
-                if ctx_n != patch_n {
-                    continue;
-                }
-                let first_junc_r = jp[0];
-                let anchor_r = (first_junc_r + ctx_n - ax) % ctx_n;
-                let central_seq = tileset.rat(third_pm.tile_id).seq();
-                let mlen_r = crate::intgeom::patch::forward_match_length(
-                    ctx_r.angles(),
-                    anchor_r,
-                    central_seq,
-                    third_pm.start_b,
-                );
-                if mlen_r == 0 || mlen_r >= central_seq.len() {
-                    continue;
-                }
-                let pm = PatchMatch {
-                    start_a: anchor_r,
-                    len: mlen_r,
-                    start_b: third_pm.start_b,
-                    tile_id: third_pm.tile_id,
-                };
-                if ctx_r.add_tile(&pm).is_none() {
-                    eprintln!("=== BAD SEED ===");
-                    eprintln!(
-                        "third_pm: start_a={} len={} start_b={} tile_id={}",
-                        third_pm.start_a, third_pm.len, third_pm.start_b, third_pm.tile_id
-                    );
-                    eprintln!(
-                        "patch_n={} norm_first_junc={} norm_anchor={} ax={}",
-                        patch_n, first_junc, third_pm.start_a, ax
-                    );
-                    eprintln!("norm angles={:?}", patch.angles());
-                    eprintln!("norm edges={:?}", patch.edges());
-                    eprintln!(
-                        "norm is_junction: {:?}",
-                        (0..patch_n)
-                            .map(|i| patch.is_junction(i))
-                            .collect::<Vec<_>>()
-                    );
-                    eprintln!(
-                        "recon_first_junc={} recon_anchor={} mlen_r={}",
-                        first_junc_r, anchor_r, mlen_r
-                    );
-                    eprintln!("recon angles={:?}", ctx_r.angles());
-                    eprintln!("recon edges={:?}", ctx_r.edges());
-                    eprintln!("vt_seq={:?}", vt_seq);
-                    // Look at angle/edge sequence around the anchor on both:
-                    eprintln!("--- norm around anchor ---");
-                    for k in 0..(third_pm.len + 1).min(patch_n) {
-                        let p = (third_pm.start_a + k) % patch_n;
-                        eprintln!(
-                            "  p={} angle={} edge={:?}",
-                            p,
-                            patch.angles()[p],
-                            patch.edges()[p]
-                        );
-                    }
-                    eprintln!("--- recon around anchor ---");
-                    for k in 0..(mlen_r + 1).min(ctx_n) {
-                        let p = (anchor_r + k) % ctx_n;
-                        eprintln!(
-                            "  p={} angle={} edge={:?}",
-                            p,
-                            ctx_r.angles()[p],
-                            ctx_r.edges()[p]
-                        );
-                    }
-                    return; // first bad case only
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn spectre_diagnostic() {
-        let idx = NeighborhoodIndex::new(spectre_tileset());
-        let kinds = idx.classify_all();
-        let bad = idx.validate();
-        eprintln!(
-            "SPECTRE: {} entries, validate bad={}, transitions={}",
-            idx.num_types(),
-            bad.len(),
-            idx.transitions().len()
-        );
-        let n_dead = kinds.iter().filter(|k| **k == NtKind::Dead).count();
-        let n_undead = kinds.iter().filter(|k| **k == NtKind::Undead).count();
-        let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
-        let n_free = kinds.iter().filter(|k| **k == NtKind::Free).count();
-        let n_closed_tr = idx
-            .transitions()
-            .iter()
-            .filter(|t| t.dst_id == NT_CLOSED_ID)
-            .count();
-        eprintln!(
-            "  kinds: dead={} undead={} blessed={} free={} closed_transitions={}",
-            n_dead, n_undead, n_blessed, n_free, n_closed_tr
-        );
-
-        // Look at a Dead entry: why no outgoing transitions?
-        let dead_idx = kinds.iter().position(|k| *k == NtKind::Dead).unwrap();
-        let dead_nt = &idx.entries()[dead_idx];
-        eprintln!(
-            "Dead entry [id={}]: c={} ac={} ax={} vt_seq_len={}",
-            dead_idx + 1,
-            dead_nt.central_tile_id,
-            dead_nt.cw_anchor_on_central,
-            dead_nt.cw_anchor_on_context,
-            dead_nt.vt_seq.len()
-        );
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        let ac = build_attached_context(dead_nt, &mi);
-        eprintln!(
-            "  build_attached_context: {}",
-            if ac.is_some() { "Some(...)" } else { "None" }
-        );
-        if let Some(ac) = ac {
-            let candidates = GrowingPatch::compute_candidates_covering_position(
-                ac.aug.match_index(),
-                ac.aug.angles(),
-                ac.aug.edges(),
-                ac.frontier_pos_on_aug,
-            );
-            eprintln!(
-                "  frontier_pos_on_aug={}, candidates={}",
-                ac.frontier_pos_on_aug,
-                candidates.len()
-            );
-        }
-    }
-
-    #[test]
     fn validate_returns_empty_for_square_and_hex() {
         let sq = NeighborhoodIndex::new(square_tileset());
         let bad = sq.validate();
@@ -1170,6 +1023,33 @@ mod tests {
     }
 
     #[test]
+    fn spectre_validates() {
+        let idx = NeighborhoodIndex::new(spectre_tileset());
+        let bad = idx.validate();
+        assert!(
+            bad.is_empty(),
+            "spectre has {}/{} invalid entries (first few: {:?})",
+            bad.len(),
+            idx.num_types(),
+            &bad[..bad.len().min(5)]
+        );
+        // Sanity: spectre tiles the plane, so the BFS must reach closed
+        // configurations from at least some open NTs.
+        let n_closed = idx
+            .transitions()
+            .iter()
+            .filter(|t| t.dst_id == NT_CLOSED_ID)
+            .count();
+        assert!(
+            n_closed > 0,
+            "spectre BFS should produce closed transitions"
+        );
+        let kinds = idx.classify_all();
+        let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
+        assert!(n_blessed > 0, "spectre should have Blessed entries");
+    }
+
+    #[test]
     fn classify_all_returns_one_per_entry() {
         for idx in [
             NeighborhoodIndex::new(square_tileset()),
@@ -1182,132 +1062,6 @@ mod tests {
             // closed).
             let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
             assert!(n_blessed > 0, "expected at least one Blessed entry");
-        }
-    }
-
-    /// Group NTs by their reconstructed context's normalized boundary
-    /// (angle-sequence rotated to lex-min). Many NTs share the same context
-    /// shape (different anchors / different central-tile orientations against
-    /// the same context). For square / hex, the number of distinct shapes
-    /// should be small even though the NT count is large.
-    #[test]
-    fn context_shape_diversity() {
-        for (name, idx) in [
-            ("SQUARE", NeighborhoodIndex::new(square_tileset())),
-            ("HEX", NeighborhoodIndex::new(hex_tileset())),
-        ] {
-            let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-            let mut by_shape: std::collections::HashMap<Vec<i8>, usize> =
-                std::collections::HashMap::new();
-            let mut by_tile_count: std::collections::BTreeMap<usize, usize> =
-                std::collections::BTreeMap::new();
-            for nt in idx.entries() {
-                let (ctx, _) =
-                    GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(&mi))
-                        .expect("reconstruct");
-                let angles = ctx.angles();
-                let rot = crate::intgeom::rat::lex_min_rot(angles);
-                let mut norm = angles.to_vec();
-                norm.rotate_left(rot);
-                *by_shape.entry(norm).or_insert(0) += 1;
-                let n_tiles = ctx
-                    .patch_tile_ids()
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len();
-                *by_tile_count.entry(n_tiles).or_insert(0) += 1;
-            }
-            eprintln!(
-                "{}: {} NTs -> {} distinct context shapes",
-                name,
-                idx.num_types(),
-                by_shape.len()
-            );
-            for (n, count) in &by_tile_count {
-                eprintln!("  {} ctx tiles: {} NTs", n, count);
-            }
-            // Print a sample of the smallest shapes (by boundary length).
-            let mut shapes: Vec<(&Vec<i8>, &usize)> = by_shape.iter().collect();
-            shapes.sort_by_key(|(angles, _)| angles.len());
-            eprintln!("  smallest shapes (by boundary length):");
-            for (angles, count) in shapes.iter().take(8) {
-                eprintln!(
-                    "    len={} count={} angles={:?}",
-                    angles.len(),
-                    count,
-                    angles
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn hex_level4_outcomes() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        // Find a few len-4 NTs and check what explore_one returns.
-        let len4: Vec<&NeighborhoodType> = idx
-            .entries()
-            .iter()
-            .filter(|n| n.vt_seq.len() == 4)
-            .take(5)
-            .collect();
-        assert!(!len4.is_empty(), "expected some len-4 NTs");
-        for (i, nt) in len4.iter().enumerate() {
-            let outcomes = explore_one(nt, &mi);
-            let n_open = outcomes
-                .iter()
-                .filter(|o| matches!(o.kind, OutcomeKind::Open { .. }))
-                .count();
-            let n_closed = outcomes
-                .iter()
-                .filter(|o| matches!(o.kind, OutcomeKind::Closed))
-                .count();
-            eprintln!(
-                "len-4 nt[{}]: ac={} ax={} -> {} open, {} closed outcomes",
-                i, nt.cw_anchor_on_central, nt.cw_anchor_on_context, n_open, n_closed
-            );
-        }
-    }
-
-    #[test]
-    fn bfs_vt_seq_length_distribution() {
-        let sq = NeighborhoodIndex::new(square_tileset());
-        let mut hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-        let mut max_inner = 0;
-        for nt in sq.entries() {
-            *hist.entry(nt.vt_seq.len()).or_insert(0) += 1;
-            for vt in &nt.vt_seq {
-                max_inner = max_inner.max(vt.inner.len());
-            }
-        }
-        eprintln!(
-            "SQUARE: entries={} transitions={} max_inner_per_vt={}",
-            sq.num_types(),
-            sq.transitions().len(),
-            max_inner
-        );
-        for (len, count) in &hist {
-            eprintln!("  vt_seq_len={}: {} entries", len, count);
-        }
-
-        let hex = NeighborhoodIndex::new(hex_tileset());
-        let mut hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-        let mut max_inner = 0;
-        for nt in hex.entries() {
-            *hist.entry(nt.vt_seq.len()).or_insert(0) += 1;
-            for vt in &nt.vt_seq {
-                max_inner = max_inner.max(vt.inner.len());
-            }
-        }
-        eprintln!(
-            "HEX: entries={} transitions={} max_inner_per_vt={}",
-            hex.num_types(),
-            hex.transitions().len(),
-            max_inner
-        );
-        for (len, count) in &hist {
-            eprintln!("  vt_seq_len={}: {} entries", len, count);
         }
     }
 
