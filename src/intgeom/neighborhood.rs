@@ -44,7 +44,9 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut entries: Vec<NeighborhoodType> = Vec::new();
-        let transitions: Vec<NtTransition> = Vec::new();
+        let mut transitions: Vec<NtTransition> = Vec::new();
+        // IDs are 1-based so NT_CLOSED_ID = 0 is unambiguous: entries[i] has
+        // id i + 1. `seen` and transitions store ids, not indices.
         let mut seen: FxHashMap<NeighborhoodType, usize> = FxHashMap::default();
         let mut queue: VecDeque<NeighborhoodType> = VecDeque::new();
 
@@ -102,8 +104,8 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 if seen.contains_key(&nt) {
                     continue;
                 }
-                let idx = entries.len();
-                seen.insert(nt.clone(), idx);
+                let id = entries.len() + 1;
+                seen.insert(nt.clone(), id);
                 entries.push(nt.clone());
                 queue.push_back(nt);
             }
@@ -112,7 +114,29 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         let mut explored = 0usize;
         while let Some(state) = queue.pop_front() {
             explored += 1;
-            let _state_id = seen.get(&state).expect("dequeued state must be in seen");
+            let src_id = *seen.get(&state).expect("dequeued state must be in seen");
+            for outcome in explore_one(&state, &match_index) {
+                let dst_id = match outcome.kind {
+                    OutcomeKind::Closed => NT_CLOSED_ID,
+                    OutcomeKind::Open { nt: new_nt, .. } => {
+                        if let Some(&id) = seen.get(&new_nt) {
+                            id
+                        } else {
+                            let id = entries.len() + 1;
+                            seen.insert(new_nt.clone(), id);
+                            entries.push(new_nt.clone());
+                            queue.push_back(new_nt);
+                            id
+                        }
+                    }
+                };
+                transitions.push(NtTransition {
+                    src_id,
+                    dst_id,
+                    tile_id: outcome.petal_pm.tile_id,
+                    tile_offset: outcome.petal_pm.start_b,
+                });
+            }
         }
 
         eprintln!(
@@ -146,18 +170,19 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     }
 
     pub fn classify_all(&self) -> Vec<NtKind> {
+        // Transition ids are 1-based; convert with `- 1` when indexing into
+        // these per-entry vectors. NT_CLOSED_ID (= 0) is the closed sentinel
+        // and never appears as a src_id.
         let n = self.entries.len();
         let mut succ_sets: Vec<Vec<usize>> = vec![vec![]; n];
         let mut has_outgoing = vec![false; n];
 
         for t in &self.transitions {
-            if t.src_id == NT_CLOSED_ID {
-                continue;
-            }
-            let src_idx = t.src_id;
+            debug_assert!(t.src_id != NT_CLOSED_ID, "closed cannot be a src");
+            let src_idx = t.src_id - 1;
             has_outgoing[src_idx] = true;
             if t.dst_id != NT_CLOSED_ID {
-                succ_sets[src_idx].push(t.dst_id);
+                succ_sets[src_idx].push(t.dst_id - 1);
             }
         }
 
@@ -188,10 +213,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         let mut has_closed_or_blessed_succ = vec![false; n];
 
         for t in &self.transitions {
-            if t.src_id == NT_CLOSED_ID {
-                continue;
-            }
-            let src_idx = t.src_id;
+            let src_idx = t.src_id - 1;
             if t.dst_id == NT_CLOSED_ID {
                 has_closed_or_blessed_succ[src_idx] = true;
             }
@@ -205,10 +227,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     continue;
                 }
                 let mut any = false;
-                let all_good = self.transitions.iter().filter(|t| t.src_id == i).all(|t| {
-                    any = true;
-                    t.dst_id == NT_CLOSED_ID || blessed[t.dst_id]
-                });
+                let src_id_i = i + 1;
+                let all_good = self
+                    .transitions
+                    .iter()
+                    .filter(|t| t.src_id == src_id_i)
+                    .all(|t| {
+                        any = true;
+                        t.dst_id == NT_CLOSED_ID || blessed[t.dst_id - 1]
+                    });
                 if any && all_good {
                     blessed[i] = true;
                     has_closed_or_blessed_succ[i] = true;
@@ -260,14 +287,19 @@ struct FrontierInfo {
     dist_to_frontier: usize,
 }
 
+#[allow(dead_code)]
+struct ExploreOutcome<T: IsComplex> {
+    petal_pm: PatchMatch,
+    kind: OutcomeKind<T>,
+}
+
 #[allow(dead_code, clippy::large_enum_variant)]
-enum ExploreOutcome<T: IsComplex> {
+enum OutcomeKind<T: IsComplex> {
     Closed,
     Open {
         nt: NeighborhoodType,
         trial: GrowingPatch<T>,
         central_ptid: usize,
-        petal_pm: PatchMatch,
     },
 }
 
@@ -383,16 +415,19 @@ fn explore_step<T: IsComplex + IsRingOrField + Units>(
             continue;
         }
 
-        if find_remaining_gap(&trial, central_ptid).is_none() {
-            outcomes.push(ExploreOutcome::Closed);
+        let kind = if find_remaining_gap(&trial, central_ptid).is_none() {
+            OutcomeKind::Closed
         } else {
-            outcomes.push(ExploreOutcome::Open {
+            OutcomeKind::Open {
                 nt: nt.clone(),
                 trial,
                 central_ptid,
-                petal_pm: petal_pm.clone(),
-            });
-        }
+            }
+        };
+        outcomes.push(ExploreOutcome {
+            petal_pm: petal_pm.clone(),
+            kind,
+        });
     }
 
     Some((aug, frontier, outcomes))
@@ -515,7 +550,10 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
 
         // Closed: petal absorbed all central edges.
         if !trial.patch_tile_ids().contains(&ac.central_ptid) {
-            results.push(ExploreOutcome::Closed);
+            results.push(ExploreOutcome {
+                petal_pm,
+                kind: OutcomeKind::Closed,
+            });
             continue;
         }
 
@@ -553,11 +591,13 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
             vt_seq: new_vt_seq,
         };
 
-        results.push(ExploreOutcome::Open {
-            nt: new_nt,
-            trial,
-            central_ptid: ac.central_ptid,
+        results.push(ExploreOutcome {
             petal_pm,
+            kind: OutcomeKind::Open {
+                nt: new_nt,
+                trial,
+                central_ptid: ac.central_ptid,
+            },
         });
     }
     results
@@ -626,15 +666,154 @@ mod tests {
         }
     }
 
+    /// Group NTs by their reconstructed context's normalized boundary
+    /// (angle-sequence rotated to lex-min). Many NTs share the same context
+    /// shape (different anchors / different central-tile orientations against
+    /// the same context). For square / hex, the number of distinct shapes
+    /// should be small even though the NT count is large.
     #[test]
-    fn bfs_explores_all_seeds() {
+    fn context_shape_diversity() {
+        for (name, idx) in [
+            ("SQUARE", NeighborhoodIndex::new(square_tileset())),
+            ("HEX", NeighborhoodIndex::new(hex_tileset())),
+        ] {
+            let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+            let mut by_shape: std::collections::HashMap<Vec<i8>, usize> =
+                std::collections::HashMap::new();
+            let mut by_tile_count: std::collections::BTreeMap<usize, usize> =
+                std::collections::BTreeMap::new();
+            for nt in idx.entries() {
+                let (ctx, _) =
+                    GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(&mi))
+                        .expect("reconstruct");
+                let angles = ctx.angles();
+                let rot = crate::intgeom::rat::lex_min_rot(angles);
+                let mut norm = angles.to_vec();
+                norm.rotate_left(rot);
+                *by_shape.entry(norm).or_insert(0) += 1;
+                let n_tiles = ctx
+                    .patch_tile_ids()
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
+                *by_tile_count.entry(n_tiles).or_insert(0) += 1;
+            }
+            eprintln!(
+                "{}: {} NTs -> {} distinct context shapes",
+                name,
+                idx.num_types(),
+                by_shape.len()
+            );
+            for (n, count) in &by_tile_count {
+                eprintln!("  {} ctx tiles: {} NTs", n, count);
+            }
+            // Print a sample of the smallest shapes (by boundary length).
+            let mut shapes: Vec<(&Vec<i8>, &usize)> = by_shape.iter().collect();
+            shapes.sort_by_key(|(angles, _)| angles.len());
+            eprintln!("  smallest shapes (by boundary length):");
+            for (angles, count) in shapes.iter().take(8) {
+                eprintln!(
+                    "    len={} count={} angles={:?}",
+                    angles.len(),
+                    count,
+                    angles
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hex_level4_outcomes() {
+        let idx = NeighborhoodIndex::new(hex_tileset());
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        // Find a few len-4 NTs and check what explore_one returns.
+        let len4: Vec<&NeighborhoodType> = idx
+            .entries()
+            .iter()
+            .filter(|n| n.vt_seq.len() == 4)
+            .take(5)
+            .collect();
+        assert!(!len4.is_empty(), "expected some len-4 NTs");
+        for (i, nt) in len4.iter().enumerate() {
+            let outcomes = explore_one(nt, &mi);
+            let n_open = outcomes
+                .iter()
+                .filter(|o| matches!(o.kind, OutcomeKind::Open { .. }))
+                .count();
+            let n_closed = outcomes
+                .iter()
+                .filter(|o| matches!(o.kind, OutcomeKind::Closed))
+                .count();
+            eprintln!(
+                "len-4 nt[{}]: ac={} ax={} -> {} open, {} closed outcomes",
+                i, nt.cw_anchor_on_central, nt.cw_anchor_on_context, n_open, n_closed
+            );
+        }
+    }
+
+    #[test]
+    fn bfs_vt_seq_length_distribution() {
+        let sq = NeighborhoodIndex::new(square_tileset());
+        let mut hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let mut max_inner = 0;
+        for nt in sq.entries() {
+            *hist.entry(nt.vt_seq.len()).or_insert(0) += 1;
+            for vt in &nt.vt_seq {
+                max_inner = max_inner.max(vt.inner.len());
+            }
+        }
+        eprintln!(
+            "SQUARE: entries={} transitions={} max_inner_per_vt={}",
+            sq.num_types(),
+            sq.transitions().len(),
+            max_inner
+        );
+        for (len, count) in &hist {
+            eprintln!("  vt_seq_len={}: {} entries", len, count);
+        }
+
+        let hex = NeighborhoodIndex::new(hex_tileset());
+        let mut hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let mut max_inner = 0;
+        for nt in hex.entries() {
+            *hist.entry(nt.vt_seq.len()).or_insert(0) += 1;
+            for vt in &nt.vt_seq {
+                max_inner = max_inner.max(vt.inner.len());
+            }
+        }
+        eprintln!(
+            "HEX: entries={} transitions={} max_inner_per_vt={}",
+            hex.num_types(),
+            hex.transitions().len(),
+            max_inner
+        );
+        for (len, count) in &hist {
+            eprintln!("  vt_seq_len={}: {} entries", len, count);
+        }
+    }
+
+    #[test]
+    fn bfs_produces_transitions() {
         let sq_idx = NeighborhoodIndex::new(square_tileset());
         assert!(sq_idx.num_types() > 0);
-        assert!(sq_idx.transitions().is_empty());
+        assert!(
+            !sq_idx.transitions().is_empty(),
+            "BFS should produce transitions"
+        );
+        // src_id is a 1-based entry id; dst_id is either 1-based or
+        // NT_CLOSED_ID (= 0).
+        for t in sq_idx.transitions() {
+            assert!(t.src_id >= 1 && t.src_id <= sq_idx.num_types());
+            assert!(t.dst_id == NT_CLOSED_ID || t.dst_id <= sq_idx.num_types());
+        }
 
         let hex_idx = NeighborhoodIndex::new(hex_tileset());
         assert!(hex_idx.num_types() > 0);
-        assert!(hex_idx.transitions().is_empty());
+        assert!(!hex_idx.transitions().is_empty());
+        for t in hex_idx.transitions() {
+            assert!(t.src_id >= 1 && t.src_id <= hex_idx.num_types());
+            assert!(t.dst_id == NT_CLOSED_ID || t.dst_id <= hex_idx.num_types());
+        }
     }
 
     fn validate_seeds<T: IsComplex + IsRingOrField + Units>(
@@ -842,9 +1021,9 @@ mod tests {
                 explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
             let central_ptid = aug.central_ptid;
             for outcome in &petal_outcomes {
-                match outcome {
-                    ExploreOutcome::Closed => {}
-                    ExploreOutcome::Open {
+                match &outcome.kind {
+                    OutcomeKind::Closed => {}
+                    OutcomeKind::Open {
                         trial,
                         central_ptid: cptid,
                         ..
@@ -891,9 +1070,9 @@ mod tests {
         let mut errors = Vec::new();
         for (i, nt) in idx.entries().iter().enumerate() {
             for outcome in explore_one(nt, &mi) {
-                let new_nt = match &outcome {
-                    ExploreOutcome::Closed => continue,
-                    ExploreOutcome::Open { nt, .. } => nt.clone(),
+                let new_nt = match &outcome.kind {
+                    OutcomeKind::Closed => continue,
+                    OutcomeKind::Open { nt, .. } => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
@@ -967,9 +1146,9 @@ mod tests {
         let mut errors = Vec::new();
         for (i, nt) in idx.entries().iter().enumerate() {
             for outcome in explore_one(nt, &mi) {
-                let new_nt = match &outcome {
-                    ExploreOutcome::Closed => continue,
-                    ExploreOutcome::Open { nt, .. } => nt.clone(),
+                let new_nt = match &outcome.kind {
+                    OutcomeKind::Closed => continue,
+                    OutcomeKind::Open { nt, .. } => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
