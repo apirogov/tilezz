@@ -73,6 +73,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 .collect();
 
             for third_pm in patch.get_all_matches() {
+                // get_all_matches returns edge-compatible glues but for
+                // non-convex tiles (e.g. spectre) the central might still
+                // collide with the existing two-tile patch. Try the glue on
+                // a clone first; skip if it fails.
+                let mut trial = patch.clone_for_mutation();
+                if trial.add_tile(&third_pm).is_none() {
+                    continue;
+                }
+
                 let central_tile_id = third_pm.tile_id;
                 let cw_anchor_on_central = third_pm.start_b;
 
@@ -102,6 +111,13 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     vt_seq,
                 };
                 if seen.contains_key(&nt) {
+                    continue;
+                }
+                // The trial.add_tile above verified the central glues into
+                // the normalized two-tile patch. Also verify the abstract NT
+                // reconstructs from its vt_seq (needed for non-convex tiles
+                // where seed-gen and reconstruct can diverge).
+                if !nt_is_valid(&nt, &match_index) {
                     continue;
                 }
                 let id = entries.len() + 1;
@@ -266,46 +282,17 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// means every entry is well-formed.
     pub fn validate(&self) -> Vec<usize> {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&self.tileset)));
-        let mut bad = Vec::new();
-        for (idx, nt) in self.entries.iter().enumerate() {
-            let id = idx + 1;
-            let Some((mut ctx, junc_positions)) = GrowingPatch::construct_witness_from_vt_sequence(
-                &nt.vt_seq,
-                Arc::clone(&match_index),
-            ) else {
-                bad.push(id);
-                continue;
-            };
-            let ctx_n = ctx.boundary_len();
-            if ctx_n == 0 || junc_positions.is_empty() {
-                bad.push(id);
-                continue;
-            }
-            let first_junc = junc_positions[0];
-            let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
-            let central_seq = self.tileset.rat(nt.central_tile_id).seq();
-            let central_n = central_seq.len();
-            let match_len = crate::intgeom::patch::forward_match_length(
-                ctx.angles(),
-                anchor_pos,
-                central_seq,
-                nt.cw_anchor_on_central,
-            );
-            if match_len == 0 || match_len >= central_n {
-                bad.push(id);
-                continue;
-            }
-            let pm = PatchMatch {
-                start_a: anchor_pos,
-                len: match_len,
-                start_b: nt.cw_anchor_on_central,
-                tile_id: nt.central_tile_id,
-            };
-            if ctx.add_tile(&pm).is_none() {
-                bad.push(id);
-            }
-        }
-        bad
+        self.entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, nt)| {
+                if nt_is_valid(nt, &match_index) {
+                    None
+                } else {
+                    Some(idx + 1)
+                }
+            })
+            .collect()
     }
 
     /// Serialize the entries + transitions to a text format.
@@ -816,6 +803,15 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
             vt_seq: new_vt_seq,
         };
 
+        // Verify the abstract vt_seq update produced a valid NT: it must
+        // reconstruct + glue the central. The petal glue itself was already
+        // validated on the augmented patch (`trial.add_tile` succeeded), but
+        // the abstract Case A / Case B update may not always capture the
+        // geometry (e.g. for non-convex tiles like spectre).
+        if !nt_is_valid(&new_nt, match_index) {
+            continue;
+        }
+
         results.push(ExploreOutcome {
             petal_pm,
             kind: OutcomeKind::Open {
@@ -826,6 +822,42 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
         });
     }
     results
+}
+
+fn nt_is_valid<T: IsComplex + IsRingOrField + Units>(
+    nt: &NeighborhoodType,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> bool {
+    let Some((mut ctx, jp)) =
+        GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))
+    else {
+        return false;
+    };
+    let ctx_n = ctx.boundary_len();
+    if ctx_n == 0 || jp.is_empty() {
+        return false;
+    }
+    let first_junc = jp[0];
+    let anchor = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
+    let tileset = match_index.tileset();
+    let central_seq = tileset.rat(nt.central_tile_id).seq();
+    let central_n = central_seq.len();
+    let mlen = crate::intgeom::patch::forward_match_length(
+        ctx.angles(),
+        anchor,
+        central_seq,
+        nt.cw_anchor_on_central,
+    );
+    if mlen == 0 || mlen >= central_n {
+        return false;
+    }
+    let pm = PatchMatch {
+        start_a: anchor,
+        len: mlen,
+        start_b: nt.cw_anchor_on_central,
+        tile_id: nt.central_tile_id,
+    };
+    ctx.add_tile(&pm).is_some()
 }
 
 #[cfg(test)]
@@ -937,6 +969,184 @@ mod tests {
     fn hex_roundtrip_collection() {
         let idx = NeighborhoodIndex::new(hex_tileset());
         assert_roundtrip(&idx);
+    }
+
+    fn spectre_tileset() -> Arc<TileSet<ZZ12>> {
+        let sp = tiles::spectre::<ZZ12>();
+        let rat = Rat::try_from(&sp).unwrap();
+        Arc::new(TileSet::new(vec![rat]))
+    }
+
+    #[test]
+    #[ignore = "remove once spectre BFS converges; this was a one-shot diagnostic"]
+    fn spectre_one_bad_seed_compare() {
+        // Find a bad seed and compare normalized vs reconstructed angles.
+        let tileset = spectre_tileset();
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+        for id in 1..=mi.num_types() {
+            let mt = mi.get(id);
+            let mut patch = GrowingPatch::new(Arc::clone(mi.tileset()), mt.tile_a);
+            let pm = PatchMatch {
+                start_a: mt.start_a,
+                len: mt.len,
+                start_b: mt.start_b,
+                tile_id: mt.tile_b,
+            };
+            if patch.add_tile(&pm).is_none() {
+                continue;
+            }
+            patch.normalize();
+            let patch_n = patch.boundary_len();
+            let all_juncs: Vec<(usize, VertexType)> = (0..patch_n)
+                .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
+                .collect();
+            for third_pm in patch.get_all_matches() {
+                let filtered: Vec<&(usize, VertexType)> = all_juncs
+                    .iter()
+                    .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
+                    .collect();
+                if filtered.is_empty() {
+                    continue;
+                }
+                let first_junc = filtered[0].0;
+                let vt_seq: Vec<VertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
+                let ax = (first_junc + patch_n - third_pm.start_a) % patch_n;
+
+                // Reconstruct and compare.
+                let Some((mut ctx_r, jp)) =
+                    GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, Arc::clone(&mi))
+                else {
+                    continue;
+                };
+                let ctx_n = ctx_r.boundary_len();
+                if ctx_n != patch_n {
+                    continue;
+                }
+                let first_junc_r = jp[0];
+                let anchor_r = (first_junc_r + ctx_n - ax) % ctx_n;
+                let central_seq = tileset.rat(third_pm.tile_id).seq();
+                let mlen_r = crate::intgeom::patch::forward_match_length(
+                    ctx_r.angles(),
+                    anchor_r,
+                    central_seq,
+                    third_pm.start_b,
+                );
+                if mlen_r == 0 || mlen_r >= central_seq.len() {
+                    continue;
+                }
+                let pm = PatchMatch {
+                    start_a: anchor_r,
+                    len: mlen_r,
+                    start_b: third_pm.start_b,
+                    tile_id: third_pm.tile_id,
+                };
+                if ctx_r.add_tile(&pm).is_none() {
+                    eprintln!("=== BAD SEED ===");
+                    eprintln!(
+                        "third_pm: start_a={} len={} start_b={} tile_id={}",
+                        third_pm.start_a, third_pm.len, third_pm.start_b, third_pm.tile_id
+                    );
+                    eprintln!(
+                        "patch_n={} norm_first_junc={} norm_anchor={} ax={}",
+                        patch_n, first_junc, third_pm.start_a, ax
+                    );
+                    eprintln!("norm angles={:?}", patch.angles());
+                    eprintln!("norm edges={:?}", patch.edges());
+                    eprintln!(
+                        "norm is_junction: {:?}",
+                        (0..patch_n)
+                            .map(|i| patch.is_junction(i))
+                            .collect::<Vec<_>>()
+                    );
+                    eprintln!(
+                        "recon_first_junc={} recon_anchor={} mlen_r={}",
+                        first_junc_r, anchor_r, mlen_r
+                    );
+                    eprintln!("recon angles={:?}", ctx_r.angles());
+                    eprintln!("recon edges={:?}", ctx_r.edges());
+                    eprintln!("vt_seq={:?}", vt_seq);
+                    // Look at angle/edge sequence around the anchor on both:
+                    eprintln!("--- norm around anchor ---");
+                    for k in 0..(third_pm.len + 1).min(patch_n) {
+                        let p = (third_pm.start_a + k) % patch_n;
+                        eprintln!(
+                            "  p={} angle={} edge={:?}",
+                            p,
+                            patch.angles()[p],
+                            patch.edges()[p]
+                        );
+                    }
+                    eprintln!("--- recon around anchor ---");
+                    for k in 0..(mlen_r + 1).min(ctx_n) {
+                        let p = (anchor_r + k) % ctx_n;
+                        eprintln!(
+                            "  p={} angle={} edge={:?}",
+                            p,
+                            ctx_r.angles()[p],
+                            ctx_r.edges()[p]
+                        );
+                    }
+                    return; // first bad case only
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spectre_diagnostic() {
+        let idx = NeighborhoodIndex::new(spectre_tileset());
+        let kinds = idx.classify_all();
+        let bad = idx.validate();
+        eprintln!(
+            "SPECTRE: {} entries, validate bad={}, transitions={}",
+            idx.num_types(),
+            bad.len(),
+            idx.transitions().len()
+        );
+        let n_dead = kinds.iter().filter(|k| **k == NtKind::Dead).count();
+        let n_undead = kinds.iter().filter(|k| **k == NtKind::Undead).count();
+        let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
+        let n_free = kinds.iter().filter(|k| **k == NtKind::Free).count();
+        let n_closed_tr = idx
+            .transitions()
+            .iter()
+            .filter(|t| t.dst_id == NT_CLOSED_ID)
+            .count();
+        eprintln!(
+            "  kinds: dead={} undead={} blessed={} free={} closed_transitions={}",
+            n_dead, n_undead, n_blessed, n_free, n_closed_tr
+        );
+
+        // Look at a Dead entry: why no outgoing transitions?
+        let dead_idx = kinds.iter().position(|k| *k == NtKind::Dead).unwrap();
+        let dead_nt = &idx.entries()[dead_idx];
+        eprintln!(
+            "Dead entry [id={}]: c={} ac={} ax={} vt_seq_len={}",
+            dead_idx + 1,
+            dead_nt.central_tile_id,
+            dead_nt.cw_anchor_on_central,
+            dead_nt.cw_anchor_on_context,
+            dead_nt.vt_seq.len()
+        );
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        let ac = build_attached_context(dead_nt, &mi);
+        eprintln!(
+            "  build_attached_context: {}",
+            if ac.is_some() { "Some(...)" } else { "None" }
+        );
+        if let Some(ac) = ac {
+            let candidates = GrowingPatch::compute_candidates_covering_position(
+                ac.aug.match_index(),
+                ac.aug.angles(),
+                ac.aug.edges(),
+                ac.frontier_pos_on_aug,
+            );
+            eprintln!(
+                "  frontier_pos_on_aug={}, candidates={}",
+                ac.frontier_pos_on_aug,
+                candidates.len()
+            );
+        }
     }
 
     #[test]
