@@ -1,527 +1,229 @@
-# New NT BFS Design
+# NT BFS Design
 
-This document describes the replacement neighborhood-type (NT) enumeration
-algorithm. The current `neighborhood.rs` BFS is a flawed prototype.
-The new implementation rewrites `NeighborhoodIndex::new()` in-place,
-keeping the public API (`NeighborhoodType`, `NtTransition`, `NtKind`,
-`classify_all`, `validate`, `write_collection`, `parse_file`) unchanged.
+This document describes the neighborhood-type (NT) enumeration in
+`src/intgeom/neighborhood.rs`. It supersedes the original prototype design
+and is kept in sync with the implementation.
 
-## Goal
+## Concept
 
-Enumerate open neighborhoods around a central tile by growing a context patch at
-the moving CCW frontier. The BFS state is compact: it stores a vertex-type (VT)
-sequence for the context and just enough anchor information to attach the
-central tile.
+An open NT is a local configuration around a central tile:
 
-An NT is an open local configuration:
+- one central tile of a known type;
+- a finite context patch that shares one contiguous boundary segment with
+  the central tile;
+- the remaining uncovered "gap" segment of the central tile (must be
+  non-empty for the NT to be *open*);
+- the context patch is described by a sequence of vertex types (VTs)
+  along the *covered* segment.
 
-- one central tile;
-- a context patch glued to a contiguous covered portion of the central tile;
-- a remaining unmatched central-tile gap;
-- a context VT sequence ordered from CW to CCW from the context point of view.
+Closed configurations (= the gap segment is empty) are not stored as
+entries. They are referenced via the sentinel id `NT_CLOSED_ID = 0` in
+transitions.
 
-Closed neighborhoods, where the central tile has no unmatched edge left, are not
-stored as ordinary NT entries. They are represented by `NT_CLOSED_ID` in the
-transition graph.
-
-## File Layout
-
-All code lives in `src/intgeom/neighborhood.rs`. The rewrite replaces the BFS
-core (`NtBfsState`, `NtStateKey`, `NeighborhoodIndex::new`, and BFS-internal
-helpers) while preserving the public data types and the non-BFS methods.
-
-### What to keep unchanged
-
-- `NeighborhoodType` struct, `gap_len()`, `validate()`
-- `NtKind` enum
-- `NtTransition` struct
-- `NT_CLOSED_ID` constant
-- `NeighborhoodIndex` struct fields and all public methods except `new()`
-- `classify_all()`, `validate()` (the `NeighborhoodIndex` method),
-  `write_collection()`, `parse_file()`
-- Existing tests in `mod tests`
-
-### What to keep (reusable free functions)
-
-- `tile_boundary()` — produces a single-tile `RawBoundary`
-- `valid_two_tile_glue()` — validates a two-tile glue via `compute_glue_angles`
-- `in_consumed_range()` — tests if a position falls in the consumed segment
-- `remap_surviving_position()` — remaps a surviving position through a glue
-- `extract_covered_vertex_types()` — reads VTs from the covered portion
-
-### What to rewrite
-
-- `NtBfsState` — simplified, no `nt_id` field
-- `NtStateKey` — single dedup key: `(central_tile_id, cw_anchor_on_central, vt_seq)`
-- `reconstruct_context()` — direct anchor invariant, no scanning
-- `attach_central()` — rewritten with anchor invariant
-- `find_gap_frontier()` — simplified
-- `NeighborhoodIndex::new()` — clean BFS loop
-
-### What to remove
-
-- `ContextBoundary` struct (inline the two fields)
-- `CentralAttachment` struct (inline the fields)
-
-## Direction And Edge Conventions
-
-Boundary arrays use the existing project convention:
-
-- `angles[i]` is the angle at vertex `i`;
-- `edges[i]` is the edge leaving vertex `i` in the CCW traversal direction;
-- `EdgeInfo { tile_id, tile_offset }` identifies that boundary edge on its
-  source tile;
-- `vertex_type_raw_from(edges, inner_chains, pos)` reads `cw = edges[pos - 1]`,
-  `inner = inner_chains[pos]`, `ccw = edges[pos]`.
-
-The context VT sequence is ordered CW to CCW from the context point of view.
-`vt_seq.last()` is the active frontier VT when the sequence is non-empty.
-
-The central tile is attached to the context by a fixed CW anchor. From the
-context point of view, the covered central-tile boundary extends CCW away from
-that anchor. From the central tile point of view, the remaining gap starts at
-the stored central anchor edge.
-
-## BFS State
+## Data Types
 
 ```rust
-#[derive(Clone)]
-struct NtBfsState {
-    central_tile_id: usize,
+pub struct NeighborhoodType {
+    pub central_tile_id: usize,
+    // Tile offsets on the central tile at the two endpoints of the
+    // matched segment (= the CW and CCW anchor *vertices*). The matched
+    // edges on central are at offsets [cw_anchor_on_central - match_len,
+    // cw_anchor_on_central - 1] going CW from cw_anchor_on_central,
+    // because shared edges face opposite directions:
+    //     CCW on context  <-->  CW on central.
+    // So ccw_anchor_on_central = (cw_anchor_on_central + central_n
+    //                             - match_len) % central_n.
+    pub cw_anchor_on_central: usize,
+    pub ccw_anchor_on_central: usize,
+    // Frontier positions on context parameterised relative to vt_seq:
+    //   cw_anchor_on_context  = CW dist from vt_seq[0].junction
+    //                           to cw_anchor vertex on context.
+    //   ccw_anchor_on_context = CCW dist from vt_seq.last().junction
+    //                           to ccw_anchor vertex on context.
+    // Both stay small (the vt_seq's endpoints are the junctions closest
+    // to the anchors that lie *outside* the covered segment).
+    pub cw_anchor_on_context: usize,
+    pub ccw_anchor_on_context: usize,
+    // Number of context tiles glued. Increments by exactly 1 per BFS
+    // step. Gives the natural DAG layering and bounds for matching pairs
+    // in the structural CW reconstruction.
+    pub num_ctx_tiles: usize,
+    // CCW-ordered junctions on the context boundary that lie inside the
+    // covered segment (= "incident with the match"). vt_seq[0] is the
+    // first junction reachable CCW from the CW anchor vertex; vt_seq
+    // .last() is the last junction reachable CW from the CCW anchor
+    // vertex.
+    pub vt_seq: Vec<VertexType>,
+}
 
-    // Fixed central-tile gap edge at the CW anchor. This is the `start_b`
-    // value when gluing the central tile as the "other" boundary. Never changes.
-    cw_anchor_on_central: usize,
+pub const NT_CLOSED_ID: usize = 0;
 
-    // Context VTs ordered CW -> CCW. Empty for seed states before the first
-    // context frontier VT has been created.
-    vt_seq: Vec<VertexType>,
+pub enum NtKind { Dead, Undead, Blessed, Free }
 
-    // Seed fields: used only to reconstruct empty vt_seq states.
-    seed_tile_id: usize,
-    cw_junc_on_seed: usize,
-    seed_match_len: usize,
-
-    // Fixed CW junction position on the reconstructed context boundary.
-    // Invariant: after reconstruction, Rat::get_match at this position
-    // must satisfy the anchor invariant (see "Context Reconstruction").
-    cw_junc_on_ctx: usize,
+pub struct NtTransition {
+    pub src_id: usize,
+    pub dst_id: usize,        // NT_CLOSED_ID == 0 for closed transitions
+    pub side: TransitionSide, // Cw / Ccw — which frontier the petal grew
+    pub tile_id: usize,       // petal tile id
+    pub tile_offset: usize,   // petal_pm.start_b
 }
 ```
 
-### Deduplication key
+An NT is uniquely identified by all fields of `NeighborhoodType` together.
+IDs are 1-based: `entries[i]` has id `i + 1`. The sentinel id `0` only
+appears as `NtTransition::dst_id` (never as `src_id`).
 
-```rust
-(central_tile_id, cw_anchor_on_central, vt_seq)
-```
+`match_len` is **derived**:
+`(cw_anchor_on_central + central_n - ccw_anchor_on_central) % central_n`.
 
-This is a single key type. Empty `vt_seq` states with different seeds that
-produce the same `(central_tile_id, cw_anchor_on_central, [])` coalesce into
-one state. `cw_junc_on_ctx` is anchoring metadata, not part of the key.
+## Coordinate conventions
 
-## Seed Generation
+- Boundary arrays use the project convention: `angles[i]` is the angle at
+  vertex `i`, `edges[i]` is the edge leaving vertex `i` going CCW.
+- `vt_seq` is in CCW order: walking the context boundary CCW from the CW
+  anchor visits `vt_seq[0]`, then `vt_seq[1]`, …, then `vt_seq.last()`
+  before reaching the CCW anchor.
+- "CW distance from vertex A to vertex B" means going CW (= backward in
+  the array) from A, the number of edges until B. Equivalently, the CCW
+  distance from B to A.
 
-For each pair of tile types (A, B), compute all maximal matches between them
-using `GrowingPatch::new(tileset, A).get_all_matches()`.
+## BFS
 
-For each valid match `(start_a, len, start_b, tile_id=B)`:
+The algorithm:
 
-1. Validate: call `valid_two_tile_glue` on the seed angles + match.
-2. Deduplicate oriented pairs: insert `(min(A,start_a,B,start_b), max(...))`
-   into a `BTreeSet` to avoid processing the same glue twice.
-3. For each of the two orientations:
-   - **Orientation 1**: central=A, context seed=B
-     - `central_tile_id = A`, `seed_tile_id = B`
-     - `cw_anchor_on_central = start_a`, `cw_junc_on_seed = start_b`
-     - `cw_junc_on_ctx = start_b`, `seed_match_len = len`
-     - `vt_seq = []`
-   - **Orientation 2**: central=B, context seed=A
-     - `central_tile_id = B`, `seed_tile_id = A`
-     - `cw_anchor_on_central = start_b`, `cw_junc_on_seed = start_a`
-     - `cw_junc_on_ctx = start_a`, `seed_match_len = len`
-     - `vt_seq = []`
-4. Skip if `len >= central_tile_edge_count` (fully covered = already closed).
-5. Build context boundary via `tile_boundary(tileset, context_tile_id)`.
-6. Call `attach_central(context, cw_junc_on_ctx, central_tile_id,
-   cw_anchor_on_central, tileset, first_step=true)`.
-7. If attachment fails, skip.
-8. Deduplicate via `(central_tile_id, cw_anchor_on_central, [])`.
-9. Create `NeighborhoodType` entry with `id = entries.len() + 1`.
-10. Enqueue state.
+1. **Seed generation.** For each match-type `(tile_a, start_a, tile_b,
+   start_b, len)` from `MatchTypeIndex`:
+   - Build a two-tile patch by gluing `tile_b` to `tile_a` along the
+     match.
+   - Normalize the boundary (`lex_min_rot`).
+   - For every `third_pm` returned by `patch.get_all_matches()`:
+     - Try gluing the third tile to the two-tile patch on a clone; skip
+       if the glue collides (non-convex tiles like spectre can fail this
+       even when the edge match is valid).
+     - Collect all junctions in the normalized patch.
+     - Filter to those incident with the match (CCW distance from
+       `third_pm.start_a` is at most `third_pm.len`) — that becomes
+       `vt_seq`.
+     - Compute the anchor fields with Convention 2 (see "Anchors" below).
+     - Run `try_construct_nt_from_cw` (which also validates the abstract
+       NT reconstructs); skip on failure.
+     - Dedup against `seen`; if new, push to `entries` and `queue`.
 
-## Context Reconstruction
+2. **BFS growth.** Dequeue each state and call `explore_one` to enumerate
+   one-petal successors. For each open successor, dedup against `seen`,
+   enqueue if new, push a transition with the right side.
 
-For a dequeued state:
+3. **Classification.** `classify_all` walks the transition graph and
+   assigns `NtKind` per entry: `Dead` (no outgoing transitions),
+   `Undead` (all outgoing reach Dead/Undead via the same), `Blessed`
+   (every outgoing leads to Closed or another Blessed), `Free`
+   otherwise.
 
-### Case 1: `vt_seq` is empty
+## Anchors
 
-The context is the full boundary of `seed_tile_id`:
+The CW anchor *vertex* on context is at position
+`(first_junc + ctx_n - cw_anchor_on_context) mod ctx_n` where
+`first_junc` is the position of `vt_seq[0]`'s junction in the
+reconstructed ctx.
 
-```rust
-let context = tile_boundary(tileset, seed_tile_id);
-// cw_junc_on_ctx comes directly from the state
-```
+The CCW anchor *vertex* on context is at position
+`(last_junc + ccw_anchor_on_context) mod ctx_n` where `last_junc` is
+`vt_seq.last()`'s position.
 
-### Case 2: `vt_seq` is non-empty
+Match length on context = `(ccw_anchor_pos - cw_anchor_pos) mod ctx_n`.
 
-```rust
-let (patch, _juncs) = GrowingPatch::construct_witness_from_vt_sequence(
-    &vt_seq, match_index
-)?;
-let context = RawBoundary {
-    angles: patch.angles().to_vec(),
-    edges: patch.edges().to_vec(),
-    inner_chains: patch.inner_chains().to_vec(),
-    patch_tile_ids: patch.patch_tile_ids().to_vec(),
-};
-```
+On the central tile, `cw_anchor_on_central` is `start_b` from
+`PatchMatch` (= the tile offset at the CW anchor vertex). The CCW anchor
+vertex on the *central* is at tile offset `start_b - match_len mod
+central_n`, which is what `ccw_anchor_on_central` stores.
 
-Then recover `cw_junc_on_ctx` using the **anchor invariant**:
+## Helpers
 
-```rust
-let ctx_rat = Rat::from_slice_unchecked(&context.angles);
-let central_rat = tileset.rat(central_tile_id);
-let (ctx_match_start, covered_len, central_end) = ctx_rat.get_match(
-    (cw_junc_on_ctx as i64, cw_anchor_on_central as i64),
-    central_rat,
-);
-```
+- `build_attached_context(nt, mi)` reconstructs ctx, attaches central,
+  finds both frontiers on the augmented patch, and returns enough
+  metadata for one BFS step (CCW and/or CW).
 
-**Anchor invariant** (must hold, fail fast if not):
+- `try_construct_nt_from_cw(central, cw_ac, cw_ax, num_ctx_tiles,
+  vt_seq, mi) -> Option<NeighborhoodType>`: reconstruct from CW-side
+  anchor fields, derive the CCW-side fields via `forward_match_length`,
+  fail if reconstruction or the central glue fails.
 
-```
-ctx_match_start.rem_euclid(ctx_n) == cw_junc_on_ctx
-central_end.rem_euclid(central_n) == cw_anchor_on_central
-covered_len > 0 && covered_len < central_n
-```
+- `try_construct_nt_from_ccw(central, ccw_ac, ccw_ax, num_ctx_tiles,
+  vt_seq, mi) -> Option<NeighborhoodType>`: symmetric helper using
+  `backward_match_length`.
 
-If any part fails, return `None` — this is a bug, not a recoverable error.
-Do NOT scan all positions as a fallback.
+- `nt_is_valid(nt, mi)`: reconstructs from the CW side and verifies the
+  stored CCW-side fields agree (= the NT is self-consistent).
 
-## Attaching The Central Tile
+## `explore_one`
 
-Given a context boundary and `cw_junc_on_ctx`:
+Returns a vector of `ExploreOutcome { side, petal_pm, kind }` where
+`kind` is `Closed` or `Open { nt, trial, central_ptid }`.
 
-1. Call `Rat::get_match` at `(cw_junc_on_ctx, cw_anchor_on_central)` to get
-   `(ctx_match_start, covered_len, central_end)`.
-2. Validate anchor invariant.
-3. Build `PatchMatch { start_a: cw_junc_on_ctx, len: covered_len,
-   start_b: cw_anchor_on_central, tile_id: central_tile_id }`.
-4. Call `glue_match_to_raw_boundary(context, &pm, tileset, first_step, new_tile_id)`.
-   - `first_step = true` only for seed states where `vt_seq` is empty.
-   - `new_tile_id = 0` (we don't track ptids for NT boundaries).
-5. Call `validate_raw_boundary` on the result.
-6. Derive:
-   - `gap_start = glue.old_survivor_len` (the CCW end of the old-context
-     survivor segment, which is where the central gap begins)
-   - `gap_len = central_n - covered_len`
-7. Return the augmented boundary, covered_len, gap_start, gap_len.
+For each candidate petal at the CCW frontier:
+- Glue on a clone of `aug` (skip on collision).
+- If the trial has no central edges remaining, emit `Closed`.
+- Otherwise compute the new vt_seq:
+  - **CCW Case A** (`frontier_is_junction_in_ctx`): extend `vt_seq[-1]`
+    — push the old ccw into `inner`, set `ccw = petal_edge`.
+  - **CCW Case B**: append a new VT with `cw = last_covered_ctx_edge`,
+    `ccw = petal_edge`, `inner = []`.
 
-## Finding The Frontier
+  Where
+  `petal_edge.tile_offset = (start_b - i_anchor) mod petal_n` and
+  `i_anchor = (frontier_pos_on_aug - start_a) mod aug_n` (= the index of
+  the OLD CCW anchor vertex within the petal's match span).
 
-The frontier is the CCW-most junction on the augmented boundary that borders
-the central-tile gap.
+- Call `try_construct_nt_from_cw` to finalize the new NT (fills CCW-side
+  anchors and validates).
 
-Procedure:
+## BFS
 
-1. Start at `gap_start` (the CW end of the gap).
-2. Walk CCW along the gap (up to `gap_len` positions).
-3. Return the first position that is a junction.
+The state graph is a DAG: every transition increments `num_ctx_tiles` by
+exactly 1.
 
-A position is a junction if `boundary.angles[pos] != tile_rat.seq()[edge.tile_offset]`
-where `edge = boundary.edges[pos]`.
+CW-direction exploration is currently **disabled** — needs clean
+re-derivation. The CCW-only BFS reaches every state currently produced;
+re-enabling CW should yield the same state set (by mirror symmetry of
+the seed set under the match-type involution).
 
-If no junction is found within the gap, return `(gap_start + gap_len) % n`
-(the position just past the gap end). This means the frontier is at the CCW
-end of the gap — there are no intermediate junctions.
+## Roadmap
 
-The **context-side frontier** is:
+- ✅ Symmetric NT struct: both CW and CCW anchors on both central and
+  context, plus `num_ctx_tiles`. Closed geometric convention.
+- ✅ Helper `try_construct_nt_from_cw`.
+- 🚧 Re-derive CW-direction `try_step_cw` cleanly. Open subproblems:
+  - Which petal candidates belong to the CW step vs CCW step
+    (wrap-around / two-sided cases). The CW step expects petals that
+    extend the matched segment CW on central; wrap-around petals (where
+    `petal_pm.start_a + petal_pm.len > aug_n`) are CCW-direction
+    semantics and must be excluded.
+  - Geometrically-correct petal_edge offset for the CW Case A/B
+    construction (mirror of the CCW i_anchor formula, but for the OLD
+    CW anchor vertex).
+- 🚧 Sanity test: CCW-only state count == CW-only state count (mirror
+  symmetry, expected for every tileset because the seed set is closed
+  under the match-type involution).
+- 🚧 Performance check on square (109k entries, ~1M transitions). If
+  classify_all becomes the bottleneck, switch its inner loop to a
+  successor-set lookup instead of a per-iter filter over transitions.
 
-```rust
-let ctx_frontier = (cw_junc_on_ctx + covered_len) % ctx_n;
-```
+## Required passing tests
 
-This is the replay point for growing the context without the central tile.
+- Public API: `NeighborhoodType`, `NtTransition`, `NtKind`,
+  `classify_all`, `validate`, `write_collection`, `parse_file`.
+- `square_seeds_validate`, `hex_seeds_validate`, `spectre_validates` —
+  all entries reconstruct and accept the central tile.
+- `square_roundtrip_collection`, `hex_roundtrip_collection` — write /
+  parse round-trip equality on the produced collection.
+- `bfs_produces_transitions` — id range invariants.
+- `classify_all_returns_one_per_entry` — classification vector matches
+  entry count and at least one Blessed entry exists.
 
-## Frontier Distance
-
-To compare frontiers across different context boundaries, use an anchored
-distance metric, not raw indices.
-
-```
-frontier_distance(ctx_n, cw_junc_on_ctx, ctx_frontier) =
-    (cw_junc_on_ctx + ctx_n - ctx_frontier) % ctx_n
-```
-
-This is the CW distance from the fixed CW anchor to the frontier. It increases
-when the frontier advances CCW.
-
-## Petal Enumeration
-
-At the augmented frontier, enumerate candidate petals `(tile_id, tile_offset)`
-from the tileset.
-
-**Pre-filter by forward match**: for each `(tile_id, tile_offset)`, compute
-`forward_match_length(augmented_angles, augmented_frontier, tile_seq, tile_offset)`.
-Skip candidates with `forward_match_length == 0`.
-
-For each surviving candidate:
-
-1. Glue the petal to the augmented boundary:
-   ```rust
-   let aug_glue = glue_tile_to_raw_boundary(
-       &augmented, augmented_frontier, target, tileset, false, 0,
-   );
-   ```
-   If glue fails, skip.
-2. Validate the result: `validate_raw_boundary`.
-3. Check frontier angle monotonicity for same-frontier refinements (see below).
-
-### Frontier angle monotonicity
-
-When a petal is glued at the same frontier (covered_len unchanged), the
-frontier angle must be monotonically non-increasing using normalized signed
-angles. This prevents revisiting the same frontier state.
-
-For the **first** petal at a new frontier, there is no monotonicity check —
-all candidates are valid. For subsequent same-frontier petals, the new frontier
-angle must be `<=` the previous frontier angle.
-
-## Closed Detection
-
-After gluing the petal to the augmented boundary:
-
-- If the augmented boundary has **no** edge with `tile_id == central_tile_id`,
-  the central tile was fully consumed. Record a **closed transition**:
-  ```rust
-  NtTransition { src_id, dst_id: NT_CLOSED_ID, tile_id, tile_offset, ... }
-  ```
-  Do NOT replay on context. Do NOT enqueue a new state.
-
-## Replay On The Context
-
-For non-closed petals, replay the glue on the original context boundary
-(without the central tile).
-
-1. Glue at `ctx_frontier`:
-   ```rust
-   let replay_glue = glue_tile_to_raw_boundary(
-       &context, ctx_frontier, target, tileset, first_step, 0,
-   );
-   ```
-   - `first_step = true` only when `vt_seq` is empty (seed context).
-2. Validate: `validate_raw_boundary`.
-3. Remap `cw_junc_on_ctx`:
-   ```rust
-   let new_cw_junc = remap_surviving_position(
-       cw_junc_on_ctx, ctx_frontier, replay_glue.match_len, ctx_n,
-   );
-   ```
-   If `cw_junc_on_ctx` was consumed (returns `None`), the replay is invalid.
-   Skip.
-4. The new context boundary is `replay_glue.boundary`.
-
-## Re-Attach Central To New Context
-
-After replay, attach the central tile to the new context:
-
-1. Call `attach_central(new_context, new_cw_junc, central_tile_id,
-   cw_anchor_on_central, tileset, false)`.
-2. If attachment returns `None` (fully covered), record a **closed transition**.
-   Do NOT enqueue.
-3. If attachment returns `Some(None)` (covered_len == central_n, which means
-   closed), same as above — record closed transition.
-4. If covered_len **decreased** from the source state's covered_len, skip.
-   This should not happen for valid petals but is a safety check.
-5. Derive the new augmented boundary, covered_len, gap_start, gap_len,
-    and new frontier.
-
-## Updating The VT Sequence
-
-After re-attaching the central tile to the new context:
-
-1. Compute the new frontier VT:
-   ```rust
-   let new_frontier_vt = vertex_type_raw_from(
-       &new_augmented.edges, &new_augmented.inner_chains, new_augmented_frontier,
-   );
-   ```
-2. Compute the new context-side frontier distance:
-   ```
-   new_ctx_n = new_context.angles.len()
-   new_ctx_frontier = (new_cw_junc + new_covered_len) % new_ctx_n
-   new_frontier_dist = frontier_distance(new_ctx_n, new_cw_junc, new_ctx_frontier)
-   ```
-3. Compare with the source state's frontier distance. **Important**: compute
-   the source frontier distance on the source context, not the augmented
-   boundary:
-   ```
-   src_ctx_frontier = (cw_junc_on_ctx + covered_len) % ctx_n
-   src_frontier_dist = frontier_distance(ctx_n, cw_junc_on_ctx, src_ctx_frontier)
-   ```
-4. Update `vt_seq`:
-   - If `vt_seq` is empty → **append** `new_frontier_vt`. This is the first
-     context frontier VT.
-   - If `new_frontier_dist == src_frontier_dist` (same frontier) → **replace**
-     `vt_seq.last()` with `new_frontier_vt`.
-   - If `new_frontier_dist != src_frontier_dist` (frontier advanced) →
-     **append** `new_frontier_vt`.
-
-## Recording NT Entries
-
-Each non-closed BFS state (both seeds and grown states) corresponds to one
-`NeighborhoodType` entry. The entry is derived fresh from the state by
-reconstructing the context and attaching the central tile:
-
-```rust
-fn make_neighborhood_entry(
-    id: usize,
-    state: &NtBfsState,
-    attachment: &AttachmentResult,  // augmented boundary, gap_start, etc.
-) -> NeighborhoodType {
-    NeighborhoodType {
-        id,
-        central_tile_id: state.central_tile_id,
-        central_anchor_edge: state.cw_anchor_on_central,
-        gap_len: u8::try_from(attachment.gap_len).unwrap(),
-        context_vertex_types: state.vt_seq.clone(),
-        angles: attachment.augmented.angles.clone(),
-        edges: attachment.augmented.edges.clone(),
-        inner_chains: attachment.augmented.inner_chains.clone(),
-        gap_start: attachment.gap_start,
-    }
-}
-```
-
-For seed states, the entry is created during seed generation. For grown states,
-the entry is created when the new state is first discovered (not yet in `seen`).
-
-## Transition Graph
-
-Each successful petal produces exactly one transition:
-
-```rust
-NtTransition {
-    src_id: current_state_id,
-    dst_id: existing_id or new_entry_id or NT_CLOSED_ID,
-    tile_id: target.tile_id,
-    tile_offset: target.tile_offset,
-    match_start: augmented_frontier,
-    match_len: aug_glue.match_len,
-}
-```
-
-Classification (`Dead`, `Undead`, `Blessed`, `Free`) reuses the existing
-`classify_all` logic.
-
-## BFS Loop Pseudocode
+## Build requirements
 
 ```
-fn new(tileset: Arc<TileSet<T>>) -> NeighborhoodIndex<T> {
-    let match_index = Arc::new(MatchTypeIndex::new(tileset.clone()));
-    let mut entries: Vec<NeighborhoodType> = Vec::new();
-    let mut transitions: Vec<NtTransition> = Vec::new();
-    let mut seen: FxHashMap<NtStateKey, usize> = FxHashMap::default();
-    let mut queue: VecDeque<NtBfsState> = VecDeque::new();
-
-    // --- Phase 1: Seed Generation ---
-    for each pair of tiles (A, B) with valid maximal match (start_a, len, start_b):
-        for each orientation (central, context):
-            if len >= central_tile_n: continue  // already closed
-            let state = NtBfsState { ... vt_seq: [], ... };
-            let context = tile_boundary(tileset, context_tile_id);
-            let attachment = attach_central(context, ..., first_step=true)?;
-            let key = (central_tile_id, cw_anchor_on_central, []);
-            if seen.contains(&key): continue
-            let id = entries.len() + 1;
-            entries.push(make_neighborhood_entry(id, &state, &attachment));
-            seen.insert(key, id);
-            queue.push_back(state);
-
-    // --- Phase 2: BFS Growth ---
-    while let Some(state) = queue.pop_front():
-        let (context, cw_junc, covered_len) = reconstruct_and_attach(&state)?;
-        let augmented = attach_central(context, cw_junc, ...)?;
-        let aug_frontier = find_gap_frontier(&augmented, gap_start, gap_len);
-        let ctx_frontier = (cw_junc + covered_len) % ctx_n;
-        let src_frontier_dist = frontier_distance(ctx_n, cw_junc, ctx_frontier);
-
-        for each (tile_id, tile_offset) with forward_match > 0 at aug_frontier:
-            let aug_glue = glue_tile_to_raw_boundary(&augmented, aug_frontier, target, ...)?;
-            validate_raw_boundary(&aug_glue.boundary)?
-
-            // Closed detection
-            if no central_tile_id edge in aug_glue.boundary:
-                transitions.push(closed_transition);
-                continue
-
-            // Replay on context
-            let replay = glue_tile_to_raw_boundary(&context, ctx_frontier, target, ...)?;
-            validate_raw_boundary(&replay.boundary)?
-            let new_cw_junc = remap_surviving_position(cw_junc, ctx_frontier, replay.match_len, ctx_n)?;
-            let new_context = replay.boundary;
-
-            // Re-attach central
-            let new_attachment = attach_central(&new_context, new_cw_junc, ...)?;
-            if new_attachment is closed:
-                transitions.push(closed_transition);
-                continue
-            if new_attachment.covered_len < covered_len: continue
-
-            // Compute new frontier VT and distance
-            let new_frontier_vt = vertex_type_raw_from(...);
-            let new_frontier_dist = frontier_distance(...);
-
-            // Update vt_seq
-            let mut new_vt_seq = state.vt_seq.clone();
-            if new_vt_seq.is_empty():
-                new_vt_seq.push(new_frontier_vt)
-            elif new_frontier_dist == src_frontier_dist:
-                *new_vt_seq.last_mut() = new_frontier_vt
-            else:
-                new_vt_seq.push(new_frontier_vt)
-
-            // Dedup and enqueue
-            let key = (central_tile_id, cw_anchor_on_central, new_vt_seq);
-            let dst_id = seen.get(&key).cloned().unwrap_or_else(|| {
-                let id = entries.len() + 1;
-                let new_state = NtBfsState { vt_seq: new_vt_seq, cw_junc_on_ctx: new_cw_junc, ... };
-                entries.push(make_neighborhood_entry(id, &new_state, &new_attachment));
-                seen.insert(key, id);
-                queue.push_back(new_state);
-                id
-            });
-            transitions.push(NtTransition { src_id: state.nt_id, dst_id, ... });
-
-    NeighborhoodIndex { tileset, entries, transitions }
-}
-```
-
-## Required Tests
-
-Existing tests must continue to pass:
-
-- `square_has_valid_open_types` — square NT collection validates
-- `square_roundtrip_collection` — write/parse roundtrip
-- `classify_vector_matches_entry_count` — classify_all length matches entries
-- `spectre_collection_validates` — spectre validates in release mode
-
-New invariant tests to add:
-
-- seed generation creates both orientations for each valid two-tile glue
-- central glue anchor invariant holds for every dequeued state
-- `cw_junc_on_ctx` survives and remaps correctly after every context replay
-- same-frontier petal growth replaces the last VT
-- frontier-advance petal growth appends a new VT
-- empty-seed first petal appends the first VT
-- closed transitions are recorded when central coverage reaches full tile
-
-## Build Requirements
-
-```bash
 cargo fmt
 cargo clippy -- -D warnings
 cargo test --release
 ```
-
-Fix all issues before committing.

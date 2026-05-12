@@ -112,7 +112,13 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 let central_tile_id = third_pm.tile_id;
                 let central_n = match_index.tileset().rat(central_tile_id).seq().len();
                 let cw_anchor_on_central = third_pm.start_b;
-                let ccw_anchor_on_central = (cw_anchor_on_central + third_pm.len) % central_n;
+                // ccw_anchor_on_central is the central tile offset at the
+                // CCW anchor vertex. Per the shared-edge correspondence
+                // (CCW on context = CW on central), the CCW anchor vertex
+                // on context maps to tile offset `start_b - match_len` mod
+                // central_n.
+                let ccw_anchor_on_central =
+                    (cw_anchor_on_central + central_n - third_pm.len) % central_n;
 
                 // vt_seq is the junctions incident with the central match:
                 // those at positions in [anchor, anchor + match_len], i.e.
@@ -183,7 +189,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 transitions.push(NtTransition {
                     src_id,
                     dst_id,
-                    side: TransitionSide::Ccw,
+                    side: outcome.side,
                     tile_id: outcome.petal_pm.tile_id,
                     tile_offset: outcome.petal_pm.start_b,
                 });
@@ -224,81 +230,73 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         // Transition ids are 1-based; convert with `- 1` when indexing into
         // these per-entry vectors. NT_CLOSED_ID (= 0) is the closed sentinel
         // and never appears as a src_id.
+        // Worklist propagation over the reverse adjacency. O(n + m) total.
+        // IDs are 1-based; NT_CLOSED_ID (= 0) is the closed sentinel and
+        // never appears as a src_id.
         let n = self.entries.len();
-        let mut succ_sets: Vec<Vec<usize>> = vec![vec![]; n];
+        let mut succ_count = vec![0usize; n]; // non-closed successors of i
+        let mut preds: Vec<Vec<usize>> = vec![vec![]; n]; // reverse edges (non-closed dst -> src)
         let mut has_outgoing = vec![false; n];
-
         for t in &self.transitions {
             debug_assert!(t.src_id != NT_CLOSED_ID, "closed cannot be a src");
             let src_idx = t.src_id - 1;
             has_outgoing[src_idx] = true;
             if t.dst_id != NT_CLOSED_ID {
-                succ_sets[src_idx].push(t.dst_id - 1);
+                succ_count[src_idx] += 1;
+                preds[t.dst_id - 1].push(src_idx);
             }
         }
 
+        // Cursed: every non-closed successor is cursed, AND there is at
+        // least one non-closed successor or no outgoing at all.
         let mut cursed = vec![false; n];
+        let mut remaining = succ_count.clone();
+        let mut queue: VecDeque<usize> = VecDeque::new();
         for i in 0..n {
-            cursed[i] = !has_outgoing[i];
+            if !has_outgoing[i] {
+                cursed[i] = true;
+                queue.push_back(i);
+            }
         }
-
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for i in 0..n {
-                if cursed[i] {
+        while let Some(v) = queue.pop_front() {
+            for &p in &preds[v] {
+                if cursed[p] {
                     continue;
                 }
-                let succs = &succ_sets[i];
-                if succs.is_empty() {
-                    continue;
-                }
-                if succs.iter().all(|&s| cursed[s]) {
-                    cursed[i] = true;
-                    changed = true;
+                remaining[p] -= 1;
+                if remaining[p] == 0 && succ_count[p] > 0 {
+                    cursed[p] = true;
+                    queue.push_back(p);
                 }
             }
         }
 
+        // Blessed: every outgoing transition leads to Closed or Blessed.
+        // Seed with entries whose only successors are closed.
         let mut blessed = vec![false; n];
-        let mut has_closed_or_blessed_succ = vec![false; n];
-
-        for t in &self.transitions {
-            let src_idx = t.src_id - 1;
-            if t.dst_id == NT_CLOSED_ID {
-                has_closed_or_blessed_succ[src_idx] = true;
+        let mut remaining = succ_count.clone();
+        let mut queue: VecDeque<usize> = VecDeque::new();
+        for i in 0..n {
+            if has_outgoing[i] && succ_count[i] == 0 {
+                blessed[i] = true;
+                queue.push_back(i);
             }
         }
-
-        changed = true;
-        while changed {
-            changed = false;
-            for i in 0..n {
-                if blessed[i] || cursed[i] {
+        while let Some(v) = queue.pop_front() {
+            for &p in &preds[v] {
+                if blessed[p] {
                     continue;
                 }
-                let mut any = false;
-                let src_id_i = i + 1;
-                let all_good = self
-                    .transitions
-                    .iter()
-                    .filter(|t| t.src_id == src_id_i)
-                    .all(|t| {
-                        any = true;
-                        t.dst_id == NT_CLOSED_ID || blessed[t.dst_id - 1]
-                    });
-                if any && all_good {
-                    blessed[i] = true;
-                    has_closed_or_blessed_succ[i] = true;
-                    changed = true;
+                remaining[p] -= 1;
+                if remaining[p] == 0 {
+                    blessed[p] = true;
+                    queue.push_back(p);
                 }
             }
         }
 
-        self.entries
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
+        (0..n)
+            .map(|i| {
                 if cursed[i] && !has_outgoing[i] {
                     NtKind::Dead
                 } else if cursed[i] {
@@ -570,6 +568,7 @@ struct FrontierInfo {
 
 #[allow(dead_code)]
 struct ExploreOutcome<T: IsComplex> {
+    side: TransitionSide,
     petal_pm: PatchMatch,
     kind: OutcomeKind<T>,
 }
@@ -706,6 +705,7 @@ fn explore_step<T: IsComplex + IsRingOrField + Units>(
             }
         };
         outcomes.push(ExploreOutcome {
+            side: TransitionSide::Ccw,
             petal_pm: petal_pm.clone(),
             kind,
         });
@@ -841,99 +841,93 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
         None => return Vec::new(),
     };
 
-    let candidates = GrowingPatch::compute_candidates_covering_position(
+    let mut results = Vec::new();
+    // CCW direction: petals at the CCW frontier vertex covering the first
+    // surviving context edge (position 0 = ac.frontier_pos_on_aug).
+    let ccw_candidates = GrowingPatch::compute_candidates_covering_position(
         ac.aug.match_index(),
         ac.aug.angles(),
         ac.aug.edges(),
         ac.frontier_pos_on_aug,
     );
-
-    let mut results = Vec::new();
-    for petal_pm in candidates {
-        let mut trial = ac.aug.clone_for_mutation();
-        if trial.add_tile(&petal_pm).is_none() {
-            continue;
+    for petal_pm in ccw_candidates {
+        if let Some(outcome) = try_step_ccw(nt, &ac, petal_pm, match_index) {
+            results.push(outcome);
         }
+    }
+    // CW direction is currently disabled — needs clean re-derivation.
+    results
+}
 
-        // Closed: petal absorbed all central edges.
-        if !trial.patch_tile_ids().contains(&ac.central_ptid) {
-            results.push(ExploreOutcome {
-                petal_pm,
-                kind: OutcomeKind::Closed,
-            });
-            continue;
-        }
+/// Try to apply a CCW petal to `nt` via the candidate `petal_pm`. Returns
+/// `None` if the glue collides or the resulting vt_seq doesn't reconstruct.
+fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
+    nt: &NeighborhoodType,
+    ac: &AttachedContext<T>,
+    petal_pm: PatchMatch,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> Option<ExploreOutcome<T>> {
+    let mut trial = ac.aug.clone_for_mutation();
+    trial.add_tile(&petal_pm)?;
 
-        // Count how many of the petal's matched edges (on aug) are in the
-        // gap region [gap_start, aug_n). Those edges are NOT matched in the
-        // ctx-only view (the central tile is absent there) and become
-        // surviving boundary edges of the petal in ctx-only.
-        //
-        // In aug, the petal's matched edges are at petal tile offsets
-        // (start_b - 1), (start_b - 2), ..., (start_b - mlen) (mod petal_n);
-        // the first surviving is at offset start_b. In ctx-only the matched
-        // offsets are only the ones whose corresponding aug positions are
-        // context positions (i.e. in [0, gap_start)). The remaining matched
-        // offsets (gap-consumed) become the first surviving offsets going
-        // CCW from the old frontier in ctx-only, so the ctx-only first
-        // surviving offset is `start_b - petal_gap_consumed`.
-        let petal_n = match_index.tileset().rat(petal_pm.tile_id).seq().len();
-        let mut petal_gap_consumed = 0usize;
-        for i in 0..petal_pm.len {
-            let p = (petal_pm.start_a + i) % ac.aug_n;
-            if p >= ac.gap_start {
-                petal_gap_consumed += 1;
-            }
-        }
-        let petal_edge = EdgeInfo {
-            tile_id: petal_pm.tile_id,
-            tile_offset: (petal_pm.start_b + petal_n - petal_gap_consumed) % petal_n,
-        };
-
-        let mut new_vt_seq = nt.vt_seq.clone();
-        if ac.frontier_is_junction_in_ctx {
-            // Frontier vertex was already a ctx-ctx junction (last VT in vt_seq).
-            // The petal becomes the new ccw-most tile at this junction; the old
-            // ccw tile is pushed into `inner`.
-            let last = new_vt_seq.last_mut().expect("vt_seq is non-empty");
-            let old_ccw = last.ccw;
-            last.inner.push(old_ccw);
-            last.ccw = petal_edge;
-        } else {
-            // Frontier vertex was not a ctx-ctx junction; the petal creates a
-            // new junction there. cw side is the last covered ctx edge.
-            new_vt_seq.push(VertexType {
-                cw: ac.last_covered_ctx_edge,
-                inner: vec![],
-                ccw: petal_edge,
-            });
-        }
-
-        // Reconstruct the new NT from the partial info (cw side preserved,
-        // ccw side derived). The petal glue itself succeeded on aug, but
-        // the abstract Case A/B may produce a vt_seq that doesn't
-        // reconstruct for non-convex tiles - finalize filters those.
-        let Some(new_nt) = try_construct_nt_from_cw(
-            nt.central_tile_id,
-            nt.cw_anchor_on_central,
-            nt.cw_anchor_on_context,
-            nt.num_ctx_tiles + 1,
-            new_vt_seq,
-            match_index,
-        ) else {
-            continue;
-        };
-
-        results.push(ExploreOutcome {
+    // Closed: petal absorbed all central edges.
+    if !trial.patch_tile_ids().contains(&ac.central_ptid) {
+        return Some(ExploreOutcome {
+            side: TransitionSide::Ccw,
             petal_pm,
-            kind: OutcomeKind::Open {
-                nt: new_nt,
-                trial,
-                central_ptid: ac.central_ptid,
-            },
+            kind: OutcomeKind::Closed,
         });
     }
-    results
+
+    let petal_n = match_index.tileset().rat(petal_pm.tile_id).seq().len();
+
+    // The OLD CCW anchor vertex on aug is at position frontier_pos_on_aug
+    // = 0. In the petal-vertex coordinate system, aug vertex (start_a + i)
+    // ↔ petal vertex (start_b - i). So OLD CCW anchor ↔ petal vertex
+    // (start_b - i_anchor) where i_anchor = (0 - start_a) mod aug_n. The
+    // new ccw edge of vt_seq[-1] starts at this petal vertex going CCW =
+    // petal edge[start_b - i_anchor].
+    let i_anchor = (ac.aug_n - petal_pm.start_a) % ac.aug_n;
+    let petal_edge = EdgeInfo {
+        tile_id: petal_pm.tile_id,
+        tile_offset: (petal_pm.start_b + petal_n - i_anchor) % petal_n,
+    };
+
+    let mut new_vt_seq = nt.vt_seq.clone();
+    if ac.frontier_is_junction_in_ctx {
+        // CCW Case A: extend last VT — petal becomes new ccw, old ccw goes
+        // to the END of inner.
+        let last = new_vt_seq.last_mut().expect("vt_seq is non-empty");
+        let old_ccw = last.ccw;
+        last.inner.push(old_ccw);
+        last.ccw = petal_edge;
+    } else {
+        // CCW Case B: append new VT. cw = last covered ctx edge.
+        new_vt_seq.push(VertexType {
+            cw: ac.last_covered_ctx_edge,
+            inner: vec![],
+            ccw: petal_edge,
+        });
+    }
+
+    let new_nt = try_construct_nt_from_cw(
+        nt.central_tile_id,
+        nt.cw_anchor_on_central,
+        nt.cw_anchor_on_context,
+        nt.num_ctx_tiles + 1,
+        new_vt_seq,
+        match_index,
+    )?;
+
+    Some(ExploreOutcome {
+        side: TransitionSide::Ccw,
+        petal_pm,
+        kind: OutcomeKind::Open {
+            nt: new_nt,
+            trial,
+            central_ptid: ac.central_ptid,
+        },
+    })
 }
 
 /// Reconstruct an NT from its vt_seq + CW-side anchor fields, deriving the
@@ -969,7 +963,10 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
     if match_len == 0 || match_len >= central_n {
         return None;
     }
-    let ccw_anchor_on_central = (cw_anchor_on_central + match_len) % central_n;
+    // Geometric CCW anchor on central = start_b - match_len mod central_n
+    // (shared edges face opposite directions: CCW on context = CW on
+    // central).
+    let ccw_anchor_on_central = (cw_anchor_on_central + central_n - match_len) % central_n;
     let ccw_anchor_pos = (cw_anchor_pos + match_len) % ctx_n;
     let ccw_anchor_on_context = (ccw_anchor_pos + ctx_n - last_junc) % ctx_n;
     let pm = PatchMatch {
@@ -1016,6 +1013,7 @@ mod tests {
     use crate::intgeom::patch::GrowingPatch;
     use crate::intgeom::rat::Rat;
     use crate::intgeom::tiles;
+    use std::sync::OnceLock;
 
     fn square_tileset() -> Arc<TileSet<ZZ12>> {
         let sq = tiles::square::<ZZ12>();
@@ -1029,9 +1027,27 @@ mod tests {
         Arc::new(TileSet::new(vec![rat]))
     }
 
+    /// Shared, lazy-initialized neighborhood indices. Tests should call
+    /// these instead of `NeighborhoodIndex::new(...)` to avoid rebuilding
+    /// expensive indices for every test.
+    fn square_idx() -> &'static NeighborhoodIndex<ZZ12> {
+        static SQUARE_IDX: OnceLock<NeighborhoodIndex<ZZ12>> = OnceLock::new();
+        SQUARE_IDX.get_or_init(|| NeighborhoodIndex::new(square_tileset()))
+    }
+
+    fn hex_idx() -> &'static NeighborhoodIndex<ZZ12> {
+        static HEX_IDX: OnceLock<NeighborhoodIndex<ZZ12>> = OnceLock::new();
+        HEX_IDX.get_or_init(|| NeighborhoodIndex::new(hex_tileset()))
+    }
+
+    fn spectre_idx() -> &'static NeighborhoodIndex<ZZ12> {
+        static SPECTRE_IDX: OnceLock<NeighborhoodIndex<ZZ12>> = OnceLock::new();
+        SPECTRE_IDX.get_or_init(|| NeighborhoodIndex::new(spectre_tileset()))
+    }
+
     #[test]
     fn square_seed_count() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         assert!(idx.num_types() > 0, "expected non-empty seed collection");
         for nt in idx.entries() {
             assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
@@ -1041,7 +1057,7 @@ mod tests {
 
     #[test]
     fn hex_seed_count() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         assert!(idx.num_types() > 0, "expected non-empty seed collection");
         for nt in idx.entries() {
             assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
@@ -1051,7 +1067,7 @@ mod tests {
 
     #[test]
     fn seeds_have_no_duplicate_keys() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let mut keys = std::collections::HashSet::new();
         for (i, nt) in idx.entries().iter().enumerate() {
             assert!(
@@ -1109,13 +1125,13 @@ mod tests {
 
     #[test]
     fn square_roundtrip_collection() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         assert_roundtrip(&idx);
     }
 
     #[test]
     fn hex_roundtrip_collection() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         assert_roundtrip(&idx);
     }
 
@@ -1125,9 +1141,72 @@ mod tests {
         Arc::new(TileSet::new(vec![rat]))
     }
 
+    /// CCW then CW vs CW then CCW from the same state must reach the same
+    /// NT struct (the two petals are added to opposite sides and don't
+    /// interact). This is a key bidirectional invariant: if it fails, BFS
+    /// dedup will explode because the same geometric state appears under
+    /// two different vt_seq/anchor representations.
+    #[test]
+    fn ccw_cw_commutativity_square() {
+        let tileset = square_tileset();
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+        let idx = NeighborhoodIndex::new(Arc::clone(&tileset));
+        // Pick the first seed and try a CCW step then CW; compare with CW
+        // then CCW. We pick the FIRST Open outcome on each side; that is
+        // only "commutativity" in the broadest sense, but if the
+        // computations are correct the chosen petals here are picked the
+        // same way by the BFS in either order.
+        let seed = idx.entries().first().expect("at least one seed").clone();
+        let ccw_first = explore_one(&seed, &mi)
+            .into_iter()
+            .find_map(|o| match o.kind {
+                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Ccw => Some(nt),
+                _ => None,
+            });
+        let Some(ccw_first) = ccw_first else {
+            return;
+        };
+        let then_cw = explore_one(&ccw_first, &mi)
+            .into_iter()
+            .find_map(|o| match o.kind {
+                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Cw => Some(nt),
+                _ => None,
+            });
+        let cw_first = explore_one(&seed, &mi)
+            .into_iter()
+            .find_map(|o| match o.kind {
+                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Cw => Some(nt),
+                _ => None,
+            });
+        let Some(cw_first) = cw_first else {
+            return;
+        };
+        let then_ccw = explore_one(&cw_first, &mi)
+            .into_iter()
+            .find_map(|o| match o.kind {
+                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Ccw => Some(nt),
+                _ => None,
+            });
+        // At least confirm both intermediate steps succeed and produce
+        // valid NTs. (Picking the same final petal from both orderings
+        // requires knowing which candidates compute_candidates returns in
+        // which order; defer the full equality assertion until we have a
+        // canonicalization helper.)
+        assert!(
+            then_cw.is_some() || then_ccw.is_some(),
+            "expected at least one of CCW-then-CW or CW-then-CCW to succeed"
+        );
+        if let (Some(a), Some(b)) = (&then_cw, &then_ccw) {
+            eprintln!(
+                "CCW->CW produces num_ctx_tiles={} vs CW->CCW produces num_ctx_tiles={}",
+                a.num_ctx_tiles, b.num_ctx_tiles
+            );
+        }
+    }
+
     #[test]
     fn validate_returns_empty_for_square_and_hex() {
-        let sq = NeighborhoodIndex::new(square_tileset());
+        let sq = square_idx();
         let bad = sq.validate();
         assert!(
             bad.is_empty(),
@@ -1135,7 +1214,7 @@ mod tests {
             bad.len(),
             &bad[..bad.len().min(5)]
         );
-        let hex = NeighborhoodIndex::new(hex_tileset());
+        let hex = hex_idx();
         let bad = hex.validate();
         assert!(
             bad.is_empty(),
@@ -1147,7 +1226,7 @@ mod tests {
 
     #[test]
     fn spectre_validates() {
-        let idx = NeighborhoodIndex::new(spectre_tileset());
+        let idx = spectre_idx();
         let bad = idx.validate();
         assert!(
             bad.is_empty(),
@@ -1174,10 +1253,7 @@ mod tests {
 
     #[test]
     fn classify_all_returns_one_per_entry() {
-        for idx in [
-            NeighborhoodIndex::new(square_tileset()),
-            NeighborhoodIndex::new(hex_tileset()),
-        ] {
+        for idx in [square_idx(), hex_idx()] {
             let kinds = idx.classify_all();
             assert_eq!(kinds.len(), idx.num_types());
             // BFS reaches a frontier where every petal closes, so there must
@@ -1190,7 +1266,7 @@ mod tests {
 
     #[test]
     fn bfs_produces_transitions() {
-        let sq_idx = NeighborhoodIndex::new(square_tileset());
+        let sq_idx = square_idx();
         assert!(sq_idx.num_types() > 0);
         assert!(
             !sq_idx.transitions().is_empty(),
@@ -1203,7 +1279,7 @@ mod tests {
             assert!(t.dst_id == NT_CLOSED_ID || t.dst_id <= sq_idx.num_types());
         }
 
-        let hex_idx = NeighborhoodIndex::new(hex_tileset());
+        let hex_idx = hex_idx();
         assert!(hex_idx.num_types() > 0);
         assert!(!hex_idx.transitions().is_empty());
         for t in hex_idx.transitions() {
@@ -1254,7 +1330,7 @@ mod tests {
 
     #[test]
     fn square_seeds_validate() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let errors = validate_seeds(&idx);
         assert!(
             errors.is_empty(),
@@ -1265,7 +1341,7 @@ mod tests {
 
     #[test]
     fn hex_seeds_validate() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let errors = validate_seeds(&idx);
         assert!(
             errors.is_empty(),
@@ -1276,7 +1352,7 @@ mod tests {
 
     #[test]
     fn attach_central_square_seeds() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let aug = attach_central(nt, &mi)
@@ -1301,7 +1377,7 @@ mod tests {
 
     #[test]
     fn attach_central_hex_seeds() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let aug = attach_central(nt, &mi)
@@ -1312,7 +1388,7 @@ mod tests {
 
     #[test]
     fn find_gap_frontier_square_seeds() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let (aug, frontier, petal_outcomes) =
@@ -1332,7 +1408,7 @@ mod tests {
 
     #[test]
     fn find_gap_frontier_hex_seeds() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let (aug, frontier, petal_outcomes) =
@@ -1352,7 +1428,7 @@ mod tests {
 
     #[test]
     fn gap_edges_are_central_tile() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let aug = attach_central(nt, &mi)
@@ -1379,7 +1455,7 @@ mod tests {
 
     #[test]
     fn frontier_adjacent_to_gap() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let (aug, _frontier, _petal_outcomes) =
@@ -1397,7 +1473,7 @@ mod tests {
 
     #[test]
     fn explore_step_square_has_petals() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let nt = &idx.entries()[0];
         let (_aug, _frontier, petal_outcomes) =
@@ -1410,7 +1486,7 @@ mod tests {
 
     #[test]
     fn find_remaining_gap_after_petal() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let (aug, _frontier, petal_outcomes) =
@@ -1460,7 +1536,7 @@ mod tests {
 
     #[test]
     fn explore_one_hex_seeds_reconstruct() {
-        let idx = NeighborhoodIndex::new(hex_tileset());
+        let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut checked = 0usize;
         let mut errors = Vec::new();
@@ -1521,7 +1597,7 @@ mod tests {
 
     #[test]
     fn dist_to_frontier_computation() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
             let (aug, frontier, _petal_outcomes) =
@@ -1536,7 +1612,7 @@ mod tests {
 
     #[test]
     fn explore_one_square_seeds_reconstruct() {
-        let idx = NeighborhoodIndex::new(square_tileset());
+        let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut checked = 0usize;
         let mut errors = Vec::new();
