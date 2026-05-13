@@ -128,6 +128,29 @@ enum PatchState<T: IsComplex> {
         tile_id: usize,
         cached_matches: Vec<PatchMatch>,
     },
+    /// Active patch with a boundary.
+    ///
+    /// # Grid bookkeeping
+    ///
+    /// The spatial grid uses **stable edge IDs** so incremental glue
+    /// updates only touch the changed segments:
+    ///
+    /// * `seg_data[id] -> (p1, p2)` for each edge ever created.
+    /// * `boundary_edge_ids[pos] -> id` for the current boundary.
+    /// * `next_edge_id` is the next free ID; bumped on each new edge.
+    /// * `grid` indexes `seg_data` by ID.
+    ///
+    /// Removed (matched-away) edges leave their entry in `seg_data`
+    /// rather than being shifted out — keeping live IDs stable across
+    /// glues is what lets `unregister_segment` work in O(1). Consequently
+    /// `seg_data.len()` grows with **total glue history**, not with
+    /// current boundary length. For typical workflows (short-lived
+    /// patches in BFS enumeration; small handwritten fixtures) the
+    /// overhead is small. For long-lived patches grown over many glues,
+    /// pass through [`GrowingPatch::from_parts`] to rebuild the grid
+    /// from `angles`/`edges`/`inner_chains`/`patch_tile_ids` —
+    /// `from_parts` re-traces positions, builds a fresh grid, and
+    /// resets `boundary_edge_ids` to `(0..n)`, dropping all tombstones.
     Growing {
         angles: Vec<i8>,
         edges: Vec<EdgeInfo>,
