@@ -136,6 +136,19 @@ pub(crate) fn vertex_type_raw_from(
     }
 }
 
+/// Compute the maximum match length when gluing `other` onto `self_angles`
+/// starting at `self_start`, with the match endpoint at `other_junction`
+/// on the other side.
+///
+/// The two sides are walked outward from a shared anchor edge: `self`
+/// advances CCW from `self_start`, `other` advances CW from
+/// `other_junction`. Edges are compatible when `self_angles[k] ==
+/// -other_angles[mirror(k)]` (the angles meet head-to-tail with opposite
+/// signs, since one side is traversed CCW and the other CW).
+///
+/// Length is at least 1 (the anchor edge itself always matches by
+/// construction) and stops as soon as the angle pair disagrees, capped
+/// at `min(self_len, other_len)`.
 pub(crate) fn forward_match_length(
     self_angles: &[i8],
     self_start: usize,
@@ -328,6 +341,24 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     })
 }
 
+/// Compute the sequence of boundary angles at a junction vertex as petals
+/// are stacked CCW from the CW side.
+///
+/// Returns a vector of length `1 + |inner| + 1` where:
+///  * `result[0]` is the boundary angle with only the CW tile present —
+///    that is, the internal angle of `vtype.cw`'s tile at the junction
+///    vertex (the corner just CCW of `cw.tile_offset`).
+///  * Each subsequent entry is the new boundary angle after adding one
+///    more petal, computed as `next = petal_angle + prev - hturn`.
+///    Geometrically: each petal eats away `hturn - petal_angle` from the
+///    remaining boundary angle.
+///  * `result.last()` is the boundary angle once all petals (inner +
+///    ccw) are in place — this is what the witness boundary should show
+///    at the junction position.
+///
+/// For convex tiles (positive internal angles), the sequence is
+/// monotonically non-increasing. This is asserted by
+/// `assert_junction_angle_sequence_valid` in tests.
 pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
     vtype: &OpenVertexType,
     tileset: &TileSet<T>,
@@ -1193,6 +1224,15 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             return false;
         }
 
+        // Geometric self-intersection check.
+        //
+        // On the first add we don't yet have a `UnitSquareGrid` to query
+        // incrementally, so we build the candidate boundary from scratch
+        // and run Snake's batch validator. `add_tile_growing` uses the
+        // incremental `check_segment_clear` path instead (it maintains the
+        // grid across glues). Both ultimately use the same `intersect` +
+        // `UnitSquareGrid` primitive, and their agreement is cross-checked
+        // by `add_tile_decision_agrees_with_snake_on_spectre`.
         if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
             return false;
         }
@@ -1699,6 +1739,20 @@ fn enumerate_junction_candidates_at<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
+/// Returns true if vertex `index` is touched by a match of `len` edges
+/// starting at edge position `start` on a cyclic boundary of length `n`.
+///
+/// A match of length `len` starting at edge `start` covers edges
+/// `[start, start+1, ..., start+len-1]` and therefore *touches* the
+/// `len + 1` boundary **vertices** `[start, start+1, ..., start+len]`
+/// (the CW endpoint of the first edge through the CCW endpoint of the
+/// last edge). This function is inclusive on both ends — both the CW
+/// vertex (`start`) and the CCW vertex (`start + len`) are considered
+/// to be touched.
+///
+/// Used by `compute_candidates_covering_position` and
+/// `get_matches_touching_vertex` to find matches incident with a given
+/// boundary vertex.
 pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -> bool {
     if len == 0 || n == 0 {
         return false;
@@ -1711,6 +1765,19 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     }
 }
 
+/// Compute the new boundary angles after gluing `pm.tile_id`'s tile onto
+/// the boundary `angles` along the match described by `pm`.
+///
+/// Wraps [`angles::glue_raw_angles`] and additionally rejects glues that
+/// would produce a ±half-turn at either of the two new junction angles
+/// (a half-turn boundary angle means the boundary doubles back on itself
+/// — a degenerate pinched vertex, which is not a valid patch boundary).
+///
+/// Returns `None` if either the raw glue would be empty or a ±hturn
+/// junction would result. This is the live-patch glue path; the parallel
+/// raw-boundary path used by witness construction (`glue_match_to_raw_boundary`)
+/// is intentionally permissive at this level — see
+/// [`construct_witness_from_vt_sequence`] for the open-VT enforcement.
 pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
@@ -1804,6 +1871,14 @@ fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
     true
 }
 
+/// Find the direction `dir` such that `from + T::unit(dir) == to`.
+///
+/// Caller invariant: `(from, to)` must be a unit-length boundary edge, i.e.
+/// `to - from` is a unit vector in the cyclotomic ring. This is enforced
+/// upstream by [`trace_boundary_positions`] and the live patch growth
+/// path (every boundary edge is constructed as a single unit step). A
+/// failure here means upstream broke the unit-edge invariant — an
+/// internal bug, not bad input.
 fn dir_of_edge<T: IsComplex + IsRingOrField + Units>(from: T, to: T) -> i8 {
     let d = to - from;
     for dir in 0..T::turn() {
@@ -1811,7 +1886,7 @@ fn dir_of_edge<T: IsComplex + IsRingOrField + Units>(from: T, to: T) -> i8 {
             return dir;
         }
     }
-    panic!("edge is not a unit vector");
+    unreachable!("dir_of_edge: ({from:?} -> {to:?}) is not a unit vector");
 }
 
 #[cfg(test)]
