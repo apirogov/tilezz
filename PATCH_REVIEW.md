@@ -396,7 +396,7 @@ A balanced review should call this out:
 
 | ID  | Severity | Type             | Status   | Notes |
 |-----|----------|------------------|----------|-------|
-| C1  | Critical | naming           | pending  | rename `growing::GrowingPatch` |
+| C1  | Critical | naming           | done     | renamed type to `RedelmeierPatch`; renamed module file `growing.rs` → `redelmeier.rs` |
 | C2  | Critical | visibility       | pending  | tighten `growing.rs` `pub` → `pub(crate)`/private |
 | C3  | Critical | docs             | pending  | doc-pass across patch/tileset/matchtypes/growing/rat |
 | H1  | High     | dead code        | pending  | delete ~10 unused `MatchFinder` methods |
