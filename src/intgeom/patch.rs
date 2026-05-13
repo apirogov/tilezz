@@ -287,6 +287,12 @@ pub(crate) fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units
     None
 }
 
+/// Result of [`glue_match_to_raw_boundary`].
+///
+/// `new_junc_pos` is the index, in the resulting `boundary`, of the
+/// junction at the CCW end of the match — i.e. the first new-tile edge.
+/// Equivalently, it equals `old_survivor_len` (see the **rotation
+/// convention** documented on [`glue_match_to_raw_boundary`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RawGlueResult {
     pub boundary: RawBoundary,
@@ -328,6 +334,38 @@ pub(crate) fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     )
 }
 
+/// Glue one match onto a raw boundary.
+///
+/// # Rotation convention
+///
+/// The returned boundary is **rotated** so that index 0 is the first
+/// surviving old edge immediately CCW of the match (i.e. position
+/// `(pm.start_a + pm.len) % old_n` in the old boundary). The layout is:
+///
+/// ```text
+/// new_edges[0 .. old_survivor_len]           = surviving old edges
+/// new_edges[old_survivor_len .. new_n]       = new tile's surviving edges
+/// ```
+///
+/// `RawGlueResult::new_junc_pos = old_survivor_len` is the index of the
+/// CCW junction (first new-tile edge) in the new boundary. The CW
+/// junction is at index 0 of the new boundary.
+///
+/// **Caller consequence.** A position `j` tracked in the *old* boundary
+/// that survives the glue (i.e. lies outside the matched range) maps to
+/// `(j + old_n - ccw_pos) % old_n` in the new boundary, where
+/// `ccw_pos = (pm.start_a + pm.len) % old_n`. [`flower_petal_glue`]
+/// applies this remap automatically for the `prior_juncs` it tracks
+/// across multiple glues; bespoke callers in `neighborhood.rs` use the
+/// returned `new_junc_pos` as their CCW-side anchor and derive other
+/// positions relative to it, so they don't need an explicit remap.
+///
+/// This rotation is mandatory in some form because the boundary length
+/// changes (`old_n → old_n - pm.len + new_tile_seg_len`); positions in
+/// the new array necessarily differ from positions in the old one. The
+/// "anchor at CCW survivor" choice keeps the formula uniform — a single
+/// modular subtraction — and matches what's most natural for callers
+/// that just glued at a junction and want the next junction's index.
 pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     pm: &PatchMatch,
@@ -429,15 +467,15 @@ pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
     result
 }
 
-// FIXME: glue_match_to_raw_boundary rotates the boundary so that new_pos 0
-// equals old_pos ccw_pos. That rotation forces every caller that wants to
-// retain a stable position across multiple glues to remap their tracked
-// positions after each call (see `prior_juncs` below, and the NT BFS in
-// neighborhood.rs which assumes junction positions are stable). A cleaner
-// convention would keep surviving edges at their original indices and append
-// the new tile's surviving edges contiguously. That is a wider refactor
-// (touches the glue helpers and every test that pins boundary positions), so
-// for now we remap explicitly here.
+/// Glue a sequence of "petal" tiles onto a raw boundary at a single junction.
+///
+/// Each call to [`glue_tile_to_raw_boundary`] rotates the boundary per the
+/// convention documented on [`glue_match_to_raw_boundary`]. Any junction
+/// positions in `prior_juncs` that the caller is tracking across this
+/// call get remapped via `(j + n_old - ccw_pos) % n_old` after each glue,
+/// so the caller sees them at their new indices in the final boundary.
+///
+/// Returns `(new_boundary, junc_pos_after_last_glue)` on success.
 fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     mut boundary: RawBoundary,
     mut junc_pos: usize,
@@ -455,8 +493,8 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
             &boundary, junc_pos, *target, tileset, first_step, tile_id,
         )?;
 
-        // Remap previously tracked junction positions to the new boundary
-        // indexing. See FIXME on this function.
+        // Remap previously tracked junction positions per the rotation
+        // convention documented on `glue_match_to_raw_boundary`.
         let ccw_pos = (junc_pos + result.match_len) % n_old;
         for j in prior_juncs.iter_mut() {
             *j = (*j + n_old - ccw_pos) % n_old;
