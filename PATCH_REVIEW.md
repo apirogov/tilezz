@@ -190,7 +190,7 @@ larger refactors after the file is shorter and the cruft is gone.
 | M7  | clean-up   | done     | dropped `_new_ptids` from `update_inner_chains` |
 | M3  | duplicate  | done     | new `enumerate_junction_candidates_at` helper takes `keep`/`emit` |
 | M4  | duplicate  | done     | `get_matches_touching_vertex` picks source up front, one shared loop |
-| M9  | test churn | pending  | parameterize/dedupe duplicated test families |
+| M9  | test churn | done     | generic `brute_force_patches`; shared helpers `assert_minimal_witness_roundtrips_for`, `assert_witness_matches_brute_force`, `assert_junction_angle_sequence_valid`; deleted 3 strict-subset edges tests |
 | H6  | test       | pending  | add "state unchanged on failed add" |
 | H7  | test       | pending  | add self-intersection rejection |
 | H5  | test       | pending  | add reverse-direction coverage |
