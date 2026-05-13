@@ -2605,6 +2605,242 @@ mod tests {
         );
     }
 
+    /// Cross-check between the two independent geometric implementations:
+    /// GrowingPatch's incremental check (which maintains a UnitSquareGrid
+    /// across glues that remove multiple segments and add new ones with an
+    /// allowed-endpoint exception) versus Snake's batch validator (which
+    /// walks the resulting boundary segment-by-segment from origin and
+    /// checks each new segment against the previously visited ones).
+    ///
+    /// Both ultimately use the same `intersect` + `UnitSquareGrid` primitive
+    /// but compose it differently. They must agree on accept/reject for
+    /// every candidate.
+    ///
+    /// Skips candidates that would produce ±hturn (Snake panics on hturn,
+    /// and `compute_glue_angles` would have already rejected them at the
+    /// add_tile level — the two paths trivially agree there).
+    #[test]
+    fn add_tile_decision_agrees_with_snake_on_spectre() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first), "fixture setup");
+
+        let candidates = gp.get_all_matches();
+        let tileset = gp.tileset().clone();
+        let mut compared = 0usize;
+        let mut discrepancies: Vec<(PatchMatch, bool, bool)> = Vec::new();
+
+        for pm in &candidates {
+            let new_angles = match compute_glue_angles::<ZZ12>(gp.angles(), pm, &tileset) {
+                Some(a) => a,
+                None => continue,
+            };
+            let snake_ok = Snake::<ZZ12>::try_from(new_angles.as_slice()).is_ok();
+            let mut trial = gp.clone_for_mutation();
+            let gp_ok = trial.add_tile(pm);
+            if snake_ok != gp_ok {
+                discrepancies.push((pm.clone(), snake_ok, gp_ok));
+            }
+            compared += 1;
+        }
+
+        assert!(compared > 0, "expected non-zero candidates to compare");
+        assert!(
+            discrepancies.is_empty(),
+            "Snake and add_tile disagreed on {} of {} candidates: {:?}",
+            discrepancies.len(),
+            compared,
+            discrepancies
+        );
+    }
+
+    /// After every successful `add_tile`, the resulting boundary should
+    /// be a valid (non-self-intersecting) closed Snake polygon. Spectre
+    /// is the right fixture because it has a non-convex shape — most of
+    /// the candidate boundaries are non-trivial.
+    #[test]
+    fn growing_patch_boundary_validates_as_snake_through_growth() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let mut step = 0usize;
+        while step < 4 {
+            let pm = match gp.get_all_matches().first() {
+                Some(pm) => pm.clone(),
+                None => break,
+            };
+            if !gp.add_tile(&pm) {
+                break;
+            }
+            let angles = gp.angles().to_vec();
+            let snake = Snake::<ZZ12>::try_from(angles.as_slice());
+            assert!(
+                snake.is_ok(),
+                "step {step}: GrowingPatch's boundary failed Snake validation: angles={angles:?}"
+            );
+            assert!(
+                snake.unwrap().is_closed(),
+                "step {step}: GrowingPatch's boundary should close as a polygon"
+            );
+            step += 1;
+        }
+        assert!(step > 0, "expected at least one successful add");
+    }
+
+    /// Brute-force candidate enumeration independent of `MatchTypeIndex`.
+    ///
+    /// `compute_all_candidates` (and therefore `get_all_matches`) relies on
+    /// the pre-computed `MatchTypeIndex::candidates_starting_at` index for
+    /// the segment path, and direct iteration for the junction path. This
+    /// test brute-forces every `(tile_id_b, ib, start_a)` triple and
+    /// applies the same downstream filters
+    /// (`junction_gap_nonnegative`, `try_glue_precomputed`), so a mismatch
+    /// against `get_all_matches()` would indicate a bug in either the
+    /// index or the segment/junction routing.
+    #[test]
+    fn get_all_matches_matches_brute_force_on_spectre() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first), "fixture setup");
+
+        let n = gp.boundary_len();
+        let rat = Rat::from_slice_unchecked(gp.angles());
+
+        let mut brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
+            std::collections::BTreeSet::new();
+        for tile_id_b in 0..ts.num_tiles() {
+            let tile_b = ts.rat(tile_id_b);
+            let b_seq = tile_b.seq();
+            let m_tile = b_seq.len();
+            for ib in 0..m_tile {
+                for start_a in 0..n {
+                    let (ns, len, ne) = rat.get_match((start_a as i64, ib as i64), tile_b);
+                    if len == 0 {
+                        continue;
+                    }
+                    let ns_u = ns.rem_euclid(n as i64) as usize;
+                    let ne_u = ne.rem_euclid(m_tile as i64) as usize;
+                    if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                        gp.angles(),
+                        ns_u,
+                        len,
+                        b_seq,
+                        ne_u,
+                    ) {
+                        continue;
+                    }
+                    if rat
+                        .try_glue_precomputed((ns, len, ne), tile_b, true)
+                        .is_ok()
+                    {
+                        brute.insert((ns_u, len, ne_u, tile_id_b));
+                    }
+                }
+            }
+        }
+
+        let from_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
+            .get_all_matches()
+            .into_iter()
+            .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
+            .collect();
+
+        assert_eq!(
+            brute, from_api,
+            "brute-force candidate set differs from get_all_matches()"
+        );
+    }
+
+    /// Like `get_all_matches_matches_brute_force_on_spectre` but for
+    /// `get_matches_touching_vertex`: brute-force enumerate all matches,
+    /// filter by `cyclic_range_contains(start_a, len, v, n)` for each
+    /// vertex `v`, and compare against the per-vertex fast path.
+    #[test]
+    fn get_matches_touching_vertex_matches_brute_force_on_spectre() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first), "fixture setup");
+        gp.ensure_candidates_materialized();
+
+        let n = gp.boundary_len();
+        let rat = Rat::from_slice_unchecked(gp.angles());
+
+        let mut brute_matches: Vec<PatchMatch> = Vec::new();
+        for tile_id_b in 0..ts.num_tiles() {
+            let tile_b = ts.rat(tile_id_b);
+            let b_seq = tile_b.seq();
+            let m_tile = b_seq.len();
+            for ib in 0..m_tile {
+                for start_a in 0..n {
+                    let (ns, len, ne) = rat.get_match((start_a as i64, ib as i64), tile_b);
+                    if len == 0 {
+                        continue;
+                    }
+                    let ns_u = ns.rem_euclid(n as i64) as usize;
+                    let ne_u = ne.rem_euclid(m_tile as i64) as usize;
+                    if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                        gp.angles(),
+                        ns_u,
+                        len,
+                        b_seq,
+                        ne_u,
+                    ) {
+                        continue;
+                    }
+                    if rat
+                        .try_glue_precomputed((ns, len, ne), tile_b, true)
+                        .is_ok()
+                    {
+                        brute_matches.push(PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id: tile_id_b,
+                        });
+                    }
+                }
+            }
+        }
+        // Dedup the brute set (the (start_a, ib) double-counts hit the same
+        // canonical match).
+        let brute_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = brute_matches
+            .iter()
+            .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
+            .collect();
+
+        for target in 0..n {
+            let touching_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
+                brute_set
+                    .iter()
+                    .copied()
+                    .filter(|(start_a, len, _, _)| cyclic_range_contains(*start_a, *len, target, n))
+                    .collect();
+            let touching_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
+                .get_matches_touching_vertex(target)
+                .into_iter()
+                .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
+                .collect();
+            assert_eq!(
+                touching_brute, touching_api,
+                "mismatch at target={target}: brute={touching_brute:?} api={touching_api:?}"
+            );
+        }
+    }
+
     #[test]
     fn construct_minimal_witness_hex_boundary_matches_brute_force() {
         let gp = hex_patch();
