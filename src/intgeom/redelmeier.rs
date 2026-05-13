@@ -388,7 +388,7 @@ fn trace_positions_from<P: PatchPos>(start: P, start_dir: i8, angles: &[i8]) -> 
     positions
 }
 
-pub struct RedelmeierPatch<T: HasPatchPos> {
+pub(crate) struct RedelmeierPatch<T: HasPatchPos> {
     angles: Vec<i8>,
     counters: Vec<usize>,
     next_counter: usize,
@@ -396,16 +396,6 @@ pub struct RedelmeierPatch<T: HasPatchPos> {
     positions: Vec<T::Pos>,
     visited: FxHashSet<T::Pos>,
     _phantom: PhantomData<T>,
-}
-
-impl<T: HasPatchPos> RedelmeierPatch<T> {
-    pub fn len(&self) -> usize {
-        self.angles.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.angles.len() == 0
-    }
 }
 
 impl<T: HasPatchPos> RedelmeierPatch<T> {
@@ -611,10 +601,10 @@ impl<T: HasPatchPos> RedelmeierPatch<T> {
 }
 
 #[derive(Default)]
-pub struct GrowStats {
-    pub enumerate_calls: usize,
-    pub enumerate_ns: u64,
-    pub apply_ns: u64,
+pub(crate) struct GrowStats {
+    pub(crate) enumerate_calls: usize,
+    pub(crate) enumerate_ns: u64,
+    pub(crate) apply_ns: u64,
 }
 
 impl std::fmt::Display for GrowStats {
@@ -646,16 +636,6 @@ where
     T: HasPatchPos,
 {
     grow_redelmeier_inner(seed, max_size, true).0
-}
-
-pub fn grow_redelmeier_profiled<T>(
-    seed: &Rat<T>,
-    max_size: usize,
-) -> (BTreeMap<usize, FxHashSet<Rat<T>>>, GrowStats)
-where
-    T: HasPatchPos,
-{
-    grow_redelmeier_inner(seed, max_size, false)
 }
 
 fn grow_redelmeier_inner<T>(
@@ -745,7 +725,8 @@ fn grow_recursive_inner<T>(
     }
 }
 
-pub fn make_free<T>(onesided: &FxHashSet<Rat<T>>) -> FxHashSet<Rat<T>>
+#[cfg(test)]
+fn make_free<T>(onesided: &FxHashSet<Rat<T>>) -> FxHashSet<Rat<T>>
 where
     T: HasPatchPos,
 {
