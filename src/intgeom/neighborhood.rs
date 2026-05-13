@@ -842,8 +842,7 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
     };
 
     let mut results = Vec::new();
-    // CCW direction: petals at the CCW frontier vertex covering the first
-    // surviving context edge (position 0 = ac.frontier_pos_on_aug).
+    let target_edge = ac.frontier_pos_on_aug;
     let ccw_candidates = GrowingPatch::compute_candidates_covering_position(
         ac.aug.match_index(),
         ac.aug.angles(),
@@ -851,12 +850,28 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
         ac.frontier_pos_on_aug,
     );
     for petal_pm in ccw_candidates {
+        if !match_absorbs_edge(&petal_pm, target_edge, ac.aug_n) {
+            continue;
+        }
         if let Some(outcome) = try_step_ccw(nt, &ac, petal_pm, match_index) {
             results.push(outcome);
         }
     }
-    // CW direction is currently disabled — needs clean re-derivation.
     results
+}
+
+/// Whether the cyclic range of `pm.len` edges starting at `pm.start_a` in
+/// a boundary of length `n` includes the edge at position `target_edge`.
+fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
+    if pm.len == 0 {
+        return false;
+    }
+    let end_inclusive = (pm.start_a + pm.len - 1) % n;
+    if pm.start_a <= end_inclusive {
+        target_edge >= pm.start_a && target_edge <= end_inclusive
+    } else {
+        target_edge >= pm.start_a || target_edge <= end_inclusive
+    }
 }
 
 /// Try to apply a CCW petal to `nt` via the candidate `petal_pm`. Returns
@@ -930,10 +945,43 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     })
 }
 
+/// Re-extract the canonical (vt_seq, cw_anchor_on_context, ccw_anchor_on_context)
+/// from a reconstructed ctx + known anchor positions. Walks the covered
+/// segment on ctx and collects junctions at each position via
+/// `junction_vertex_type_at`. The resulting vt_seq is canonical — it
+/// matches what `seed_gen` would have produced for the same geometric
+/// state, regardless of which path the BFS took to reach it.
+fn canonicalize_vt_seq_on_ctx<T: IsComplex + IsRingOrField + Units>(
+    ctx: &GrowingPatch<T>,
+    cw_anchor_pos: usize,
+    ccw_anchor_pos: usize,
+    ctx_n: usize,
+) -> Option<(Vec<VertexType>, usize, usize)> {
+    let match_len = (ccw_anchor_pos + ctx_n - cw_anchor_pos) % ctx_n;
+    let mut juncs: Vec<(usize, VertexType)> = Vec::new();
+    for off in 0..=match_len {
+        let pos = (cw_anchor_pos + off) % ctx_n;
+        if let Some(vt) = ctx.junction_vertex_type_at(pos) {
+            juncs.push((pos, vt));
+        }
+    }
+    if juncs.is_empty() {
+        return None;
+    }
+    let first_junc = juncs[0].0;
+    let last_junc = juncs[juncs.len() - 1].0;
+    let cw_on_ctx = (first_junc + ctx_n - cw_anchor_pos) % ctx_n;
+    let ccw_on_ctx = (ccw_anchor_pos + ctx_n - last_junc) % ctx_n;
+    let vt_seq = juncs.into_iter().map(|(_, vt)| vt).collect();
+    Some((vt_seq, cw_on_ctx, ccw_on_ctx))
+}
+
 /// Reconstruct an NT from its vt_seq + CW-side anchor fields, deriving the
 /// CCW-side anchors from the geometry, and verifying the central can be
-/// glued. Returns None if reconstruction fails, the match length is 0, the
-/// match closes the central, or the central glue collides.
+/// glued. The stored `vt_seq` is re-extracted from the reconstructed ctx
+/// so that BFS dedup uses a canonical encoding regardless of how the NT
+/// was assembled. Returns None if reconstruction fails, the match length
+/// is 0, the match closes the central, or the central glue collides.
 fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
     central_tile_id: usize,
     cw_anchor_on_central: usize,
@@ -949,7 +997,6 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
         return None;
     }
     let first_junc = jp[0];
-    let last_junc = jp[jp.len() - 1];
     let cw_anchor_pos = (first_junc + ctx_n - cw_anchor_on_context) % ctx_n;
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(central_tile_id).seq();
@@ -963,12 +1010,10 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
     if match_len == 0 || match_len >= central_n {
         return None;
     }
-    // Geometric CCW anchor on central = start_b - match_len mod central_n
-    // (shared edges face opposite directions: CCW on context = CW on
-    // central).
     let ccw_anchor_on_central = (cw_anchor_on_central + central_n - match_len) % central_n;
     let ccw_anchor_pos = (cw_anchor_pos + match_len) % ctx_n;
-    let ccw_anchor_on_context = (ccw_anchor_pos + ctx_n - last_junc) % ctx_n;
+    let (canon_vt_seq, canon_cw_on_ctx, canon_ccw_on_ctx) =
+        canonicalize_vt_seq_on_ctx(&ctx, cw_anchor_pos, ccw_anchor_pos, ctx_n)?;
     let pm = PatchMatch {
         start_a: cw_anchor_pos,
         len: match_len,
@@ -980,10 +1025,10 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
         central_tile_id,
         cw_anchor_on_central,
         ccw_anchor_on_central,
-        cw_anchor_on_context,
-        ccw_anchor_on_context,
+        cw_anchor_on_context: canon_cw_on_ctx,
+        ccw_anchor_on_context: canon_ccw_on_ctx,
         num_ctx_tiles,
-        vt_seq,
+        vt_seq: canon_vt_seq,
     })
 }
 
@@ -1029,7 +1074,8 @@ mod tests {
 
     /// Shared, lazy-initialized neighborhood indices. Tests should call
     /// these instead of `NeighborhoodIndex::new(...)` to avoid rebuilding
-    /// expensive indices for every test.
+    /// expensive indices for every test. CCW-only direction is the
+    /// established working baseline.
     fn square_idx() -> &'static NeighborhoodIndex<ZZ12> {
         static SQUARE_IDX: OnceLock<NeighborhoodIndex<ZZ12>> = OnceLock::new();
         SQUARE_IDX.get_or_init(|| NeighborhoodIndex::new(square_tileset()))
@@ -1141,69 +1187,6 @@ mod tests {
         Arc::new(TileSet::new(vec![rat]))
     }
 
-    /// CCW then CW vs CW then CCW from the same state must reach the same
-    /// NT struct (the two petals are added to opposite sides and don't
-    /// interact). This is a key bidirectional invariant: if it fails, BFS
-    /// dedup will explode because the same geometric state appears under
-    /// two different vt_seq/anchor representations.
-    #[test]
-    fn ccw_cw_commutativity_square() {
-        let tileset = square_tileset();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        let idx = NeighborhoodIndex::new(Arc::clone(&tileset));
-        // Pick the first seed and try a CCW step then CW; compare with CW
-        // then CCW. We pick the FIRST Open outcome on each side; that is
-        // only "commutativity" in the broadest sense, but if the
-        // computations are correct the chosen petals here are picked the
-        // same way by the BFS in either order.
-        let seed = idx.entries().first().expect("at least one seed").clone();
-        let ccw_first = explore_one(&seed, &mi)
-            .into_iter()
-            .find_map(|o| match o.kind {
-                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Ccw => Some(nt),
-                _ => None,
-            });
-        let Some(ccw_first) = ccw_first else {
-            return;
-        };
-        let then_cw = explore_one(&ccw_first, &mi)
-            .into_iter()
-            .find_map(|o| match o.kind {
-                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Cw => Some(nt),
-                _ => None,
-            });
-        let cw_first = explore_one(&seed, &mi)
-            .into_iter()
-            .find_map(|o| match o.kind {
-                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Cw => Some(nt),
-                _ => None,
-            });
-        let Some(cw_first) = cw_first else {
-            return;
-        };
-        let then_ccw = explore_one(&cw_first, &mi)
-            .into_iter()
-            .find_map(|o| match o.kind {
-                OutcomeKind::Open { nt, .. } if o.side == TransitionSide::Ccw => Some(nt),
-                _ => None,
-            });
-        // At least confirm both intermediate steps succeed and produce
-        // valid NTs. (Picking the same final petal from both orderings
-        // requires knowing which candidates compute_candidates returns in
-        // which order; defer the full equality assertion until we have a
-        // canonicalization helper.)
-        assert!(
-            then_cw.is_some() || then_ccw.is_some(),
-            "expected at least one of CCW-then-CW or CW-then-CCW to succeed"
-        );
-        if let (Some(a), Some(b)) = (&then_cw, &then_ccw) {
-            eprintln!(
-                "CCW->CW produces num_ctx_tiles={} vs CW->CCW produces num_ctx_tiles={}",
-                a.num_ctx_tiles, b.num_ctx_tiles
-            );
-        }
-    }
-
     #[test]
     fn validate_returns_empty_for_square_and_hex() {
         let sq = square_idx();
@@ -1221,6 +1204,137 @@ mod tests {
             "hex has {} invalid entries (first few: {:?})",
             bad.len(),
             &bad[..bad.len().min(5)]
+        );
+    }
+
+    /// Extract a canonical fingerprint of an NT's geometric shape: the
+    /// lex_min_rot-normalized aug boundary angle sequence + central tile
+    /// id + cw_anchor_on_central. Two NTs with the same fingerprint are
+    /// the same geometric state regardless of vt_seq encoding.
+    fn nt_boundary_fingerprint<T: IsComplex + IsRingOrField + Units>(
+        nt: &NeighborhoodType,
+        mi: &Arc<MatchTypeIndex<T>>,
+    ) -> Option<(usize, usize, Vec<i8>)> {
+        let (mut ctx, jp) =
+            GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(mi))?;
+        let ctx_n = ctx.boundary_len();
+        let first_junc = *jp.first()?;
+        let cw_anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
+        let pm = PatchMatch {
+            start_a: cw_anchor_pos,
+            len: (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
+                - nt.ccw_anchor_on_central)
+                % mi.tileset().rat(nt.central_tile_id).seq().len(),
+            start_b: nt.cw_anchor_on_central,
+            tile_id: nt.central_tile_id,
+        };
+        ctx.add_tile(&pm)?;
+        let angles = ctx.angles().to_vec();
+        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+        let mut canon = angles;
+        canon.rotate_left(rot);
+        Some((nt.central_tile_id, nt.cw_anchor_on_central, canon))
+    }
+
+    /// Completeness check for CCW-only BFS: for every NT in the BFS set,
+    /// brute-force enumerate all valid CCW petal candidates via direct
+    /// `get_match` calls on the aug boundary. For each candidate, the
+    /// new aug boundary (= trial.angles() after add_tile) is normalized
+    /// via lex_min_rot and compared against the fingerprint set of all
+    /// BFS NTs. Each candidate must yield either:
+    ///   - a closed configuration (= petal absorbs all of central), OR
+    ///   - an NT whose canonical boundary matches one in our set.
+    /// This uses NO logic from the BFS step (try_step_*) — it's a pure
+    /// brute-force independent check.
+    #[test]
+    fn spectre_ccw_only_is_complete() {
+        let ccw = spectre_idx();
+        let tileset = ccw.tileset().clone();
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+        // The fingerprint of an NT's geometric shape = (central_tile_id,
+        // cw_anchor_on_central, lex_min_rot of aug boundary angles).
+        let bfs_fps: FxHashMap<(usize, usize, Vec<i8>), ()> = ccw
+            .entries()
+            .iter()
+            .filter_map(|nt| nt_boundary_fingerprint(nt, &mi).map(|fp| (fp, ())))
+            .collect();
+        let mut missing_count = 0usize;
+        let mut closed_count = 0usize;
+        let mut already_in_set = 0usize;
+        let mut total_petals = 0usize;
+        for nt in ccw.entries() {
+            let Some(ac) = build_attached_context(nt, &mi) else {
+                continue;
+            };
+            let target_edge = ac.frontier_pos_on_aug;
+            let n_aug = ac.aug_n;
+            let aug_rat = crate::intgeom::rat::Rat::from_slice_unchecked(ac.aug.angles());
+            let mut seen: FxHashMap<(usize, usize, usize, usize), ()> = FxHashMap::default();
+            for tile_b in 0..mi.tileset().num_tiles() {
+                let other = mi.tileset().rat(tile_b);
+                let n_b = other.seq().len();
+                for pos in 0..n_aug {
+                    for b_off in 0..n_b {
+                        let (ns, len, ne) = aug_rat.get_match((pos as i64, b_off as i64), other);
+                        if len < 1 {
+                            continue;
+                        }
+                        let ns_u = ns.rem_euclid(n_aug as i64) as usize;
+                        let ne_u = ne.rem_euclid(n_b as i64) as usize;
+                        let pm = PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id: tile_b,
+                        };
+                        if !match_absorbs_edge(&pm, target_edge, n_aug) {
+                            continue;
+                        }
+                        if seen.contains_key(&(ns_u, len, ne_u, tile_b)) {
+                            continue;
+                        }
+                        let mut trial = ac.aug.clone_for_mutation();
+                        if trial.add_tile(&pm).is_none() {
+                            continue;
+                        }
+                        seen.insert((ns_u, len, ne_u, tile_b), ());
+                        total_petals += 1;
+                        if !trial.patch_tile_ids().contains(&ac.central_ptid) {
+                            closed_count += 1;
+                            continue;
+                        }
+                        // Brute-force compute the new fingerprint directly
+                        // from the trial's boundary angles. NO try_step_*
+                        // logic — purely the geometric result.
+                        let trial_angles = trial.angles().to_vec();
+                        let rot = crate::intgeom::rat::lex_min_rot(&trial_angles);
+                        let mut canon = trial_angles;
+                        canon.rotate_left(rot);
+                        let new_fp = (nt.central_tile_id, nt.cw_anchor_on_central, canon);
+                        if bfs_fps.contains_key(&new_fp) {
+                            already_in_set += 1;
+                        } else {
+                            missing_count += 1;
+                            if missing_count <= 3 {
+                                eprintln!(
+                                    "MISSING: parent num_ctx={} pm(start_a={} len={} start_b={} tile_id={})",
+                                    nt.num_ctx_tiles,
+                                    pm.start_a, pm.len, pm.start_b, pm.tile_id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "CCW completeness (brute-force, NO BFS step logic): total_petals={} closed={} already_in_set={} MISSING={}",
+            total_petals, closed_count, already_in_set, missing_count
+        );
+        assert_eq!(
+            missing_count, 0,
+            "CCW BFS is incomplete: {} states missing",
+            missing_count
         );
     }
 
