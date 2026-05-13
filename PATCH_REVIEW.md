@@ -208,6 +208,8 @@ larger refactors after the file is shorter and the cruft is gone.
 | L5 | latent bug | done | `clone_for_mutation` on a `Seed` previously discarded `cached_matches` (so `get_all_matches()` on the clone returned `[]`); fixed to preserve. Regression test `clone_for_mutation_preserves_seed_matches` |
 | L2 | smell | done | `from_parts` docstring spells out the derived-state rebuild (grid, seg_data, boundary_edge_ids) so callers don't expect a faithful snapshot restore |
 | L6 | smell | done | extracted `trace_polyline_from` (generic start + initial_dir polyline tracer; `trace_boundary_positions` now delegates) and `segments_all_clear` (multi-segment collision check with allowed-last-endpoint exception). `add_tile_growing`'s body is correspondingly shorter and more readable |
+| L1 | smell | done | removed `clone_for_mutation` entirely. Its only semantic effect was resetting `candidates_by_start` to `None`, but that cache is materialized only by tests (`ensure_candidates_materialized` has no production callers), so in practice it was identical to derived `Clone`. All ~18 call sites now use `.clone()` |
+| M5 | refactor | done | `flower_petal_glue` now mutates `RawBoundary` in place (takes ownership, returns ownership) instead of destructuring/re-packing the four `Vec`s each iteration. Both callers in `construct_witness_from_vt_sequence_inner` pass `raw` by move instead of cloning the four `Vec`s per glue, eliminating ~8 redundant clones per witness construction |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
 | M6  | design     | DEFERRED | rotation convention — own ticket |
 | M10 | refactor   | DEFERRED | seg_data GC — needs design |

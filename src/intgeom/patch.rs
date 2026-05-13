@@ -439,40 +439,20 @@ pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
 // (touches the glue helpers and every test that pins boundary positions), so
 // for now we remap explicitly here.
 fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
-    boundary: RawBoundary,
-    junc_pos: usize,
+    mut boundary: RawBoundary,
+    mut junc_pos: usize,
     targets: &[EdgeInfo],
     tileset: &TileSet<T>,
-    first_step: bool,
+    mut first_step: bool,
     next_tile_id: &mut usize,
     prior_juncs: &mut [usize],
 ) -> Option<(RawBoundary, usize)> {
-    let RawBoundary {
-        mut angles,
-        mut edges,
-        mut inner_chains,
-        mut patch_tile_ids,
-    } = boundary;
-
-    let mut junc_pos = junc_pos;
-    let mut first_step = first_step;
-
     for target in targets {
         let tile_id = *next_tile_id;
         *next_tile_id += 1;
-        let n_old = angles.len();
+        let n_old = boundary.angles.len();
         let result = glue_tile_to_raw_boundary::<T>(
-            &RawBoundary {
-                angles,
-                edges,
-                inner_chains,
-                patch_tile_ids,
-            },
-            junc_pos,
-            *target,
-            tileset,
-            first_step,
-            tile_id,
+            &boundary, junc_pos, *target, tileset, first_step, tile_id,
         )?;
 
         // Remap previously tracked junction positions to the new boundary
@@ -483,23 +463,11 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
         }
 
         first_step = false;
-        angles = result.boundary.angles;
-        edges = result.boundary.edges;
-        inner_chains = result.boundary.inner_chains;
-        patch_tile_ids = result.boundary.patch_tile_ids;
-
+        boundary = result.boundary;
         junc_pos = result.new_junc_pos;
     }
 
-    Some((
-        RawBoundary {
-            angles,
-            edges,
-            inner_chains,
-            patch_tile_ids,
-        },
-        junc_pos,
-    ))
+    Some((boundary, junc_pos))
 }
 
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
@@ -638,12 +606,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         all_targets.push(vt0.ccw);
 
         let (new_raw, new_junc) = flower_petal_glue::<T>(
-            RawBoundary {
-                angles: raw.angles.clone(),
-                edges: raw.edges.clone(),
-                inner_chains: raw.inner_chains.clone(),
-                patch_tile_ids: raw.patch_tile_ids.clone(),
-            },
+            raw,
             junc_pos,
             &all_targets,
             tileset.as_ref(),
@@ -693,12 +656,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             }
 
             let (new_raw, new_junc) = flower_petal_glue::<T>(
-                RawBoundary {
-                    angles: raw.angles.clone(),
-                    edges: raw.edges.clone(),
-                    inner_chains: raw.inner_chains.clone(),
-                    patch_tile_ids: raw.patch_tile_ids.clone(),
-                },
+                raw,
                 junc_k,
                 targets,
                 tileset.as_ref(),
@@ -845,56 +803,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
     pub fn is_growing(&self) -> bool {
         matches!(self.state, PatchState::Growing { .. })
-    }
-
-    /// Clone the patch, resetting derivable caches.
-    ///
-    /// For [`PatchState::Growing`], `candidates_by_start` (an
-    /// invalidatable cache populated lazily by
-    /// [`Self::ensure_candidates_materialized`]) is reset to `None`.
-    ///
-    /// For [`PatchState::Seed`], `cached_matches` is **not** a cache in
-    /// that sense — the seed boundary never changes, so the seed-match
-    /// set is the authoritative value computed at construction. It is
-    /// preserved across the clone.
-    pub(crate) fn clone_for_mutation(&self) -> Self {
-        GrowingPatch {
-            match_index: Arc::clone(&self.match_index),
-            state: match &self.state {
-                PatchState::Seed {
-                    tile_id,
-                    cached_matches,
-                } => PatchState::Seed {
-                    tile_id: *tile_id,
-                    cached_matches: cached_matches.clone(),
-                },
-                PatchState::Growing {
-                    angles,
-                    edges,
-                    candidates_by_start: _,
-                    inner_chains,
-                    positions,
-                    grid,
-                    seg_data,
-                    boundary_edge_ids,
-                    next_edge_id,
-                    patch_tile_ids,
-                    next_tile_id,
-                } => PatchState::Growing {
-                    angles: angles.clone(),
-                    edges: edges.clone(),
-                    candidates_by_start: None,
-                    inner_chains: inner_chains.clone(),
-                    positions: positions.clone(),
-                    grid: grid.clone(),
-                    seg_data: seg_data.clone(),
-                    boundary_edge_ids: boundary_edge_ids.clone(),
-                    next_edge_id: *next_edge_id,
-                    patch_tile_ids: patch_tile_ids.clone(),
-                    next_tile_id: *next_tile_id,
-                },
-            },
-        }
     }
 
     pub fn get_all_matches(&self) -> Vec<PatchMatch> {
@@ -2038,19 +1946,20 @@ mod tests {
         assert_eq!(gp.edges().len(), 0);
     }
 
-    /// `clone_for_mutation` of a `Seed` must preserve the seed-match set
-    /// (the seed boundary never changes, so the matches computed at
-    /// construction are still authoritative). Regression test for an
-    /// earlier latent bug where `cached_matches` was reset to empty.
+    /// Cloning a `Seed` must preserve the seed-match set (the seed
+    /// boundary never changes, so the matches computed at construction
+    /// are still authoritative for the clone). Regression test for an
+    /// earlier latent bug in the (now-removed) `clone_for_mutation`
+    /// method, which used to reset `cached_matches` to empty.
     #[test]
-    fn clone_for_mutation_preserves_seed_matches() {
+    fn clone_preserves_seed_matches() {
         let gp = hex_patch();
         let original = gp.get_all_matches();
         assert!(
             !original.is_empty(),
             "fixture: seed should have non-empty matches"
         );
-        let clone = gp.clone_for_mutation();
+        let clone = gp.clone();
         let cloned_matches = clone.get_all_matches();
         assert_eq!(
             cloned_matches, original,
@@ -2601,7 +2510,7 @@ mod tests {
         let n = gp.boundary_len();
         for target in 0..n {
             let lazy = {
-                let gp2 = gp.clone_for_mutation();
+                let gp2 = gp.clone();
                 gp2.get_matches_touching_vertex(target)
             };
             let eager = gp.get_matches_touching_vertex(target);
@@ -2672,7 +2581,7 @@ mod tests {
             .get_all_matches()
             .into_iter()
             .map(|pm| {
-                let mut trial = gp.clone_for_mutation();
+                let mut trial = gp.clone();
                 let ok = trial.add_tile(&pm);
                 (pm, ok)
             })
@@ -2760,7 +2669,7 @@ mod tests {
         let candidates = gp.get_all_matches();
         let (mut accepted, mut rejected) = (0usize, 0usize);
         for pm in &candidates {
-            let mut trial = gp.clone_for_mutation();
+            let mut trial = gp.clone();
             if trial.add_tile(pm) {
                 accepted += 1;
             } else {
@@ -2815,7 +2724,7 @@ mod tests {
                 None => continue,
             };
             let snake_ok = Snake::<ZZ12>::try_from(new_angles.as_slice()).is_ok();
-            let mut trial = gp.clone_for_mutation();
+            let mut trial = gp.clone();
             let gp_ok = trial.add_tile(pm);
             if snake_ok != gp_ok {
                 discrepancies.push((pm.clone(), snake_ok, gp_ok));
@@ -3320,7 +3229,7 @@ mod tests {
             let matches = gp.get_all_matches();
             let mut found = false;
             for pm in &matches {
-                let mut trial = gp.clone_for_mutation();
+                let mut trial = gp.clone();
                 if !trial.add_tile(pm) {
                     continue;
                 }
@@ -3485,7 +3394,7 @@ mod tests {
     #[test]
     fn normalize_five_hex_cross() {
         let gp = five_hex_cross();
-        let mut gp2 = gp.clone_for_mutation();
+        let mut gp2 = gp.clone();
         gp2.normalize();
 
         assert_eq!(gp2.boundary_len(), 18);
@@ -3514,7 +3423,7 @@ mod tests {
     #[test]
     fn normalize_idempotent() {
         let gp = five_hex_cross();
-        let mut gp1 = gp.clone_for_mutation();
+        let mut gp1 = gp.clone();
         gp1.normalize();
         let snap1 = (
             gp1.angles().to_vec(),

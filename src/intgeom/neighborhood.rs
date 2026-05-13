@@ -104,7 +104,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 // non-convex tiles (e.g. spectre) the central might still
                 // collide with the existing two-tile patch. Try the glue on
                 // a clone first; skip if it fails.
-                let mut trial = patch.clone_for_mutation();
+                let mut trial = patch.clone();
                 if !trial.add_tile(&third_pm) {
                     continue;
                 }
@@ -693,7 +693,7 @@ fn explore_step<T: IsComplex + IsRingOrField + Units>(
 
     let mut outcomes = Vec::new();
     for petal_pm in &candidates {
-        let mut trial = aug.augmented.clone_for_mutation();
+        let mut trial = aug.augmented.clone();
         if !trial.add_tile(petal_pm) {
             continue;
         }
@@ -795,7 +795,7 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
         start_b: nt.cw_anchor_on_central,
         tile_id: nt.central_tile_id,
     };
-    let mut aug = ctx.clone_for_mutation();
+    let mut aug = ctx.clone();
     if !aug.add_tile(&central_pm) {
         return None;
     }
@@ -887,7 +887,7 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     petal_pm: PatchMatch,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<ExploreOutcome<T>> {
-    let mut trial = ac.aug.clone_for_mutation();
+    let mut trial = ac.aug.clone();
     if !trial.add_tile(&petal_pm) {
         return None;
     }
@@ -1305,7 +1305,7 @@ mod tests {
                         if seen.contains_key(&(ns_u, len, ne_u, tile_b)) {
                             continue;
                         }
-                        let mut trial = ac.aug.clone_for_mutation();
+                        let mut trial = ac.aug.clone();
                         if !trial.add_tile(&pm) {
                             continue;
                         }

@@ -227,7 +227,7 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
         for tile_idx in 0..tileset.num_tiles() {
             let seed = GrowingPatch::new(Arc::clone(&tileset), tile_idx);
             for pm in seed.get_all_matches() {
-                let mut gp = seed.clone_for_mutation();
+                let mut gp = seed.clone();
                 if !gp.add_tile(&pm) || !gp.is_growing() {
                     continue;
                 }
@@ -296,7 +296,7 @@ impl<T: IsComplex + IsRingOrField + Units> PatchSeqExplorer<T> {
                     }
                     layer_considered += 1;
 
-                    let mut gp = patch.clone_for_mutation();
+                    let mut gp = patch.clone();
                     if !gp.add_tile(pm) || !gp.is_growing() {
                         continue;
                     }
