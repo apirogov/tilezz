@@ -3253,6 +3253,22 @@ mod tests {
         assert_eq!(min_angles, recon_angles);
     }
 
+    /// Build a 5-hexagon plus-shaped cross: a central hex with four
+    /// hexagons attached on alternating sides. The resulting patch has
+    /// 18 boundary edges and 6 junctions arranged symmetrically.
+    ///
+    /// Construction picks each glue by *resulting boundary length*:
+    /// start with a bi-hex (10 edges), then grow to 14 → 16 → 18.
+    /// `five_hex_cross_structure` verifies the boundary symmetry,
+    /// junction count, and tile-id pattern.
+    ///
+    /// FIXME: replace with explicit tile-placement construction once
+    /// that API exists. The current recipe depends on which pm is
+    /// returned first by `get_all_matches()` for each target
+    /// boundary_len; if two pms produced the same length and the
+    /// iteration order changed, we'd silently build a different
+    /// (equally-shaped) cross — caught by the structure test, but
+    /// avoidable with a direct geometry-based fixture.
     fn five_hex_cross() -> GrowingPatch<ZZ12> {
         let mut gp = hex_patch();
         let first = gp
@@ -3261,6 +3277,7 @@ mod tests {
             .find(|pm| pm.len == 1)
             .expect("seed has len-1 match");
         assert!(gp.add_tile(&first), "glue tile 2");
+        assert_eq!(gp.boundary_len(), 10, "bi-hex should have 10 edges");
 
         let target_sequence = [14usize, 16, 18];
         for (step, &target_n) in target_sequence.iter().enumerate() {
@@ -3273,6 +3290,12 @@ mod tests {
                 }
                 if trial.boundary_len() == target_n {
                     assert!(gp.add_tile(pm), "glue failed at step {}", step + 2);
+                    assert_eq!(
+                        gp.boundary_len(),
+                        target_n,
+                        "step {}: boundary_len should be {target_n} after glue",
+                        step + 2
+                    );
                     found = true;
                     break;
                 }
@@ -3483,26 +3506,53 @@ mod tests {
         rat.seq().to_vec()
     }
 
+    /// Build the T-tetromino — 4 unit squares in a T shape:
+    ///
+    /// ```text
+    ///     +---+
+    ///     |   |
+    /// +---+   +---+
+    /// |             |
+    /// +---+---+---+
+    /// ```
+    ///
+    /// Glues three squares onto the seed by picking each candidate
+    /// match by its `(start_a, len, start_b)` triple. Per-step boundary
+    /// length assertions (square seed: 4 edges; bi-square: 6; tri-square:
+    /// 8; T: 10) catch the case where the match-finder semantics drift
+    /// such that the selected triple produces a different shape.
+    ///
+    /// FIXME: replace with explicit tile-placement construction once
+    /// that API exists. The current recipe is opaque: a reader has to
+    /// reverse-engineer the intended shape from three triples.
     fn t_tetromino() -> GrowingPatch<ZZ4> {
         let mut gp = square_patch();
+        // Glue 1: square + square along seed's edge 0 → bi-square (6 edges).
         let ms: Vec<_> = gp.get_all_matches();
         let pm1 = ms
             .iter()
             .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 0)
             .expect("first match");
         assert!(gp.add_tile(pm1), "glue 1");
+        assert_eq!(gp.boundary_len(), 6, "bi-square should have 6 edges");
+
+        // Glue 2: third square along the bi-square's edge 0 → tri-square (8 edges).
         let ms: Vec<_> = gp.get_all_matches();
         let pm2 = ms
             .iter()
             .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
             .expect("second match");
         assert!(gp.add_tile(pm2), "glue 2");
+        assert_eq!(gp.boundary_len(), 8, "tri-square should have 8 edges");
+
+        // Glue 3: fourth square to form the T-stem → T-tetromino (10 edges).
         let ms: Vec<_> = gp.get_all_matches();
         let pm3 = ms
             .iter()
             .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
             .expect("third match");
         assert!(gp.add_tile(pm3), "glue 3");
+        assert_eq!(gp.boundary_len(), 10, "T-tetromino should have 10 edges");
         gp
     }
 
