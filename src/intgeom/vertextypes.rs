@@ -169,7 +169,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
             );
             let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
             for pm in seed.get_all_matches() {
-                let mut gp = seed.clone_for_mutation();
+                let mut gp = seed.clone();
                 if !gp.add_tile(&pm) || !gp.is_growing() {
                     continue;
                 }
@@ -228,7 +228,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
 
             for pm in touching {
                 let gp = &witness_store[&vt].0;
-                let mut gp2 = gp.clone_for_mutation();
+                let mut gp2 = gp.clone();
                 if !gp2.add_tile(&pm) || !gp2.is_growing() {
                     continue;
                 }
@@ -292,7 +292,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
                     {
                         continue;
                     }
-                    let mut gp2 = gp.clone_for_mutation();
+                    let mut gp2 = gp.clone();
                     if !gp2.add_tile(pm) || !gp2.is_growing() {
                         continue;
                     }
