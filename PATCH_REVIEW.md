@@ -1,225 +1,415 @@
-# Review: `src/intgeom/patch.rs`
+# API design review — patch / tileset module
 
-A 3,188-line file mixing the `GrowingPatch` state machine, parallel raw-boundary
-helpers, witness construction, candidate computation, and tests. The core
-algorithm is sound, but the file has substantial duplication, a leaky state
-machine, and several lazy or vacuous tests.
+Scope: the public + `pub(crate)` API surface of the patch/tileset
+subsystem of `intgeom`.
 
-Findings are prioritized; resolution status is tracked at the bottom.
+Files covered:
+- `src/intgeom/patch.rs`
+- `src/intgeom/tileset.rs`
+- `src/intgeom/tiles.rs`
+- `src/intgeom/matchtypes.rs`
+- `src/intgeom/growing.rs`
+- `src/intgeom/rat.rs` (the underlying `Rat` type is heavily used by everything above)
+
+Findings are organized by severity. Each item includes context, the
+concrete API impact, and a recommended fix.
+
+A previous review of `patch.rs`'s internals (semantics, tests, refactor
+opportunities) was completed in a prior pass; this review focuses on
+**API surface, naming, scoping, documentation, and dead public surface**.
 
 ---
 
-## High-severity
+## Critical
 
-### H1. `PatchState::_Phantom` is dead and should be deleted (line 104)
-`T` already appears in `match_index: Arc<MatchTypeIndex<T>>` (line 80), so no
-`PhantomData` is needed. The variant is unreachable, yet every `match` over
-`PatchState` must handle it (`_ => return …`, `_Phantom(_) => …`, `to_rat`
-panics on it). Removing it eliminates ~12 dead branches and one `panic!`
-(line 988).
+### C1. Two distinct types both named `GrowingPatch`
 
-### H2. Dead public API
-- `AddTileDiff` (line 76): unit struct returned by `add_tile`; never inspected
-  by any caller. Either remove or have it actually carry the diff.
-- `Transition` (line 68): defined but unused. Real types are `NtTransition` /
-  `ParsedTransition` elsewhere. Only `TransitionSide` is in use.
-- `candidates_from_flat` (line 1739): no callers in workspace.
-- `RawBoundary::normalize` (line 213): `#[allow(dead_code)]`, no callers.
-- `junction_vertex_type_from` (free fn, line 129): superseded by
-  `GrowingPatch::junction_vertex_type_at`; no other callers.
+Both modules define a type with the same name:
 
-### H3. `add_tile_growing` is 220 lines with three manual rollbacks
-The "destructure into locals with `mem::take`, then on failure rebuild via
-`restore_growing`" pattern (called three times: 1383, 1401, 1476) is exactly
-the failure mode that motivates a two-phase write:
+- `patch::GrowingPatch<T: IsComplex>` — the main public abstraction
+  for incrementally grown, hole-free tilings (3,656-line `patch.rs`).
+- `growing::GrowingPatch<T: HasPatchPos>` — an internal helper for
+  Redelmeier polyomino enumeration (1,096-line `growing.rs`).
 
-```text
-fn plan_glue(&self, pm) -> Option<NewGrowingState>   // pure, no mutation
-fn commit_glue(&mut self, ns: NewGrowingState)       // infallible swap
+External code uses only the `patch.rs` one (5 files import it). The
+`growing.rs` one has zero external callers. The name collision is
+invisible at the call site because each call site imports just one,
+but it surfaces in `cargo doc`, in cross-file code reading, and
+whenever someone writes `use crate::intgeom::*`.
+
+**Impact:** confusing for any reader doing module-level navigation;
+hostile to crate-level documentation; ambiguous in error messages
+that elide the path.
+
+**Recommended fix:** rename `growing::GrowingPatch` to something that
+reflects its role (`RedelmeierPatch`, `EnumerationPatch`, or
+`PartialPatch`). It has no external callers, so the rename is purely
+internal. ~5-minute change.
+
+### C2. `growing.rs` has a near-zero exported surface but most items are `pub`
+
+External use of `growing.rs`:
+- `grow_redelmeier` — 1 external file (`bin/patch_bench`).
+- `grow_redelmeier_free` — 1 external file (`bin/patch_bench`).
+
+Everything else is `pub` but never referenced outside `growing.rs`:
+- `GlueSite` (currently `pub(crate)`)
+- `PatchPos` trait, `HasPatchPos` trait
+- `Pos2`, `Pos4`, `Pos8` position-type structs
+- `growing::GrowingPatch<T: HasPatchPos>` (see C1)
+- `GrowingPatch::len`, `is_empty`, `from_seed`, `to_rat` methods
+- `GrowStats` struct + its `Display` impl
+- `grow_redelmeier_profiled`
+- `make_free`
+
+**Impact:** every `pub` item is part of the crate's public API, lands
+in `cargo doc`, and constrains future internal refactors. A user
+encountering this module via docs would have no way to tell the two
+real entry points from the dozen incidental ones.
+
+**Recommended fix:** downgrade everything except `grow_redelmeier`
+and `grow_redelmeier_free` to `pub(crate)` (or private where the use
+is single-file). Audit each entry: if there's a reason to keep it
+`pub`, document the use case. ~15-minute change.
+
+### C3. Pervasive lack of doc comments on public types
+
+The following public types have **no documentation at all**:
+
+- **`tileset.rs`**: `TileSet`, all five methods.
+- **`matchtypes.rs`**: `MatchType` (incl. its non-obvious field
+  semantics — see L1), `CandidateMatch`, `MatchFinder` + all 18 of
+  its methods, `MatchTypeIndex` + all 9 of its methods, the two
+  `pub(crate)` free functions.
+- **`patch.rs`**: `EdgeInfo`, `PatchMatch`, `TransitionSide`, and many
+  `GrowingPatch` methods (`new`, `is_growing`, `add_tile`,
+  `boundary_len`, `angles`, `edges`, `inner_chains`, etc.).
+- **`tiles.rs`**: 9 of 13 tile constructors (only `square`,
+  `triangle`, `hexagon`, `spectre` have docs).
+- **`growing.rs`**: every public item.
+- **`rat.rs`**: many heavily-used methods.
+
+For a published crate (`tilezz v0.0.3`) this is a significant gap.
+Several of these types encode subtle invariants (start_a vs start_b
+asymmetry, edge-offset conventions, rotation conventions) that are
+not visible from the field names. The `OpenVertexType` doc-comment
+pattern from the prior review pass is the right model: a paragraph
+on what the type means, then explicit invariants where they exist.
+
+**Recommended fix:** doc-pass across all public items.
+Prioritize the heavily-used types (`TileSet`, `Rat` methods, `MatchTypeIndex`)
+and the ones with non-obvious semantics (`MatchType`, `EdgeInfo`,
+`PatchMatch`). Best done as a separate dedicated PR.
+
+---
+
+## High
+
+### H1. `MatchFinder` exposes ~10 methods that nothing calls externally
+
+External call sites (per the dependency survey):
+
+| Used                              | Not used |
+|-----------------------------------|----------|
+| `new`                             | `set_a`, `set_b` |
+| `crossing`                        | `rat_a`, `rat_b` |
+| `valid_matches` (1 site)          | `apply_match` |
+| `valid_matches_filtered` (1 site) | `shared_boundaries` |
+| `valid_results_for_pairs`         | `valid_matches_with_rats` |
+| `num_tiles_a` / `num_tiles_b`     | `all_valid_matches` |
+|                                   | `valid_matches_for_pairs` |
+
+That's roughly half the public surface of the struct unused.
+
+**Impact:** each unused method is a maintenance burden — it must
+compile, must be considered in API-evolution decisions, contributes
+to module size, and clutters docs.
+
+**Recommended fix:** delete the unused methods. If a future caller
+needs one, the new call site will tell us its exact required shape.
+Should also document the surviving ones (see C3, L2).
+
+### H2. `tiles.rs` has 6 dead tetromino constructors
+
+Defined but uncalled anywhere in production or tests:
+`tetromino_O`, `tetromino_I`, `tetromino_S`, `tetromino_Z`,
+`tetromino_J`, `tetromino_L`.
+
+Only `tetromino_T` is used (one call site, in a `patch.rs` test).
+
+**Impact:** small, but six dead public functions in a small file
+(131 lines total) is a high dead-code density.
+
+**Recommended fix:** delete the six unused constructors. If polyomino
+test coverage is wanted as a public catalog, instead add a smoke test
+that constructs each shape and verifies its angle sequence — that
+keeps them alive with explicit purpose.
+
+### H3. Internal `pub` and `pub(crate)` cluster in `patch.rs`
+
+Despite the prior cleanup pass, these items are still visible beyond
+their need:
+
+| Item | Current visibility | External use | Recommended |
+|------|---------------------|--------------|-------------|
+| `update_inner_chains` | `pub` | 0 | private |
+| `junction_angle_sequence` | `pub` | 0 | private |
+| `compute_glue_angles` | `pub` | 0 | private |
+| `is_junction_at` | `pub(crate)` | 0 | private |
+| `vertex_type_raw_from` | `pub(crate)` `#[cfg(test)]` | 0 (tests in same file) | private+`#[cfg(test)]` |
+| `forward_match_length` | `pub(crate)` | 1 (`neighborhood.rs`, 3 sites) | keep `pub(crate)`, add doc |
+| `RawBoundary` | `pub(crate)` | 0 | private |
+| `RawGlueResult` | `pub(crate)` | 0 | private |
+| `glue_tile_to_raw_boundary` | `pub(crate)` | 0 | private |
+| `glue_match_to_raw_boundary` | `pub(crate)` | 0 | private |
+| `raw_is_junction` | `pub(crate)` `#[cfg(test)]` | 0 | private+`#[cfg(test)]` |
+| `next_junction_on_raw_boundary` | `pub(crate)` `#[cfg(test)]` | 0 | private+`#[cfg(test)]` |
+
+**Impact:** the `Raw*` cluster is internal infrastructure that the
+witness-construction path leans on; nothing outside `patch.rs` uses
+any of it. Keeping it `pub(crate)` advertises an internal contract to
+the rest of the crate that doesn't exist.
+
+**Recommended fix:** tighten each visibility to the minimum that
+satisfies its actual callers.
+
+### H4. `GrowingPatch` (patch.rs) has many `pub` methods with no external callers
+
+These methods are `pub` but never invoked outside `patch.rs`:
+
+`get_matches_for_tile`, `ensure_candidates_materialized`,
+`next_tile_id`, `candidates_by_start`, `vertex_type_at`,
+`junction_vertices`, `tile_segments`, `from_parts`,
+`construct_minimal_witness`, `construct_witness_from_vt_sequence`,
+`compute_candidates_covering_position`, `compute_all_candidates`.
+
+These fall into three buckets:
+
+1. **Intended public API** (likely): `from_parts`,
+   `construct_minimal_witness`, `construct_witness_from_vt_sequence`,
+   `compute_candidates_covering_position`, `compute_all_candidates`.
+2. **Internal handles that leaked out**: `ensure_candidates_materialized`,
+   `next_tile_id`, `candidates_by_start`.
+3. **Test-only accessors**: `vertex_type_at`, `junction_vertices`,
+   `tile_segments`.
+
+**Impact:** category 2 and 3 should not be in the public API;
+category 1 should be documented as such.
+
+**Recommended fix:** triage each. Move category 2 to `pub(crate)` or
+private. Move category 3 to `pub(crate)` or expose them only inside
+the test module via `pub(super)`. Confirm category 1 is intended
+public API and document.
+
+---
+
+## Medium
+
+### M1. `Seed` / `Growing` state machine in `GrowingPatch` is leaky
+
+`GrowingPatch` is conceptually two states (`Seed`, `Growing`) under
+one type. Many accessors return defaults for `Seed` rather than
+panicking or being unavailable: `boundary_len() → 0`,
+`angles() → &[]`, `edges() → &[]`, etc. Callers must explicitly check
+`is_growing()` to know which state they're dealing with.
+
+**Impact:** type-level semantics are weak. A caller can hold a
+`Seed`-state `GrowingPatch`, call `angles()`, get an empty slice,
+and not realize until much later that they were treating an
+unstarted seed as a real boundary.
+
+**Recommended fix (optional, larger):** consider splitting into two
+types: `SeedPatch` (just the seed metadata) and `GrowingPatch` (the
+boundary state). The transition is
+`SeedPatch::add_tile(self, pm) -> Option<GrowingPatch>`. This makes
+the state machine a type-level guarantee and removes ~10 "return
+default for Seed" branches.
+
+Not urgent. Worth revisiting if a third state ever shows up (e.g.
+"closed" patch), which would be the natural trigger for the proper
+split.
+
+### M2. `Rat` exposes 9 methods nothing uses externally
+
+`Rat::cycle`, `cycled`, `slice`, `slice_from`, `is_convex`,
+`is_canonical`, `match_length` (method form), `len`, `is_empty`.
+
+These are likely small one-liners but each contributes to `Rat`'s
+public surface area.
+
+**Impact:** `Rat` is the central data type (18 external files use
+it). Every public method is part of the crate's API surface; keeping
+unused ones around makes future evolution harder and clutters docs.
+
+**Recommended fix:** downgrade to `pub(crate)` where appropriate. If
+a `pub` method is genuinely intended for external use, document it
+and add an example test.
+
+### M3. `TileSet::index_of` is tests-only
+
+External use: only `matchtypes.rs` lines 1486 and 1488, both inside
+the `mod tests` block.
+
+**Recommended fix:** either gate with `#[cfg(test)]` and downgrade to
+`pub(crate)`, or remove if its test use can be replaced with linear
+search.
+
+### M4. `PatchVertexInfo` is `pub` but unused externally
+
+Returned by `vertex_type_at()` and `junction_vertices()`. Neither
+method has external callers (see H4). The struct's `pub` status
+serves no external caller today.
+
+**Recommended fix:** downgrade `PatchVertexInfo` to `pub(crate)` (or
+private) and the two methods to match.
+
+### M5. `TileSegment` is `pub` but tests-only externally
+
+`tile_segments()` is only invoked from `patch.rs`'s own tests. The
+struct's `pub` status is unused.
+
+**Recommended fix:** `pub(crate)` for both the struct and the
+method, or keep `pub` if there's a planned external use case
+(document it then).
+
+### M6. `MatchType::apply` and several `MatchTypeIndex` methods have no external callers
+
+Unused externally:
+- `MatchType::apply`
+- `MatchTypeIndex::tileset`
+- `MatchTypeIndex::num_types`
+- `MatchTypeIndex::signed_id`
+- `MatchTypeIndex::apply`
+- `MatchTypeIndex::all_candidates_for_tile`
+
+`MatchTypeIndex::tileset` might be genuinely useful (an external
+caller might need the underlying tileset from a stored index). Check
+before dropping.
+
+**Recommended fix:** `pub(crate)` or private after triage. Audit
+each: removal is fine for the rest.
+
+---
+
+## Low
+
+### L1. `MatchType` struct: field semantics undocumented
+
+```rust
+pub struct MatchType {
+    pub tile_a: usize,
+    pub start_a: usize,
+    pub tile_b: usize,
+    pub start_b: usize,
+    pub len: usize,
+}
 ```
 
-That deletes `restore_growing`, the `mem::take` choreography, and the partial
-grid mutation in the middle that must manually re-register segments on
-failure.
+The semantic asymmetry between `start_a` (first *matched* edge offset
+on side A) and `start_b` (first *surviving* edge offset on side B,
+just past the match end on B's side — see the rotation-convention
+discussion in the prior `patch.rs` review) is non-obvious and not
+documented anywhere.
 
-### H4. `compute_glue_angles` enforced in the live path but not in the raw path
-- `add_tile` / `init_from_first_add` route through `compute_glue_angles` (line
-  1761), which rejects ±hturn glues.
-- `glue_match_to_raw_boundary` (line 363) calls `angles::glue_raw_angles`
-  directly, bypassing that check.
+**Recommended fix:** doc-comment on the struct explaining the
+convention. Same comment can serve `PatchMatch` and `RawGlueResult`.
 
-Witness construction can therefore accept configurations the live patch
-rejects. Either both paths reject, or the asymmetry is intentional and must
-be documented. No test exercises this.
+### L2. `MatchFinder::new` vs `crossing` distinction is undocumented
 
-### H5. `compute_candidates_covering_position_is_subset_of_all_candidates` is half a test
-Only checks one direction (`covering ⊆ touching`). Passes vacuously if
-`covering` is empty. The reverse direction — every match that genuinely
-touches `target` is returned by `compute_candidates_covering_position` — is
-the load-bearing invariant and it is not tested.
+Both have the same return type. Naming hints at "self-match within
+one tileset" vs "match between two tilesets" but isn't explicit.
 
-### H6. Failed `add_tile` has no "state-unchanged" test
-`restore_growing` is exactly the kind of code that silently corrupts state
-when someone adds a field and forgets one branch. No test snapshots the patch
-state, attempts a failing `add_tile`, and asserts byte-equality afterward.
+**Recommended fix:** one-line doc on each.
 
-### H7. No self-intersection rejection test
-`check_segment_clear` is the geometric safety net. No test constructs a patch
-where the next tile would self-intersect and asserts `add_tile` returns
-`None`. Without that, refactoring the grid logic could pass all current tests
-while admitting overlapping tiles.
+### L3. `growing.rs` feature flag undocumented
 
----
+The choice between `check_segments_cross_cyclotomic` (with feature
+`cyclotomic_intersect`) and the `pos4`/`pos2`/`pos8`-based
+intersection helpers (without it) is significant — different math
+backends. Neither path documents what they do or why one would
+prefer the feature on/off.
 
-## Medium-severity
+**Recommended fix:** module-level doc on `growing.rs` (or on the
+relevant trait `HasPatchPos`) explaining the two backends, their
+trade-offs, and when to enable the feature.
 
-### M1. Duplicated junction-test predicate (5 copies)
-`tileset.rat(edge.tile_id).seq()[edge.tile_offset] != angles[pos]` appears at
-lines 138, 247, 1187, 1652, 1676. Extract into one helper.
+### L4. `growing::GrowStats::Display` impl is unused externally
 
-### M2. Triple-duplicated edge-construction loop
-The "copy surviving old edges, push first new edge, push remaining new edges"
-pattern appears in:
-- `glue_match_to_raw_boundary` (331–348)
-- `init_from_first_add` (1291–1307)
-- `add_tile_growing` (1517–1534)
+The struct and its `Display` rendering of profile counters are `pub`
+but never referenced outside `growing.rs`.
 
-### M3. `compute_candidates_covering_position` and `compute_all_candidates` share their junction block verbatim
-Lines 702–735 and 777–808 are the same nested loop. Extract.
-
-### M4. `get_matches_touching_vertex` has two near-identical branches
-`Some(cbs)` / `None` differ only in source of `[Vec<PatchMatch>]`. Compute the
-source first, then run one shared loop.
-
-### M5. `flower_petal_glue` clones-and-reassigns RawBoundary in the loop
-Destructures, builds a fresh `RawBoundary` inside the call, reassigns the
-fields. Callers also clone all four vecs. Take `&mut RawBoundary` or shadow
-per iteration.
-
-### M6. The FIXME at line 403 is a design defect, not a TODO
-The rotation convention forces every caller tracking positions to remap them
-after each glue. Either fix or track in an issue.
-
-### M7. `update_inner_chains` has an unused parameter (`_new_ptids`)
-Delete or use it.
-
-### M8. Brittle test fixtures
-`t_tetromino` (3108) and `five_hex_cross` (2843) select matches by ordering
-and structural predicates. If `get_all_matches` ordering ever changes, they
-build a different patch silently.
-
-### M9. Test family duplication
-- `edges_self_consistent` already covers hex *and* square. `edges_bi_hex`,
-  `edges_bi_square`, `edges_multi_hex` are strict subsets.
-- `construct_minimal_witness_{hex,square,spectre,hex_with_inner}_roundtrip`,
-  `construct_minimal_witness_{hex,square}_boundary_matches_brute_force`,
-  `test_junction_angle_sequence_{hex,square}`: parameterize over fixture.
-- `brute_force_zz4` / `brute_force_zz12`: make generic.
-
-### M10. `seg_data` is append-only and indexed by global ID
-`unregister_segment` clears the grid entry but `seg_data` keeps the stale
-tuple forever (`seg_data[id]` lookup at 1825). Unbounded memory growth over
-long lifetimes.
-
-### M11. `dir_of_edge` panics on a non-unit edge
-Should return `Option<i8>` or `debug_assert!`.
-
-### M12. Tests that pass for the wrong reasons
-- `glue_raw_angles_matches_rat_glue` (2741) sorts both sequences before
-  comparison. Random permutation passes. Should compare canonical form.
-- `construct_minimal_witness_*_boundary_matches_brute_force` (2617): same.
-
-### M13. Vacuous tests
-- `segment_cyclic_invariant` (1909): nested `if let` / `if .is_some()` guards
-  can no-op away the second assertion.
-- `mixed_hex_square_add_tile` (2027): only tests first match.
-- `junction_vertex_ids_nonempty_after_each_add` (1929): iterates over
-  matches computed against the seed, but mutates `gp` each loop — after the
-  first iteration the `pm`s are stale.
-
-### M14. Untested public/crate API
-- `neighbor_junction_offsets` (1190)
-- `vertex_type_at` (1132) — only used indirectly via `junction_vertices`
-- `compute_segments` / `compute_junctions` — no unit tests on hand-crafted
-  boundaries
+**Recommended fix:** `pub(crate)` for the struct + impl. Re-promote
+if external profiling tooling is added.
 
 ---
 
-## Low-severity
+## What's working well
 
-### L1. Two clone semantics
-`GrowingPatch` derives `Clone`. `clone_for_mutation` differs only by clearing
-caches. Name conveys mutability hint, not cache reset.
+A balanced review should call this out:
 
-### L2. `from_parts` silently loses caller state
-- `boundary_edge_ids` reset to `(0..n)` regardless of input.
-- `grid` / `seg_data` rebuilt from scratch.
-
-### L3. `cyclic_range_contains` (1749) has inclusive-on-both-ends semantics
-Returns `true` for `index == start + len`. Useful for "match touches vertex"
-semantics, but name suggests range-containment.
-
-### L4. Missing doc comments on load-bearing helpers
-- `junction_angle_sequence` (380): core of witness construction.
-- `forward_match_length` (144): reversed indexing is opaque.
-- `compute_glue_angles` (1761): ±hturn rejection invisible at call site.
-
-### L5. `Seed::cached_matches` is wasted by `clone_for_mutation`
-Computed eagerly on `new()`, discarded on `clone_for_mutation`. Make lazy or
-keep through clones.
-
-### L6. Add-tile growing has logical blocks worth extracting
-- "trace boundary positions" (1442–1454)
-- "segment clear" (1456–1469)
-
-### L7. `Snake::try_from` validity check is in `init_from_first_add` (1281)
-but not `add_tile_growing`. Resolve the asymmetry.
+- **`Rat`** is the right central abstraction. Heavily used (18
+  external files), most-touched API in the module. `try_glue`,
+  `try_glue_precomputed`, `get_match` are clearly intentional.
+- **`TileSet`** is well-scoped: a small read-only collection of
+  `Rat`s with deterministic ordering, dedup, and chirality check.
+  Five public methods, all used, all single-purpose.
+- **`tiles`** entry points for `hexagon`, `square`, `spectre`,
+  `triangle`, `penrose_p3_narrow`, `penrose_p3_wide` are clearly
+  the intended public catalog. Just trim the dead tetrominos
+  (H2).
+- **`patch.rs`** (after the prior cleanup pass) has a well-defined
+  `OpenVertexType` semantic, documented hole-free invariant,
+  documented rotation convention, and a cross-checked geometric
+  implementation.
+- **`MatchTypeIndex`** has a coherent responsibility despite the
+  undocumented surface — it's the central index for candidate
+  enumeration, and its critical paths (`candidates_starting_at`,
+  `new`, `get`) are heavily exercised and now cross-checked
+  against brute force.
 
 ---
 
-## Execution plan & status
+## Suggested order of attack
 
-The plan is to apply the cheap, mechanical fixes first, then revisit the
-larger refactors after the file is shorter and the cruft is gone.
+1. **C1** (rename second `GrowingPatch`) — minutes, isolates a name
+   clash.
+2. **C2** (tighten `growing.rs` visibilities) — small, large unused
+   public surface gets dropped.
+3. **H2** (delete dead tetrominos) — trivial.
+4. **H1** (delete unused `MatchFinder` methods) — small and visible.
+5. **H3** (tighten `patch.rs` internal visibilities) — surgical,
+   guided by the dependency map.
+6. **H4** (triage `GrowingPatch` public methods) — medium, requires
+   decisions per item.
+7. **M3, M4, M5, M6** (tighten visibilities of tests-only or
+   externally-unused items) — bundled together, mechanical.
+8. **M2** (`Rat` method audit) — small.
+9. **C3 + L1, L2, L3, L4** (documentation pass) — larger
+   investment; do as a dedicated PR after the visibility cleanup
+   so the doc target is the actual public API, not the noise.
+10. **M1** (Seed/Growing type split) — only if/when the state
+    machine grows a third variant.
 
-| ID  | Type       | Status   | Notes |
-|-----|------------|----------|-------|
-| H1  | dead code  | done     | `_Phantom` variant deleted |
-| H2  | dead code  | done     | `AddTileDiff`/`Transition`/`candidates_from_flat`/`RawBoundary::normalize`/`junction_vertex_type_from` removed; `add_tile` now returns `bool` |
-| M1  | duplicate  | done     | new `is_junction_at` helper; 4 inline copies collapsed |
-| M7  | clean-up   | done     | dropped `_new_ptids` from `update_inner_chains` |
-| M3  | duplicate  | done     | new `enumerate_junction_candidates_at` helper takes `keep`/`emit` |
-| M4  | duplicate  | done     | `get_matches_touching_vertex` picks source up front, one shared loop |
-| M9  | test churn | done     | generic `brute_force_patches`; shared helpers `assert_minimal_witness_roundtrips_for`, `assert_witness_matches_brute_force`, `assert_junction_angle_sequence_valid`; deleted 3 strict-subset edges tests |
-| H5  | test       | done     | `compute_candidates_covering_position_matches_full_enumeration` asserts multiset equality with full enumeration (was: subset-only) |
-| H6  | test       | done     | `add_tile_failure_leaves_state_unchanged` snapshots state+candidate classification, exercises early-bound and geometric rollback paths |
-| H7  | test       | done     | `add_tile_rejects_geometrically_invalid_candidate` pins that some spectre candidates trigger the `check_segment_clear` rejection |
-| H3  | refactor   | done     | hoisted paths 1, 2, 4 above `mem::take` as `debug_assert!` + release-mode `return false`; path 3 (geometric) remains the only `restore_growing` caller; latent path-4 bug fixed for free. Updated 2 tests that fed adversarial/stale pms |
-| H4  | semantics  | done     | renamed `VertexType` → `OpenVertexType` (4 files, propagated to `OpenVertexTypeInfo`/`OpenVertexTypeIndex`); added documentation distinguishing open (boundary) vs closed (fully-surrounded) VTs; enforced the open-VT invariant in `construct_witness_from_vt_sequence_inner` — each glue step rejects with `None` if it produces a ±hturn boundary angle at the tracked junction. Low-level `glue_match_to_raw_boundary` stays permissive (allows future closed-VT demonstration constructors). |
-| M2  | refactor   | done     | new `build_glued_edges` helper replaces three duplicated loops; `init_from_first_add` synthesizes the seed's old-edge list to share the same helper |
-| X-check tests | new tests | done | four spectre-fixture tests: `add_tile_decision_agrees_with_snake_on_spectre` (incremental check vs Snake batch validator), `growing_patch_boundary_validates_as_snake_through_growth` (boundary is a valid Snake after each glue), `get_all_matches_matches_brute_force_on_spectre` (vs independent `(tile_b, ib, start_a)` enumeration), `get_matches_touching_vertex_matches_brute_force_on_spectre` |
-| M11 | API change | done | `dir_of_edge` `panic!` → `unreachable!` with diagnostic; docstring on the upstream invariant |
-| L3  | smell      | done | `cyclic_range_contains` doc explains inclusive-on-both-ends "vertex touched by match" semantics |
-| L4  | smell      | done | doc comments on `forward_match_length`, `junction_angle_sequence`, `compute_glue_angles` |
-| L7  | smell      | done | comment on `init_from_first_add`'s Snake-batch path explains why it differs from `add_tile_growing`'s incremental path (and points to the cross-check test) |
-| M13 | test       | done | deleted `segment_cyclic_invariant` and `mixed_hex_square_add_tile` (vacuous subsets of `edges_self_consistent` / `edges_mixed_consistency`) |
-| M14 | new tests  | done | `vertex_type_at_returns_consistent_info`, `neighbor_junction_offsets_returns_valid_offsets`, `tile_segments_partitions_boundary` (with explicit handling of the linear-vs-cyclic segment-start seam) |
-| docs/refactor | refactor | done | `compute_segments` now uses the **canonical** `is_junction_at` check as the segment-break condition (the prior `tile_change` heuristic over-segmented on intra-tile wrap-arounds and could under-segment for pathological same-tile-id glues); `GrowingPatch` + `RawBoundary` doc the hole-free / edge-to-edge invariants; `TileSegment` docs the cyclic-vs-linear seam |
-| L5 | latent bug | done | `clone_for_mutation` on a `Seed` previously discarded `cached_matches` (so `get_all_matches()` on the clone returned `[]`); fixed to preserve. Regression test `clone_for_mutation_preserves_seed_matches` |
-| L2 | smell | done | `from_parts` docstring spells out the derived-state rebuild (grid, seg_data, boundary_edge_ids) so callers don't expect a faithful snapshot restore |
-| L6 | smell | done | extracted `trace_polyline_from` (generic start + initial_dir polyline tracer; `trace_boundary_positions` now delegates) and `segments_all_clear` (multi-segment collision check with allowed-last-endpoint exception). `add_tile_growing`'s body is correspondingly shorter and more readable |
-| L1 | smell | done | removed `clone_for_mutation` entirely. Its only semantic effect was resetting `candidates_by_start` to `None`, but that cache is materialized only by tests (`ensure_candidates_materialized` has no production callers), so in practice it was identical to derived `Clone`. All ~18 call sites now use `.clone()` |
-| M5 | refactor | done | `flower_petal_glue` now mutates `RawBoundary` in place (takes ownership, returns ownership) instead of destructuring/re-packing the four `Vec`s each iteration. Both callers in `construct_witness_from_vt_sequence_inner` pass `raw` by move instead of cloning the four `Vec`s per glue, eliminating ~8 redundant clones per witness construction |
-| M6 | doc | done | FIXME on `flower_petal_glue` replaced with a real **Rotation convention** doc-comment block on `glue_match_to_raw_boundary` + `RawGlueResult` that justifies the choice (any glue must rotate since boundary length changes; anchoring at the CCW survivor keeps the remap formula uniform) and gives the explicit remap formula `(j + old_n - ccw_pos) % old_n` for callers tracking positions |
-| M8 | test docs | done | `t_tetromino` and `five_hex_cross` now have ASCII shape diagrams + per-step `boundary_len` assertions so a `get_all_matches()` ordering drift fails the fixture at the offending step rather than only the downstream verification test. Both marked with **FIXME** pointing to a future explicit-tile-placement API |
-| M10 | doc only | done | doc-comment on `PatchState::Growing` explains the stable-edge-id grid bookkeeping (why incremental updates need it) and notes that `seg_data` grows with glue history, not boundary length. Callers needing compaction can route through `from_parts`, which rebuilds the grid and drops tombstones |
-| M12 | test | done | new `assert_same_cyclic_shape` test helper (canonicalizes both sequences via `lex_min_rot` and compares). Replaced sort-based "angle multiset" assertions in 5 tests: `assert_witness_matches_brute_force`, `glue_raw_angles_matches_rat_glue`, `reconstruct_five_hex_cross`, `reconstruct_t_tetromino` (×2). One test (`construct_witness_from_vt_sequence_single_vt_roundtrip`) tightened further to byte-equality since it compares two outputs of the same code path |
-| M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
-| M6  | design     | DEFERRED | rotation convention — own ticket |
-| M10 | refactor   | DEFERRED | seg_data GC — needs design |
-| M11 | API change | DEFERRED | `dir_of_edge` signature |
-| M14 | new tests  | DEFERRED | after refactors so we don't pin internals we'll move |
-| M12 | test       | DEFERRED | strengthen comparisons after canonicalisation API exists |
-| M13 | test       | DEFERRED | strengthen after de-duplication in M9 |
-| M8  | test       | DEFERRED | re-spell fixtures |
-| L1-L7 | smells   | DEFERRED | bundle into future polish PR |
+---
+
+## Status table
+
+| ID  | Severity | Type             | Status   | Notes |
+|-----|----------|------------------|----------|-------|
+| C1  | Critical | naming           | pending  | rename `growing::GrowingPatch` |
+| C2  | Critical | visibility       | pending  | tighten `growing.rs` `pub` → `pub(crate)`/private |
+| C3  | Critical | docs             | pending  | doc-pass across patch/tileset/matchtypes/growing/rat |
+| H1  | High     | dead code        | pending  | delete ~10 unused `MatchFinder` methods |
+| H2  | High     | dead code        | pending  | delete 6 unused tetromino constructors |
+| H3  | High     | visibility       | pending  | tighten internal `pub`/`pub(crate)` in `patch.rs` |
+| H4  | High     | visibility       | pending  | triage `GrowingPatch` `pub` methods (3 buckets) |
+| M1  | Medium   | architecture     | DEFERRED | split Seed/Growing types — wait for natural trigger |
+| M2  | Medium   | visibility       | pending  | downgrade 9 unused `Rat` methods |
+| M3  | Medium   | visibility       | pending  | `TileSet::index_of` → `pub(crate)`/`#[cfg(test)]` |
+| M4  | Medium   | visibility       | pending  | `PatchVertexInfo` → `pub(crate)` |
+| M5  | Medium   | visibility       | pending  | `TileSegment` → `pub(crate)` |
+| M6  | Medium   | visibility       | pending  | tighten 5 `MatchTypeIndex` + `MatchType::apply` methods |
+| L1  | Low      | docs             | pending  | doc-comment on `MatchType` field semantics |
+| L2  | Low      | docs             | pending  | doc `MatchFinder::new` vs `crossing` |
+| L3  | Low      | docs             | pending  | document `cyclotomic_intersect` feature flag |
+| L4  | Low      | visibility       | pending  | `growing::GrowStats` + `Display` → `pub(crate)` |
