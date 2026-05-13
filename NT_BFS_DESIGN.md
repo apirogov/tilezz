@@ -182,28 +182,24 @@ For each candidate petal at the CCW frontier:
 The state graph is a DAG: every transition increments `num_ctx_tiles` by
 exactly 1.
 
-CW-direction exploration is currently **disabled** — needs clean
-re-derivation. The CCW-only BFS reaches every state currently produced;
-re-enabling CW should yield the same state set (by mirror symmetry of
-the seed set under the match-type involution).
+CW-direction exploration is **not implemented**. The CCW-only BFS reaches
+the complete CCW-reachable state set, verified by a brute-force
+completeness test (`spectre_ccw_only_is_complete`): for every NT in the
+BFS set, every direct `get_match` candidate at the CCW frontier lands
+either on a closed configuration or on an NT already in the set.
 
 ## Roadmap
 
-- ✅ Symmetric NT struct: both CW and CCW anchors on both central and
-  context, plus `num_ctx_tiles`. Closed geometric convention.
+- ✅ NT struct with CW and CCW anchors on both central and context, plus
+  `num_ctx_tiles`.
 - ✅ Helper `try_construct_nt_from_cw`.
-- 🚧 Re-derive CW-direction `try_step_cw` cleanly. Open subproblems:
-  - Which petal candidates belong to the CW step vs CCW step
-    (wrap-around / two-sided cases). The CW step expects petals that
-    extend the matched segment CW on central; wrap-around petals (where
-    `petal_pm.start_a + petal_pm.len > aug_n`) are CCW-direction
-    semantics and must be excluded.
-  - Geometrically-correct petal_edge offset for the CW Case A/B
-    construction (mirror of the CCW i_anchor formula, but for the OLD
-    CW anchor vertex).
-- 🚧 Sanity test: CCW-only state count == CW-only state count (mirror
-  symmetry, expected for every tileset because the seed set is closed
-  under the match-type involution).
+- ✅ CCW-only BFS verified complete via brute-force cross-check.
+- 🚧 CW-direction `try_step_cw`. Previous attempts produced spurious NTs
+  whose reconstructed boundary didn't match the actual `trial.angles()`
+  boundary — the Case A/B vt_seq mutation breaks down when the OLD CW
+  anchor's junction status flips between old ctx and new ctx (= when the
+  petal's angle contribution at that vertex is zero). Removed pending a
+  clean re-derivation.
 - 🚧 Performance check on square (109k entries, ~1M transitions). If
   classify_all becomes the bottleneck, switch its inner loop to a
   successor-set lookup instead of a per-iter filter over transitions.
