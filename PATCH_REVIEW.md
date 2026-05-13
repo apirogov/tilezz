@@ -196,7 +196,7 @@ larger refactors after the file is shorter and the cruft is gone.
 | H7  | test       | done     | `add_tile_rejects_geometrically_invalid_candidate` pins that some spectre candidates trigger the `check_segment_clear` rejection |
 | H3  | refactor   | done     | hoisted paths 1, 2, 4 above `mem::take` as `debug_assert!` + release-mode `return false`; path 3 (geometric) remains the only `restore_growing` caller; latent path-4 bug fixed for free. Updated 2 tests that fed adversarial/stale pms |
 | H4  | semantics  | done     | renamed `VertexType` → `OpenVertexType` (4 files, propagated to `OpenVertexTypeInfo`/`OpenVertexTypeIndex`); added documentation distinguishing open (boundary) vs closed (fully-surrounded) VTs; enforced the open-VT invariant in `construct_witness_from_vt_sequence_inner` — each glue step rejects with `None` if it produces a ±hturn boundary angle at the tracked junction. Low-level `glue_match_to_raw_boundary` stays permissive (allows future closed-VT demonstration constructors). |
-| M2  | refactor   | DEFERRED | edge-construction helper, after H3 |
+| M2  | refactor   | done     | new `build_glued_edges` helper replaces three duplicated loops; `init_from_first_add` synthesizes the seed's old-edge list to share the same helper |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
 | M6  | design     | DEFERRED | rotation convention — own ticket |
 | M10 | refactor   | DEFERRED | seg_data GC — needs design |
