@@ -1,3 +1,38 @@
+//! Redelmeier-style polyomino-like enumeration over a polygonal tile.
+//!
+//! [`grow_redelmeier`] and [`grow_redelmeier_free`] are the public
+//! entry points; given a seed tile shape and a maximum size, they
+//! enumerate all distinct patches of up to `max_size` tile copies
+//! (onesided / free, respectively) and return them grouped by size.
+//!
+//! Internally the algorithm uses a much lighter-weight patch
+//! representation than [`patch::GrowingPatch`](crate::intgeom::patch::GrowingPatch):
+//! [`RedelmeierPatch`] tracks just the angle sequence, per-vertex
+//! positions, and a `visited` set. There is no edge-id grid, no
+//! candidate cache, no inner-chain tracking. The enumeration walks
+//! glue sites canonically (counter > new-tile counter, etc.) so each
+//! shape is reached exactly once.
+//!
+//! # The `cyclotomic_intersect` feature flag
+//!
+//! Self-intersection checking during growth is the hot path. Two
+//! backends are available:
+//!
+//! * **Without `cyclotomic_intersect`** (default for fast benchmarks):
+//!   each tile vertex is projected into a fixed-precision integer
+//!   coordinate (the [`Pos2`] / [`Pos4`] / [`Pos8`] structs) and
+//!   intersection checks run on those small fixed-size integer
+//!   vectors with bespoke wedge-and-dot math. Faster per check; only
+//!   exact for rings that admit a 4-component projection.
+//!
+//! * **With `cyclotomic_intersect`**: intersection checks call
+//!   [`crate::cyclotomic::geometry::intersect`] directly on the
+//!   cyclotomic-integer positions. Slower but exact for every
+//!   supported ring (no projection precision concerns).
+//!
+//! Toggle the feature via Cargo if you suspect projection precision
+//! issues, or to compare backends.
+
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::OnceLock;
@@ -624,6 +659,15 @@ struct GrowState<T: HasPatchPos> {
     stats: GrowStats,
 }
 
+/// Enumerate all distinct **onesided** polyomino-like patches built
+/// from the seed tile, up to `max_size` tile copies.
+///
+/// Two patches are distinct iff their boundary `Rat`s differ
+/// (rotations of the same shape are counted as the same patch).
+/// Reflections are *not* identified — chiral pairs count as two.
+///
+/// Returns a map `size -> {patches of that size}`, with sizes
+/// `1..=max_size`.
 pub fn grow_redelmeier<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
     T: HasPatchPos,
@@ -631,6 +675,9 @@ where
     grow_redelmeier_inner(seed, max_size, false).0
 }
 
+/// Like [`grow_redelmeier`] but identifies chiral pairs: a patch and
+/// its reflection are merged into one entry. The result is the set of
+/// **free** polyomino-like patches.
 pub fn grow_redelmeier_free<T>(seed: &Rat<T>, max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
     T: HasPatchPos,
