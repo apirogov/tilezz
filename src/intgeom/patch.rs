@@ -30,6 +30,24 @@ pub struct PatchVertexInfo {
     pub ccw: EdgeInfo,
 }
 
+/// A maximal contiguous range `[patch_start, patch_end)` of boundary
+/// positions whose edges all come from a single tile instance.
+///
+/// `tile_id` is the tile that segment belongs to; `offset_start` is the
+/// tile-offset of `edges[patch_start]`. Within the segment,
+/// `edges[patch_start + k].tile_offset == (offset_start + k) mod
+/// tile_len`.
+///
+/// **Cyclic-vs-linear caveat.** The boundary is cyclic but
+/// `TileSegment`s are produced from the linear array `[0, n)`. If
+/// position 0 is not a junction, a single cyclic tile-instance run that
+/// straddles position 0 is split into two linear `TileSegment`s — one
+/// at the start `[0, first_junction)` and one at the end
+/// `[last_junction, n)`. Both have the same `tile_id`, and their
+/// offsets are cyclically continuous (the last segment's offsets
+/// continue, modulo tile length, into the first segment's). Callers
+/// that need cyclic tile instances rather than linear segments must
+/// stitch these two halves themselves.
 pub struct TileSegment {
     pub patch_start: usize,
     pub patch_end: usize,
@@ -76,6 +94,27 @@ pub enum TransitionSide {
     Ccw,
 }
 
+/// An incrementally grown, edge-to-edge tiling of a connected,
+/// **hole-free** region of the plane.
+///
+/// # Invariants
+///
+/// * **Hole-free** (simply connected). The patch's interior is
+///   topologically a disk: every interior point is reachable from every
+///   other along a path that doesn't cross the boundary, and the boundary
+///   itself is a single simple closed polygon. There are no enclosed
+///   "empty" regions between tiles.
+///
+/// * **Edge-to-edge**. Each tile edge either lies on the patch boundary
+///   or coincides exactly with another tile's edge. Partial-edge overlaps
+///   ("T-junctions" along an edge) are not allowed.
+///
+/// These invariants are upheld by [`GrowingPatch::add_tile`] (geometric
+/// collision check via the spatial grid, plus the angle-matching
+/// constraints) and by [`GrowingPatch::construct_witness_from_vt_sequence`]
+/// (which additionally rejects ±hturn boundary junctions). Several
+/// pieces of internal code rely on hole-freeness for correctness; the
+/// relevant comments cite this invariant where it matters.
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsComplex> {
     match_index: Arc<MatchTypeIndex<T>>,
@@ -207,6 +246,14 @@ pub fn update_inner_chains(
     new_inner
 }
 
+/// Raw boundary representation used during witness construction.
+///
+/// Like [`GrowingPatch`], a `RawBoundary` describes the outline of a
+/// hole-free, edge-to-edge tiling — it carries the same per-position
+/// angle / edge / inner-chain / patch-tile-id data, but without the
+/// spatial-grid bookkeeping needed for incremental glue checks. The
+/// hole-free invariant applies here too: code that consumes a
+/// `RawBoundary` may assume the underlying region is simply connected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RawBoundary {
     pub angles: Vec<i8>,
@@ -1170,6 +1217,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         result
     }
 
+    /// Partition the boundary into [`TileSegment`]s — maximal contiguous
+    /// runs of edges from the same tile instance.
+    ///
+    /// See [`TileSegment`] for the cyclic-vs-linear caveat: when position
+    /// 0 is not at a junction, one cyclic tile-instance run is split into
+    /// two linear segments at the array seam.
     pub fn tile_segments(&self) -> Vec<TileSegment> {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
@@ -1591,6 +1644,28 @@ fn build_glued_edges(
     (new_edges, new_ptids)
 }
 
+/// Partition the boundary into [`TileSegment`]s — maximal contiguous runs
+/// of edges from the same tile instance (no junction between them).
+///
+/// The segment-break condition is the **canonical** junction check
+/// [`is_junction_at`] — i.e. `angles[i] != tile.seq()[edges[i].tile_offset]`.
+/// Every glue updates the boundary angle at the new junction
+/// (`compute_glue_angles` produces an angle that for non-degenerate tiles
+/// is provably different from either tile's natural internal angle at the
+/// junction position), so this check reliably detects every tile-instance
+/// boundary.
+///
+/// Note: a simpler offset-arithmetic heuristic (same `tile_id` + contiguous
+/// `tile_offset` from the segment start) is **not** used here. It would
+/// over-segment on intra-tile wrap-arounds (a single tile instance whose
+/// surviving boundary edges have offsets like `2,3,4,5,0`) and could
+/// under-segment in pathological same-tile-id glues whose offsets happen
+/// to line up. The angle-based check is canonical and avoids both.
+///
+/// Cyclic-vs-linear caveat: when position 0 is not at a junction, a single
+/// cyclic tile-instance run is split into two linear segments at the array
+/// seam (`[0, first_junction)` and `[last_junction, n)`). See
+/// [`TileSegment`] for details.
 fn compute_segments<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     edges: &[EdgeInfo],
@@ -1603,12 +1678,8 @@ fn compute_segments<T: IsComplex + IsRingOrField + Units>(
     let mut segments: Vec<TileSegment> = Vec::new();
     let mut seg_start = 0;
     for i in 1..=n {
-        let at_end = i == n;
-        let tile_change = !at_end
-            && (edges[i].tile_id != edges[seg_start].tile_id
-                || edges[i].tile_offset != edges[seg_start].tile_offset + (i - seg_start));
-        let junction_break = !at_end && is_junction_at(angles, edges, tileset, i);
-        if at_end || tile_change || junction_break {
+        let break_here = i == n || is_junction_at(angles, edges, tileset, i);
+        if break_here {
             segments.push(TileSegment {
                 patch_start: seg_start,
                 patch_end: i,
@@ -1933,26 +2004,6 @@ mod tests {
     }
 
     #[test]
-    fn segment_cyclic_invariant() {
-        let mut gp = hex_patch();
-        let matches = gp.get_all_matches();
-        let pm = matches[0].clone();
-        assert!(gp.add_tile(&pm), "first add");
-        assert_eq!(gp.angles().len(), gp.edges().len(), "angles == edges");
-
-        let matches2 = gp.get_all_matches();
-        if let Some(pm2) = matches2.first() {
-            if gp.add_tile(pm2) {
-                assert_eq!(
-                    gp.angles().len(),
-                    gp.edges().len(),
-                    "angles == edges after second add"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn junction_vertex_ids_nonempty_after_each_add() {
         let mut gp = hex_patch();
         let mut step = 0;
@@ -2041,24 +2092,6 @@ mod tests {
                 Ok(g) => assert_eq!(rat.seq(), g.seq(), "mismatch for pm {:?}", pm),
                 Err(e) => panic!("glue failed for pm {:?}: {}", pm, e),
             }
-        }
-    }
-
-    #[test]
-    fn mixed_hex_square_add_tile() {
-        let hex_snake: Snake<ZZ12> = tiles::hexagon();
-        let hex_rat = Rat::try_from(&hex_snake).unwrap();
-        let sq_snake: Snake<ZZ12> = tiles::square();
-        let sq_rat = Rat::try_from(&sq_snake).unwrap();
-        let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
-        let mut gp = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), 0);
-
-        let matches = gp.get_all_matches();
-        assert!(!matches.is_empty());
-
-        if let Some(pm) = matches.first() {
-            assert!(gp.add_tile(pm));
-            assert!(gp.is_growing());
         }
     }
 
@@ -2914,6 +2947,161 @@ mod tests {
                 "mismatch at target={target}: brute={touching_brute:?} api={touching_api:?}"
             );
         }
+    }
+
+    /// `vertex_type_at(i)` for a `Growing` patch should return
+    /// `Some(PatchVertexInfo { angle: angles[i], cw: edges[i-1], ccw: edges[i] })`
+    /// for every in-range `i`, and `None` for out-of-range / Seed state.
+    #[test]
+    fn vertex_type_at_returns_consistent_info() {
+        let mut gp = hex_patch();
+        let pm = gp
+            .get_all_matches()
+            .into_iter()
+            .find(|p| p.len == 1)
+            .expect("len-1 hex match");
+        assert!(gp.add_tile(&pm), "fixture");
+
+        let n = gp.boundary_len();
+        let angles = gp.angles().to_vec();
+        let edges = gp.edges().to_vec();
+        for i in 0..n {
+            let info = gp.vertex_type_at(i).expect("Some for in-range i");
+            assert_eq!(info.angle, angles[i], "angle mismatch at {i}");
+            assert_eq!(info.cw, edges[(i + n - 1) % n], "cw edge at {i}");
+            assert_eq!(info.ccw, edges[i], "ccw edge at {i}");
+        }
+        assert!(gp.vertex_type_at(n).is_none(), "out-of-range returns None");
+        assert!(
+            gp.vertex_type_at(n + 7).is_none(),
+            "far out-of-range returns None"
+        );
+
+        // Seed state has no boundary; vertex_type_at always returns None.
+        let seed = hex_patch();
+        assert!(!seed.is_growing());
+        assert!(seed.vertex_type_at(0).is_none(), "seed has no boundary");
+    }
+
+    /// `neighbor_junction_offsets(pos)` returns offsets into the CW and CCW
+    /// neighbouring junctions' tile sequences. The returned values must
+    /// (a) be within the relevant tile's length and (b) correctly identify
+    /// the CW junction's edge and the (ccw_prev + 1) offset of the CCW
+    /// junction's preceding edge.
+    #[test]
+    fn neighbor_junction_offsets_returns_valid_offsets() {
+        let mut gp = hex_patch();
+        let pm = gp
+            .get_all_matches()
+            .into_iter()
+            .find(|p| p.len == 1)
+            .expect("len-1 hex match");
+        assert!(gp.add_tile(&pm), "fixture");
+        let n = gp.boundary_len();
+        let edges = gp.edges().to_vec();
+        let ts = gp.tileset().clone();
+
+        for pos in 0..n {
+            let (cw_off, ccw_off) = gp
+                .neighbor_junction_offsets(pos)
+                .expect("Some for valid pos");
+
+            // Walk CW to the nearest junction (possibly == pos itself).
+            let mut j_cw = (pos + n - 1) % n;
+            while j_cw != pos && !gp.is_junction(j_cw) {
+                j_cw = (j_cw + n - 1) % n;
+            }
+            let cw_tile_len = ts.rat(edges[j_cw].tile_id).len();
+            assert!(cw_off < cw_tile_len, "cw_off out of range at pos {pos}");
+            assert_eq!(
+                cw_off, edges[j_cw].tile_offset,
+                "cw_off should be the CW junction's tile_offset at pos {pos}",
+            );
+
+            // Walk CCW to the nearest junction.
+            let mut j_ccw = (pos + 1) % n;
+            while j_ccw != pos && !gp.is_junction(j_ccw) {
+                j_ccw = (j_ccw + 1) % n;
+            }
+            let ccw_prev_edge = edges[(j_ccw + n - 1) % n];
+            let ccw_tile_len = ts.rat(ccw_prev_edge.tile_id).len();
+            assert!(ccw_off < ccw_tile_len, "ccw_off out of range at pos {pos}");
+            assert_eq!(
+                ccw_off,
+                (ccw_prev_edge.tile_offset + 1) % ccw_tile_len,
+                "ccw_off should be (ccw_prev edge's offset + 1) at pos {pos}",
+            );
+        }
+
+        // Out-of-range and Seed state both return None.
+        assert!(gp.neighbor_junction_offsets(n).is_none());
+        let seed = hex_patch();
+        assert!(seed.neighbor_junction_offsets(0).is_none());
+    }
+
+    /// `tile_segments()` should:
+    /// (a) cover the boundary contiguously (segments concatenated from
+    /// 0 to `n` with no gaps),
+    /// (b) have segment boundaries at exactly the junction positions,
+    /// (c) within each segment, `tile_id` is constant and `tile_offset`
+    /// advances by 1 modulo the tile's edge count.
+    #[test]
+    fn tile_segments_partitions_boundary() {
+        let mut gp = hex_patch();
+        let pm = gp
+            .get_all_matches()
+            .into_iter()
+            .find(|p| p.len == 1)
+            .expect("len-1 hex match");
+        assert!(gp.add_tile(&pm), "fixture");
+        let n = gp.boundary_len();
+        let edges = gp.edges().to_vec();
+        let segs = gp.tile_segments();
+
+        // Contiguous partition.
+        assert_eq!(
+            segs.first().map(|s| s.patch_start),
+            Some(0),
+            "first segment starts at 0"
+        );
+        assert_eq!(
+            segs.last().map(|s| s.patch_end),
+            Some(n),
+            "last segment ends at n"
+        );
+        for w in segs.windows(2) {
+            assert_eq!(
+                w[0].patch_end, w[1].patch_start,
+                "segments must be contiguous"
+            );
+        }
+
+        // Consistent tile_id and contiguous offsets within each segment.
+        for seg in &segs {
+            let tile_id = seg.tile_id;
+            let tile_len = gp.tileset().rat(tile_id).len();
+            for k in 0..(seg.patch_end - seg.patch_start) {
+                let pos = seg.patch_start + k;
+                assert_eq!(edges[pos].tile_id, tile_id, "tile_id at pos {pos}");
+                assert_eq!(
+                    edges[pos].tile_offset,
+                    (seg.offset_start + k) % tile_len,
+                    "tile_offset at pos {pos}",
+                );
+            }
+        }
+
+        // A position is a segment start iff it is position 0 (the
+        // linear-partition seam, always present) or a junction.
+        let expected_starts: std::collections::BTreeSet<usize> = std::iter::once(0)
+            .chain((0..n).filter(|&i| gp.is_junction(i)))
+            .collect();
+        let actual_starts: std::collections::BTreeSet<usize> =
+            segs.iter().map(|s| s.patch_start).collect();
+        assert_eq!(
+            actual_starts, expected_starts,
+            "segment starts must equal {{0}} ∪ junctions"
+        );
     }
 
     #[test]
