@@ -198,6 +198,10 @@ larger refactors after the file is shorter and the cruft is gone.
 | H4  | semantics  | done     | renamed `VertexType` → `OpenVertexType` (4 files, propagated to `OpenVertexTypeInfo`/`OpenVertexTypeIndex`); added documentation distinguishing open (boundary) vs closed (fully-surrounded) VTs; enforced the open-VT invariant in `construct_witness_from_vt_sequence_inner` — each glue step rejects with `None` if it produces a ±hturn boundary angle at the tracked junction. Low-level `glue_match_to_raw_boundary` stays permissive (allows future closed-VT demonstration constructors). |
 | M2  | refactor   | done     | new `build_glued_edges` helper replaces three duplicated loops; `init_from_first_add` synthesizes the seed's old-edge list to share the same helper |
 | X-check tests | new tests | done | four spectre-fixture tests: `add_tile_decision_agrees_with_snake_on_spectre` (incremental check vs Snake batch validator), `growing_patch_boundary_validates_as_snake_through_growth` (boundary is a valid Snake after each glue), `get_all_matches_matches_brute_force_on_spectre` (vs independent `(tile_b, ib, start_a)` enumeration), `get_matches_touching_vertex_matches_brute_force_on_spectre` |
+| M11 | API change | done | `dir_of_edge` `panic!` → `unreachable!` with diagnostic; docstring on the upstream invariant |
+| L3  | smell      | done | `cyclic_range_contains` doc explains inclusive-on-both-ends "vertex touched by match" semantics |
+| L4  | smell      | done | doc comments on `forward_match_length`, `junction_angle_sequence`, `compute_glue_angles` |
+| L7  | smell      | done | comment on `init_from_first_add`'s Snake-batch path explains why it differs from `add_tile_growing`'s incremental path (and points to the cross-check test) |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
 | M6  | design     | DEFERRED | rotation convention — own ticket |
 | M10 | refactor   | DEFERRED | seg_data GC — needs design |
