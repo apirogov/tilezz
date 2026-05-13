@@ -92,6 +92,19 @@ enum PatchState<T: IsComplex> {
     },
 }
 
+/// Returns true if position `pos` on the boundary is a junction vertex,
+/// i.e. the boundary angle differs from the tile's internal angle at the
+/// outgoing edge.
+pub(crate) fn is_junction_at<T: IsComplex + IsRingOrField + Units>(
+    angles: &[i8],
+    edges: &[EdgeInfo],
+    tileset: &TileSet<T>,
+    pos: usize,
+) -> bool {
+    let ei = edges[pos];
+    tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[pos]
+}
+
 /// Raw vertex type extraction at a boundary position (no junction check).
 ///
 /// Constructs the (cw, inner, ccw) triple from boundary edge/inner-chain data.
@@ -138,7 +151,6 @@ pub fn update_inner_chains(
     pm: &PatchMatch,
     new_n: usize,
     old_ptids: &[usize],
-    _new_ptids: &[usize],
 ) -> Vec<Vec<EdgeInfo>> {
     let n = old_edges.len();
     let seg_len_old = n - pm.len;
@@ -184,8 +196,7 @@ pub(crate) fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
     tileset: &TileSet<T>,
     pos: usize,
 ) -> bool {
-    let edge = boundary.edges[pos];
-    tileset.rat(edge.tile_id).seq()[edge.tile_offset] != boundary.angles[pos]
+    is_junction_at(&boundary.angles, &boundary.edges, tileset, pos)
 }
 
 #[cfg(test)]
@@ -297,7 +308,6 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
             pm,
             new_n,
             &boundary.patch_tile_ids,
-            &new_patch_tile_ids,
         )
     };
 
@@ -641,38 +651,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             }
 
             if junctions_set.contains(&pos) {
-                for tile_id_b in 0..tileset.num_tiles() {
-                    let tile_b = tileset.rat(tile_id_b);
-                    let b_seq = tile_b.seq();
-                    let m = b_seq.len();
-                    for ib in 0..m {
-                        if !is_single_edge_candidate(angles, pos, b_seq, ib) {
-                            continue;
-                        }
-                        let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
-                        if len != 1 {
-                            continue;
-                        }
-                        let ns_u = ns.rem_euclid(n as i64) as usize;
-                        let ne_u = ne.rem_euclid(m as i64) as usize;
-                        let key = (ns_u, len, ne_u, tile_id_b);
-                        if !global_seen.insert(key) {
-                            continue;
-                        }
-                        if cyclic_range_contains(ns_u, len, target, n)
-                            && rat
-                                .try_glue_precomputed((ns, len, ne), tile_b, true)
-                                .is_ok()
-                        {
-                            result.push(PatchMatch {
-                                start_a: ns_u,
-                                len,
-                                start_b: ne_u,
-                                tile_id: tile_id_b,
-                            });
-                        }
-                    }
-                }
+                enumerate_junction_candidates_at(
+                    pos,
+                    angles,
+                    &rat,
+                    n,
+                    tileset,
+                    &mut global_seen,
+                    |start_a, len| cyclic_range_contains(start_a, len, target, n),
+                    |pm| result.push(pm),
+                );
             }
         }
 
@@ -716,37 +704,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
 
         for &junc_idx in &junctions {
-            for tile_id_b in 0..tileset.num_tiles() {
-                let tile_b = tileset.rat(tile_id_b);
-                let b_seq = tile_b.seq();
-                let m = b_seq.len();
-                for ib in 0..m {
-                    if !is_single_edge_candidate(angles, junc_idx, b_seq, ib) {
-                        continue;
-                    }
-                    let (ns, len, ne) = rat.get_match((junc_idx as i64, ib as i64), tile_b);
-                    if len != 1 {
-                        continue;
-                    }
-                    let ns_u = ns.rem_euclid(n as i64) as usize;
-                    let ne_u = ne.rem_euclid(m as i64) as usize;
-                    let key = (ns_u, len, ne_u, tile_id_b);
-                    if !global_seen.insert(key) {
-                        continue;
-                    }
-                    if rat
-                        .try_glue_precomputed((ns, len, ne), tile_b, true)
-                        .is_ok()
-                    {
-                        result[ns_u].push(PatchMatch {
-                            start_a: ns_u,
-                            len,
-                            start_b: ne_u,
-                            tile_id: tile_id_b,
-                        });
-                    }
-                }
-            }
+            enumerate_junction_candidates_at(
+                junc_idx,
+                angles,
+                &rat,
+                n,
+                tileset,
+                &mut global_seen,
+                |_, _| true,
+                |pm| result[pm.start_a].push(pm),
+            );
         }
 
         result
@@ -834,51 +801,33 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 ..
             } => {
                 let n = angles.len();
-                match candidates_by_start {
-                    Some(cbs) => {
-                        let k = self
-                            .match_index
-                            .tileset()
-                            .rats()
-                            .iter()
-                            .map(|r| r.len())
-                            .max()
-                            .unwrap_or(0)
-                            .min(n);
-                        let mut result = Vec::new();
-                        for offset in 0..=k {
-                            let start = (vertex_index + n - offset) % n;
-                            for pm in &cbs[start] {
-                                if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
-                                    result.push(pm.clone());
-                                }
-                            }
-                        }
-                        result
-                    }
+                let computed: Vec<Vec<PatchMatch>>;
+                let source: &[Vec<PatchMatch>] = match candidates_by_start {
+                    Some(cbs) => cbs,
                     None => {
-                        let all = Self::compute_all_candidates(&self.match_index, angles, edges);
-                        let k = self
-                            .match_index
-                            .tileset()
-                            .rats()
-                            .iter()
-                            .map(|r| r.len())
-                            .max()
-                            .unwrap_or(0)
-                            .min(n);
-                        let mut result = Vec::new();
-                        for offset in 0..=k {
-                            let start = (vertex_index + n - offset) % n;
-                            for pm in &all[start] {
-                                if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
-                                    result.push(pm.clone());
-                                }
-                            }
+                        computed = Self::compute_all_candidates(&self.match_index, angles, edges);
+                        &computed
+                    }
+                };
+                let k = self
+                    .match_index
+                    .tileset()
+                    .rats()
+                    .iter()
+                    .map(|r| r.len())
+                    .max()
+                    .unwrap_or(0)
+                    .min(n);
+                let mut result = Vec::new();
+                for offset in 0..=k {
+                    let start = (vertex_index + n - offset) % n;
+                    for pm in &source[start] {
+                        if cyclic_range_contains(pm.start_a, pm.len, vertex_index, n) {
+                            result.push(pm.clone());
                         }
-                        result
                     }
                 }
+                result
             }
         }
     }
@@ -1114,14 +1063,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             PatchState::Growing { edges, .. } => edges,
             _ => return false,
         };
-        let n = edges.len();
-        if n == 0 {
+        if edges.is_empty() {
             return false;
         }
-        let ei = edges[i];
-        let tileset = self.match_index.tileset();
-        let tile = tileset.rat(ei.tile_id);
-        tile.seq()[ei.tile_offset] != self.angles()[i]
+        is_junction_at(self.angles(), edges, self.match_index.tileset(), i)
     }
 
     pub fn neighbor_junction_offsets(&self, pos: usize) -> Option<(usize, usize)> {
@@ -1474,14 +1419,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         debug_assert_eq!(new_edges.len(), new_len);
 
-        let new_inner = update_inner_chains(
-            &old_inner,
-            &edges,
-            pm,
-            new_len,
-            &patch_tile_ids,
-            &new_patch_tile_ids,
-        );
+        let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len, &patch_tile_ids);
 
         self.state = PatchState::Growing {
             angles: new_angles,
@@ -1586,10 +1524,7 @@ fn compute_segments<T: IsComplex + IsRingOrField + Units>(
         let tile_change = !at_end
             && (edges[i].tile_id != edges[seg_start].tile_id
                 || edges[i].tile_offset != edges[seg_start].tile_offset + (i - seg_start));
-        let junction_break = !at_end && {
-            let ei = edges[i];
-            tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[i]
-        };
+        let junction_break = !at_end && is_junction_at(angles, edges, tileset, i);
         if at_end || tile_change || junction_break {
             segments.push(TileSegment {
                 patch_start: seg_start,
@@ -1608,15 +1543,9 @@ fn compute_junctions<T: IsComplex + IsRingOrField + Units>(
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
 ) -> Vec<usize> {
-    let n = edges.len();
-    let mut juncs = Vec::new();
-    for i in 0..n {
-        let ei = edges[i];
-        if tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[i] {
-            juncs.push(i);
-        }
-    }
-    juncs
+    (0..edges.len())
+        .filter(|&i| is_junction_at(angles, edges, tileset, i))
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1672,6 +1601,58 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
             start_b: ne_u,
             tile_id: cand.tile_b,
         });
+    }
+}
+
+/// Enumerate single-edge match candidates that anchor at junction position `pos`.
+///
+/// For each `(tile_id_b, ib)` pair, checks single-edge compatibility, dedups
+/// via `seen`, applies the `keep(start_a, len)` filter before the relatively
+/// expensive `try_glue_precomputed`, and hands surviving matches to `emit`.
+#[allow(clippy::too_many_arguments)]
+fn enumerate_junction_candidates_at<T: IsComplex + IsRingOrField + Units>(
+    pos: usize,
+    angles: &[i8],
+    rat: &Rat<T>,
+    n: usize,
+    tileset: &TileSet<T>,
+    seen: &mut FxHashSet<(usize, usize, usize, usize)>,
+    keep: impl Fn(usize, usize) -> bool,
+    mut emit: impl FnMut(PatchMatch),
+) {
+    for tile_id_b in 0..tileset.num_tiles() {
+        let tile_b = tileset.rat(tile_id_b);
+        let b_seq = tile_b.seq();
+        let m = b_seq.len();
+        for ib in 0..m {
+            if !is_single_edge_candidate(angles, pos, b_seq, ib) {
+                continue;
+            }
+            let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
+            if len != 1 {
+                continue;
+            }
+            let ns_u = ns.rem_euclid(n as i64) as usize;
+            let ne_u = ne.rem_euclid(m as i64) as usize;
+            let key = (ns_u, len, ne_u, tile_id_b);
+            if !seen.insert(key) {
+                continue;
+            }
+            if !keep(ns_u, len) {
+                continue;
+            }
+            if rat
+                .try_glue_precomputed((ns, len, ne), tile_b, true)
+                .is_ok()
+            {
+                emit(PatchMatch {
+                    start_a: ns_u,
+                    len,
+                    start_b: ne_u,
+                    tile_id: tile_id_b,
+                });
+            }
+        }
     }
 }
 

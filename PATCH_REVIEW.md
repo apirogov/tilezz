@@ -184,12 +184,12 @@ larger refactors after the file is shorter and the cruft is gone.
 
 | ID  | Type       | Status   | Notes |
 |-----|------------|----------|-------|
-| H1  | dead code  | pending  | delete `_Phantom` variant |
-| H2  | dead code  | pending  | delete unused items |
-| M1  | duplicate  | pending  | extract junction predicate |
-| M7  | clean-up   | pending  | drop unused param |
-| M3  | duplicate  | pending  | extract junction-block in candidate fns |
-| M4  | duplicate  | pending  | dedupe `get_matches_touching_vertex` |
+| H1  | dead code  | done     | `_Phantom` variant deleted |
+| H2  | dead code  | done     | `AddTileDiff`/`Transition`/`candidates_from_flat`/`RawBoundary::normalize`/`junction_vertex_type_from` removed; `add_tile` now returns `bool` |
+| M1  | duplicate  | done     | new `is_junction_at` helper; 4 inline copies collapsed |
+| M7  | clean-up   | done     | dropped `_new_ptids` from `update_inner_chains` |
+| M3  | duplicate  | done     | new `enumerate_junction_candidates_at` helper takes `keep`/`emit` |
+| M4  | duplicate  | done     | `get_matches_touching_vertex` picks source up front, one shared loop |
 | M9  | test churn | pending  | parameterize/dedupe duplicated test families |
 | H6  | test       | pending  | add "state unchanged on failed add" |
 | H7  | test       | pending  | add self-intersection rejection |
