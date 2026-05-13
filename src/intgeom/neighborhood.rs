@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch, TransitionSide, VertexType};
+use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::intgeom::tileset::TileSet;
 
 /// A neighborhood type: a central tile, a context patch matched against a
@@ -39,7 +39,7 @@ pub struct NeighborhoodType {
     pub cw_anchor_on_context: usize,
     pub ccw_anchor_on_context: usize,
     pub num_ctx_tiles: usize,
-    pub vt_seq: Vec<VertexType>,
+    pub vt_seq: Vec<OpenVertexType>,
 }
 
 pub const NT_CLOSED_ID: usize = 0;
@@ -95,7 +95,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             // Collect all ctx-ctx junctions with their positions, sorted by
             // boundary position. We then filter per third_pm to only those
             // incident with the match (= within the covered segment).
-            let all_juncs: Vec<(usize, VertexType)> = (0..patch_n)
+            let all_juncs: Vec<(usize, OpenVertexType)> = (0..patch_n)
                 .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
                 .collect();
 
@@ -123,7 +123,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 // vt_seq is the junctions incident with the central match:
                 // those at positions in [anchor, anchor + match_len], i.e.
                 // CCW distance from the anchor is at most match_len.
-                let filtered: Vec<&(usize, VertexType)> = all_juncs
+                let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
                     .iter()
                     .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
                     .collect();
@@ -132,7 +132,8 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 }
                 let first_junc = filtered[0].0;
                 let last_junc = filtered[filtered.len() - 1].0;
-                let vt_seq: Vec<VertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
+                let vt_seq: Vec<OpenVertexType> =
+                    filtered.iter().map(|(_, vt)| vt.clone()).collect();
                 // cw_anchor_on_context = CW distance from first_junc to the
                 // CW anchor on context. ccw_anchor_on_context = CCW distance
                 // from last_junc to the CCW anchor on context. Both stay
@@ -337,7 +338,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// TRANS <src_id> <dst_id> <tile_id> <tile_offset>
     /// ```
     ///
-    /// Each `<vti>` encodes a single VertexType as
+    /// Each `<vti>` encodes a single OpenVertexType as
     /// `<cw_id>.<cw_off>|<inner_list>|<ccw_id>.<ccw_off>` where
     /// `<inner_list>` is either `-` (empty) or a comma-separated list of
     /// `<tile_id>.<tile_offset>` edges. `<kind>` is one of `dead`,
@@ -483,7 +484,7 @@ fn parse_edge_info(s: &str) -> Result<EdgeInfo, String> {
     })
 }
 
-fn parse_vt_token(tok: &str) -> Result<VertexType, String> {
+fn parse_vt_token(tok: &str) -> Result<OpenVertexType, String> {
     let parts: Vec<&str> = tok.split('|').collect();
     if parts.len() != 3 {
         return Err(format!(
@@ -502,7 +503,7 @@ fn parse_vt_token(tok: &str) -> Result<VertexType, String> {
             .collect::<Result<Vec<_>, _>>()?
     };
     let ccw = parse_edge_info(parts[2])?;
-    Ok(VertexType { cw, inner, ccw })
+    Ok(OpenVertexType { cw, inner, ccw })
 }
 
 fn parse_ntype_line(
@@ -924,7 +925,7 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
         last.ccw = petal_edge;
     } else {
         // CCW Case B: append new VT. cw = last covered ctx edge.
-        new_vt_seq.push(VertexType {
+        new_vt_seq.push(OpenVertexType {
             cw: ac.last_covered_ctx_edge,
             inner: vec![],
             ccw: petal_edge,
@@ -962,9 +963,9 @@ fn canonicalize_vt_seq_on_ctx<T: IsComplex + IsRingOrField + Units>(
     cw_anchor_pos: usize,
     ccw_anchor_pos: usize,
     ctx_n: usize,
-) -> Option<(Vec<VertexType>, usize, usize)> {
+) -> Option<(Vec<OpenVertexType>, usize, usize)> {
     let match_len = (ccw_anchor_pos + ctx_n - cw_anchor_pos) % ctx_n;
-    let mut juncs: Vec<(usize, VertexType)> = Vec::new();
+    let mut juncs: Vec<(usize, OpenVertexType)> = Vec::new();
     for off in 0..=match_len {
         let pos = (cw_anchor_pos + off) % ctx_n;
         if let Some(vt) = ctx.junction_vertex_type_at(pos) {
@@ -993,7 +994,7 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
     cw_anchor_on_central: usize,
     cw_anchor_on_context: usize,
     num_ctx_tiles: usize,
-    vt_seq: Vec<VertexType>,
+    vt_seq: Vec<OpenVertexType>,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<NeighborhoodType> {
     let (mut ctx, jp) =
