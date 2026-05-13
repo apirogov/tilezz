@@ -397,7 +397,7 @@ A balanced review should call this out:
 | ID  | Severity | Type             | Status   | Notes |
 |-----|----------|------------------|----------|-------|
 | C1  | Critical | naming           | done     | renamed type to `RedelmeierPatch`; renamed module file `growing.rs` → `redelmeier.rs` |
-| C2  | Critical | visibility       | pending  | tighten `growing.rs` `pub` → `pub(crate)`/private |
+| C2  | Critical | visibility       | done     | `redelmeier.rs`: `RedelmeierPatch` and `GrowStats` → `pub(crate)`; deleted unused `RedelmeierPatch::{len, is_empty}` and `grow_redelmeier_profiled`; `make_free` is now `#[cfg(test)]` private. `PatchPos`/`HasPatchPos`/`Pos2`/`Pos4`/`Pos8` kept `pub` (required by the bound on the public `grow_redelmeier*` entry functions) |
 | C3  | Critical | docs             | pending  | doc-pass across patch/tileset/matchtypes/growing/rat |
 | H1  | High     | dead code        | pending  | delete ~10 unused `MatchFinder` methods |
 | H2  | High     | dead code        | pending  | delete 6 unused tetromino constructors |
@@ -412,4 +412,4 @@ A balanced review should call this out:
 | L1  | Low      | docs             | pending  | doc-comment on `MatchType` field semantics |
 | L2  | Low      | docs             | pending  | doc `MatchFinder::new` vs `crossing` |
 | L3  | Low      | docs             | pending  | document `cyclotomic_intersect` feature flag |
-| L4  | Low      | visibility       | pending  | `growing::GrowStats` + `Display` → `pub(crate)` |
+| L4  | Low      | visibility       | done     | done as part of C2 |
