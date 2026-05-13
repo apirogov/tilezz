@@ -516,6 +516,21 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Reconstruct a `Growing` patch from its core boundary data.
+    ///
+    /// Returns `None` if the input slices are inconsistent (empty, or
+    /// mismatched lengths between `angles`, `edges`, `inner_chains`,
+    /// `patch_tile_ids`).
+    ///
+    /// **Caveats — derived state is rebuilt, not restored.** This
+    /// constructor recomputes the spatial grid (`grid`, `seg_data`,
+    /// `boundary_edge_ids`, `next_edge_id`) from `angles` via
+    /// `trace_boundary_positions` + `build_boundary_grid`. Specifically:
+    /// `boundary_edge_ids` is set to `(0..n).collect()` regardless of
+    /// any pre-existing identification scheme, and `candidates_by_start`
+    /// is left as `None` (will be filled on demand). Use this when you
+    /// have a serialized boundary and want a fresh `GrowingPatch`, not
+    /// to faithfully restore a snapshot of every internal field.
     pub fn from_parts(
         match_index: Arc<MatchTypeIndex<T>>,
         angles: Vec<i8>,
@@ -832,13 +847,26 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         matches!(self.state, PatchState::Growing { .. })
     }
 
+    /// Clone the patch, resetting derivable caches.
+    ///
+    /// For [`PatchState::Growing`], `candidates_by_start` (an
+    /// invalidatable cache populated lazily by
+    /// [`Self::ensure_candidates_materialized`]) is reset to `None`.
+    ///
+    /// For [`PatchState::Seed`], `cached_matches` is **not** a cache in
+    /// that sense — the seed boundary never changes, so the seed-match
+    /// set is the authoritative value computed at construction. It is
+    /// preserved across the clone.
     pub(crate) fn clone_for_mutation(&self) -> Self {
         GrowingPatch {
             match_index: Arc::clone(&self.match_index),
             state: match &self.state {
-                PatchState::Seed { tile_id, .. } => PatchState::Seed {
+                PatchState::Seed {
+                    tile_id,
+                    cached_matches,
+                } => PatchState::Seed {
                     tile_id: *tile_id,
-                    cached_matches: Vec::new(),
+                    cached_matches: cached_matches.clone(),
                 },
                 PatchState::Growing {
                     angles,
@@ -1427,41 +1455,28 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             unregister_segment::<T>(&mut grid, &seg_data, id);
         }
 
-        let abs_dir_at_cw: i8 = {
+        // Trace the new tile's boundary positions, starting from the CW
+        // junction and walking the new-tile half of `new_angles`.
+        let cw_junction = positions[pm.start_a];
+        let ccw_junction = positions[ccw_pos];
+        let initial_dir = {
             let prev = (pm.start_a + n - 1) % n;
             dir_of_edge::<T>(positions[prev], positions[pm.start_a])
         };
-
-        let cw_junction = positions[pm.start_a];
-        let ccw_junction = positions[ccw_pos];
-        let mut new_tile_positions = vec![cw_junction];
-        let mut dir = abs_dir_at_cw;
-        for &a in &new_angles[seg_len_old..] {
-            dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
-            let last = *new_tile_positions.last().unwrap();
-            new_tile_positions.push(last + T::unit(dir));
-        }
-
+        let new_tile_positions =
+            trace_polyline_from::<T>(cw_junction, initial_dir, &new_angles[seg_len_old..]);
         debug_assert_eq!(
             *new_tile_positions.last().unwrap(),
             ccw_junction,
             "new tile trace should end at CCW junction"
         );
 
-        let mut all_clear = true;
-        for i in 0..seg_len_new {
-            let p1 = new_tile_positions[i];
-            let p2 = new_tile_positions[i + 1];
-            let allowed = if i == seg_len_new - 1 {
-                Some(ccw_junction)
-            } else {
-                None
-            };
-            if !check_segment_clear::<T>(&grid, &seg_data, p1, p2, allowed) {
-                all_clear = false;
-                break;
-            }
-        }
+        // Geometric collision check (path 3): verify the new tile's
+        // segments don't cross any surviving boundary segment. The new
+        // tile's final endpoint is allowed to coincide with `ccw_junction`
+        // (that's where it rejoins the existing boundary).
+        let all_clear =
+            segments_all_clear::<T>(&grid, &seg_data, &new_tile_positions, ccw_junction);
 
         if !all_clear {
             for &id in &removed_ids {
@@ -1864,17 +1879,29 @@ pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     Some(gr.angles)
 }
 
-fn trace_boundary_positions<T: IsComplex + IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
-    let n = angles.len();
-    let mut positions = Vec::with_capacity(n + 1);
-    positions.push(T::zero());
-    let mut dir: i8 = 0;
+/// Trace a polyline of unit edges starting at `start` facing
+/// `initial_dir`, applying each angle as a turn.
+///
+/// Returns `angles.len() + 1` positions (the starting vertex plus one
+/// after each edge).
+fn trace_polyline_from<T: IsComplex + IsRingOrField + Units>(
+    start: T,
+    initial_dir: i8,
+    angles: &[i8],
+) -> Vec<T> {
+    let mut positions = Vec::with_capacity(angles.len() + 1);
+    positions.push(start);
+    let mut dir = initial_dir;
     for &a in angles {
         dir = (dir as i64 + a as i64).rem_euclid(T::turn() as i64) as i8;
         let last = *positions.last().unwrap();
         positions.push(last + T::unit(dir));
     }
     positions
+}
+
+fn trace_boundary_positions<T: IsComplex + IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
+    trace_polyline_from(T::zero(), 0, angles)
 }
 
 fn build_boundary_grid<T: IsComplex + IsRingOrField + Units>(
@@ -1942,6 +1969,26 @@ fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
     true
 }
 
+/// Walk consecutive segments of a polyline, checking each against the
+/// boundary grid via [`check_segment_clear`]. The last segment's CCW
+/// endpoint is permitted to coincide with `allowed_last_endpoint` (this
+/// is where the new tile rejoins the existing boundary).
+fn segments_all_clear<T: IsComplex + IsRingOrField + Units>(
+    grid: &UnitSquareGrid,
+    seg_data: &[(T, T)],
+    positions: &[T],
+    allowed_last_endpoint: T,
+) -> bool {
+    let n_edges = positions.len().saturating_sub(1);
+    for i in 0..n_edges {
+        let allowed = (i == n_edges - 1).then_some(allowed_last_endpoint);
+        if !check_segment_clear::<T>(grid, seg_data, positions[i], positions[i + 1], allowed) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Find the direction `dir` such that `from + T::unit(dir) == to`.
 ///
 /// Caller invariant: `(from, to)` must be a unit-length boundary edge, i.e.
@@ -1989,6 +2036,26 @@ mod tests {
         assert!(!gp.is_growing());
         assert_eq!(gp.boundary_len(), 0);
         assert_eq!(gp.edges().len(), 0);
+    }
+
+    /// `clone_for_mutation` of a `Seed` must preserve the seed-match set
+    /// (the seed boundary never changes, so the matches computed at
+    /// construction are still authoritative). Regression test for an
+    /// earlier latent bug where `cached_matches` was reset to empty.
+    #[test]
+    fn clone_for_mutation_preserves_seed_matches() {
+        let gp = hex_patch();
+        let original = gp.get_all_matches();
+        assert!(
+            !original.is_empty(),
+            "fixture: seed should have non-empty matches"
+        );
+        let clone = gp.clone_for_mutation();
+        let cloned_matches = clone.get_all_matches();
+        assert_eq!(
+            cloned_matches, original,
+            "cloned Seed must report the same matches as the original"
+        );
     }
 
     #[test]

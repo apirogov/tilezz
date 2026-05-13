@@ -205,6 +205,9 @@ larger refactors after the file is shorter and the cruft is gone.
 | M13 | test       | done | deleted `segment_cyclic_invariant` and `mixed_hex_square_add_tile` (vacuous subsets of `edges_self_consistent` / `edges_mixed_consistency`) |
 | M14 | new tests  | done | `vertex_type_at_returns_consistent_info`, `neighbor_junction_offsets_returns_valid_offsets`, `tile_segments_partitions_boundary` (with explicit handling of the linear-vs-cyclic segment-start seam) |
 | docs/refactor | refactor | done | `compute_segments` now uses the **canonical** `is_junction_at` check as the segment-break condition (the prior `tile_change` heuristic over-segmented on intra-tile wrap-arounds and could under-segment for pathological same-tile-id glues); `GrowingPatch` + `RawBoundary` doc the hole-free / edge-to-edge invariants; `TileSegment` docs the cyclic-vs-linear seam |
+| L5 | latent bug | done | `clone_for_mutation` on a `Seed` previously discarded `cached_matches` (so `get_all_matches()` on the clone returned `[]`); fixed to preserve. Regression test `clone_for_mutation_preserves_seed_matches` |
+| L2 | smell | done | `from_parts` docstring spells out the derived-state rebuild (grid, seg_data, boundary_edge_ids) so callers don't expect a faithful snapshot restore |
+| L6 | smell | done | extracted `trace_polyline_from` (generic start + initial_dir polyline tracer; `trace_boundary_positions` now delegates) and `segments_all_clear` (multi-segment collision check with allowed-last-endpoint exception). `add_tile_growing`'s body is correspondingly shorter and more readable |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
 | M6  | design     | DEFERRED | rotation convention — own ticket |
 | M10 | refactor   | DEFERRED | seg_data GC — needs design |
