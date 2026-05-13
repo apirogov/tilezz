@@ -616,7 +616,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             }
 
             let mut gp2 = gp.clone();
-            if gp2.add_tile(pm).is_none() || !gp2.is_growing() {
+            if !gp2.add_tile(pm) || !gp2.is_growing() {
                 continue;
             }
 
@@ -691,7 +691,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             total_match_checks += 1;
             let old_n = gp.boundary_len();
             let mut gp2 = gp.clone();
-            if gp2.add_tile(&pm).is_none() || !gp2.is_growing() {
+            if !gp2.add_tile(&pm) || !gp2.is_growing() {
                 continue;
             }
             let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };

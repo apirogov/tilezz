@@ -86,7 +86,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 start_b: mt.start_b,
                 tile_id: mt.tile_b,
             };
-            if patch.add_tile(&pm).is_none() {
+            if !patch.add_tile(&pm) {
                 continue;
             }
             patch.normalize();
@@ -105,7 +105,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 // collide with the existing two-tile patch. Try the glue on
                 // a clone first; skip if it fails.
                 let mut trial = patch.clone_for_mutation();
-                if trial.add_tile(&third_pm).is_none() {
+                if !trial.add_tile(&third_pm) {
                     continue;
                 }
 
@@ -614,7 +614,9 @@ fn attach_central<T: IsComplex + IsRingOrField + Units>(
     let central_len = tileset.rat(nt.central_tile_id).seq().len();
     let ctx_n = context.boundary_len();
 
-    context.add_tile(&pm)?;
+    if !context.add_tile(&pm) {
+        return None;
+    }
 
     let aug_n = context.boundary_len();
     let gap_len = central_len - pm.len;
@@ -691,7 +693,7 @@ fn explore_step<T: IsComplex + IsRingOrField + Units>(
     let mut outcomes = Vec::new();
     for petal_pm in &candidates {
         let mut trial = aug.augmented.clone_for_mutation();
-        if trial.add_tile(petal_pm).is_none() {
+        if !trial.add_tile(petal_pm) {
             continue;
         }
 
@@ -793,7 +795,9 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
         tile_id: nt.central_tile_id,
     };
     let mut aug = ctx.clone_for_mutation();
-    aug.add_tile(&central_pm)?;
+    if !aug.add_tile(&central_pm) {
+        return None;
+    }
 
     let aug_n = aug.boundary_len();
     let gap_start = ctx_n - match_len;
@@ -883,7 +887,9 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<ExploreOutcome<T>> {
     let mut trial = ac.aug.clone_for_mutation();
-    trial.add_tile(&petal_pm)?;
+    if !trial.add_tile(&petal_pm) {
+        return None;
+    }
 
     // Closed: petal absorbed all central edges.
     if !trial.patch_tile_ids().contains(&ac.central_ptid) {
@@ -1020,7 +1026,9 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
         start_b: cw_anchor_on_central,
         tile_id: central_tile_id,
     };
-    ctx.add_tile(&pm)?;
+    if !ctx.add_tile(&pm) {
+        return None;
+    }
     Some(NeighborhoodType {
         central_tile_id,
         cw_anchor_on_central,
@@ -1172,13 +1180,13 @@ mod tests {
     #[test]
     fn square_roundtrip_collection() {
         let idx = square_idx();
-        assert_roundtrip(&idx);
+        assert_roundtrip(idx);
     }
 
     #[test]
     fn hex_roundtrip_collection() {
         let idx = hex_idx();
-        assert_roundtrip(&idx);
+        assert_roundtrip(idx);
     }
 
     fn spectre_tileset() -> Arc<TileSet<ZZ12>> {
@@ -1228,7 +1236,9 @@ mod tests {
             start_b: nt.cw_anchor_on_central,
             tile_id: nt.central_tile_id,
         };
-        ctx.add_tile(&pm)?;
+        if !ctx.add_tile(&pm) {
+            return None;
+        }
         let angles = ctx.angles().to_vec();
         let rot = crate::intgeom::rat::lex_min_rot(&angles);
         let mut canon = angles;
@@ -1244,6 +1254,7 @@ mod tests {
     /// BFS NTs. Each candidate must yield either:
     ///   - a closed configuration (= petal absorbs all of central), OR
     ///   - an NT whose canonical boundary matches one in our set.
+    ///
     /// This uses NO logic from the BFS step (try_step_*) — it's a pure
     /// brute-force independent check.
     #[test]
@@ -1294,7 +1305,7 @@ mod tests {
                             continue;
                         }
                         let mut trial = ac.aug.clone_for_mutation();
-                        if trial.add_tile(&pm).is_none() {
+                        if !trial.add_tile(&pm) {
                             continue;
                         }
                         seen.insert((ns_u, len, ne_u, tile_b), ());
@@ -1432,7 +1443,7 @@ mod tests {
                 ));
                 continue;
             };
-            if ctx.add_tile(&pm).is_none() {
+            if !ctx.add_tile(&pm) {
                 errors.push(format!(
                     "nt c={} ac={} ax={}: add_tile failed",
                     nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
@@ -1445,7 +1456,7 @@ mod tests {
     #[test]
     fn square_seeds_validate() {
         let idx = square_idx();
-        let errors = validate_seeds(&idx);
+        let errors = validate_seeds(idx);
         assert!(
             errors.is_empty(),
             "validation errors:\n{}",
@@ -1456,7 +1467,7 @@ mod tests {
     #[test]
     fn hex_seeds_validate() {
         let idx = hex_idx();
-        let errors = validate_seeds(&idx);
+        let errors = validate_seeds(idx);
         assert!(
             errors.is_empty(),
             "validation errors:\n{}",
@@ -1689,7 +1700,7 @@ mod tests {
                     ));
                     continue;
                 };
-                if ctx.add_tile(&pm).is_none() {
+                if !ctx.add_tile(&pm) {
                     errors.push(format!(
                         "seed {}: add_tile failed for new_nt {:?}",
                         i, new_nt
@@ -1765,7 +1776,7 @@ mod tests {
                     ));
                     continue;
                 };
-                if ctx.add_tile(&pm).is_none() {
+                if !ctx.add_tile(&pm) {
                     errors.push(format!(
                         "seed {}: add_tile failed for new_nt {:?}",
                         i, new_nt
