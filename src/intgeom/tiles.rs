@@ -37,6 +37,8 @@ pub fn spectre<T: IsComplex + HasZZ12 + Units>() -> Snake<T> {
 // However, P3 (pair of rhombs) have edges of the same length, so it works.
 // The needed edge markings (for proper Penrose tilings) are geometrically encoded as bump/dent pairs.
 
+/// Return the sequence of the Penrose P3 "narrow" (thin) rhomb tile
+/// over a compatible 10-fold cyclotomic ring.
 pub fn penrose_p3_narrow<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
@@ -48,6 +50,8 @@ pub fn penrose_p3_narrow<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
 
+/// Return the sequence of the Penrose P3 "wide" (fat) rhomb tile
+/// over a compatible 10-fold cyclotomic ring.
 pub fn penrose_p3_wide<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
@@ -59,38 +63,50 @@ pub fn penrose_p3_wide<T: IsComplex + HasZZ10 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
 
-// ----
+// ---- Tetrominoes ----
+//
+// The seven standard 4-cell polyomino shapes over a 4-fold cyclotomic
+// ring. Each is a connected union of unit squares with the canonical
+// letter-shaped outline.
 
+/// The square / O-tetromino: a 2×2 block of unit cells.
 #[allow(non_snake_case)]
 pub fn tetromino_O<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 1, 0, 1, 0, 1, 0, 1]).as_slice()).unwrap()
 }
 
+/// The straight / I-tetromino: a 1×4 strip.
 #[allow(non_snake_case)]
 pub fn tetromino_I<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 0, 0, 1, 1, 0, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
+/// The T-tetromino: three cells in a row with one centered above.
 #[allow(non_snake_case)]
 pub fn tetromino_T<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, -1, 1, 1, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
+/// The S-tetromino (right-handed skew): like an S laid on its side.
 #[allow(non_snake_case)]
 pub fn tetromino_S<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, -1, 1, 1, 0, 1]).as_slice()).unwrap()
 }
 
+/// The Z-tetromino: the mirror image of S.
 #[allow(non_snake_case)]
 pub fn tetromino_Z<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 0, 1, 1, -1, 1, 0, 1, 1]).as_slice()).unwrap()
 }
 
+/// The J-tetromino: three cells in a row with one attached to the
+/// upper-left of the leftmost cell.
 #[allow(non_snake_case)]
 pub fn tetromino_J<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, 0, 0, 1, 1, 0]).as_slice()).unwrap()
 }
 
+/// The L-tetromino: the mirror image of J.
 #[allow(non_snake_case)]
 pub fn tetromino_L<T: IsComplex + HasZZ4 + Units>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 0, 1, 1, 0, 0, 1, 0, 1, 1]).as_slice()).unwrap()

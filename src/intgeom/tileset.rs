@@ -1,11 +1,33 @@
+//! A `TileSet` is a small immutable collection of tile shapes (`Rat`s)
+//! used as the alphabet for patch construction.
+//!
+//! - All tiles must have the same chirality (asserted at construction).
+//! - Tiles are sorted into a deterministic canonical order and deduped,
+//!   so logically-equal tilesets compare equal regardless of input
+//!   order.
+//! - Tile indices `0..num_tiles()` are the stable identifiers used by
+//!   the rest of the patch/match machinery (`tile_id` fields on
+//!   `EdgeInfo`, `PatchMatch`, etc.).
+
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 
+/// An immutable, ordered, deduplicated collection of tile shapes.
+///
+/// All tiles in a `TileSet` share the same chirality. Tiles are stored
+/// in their `Rat`-canonical sort order; `TileSet::rat(i)` returns the
+/// tile at index `i` in that order. The index is stable for the
+/// lifetime of the `TileSet` and is what `tile_id` fields in
+/// `PatchMatch` / `EdgeInfo` / etc. refer to.
 pub struct TileSet<T: IsComplex> {
     rats: Vec<Rat<T>>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
+    /// Build a `TileSet` from the given tile shapes.
+    ///
+    /// Sorts and deduplicates the input. Panics if `rats` is empty or
+    /// if the tiles have mixed chirality (some CW and some CCW).
     pub fn new(mut rats: Vec<Rat<T>>) -> Self {
         assert!(!rats.is_empty(), "need at least one tile");
 
@@ -26,18 +48,23 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         TileSet { rats }
     }
 
+    /// Number of distinct tile shapes in the set.
     pub fn num_tiles(&self) -> usize {
         self.rats.len()
     }
 
+    /// Tile at index `i` (`0..num_tiles()`).
     pub fn rat(&self, i: usize) -> &Rat<T> {
         &self.rats[i]
     }
 
+    /// All tiles in their sorted/deduped order.
     pub fn rats(&self) -> &[Rat<T>] {
         &self.rats
     }
 
+    /// Look up the index of a specific tile, if present. Uses a binary
+    /// search over the canonical-sort order.
     #[allow(dead_code)]
     pub(crate) fn index_of(&self, rat: &Rat<T>) -> Option<usize> {
         self.rats.binary_search(rat).ok()

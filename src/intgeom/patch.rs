@@ -12,6 +12,17 @@ use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 
+/// Identifies a single tile edge by `(tile_id, tile_offset)`.
+///
+/// `tile_id` indexes into the patch's [`TileSet`]; `tile_offset` is the
+/// edge index within that tile's boundary (`0..tile.len()`).
+///
+/// On a [`GrowingPatch`] boundary, an `EdgeInfo` at position `i` says
+/// "the boundary edge at position `i` is edge `tile_offset` of an
+/// instance of tile `tile_id`". Different boundary positions can share
+/// the same `EdgeInfo` if the same tile shape appears multiple times
+/// in the patch (each tile *instance* gets a separate `patch_tile_id`,
+/// tracked elsewhere in `GrowingPatch`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EdgeInfo {
     pub tile_id: usize,
@@ -56,6 +67,25 @@ pub(crate) struct TileSegment {
     pub(crate) offset_start: usize,
 }
 
+/// A description of a candidate glue between the current patch
+/// boundary and a new tile.
+///
+/// Returned by [`GrowingPatch::get_all_matches`] and consumed by
+/// [`GrowingPatch::add_tile`].
+///
+/// # Edge-offset convention
+///
+/// * `start_a` is the first **matched** boundary position on the
+///   patch side: the match consumes edges `start_a, start_a+1, ...,
+///   start_a+len-1` (modulo current boundary length).
+/// * `start_b` is the first **surviving** edge on the new tile's
+///   side, just past the match. The new tile's surviving edges run
+///   `start_b, start_b+1, ..., start_b + (tile_len - len) - 1`
+///   (modulo `tile_len`).
+/// * `tile_id` indexes into the patch's [`TileSet`] — the shape of
+///   the new tile.
+///
+/// (Same convention as the lower-level [`MatchType`](crate::intgeom::matchtypes::MatchType).)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatchMatch {
     pub start_a: usize,
@@ -89,6 +119,11 @@ pub struct OpenVertexType {
     pub ccw: EdgeInfo,
 }
 
+/// Direction tag indicating which side of a vertex type a transition
+/// emerges from when stepping through the NT enumeration.
+///
+/// Used by `vertextypes` and `neighborhood` code to disambiguate the
+/// CW-vs-CCW orientation of edges incident with an open junction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransitionSide {
     Cw,
@@ -533,6 +568,12 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
 }
 
 impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
+    /// Construct a fresh `GrowingPatch` seeded with one tile from
+    /// `tileset` (the tile at `seed_tile_id`).
+    ///
+    /// The patch starts in the `Seed` state — no boundary yet, only
+    /// the seed tile. The first call to [`Self::add_tile`] transitions
+    /// to `Growing` and produces the initial boundary.
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let seed_matches =
@@ -863,10 +904,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         result
     }
 
+    /// `true` if the patch has a boundary (one or more `add_tile`
+    /// calls have succeeded); `false` while it's still just a seed.
     pub fn is_growing(&self) -> bool {
         matches!(self.state, PatchState::Growing { .. })
     }
 
+    /// All legal `add_tile` candidates for the current boundary, in
+    /// arbitrary order. Each candidate is edge-compatible and passes
+    /// the angle-math check, but geometric self-intersection is *not*
+    /// pre-filtered — `add_tile` does that final check.
     pub fn get_all_matches(&self) -> Vec<PatchMatch> {
         match &self.state {
             PatchState::Seed { cached_matches, .. } => cached_matches.clone(),
@@ -895,6 +942,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             .filter(move |m| m.tile_id == tile_id)
     }
 
+    /// All legal `add_tile` candidates whose match touches the boundary
+    /// vertex at `vertex_index`. A match "touches" a vertex if the
+    /// vertex lies in the closed range `[start_a, start_a + len]` of
+    /// the matched edges (see [`cyclic_range_contains`]).
     pub fn get_matches_touching_vertex(&self, vertex_index: usize) -> Vec<PatchMatch> {
         match &self.state {
             PatchState::Seed { cached_matches, .. } => {
@@ -962,10 +1013,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Number of distinct tile shapes in the underlying tileset (not
+    /// the number of tile instances in the patch).
     pub fn num_tiles(&self) -> usize {
         self.match_index.tileset().num_tiles()
     }
 
+    /// Length of the current boundary in edges. Returns 0 for a `Seed`
+    /// state (use [`Self::is_growing`] to check).
     pub fn boundary_len(&self) -> usize {
         match &self.state {
             PatchState::Growing { angles, .. } => angles.len(),
@@ -973,6 +1028,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// The boundary's cyclic angle sequence (one entry per boundary
+    /// vertex). Length matches [`Self::boundary_len`]; empty for a
+    /// `Seed` state.
     pub fn angles(&self) -> &[i8] {
         match &self.state {
             PatchState::Growing { angles, .. } => angles,
@@ -980,6 +1038,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Materialise the current patch as a `Rat` describing its
+    /// boundary. For a `Seed` state, returns the seed tile.
     pub fn to_rat(&self) -> Rat<T> {
         match &self.state {
             PatchState::Seed { tile_id, .. } => self.match_index.tileset().rat(*tile_id).clone(),
@@ -987,14 +1047,22 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Reference to the underlying tileset.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         self.match_index.tileset()
     }
 
+    /// Reference to the underlying `MatchTypeIndex` used for candidate
+    /// enumeration. Shared via `Arc` so callers can pass it to
+    /// associated functions like
+    /// [`Self::construct_witness_from_vt_sequence`].
     pub fn match_index(&self) -> &Arc<MatchTypeIndex<T>> {
         &self.match_index
     }
 
+    /// Per-boundary-position [`EdgeInfo`]: which tile shape and which
+    /// of its edges occupies each boundary position. Length matches
+    /// [`Self::boundary_len`].
     pub fn edges(&self) -> &[EdgeInfo] {
         match &self.state {
             PatchState::Growing { edges, .. } => edges,
@@ -1002,6 +1070,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Per-boundary-position lists of interior tile edges meeting at
+    /// that vertex. Non-empty only at junction vertices that have
+    /// multiple tiles converging (i.e. an [`OpenVertexType`] with
+    /// non-empty `inner`).
     pub fn inner_chains(&self) -> &[Vec<EdgeInfo>] {
         match &self.state {
             PatchState::Growing { inner_chains, .. } => inner_chains,
@@ -1009,6 +1081,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Per-boundary-position **patch tile id**: a fresh monotonic id
+    /// assigned to each tile *instance* placed in the patch.
+    /// Distinct from `EdgeInfo::tile_id` (which identifies the tile
+    /// *shape*): two boundary positions can share a tile_id but have
+    /// different patch_tile_ids if they belong to different instances
+    /// of the same shape.
     pub fn patch_tile_ids(&self) -> &[usize] {
         match &self.state {
             PatchState::Growing { patch_tile_ids, .. } => patch_tile_ids,
@@ -1024,6 +1102,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// Rotate the boundary to its canonical (lex-min) starting
+    /// position and remap `patch_tile_ids` to dense `0..k` order so
+    /// two patches with the same shape and same tile arrangement
+    /// compare equal. Useful before hashing or storing as a key.
     pub fn normalize(&mut self) {
         let (
             angles,
@@ -1173,6 +1255,9 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// `true` if boundary position `i` is a junction vertex — i.e.
+    /// the boundary angle there differs from the local tile's natural
+    /// internal angle, meaning multiple tiles meet at this vertex.
     pub fn is_junction(&self, i: usize) -> bool {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
@@ -1184,6 +1269,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         is_junction_at(self.angles(), edges, self.match_index.tileset(), i)
     }
 
+    /// At boundary position `pos`, find the nearest junctions in the
+    /// CW and CCW directions and return their relevant tile-offsets
+    /// (`(cw_offset, ccw_offset)`). Returns `None` for a `Seed`-state
+    /// patch or for `pos >= boundary_len`.
     pub fn neighbor_junction_offsets(&self, pos: usize) -> Option<(usize, usize)> {
         let (edges, n) = match &self.state {
             PatchState::Growing { edges, .. } => (edges, edges.len()),
@@ -1243,6 +1332,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         compute_segments(self.angles(), edges, self.match_index.tileset())
     }
 
+    /// Attempt to glue the tile described by `pm` onto the current
+    /// boundary. Returns `true` on success; `false` if the glue is
+    /// rejected (geometric collision, ±hturn junction, or invalid
+    /// match dimensions). On failure the patch state is unchanged.
+    ///
+    /// If the patch is in `Seed` state, the first successful call
+    /// transitions it to `Growing` and constructs the initial
+    /// boundary.
     pub fn add_tile(&mut self, pm: &PatchMatch) -> bool {
         match &self.state {
             PatchState::Seed { tile_id, .. } => {

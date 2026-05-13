@@ -1,3 +1,19 @@
+//! Match enumeration between tile boundaries.
+//!
+//! Two related abstractions live here:
+//!
+//! - [`MatchFinder`] enumerates legal glue matches between two
+//!   tilesets (or a tileset against itself) using cyclic string-match
+//!   indices. Use this for one-shot or filtered enumeration when you
+//!   need flexibility over which tile pairs to scan and what filter
+//!   to apply.
+//! - [`MatchTypeIndex`] pre-computes the full match enumeration for a
+//!   single tileset and indexes the results by starting `(tile, offset)`.
+//!   Use this when you'll query many times against a fixed tileset and
+//!   want O(1) candidate lookup.
+//!
+//! Both share the [`MatchType`] record describing a single match.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -9,6 +25,26 @@ use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
 use crate::stringmatch::CyclicMatchIndex;
 
+/// A description of a single legal glue match between two tile boundaries.
+///
+/// Identifies the two tiles by index into their respective tilesets,
+/// the starting *edge* offsets on each side, and the length (in edges)
+/// of the match.
+///
+/// # Edge-offset convention
+///
+/// * `start_a` is the first **matched** edge on side A: the match
+///   consumes edges `start_a, start_a+1, ..., start_a+len-1` (modulo
+///   `tile_a`'s edge count).
+/// * `start_b` is the first **surviving** edge on side B, immediately
+///   past the match: the match consumes edges `start_b-len, ...,
+///   start_b-1` (modulo `tile_b`'s edge count, walked in reverse since
+///   B is glued anti-parallel to A).
+///
+/// This asymmetry matches the convention used throughout the
+/// patch/glue path; the same `start_b` value flows directly into
+/// [`PatchMatch`](crate::intgeom::patch::PatchMatch) without
+/// translation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MatchType {
     pub tile_a: usize,
@@ -19,6 +55,10 @@ pub struct MatchType {
 }
 
 impl MatchType {
+    /// Realise this match by gluing the two tiles, producing the
+    /// resulting boundary as a `Rat`. Assumes the match has been
+    /// previously validated (e.g. it came from a `MatchFinder`); will
+    /// panic otherwise.
     pub fn apply<T: IsComplex + IsRingOrField + Units>(
         &self,
         rats_a: &[Rat<T>],
@@ -49,6 +89,22 @@ struct TypeEntry {
     second: MatchType,
 }
 
+/// Enumerates legal glue matches between two tilesets (or one tileset
+/// against itself).
+///
+/// Use the constructor that matches your scenario:
+///
+/// * [`MatchFinder::new`] — match a tileset against **itself**. Both
+///   `set_a` and `set_b` point at the same `Arc<TileSet>`. The
+///   resulting `MatchType`s describe glues between two tiles drawn
+///   from the same tileset.
+/// * [`MatchFinder::crossing`] — match **two distinct** tilesets
+///   against each other. `set_a` and `set_b` are different. Useful
+///   when one tileset represents already-placed boundaries and the
+///   other represents candidates to glue.
+///
+/// Internally backed by a [`CyclicMatchIndex`] over the concatenated
+/// tile angle sequences, so match queries are fast.
 pub struct MatchFinder<T: IsComplex> {
     set_a: Arc<TileSet<T>>,
     set_b: Arc<TileSet<T>>,
@@ -57,6 +113,8 @@ pub struct MatchFinder<T: IsComplex> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
+    /// Build a `MatchFinder` that enumerates self-matches within a
+    /// single tileset (`set_a == set_b == tileset`).
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let cmi = CyclicMatchIndex::new(&sequences);
@@ -68,6 +126,10 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
         }
     }
 
+    /// Build a `MatchFinder` that enumerates matches between two
+    /// distinct tilesets `a` and `b`. The returned `MatchType` values
+    /// have `tile_a` indexed into `a.rats()` and `tile_b` indexed into
+    /// `b.rats()`.
     pub fn crossing(a: Arc<TileSet<T>>, b: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = a
             .rats()
@@ -85,44 +147,61 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
         }
     }
 
+    /// The A-side tileset.
     pub fn set_a(&self) -> &Arc<TileSet<T>> {
         &self.set_a
     }
 
+    /// The B-side tileset (equal to `set_a` when constructed via [`Self::new`]).
     pub fn set_b(&self) -> &Arc<TileSet<T>> {
         &self.set_b
     }
 
+    /// Tile `i` from the A-side tileset.
     pub fn rat_a(&self, i: usize) -> &Rat<T> {
         self.set_a.rat(i)
     }
 
+    /// Tile `j` from the B-side tileset.
     pub fn rat_b(&self, j: usize) -> &Rat<T> {
         self.set_b.rat(j)
     }
 
+    /// Number of tiles in the A-side tileset.
     pub fn num_tiles_a(&self) -> usize {
         self.set_a.num_tiles()
     }
 
+    /// Number of tiles in the B-side tileset.
     pub fn num_tiles_b(&self) -> usize {
         self.set_b.num_tiles()
     }
 
+    /// Realise a `MatchType` against this finder's tilesets, producing
+    /// the resulting boundary `Rat`.
     pub fn apply_match(&self, m: &MatchType) -> Rat<T> {
         m.apply(self.set_a.rats(), self.set_b.rats())
     }
 
+    /// Return the maximal reverse-complementary cyclic substrings
+    /// shared between tile `i` (A-side) and tile `j` (B-side).
+    /// Includes raw matches that haven't yet been validated as legal
+    /// glues (e.g. they might cause self-intersection).
     pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<crate::stringmatch::CyclicMatch> {
         self.cmi.maximal_rc_matches(i, self.offset_b + j)
     }
 
+    /// Enumerate the legal glue matches between tile `i` (A-side) and
+    /// tile `j` (B-side). Matches are validated (no self-intersection,
+    /// no degenerate junction angles) and sorted by `(start_a, start_b)`.
     pub fn valid_matches(&self, i: usize, j: usize) -> Vec<MatchType> {
         let mut m = Self::validated_matches(self.candidates_for_pair(i, j));
         Self::sort_by_interval(&mut m);
         m
     }
 
+    /// Same as [`Self::valid_matches`] but returns the realised
+    /// boundary `Rat` alongside each match.
     pub fn valid_matches_with_rats(&self, i: usize, j: usize) -> Vec<(Rat<T>, MatchType)> {
         let mut m = Self::validated_matches_with_rats(self.candidates_for_pair(i, j));
         m.sort_by(|a, b| {
@@ -135,6 +214,11 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
+    /// Like [`Self::valid_matches_with_rats`] but only considers
+    /// matches that touch at least one "active" position on the A-side
+    /// boundary. `active[k]` selects edge `k` of tile `i`. Useful when
+    /// you want to enumerate glues incident with a specific boundary
+    /// region (e.g. a partial growth step).
     pub fn valid_matches_filtered(
         &self,
         i: usize,
@@ -230,16 +314,25 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
             .collect()
     }
 
+    /// Enumerate all legal glue matches across every `(A-tile, B-tile)`
+    /// pair. Sorted into a deterministic global order. Result excludes
+    /// matches that are involutions of one another (each glue is listed
+    /// once, not twice).
     pub fn all_valid_matches(&self) -> Vec<MatchType> {
         self.valid_matches_for_pairs(&self.all_pairs())
     }
 
+    /// Like [`Self::all_valid_matches`] but restricted to the given
+    /// tile-pair set. `(i, j)` denotes `(A-tile i, B-tile j)`.
     pub fn valid_matches_for_pairs(&self, pairs: &[(usize, usize)]) -> Vec<MatchType> {
         let mut m = Self::validated_matches(self.collect_candidates(pairs));
         Self::sort_global(&mut m);
         m
     }
 
+    /// Enumerate the distinct *resulting boundaries* (as `Rat`s)
+    /// produced by the legal glues across the given tile pairs.
+    /// Deduped via the `BTreeSet`.
     pub fn valid_results_for_pairs(&self, pairs: &[(usize, usize)]) -> BTreeSet<Rat<T>> {
         Self::validated_results(self.collect_candidates(pairs))
     }
@@ -363,6 +456,15 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     }
 }
 
+/// Partial-match record indexed by a fixed A-side `(tile, offset)`.
+///
+/// Returned by [`MatchTypeIndex::candidates_starting_at`]. The A-side
+/// is implicit in the lookup key; only the B-side coordinates plus the
+/// match length are stored.
+///
+/// The same edge-offset convention applies as on [`MatchType`]:
+/// `start_b` is the first **surviving** edge on side B, just past the
+/// match end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CandidateMatch {
     pub tile_b: usize,
@@ -370,6 +472,17 @@ pub struct CandidateMatch {
     pub len: usize,
 }
 
+/// Pre-computed index of all legal glue matches for a single tileset,
+/// indexed by starting `(tile, offset)`.
+///
+/// Built by exhaustively enumerating self-matches via [`MatchFinder`]
+/// at construction time, then indexed for O(1) lookup. Suited for
+/// repeated queries against a fixed tileset (e.g. the candidate-match
+/// path used by [`GrowingPatch`](crate::intgeom::patch::GrowingPatch)).
+///
+/// Internally deduplicates each match with its involution; the public
+/// [`Self::candidates_starting_at`] returns *both* directions
+/// (`tile_a` and the inverted `tile_b` lookup are both indexed).
 pub struct MatchTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<TypeEntry>,
@@ -377,6 +490,8 @@ pub struct MatchTypeIndex<T: IsComplex> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
+    /// Build the index by enumerating all legal self-matches and
+    /// indexing them by `(tile_a, start_a)`.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let mf = MatchFinder::new(Arc::clone(&tileset));
         let all_matches = mf.all_valid_matches();
@@ -431,14 +546,19 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         }
     }
 
+    /// The tileset this index was built from.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
 
+    /// Number of distinct match types (each pair of involutions
+    /// counted once). IDs run `1..=num_types()`.
     pub fn num_types(&self) -> usize {
         self.entries.len()
     }
 
+    /// Retrieve the canonical-direction `MatchType` for a 1-based id.
+    /// Use [`Self::signed_id`] + [`Self::apply`] if direction matters.
     pub fn get(&self, unsigned_id: usize) -> MatchType {
         assert!(
             unsigned_id >= 1 && unsigned_id <= self.entries.len(),
@@ -448,6 +568,9 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         self.entries[unsigned_id - 1].first
     }
 
+    /// Find a `MatchType`'s id (1-based) in this index, signed by
+    /// direction: positive for the canonical direction, negative for
+    /// its involution. `None` if not present.
     pub fn signed_id(&self, mt: &MatchType) -> Option<i32> {
         for (idx, entry) in self.entries.iter().enumerate() {
             if *mt == entry.first {
@@ -460,6 +583,9 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         None
     }
 
+    /// Realise the match at the signed id, producing the resulting
+    /// boundary as a `Rat`. Positive ids use the canonical direction;
+    /// negative ids use the involution.
     pub fn apply(&self, signed_id: i32) -> Rat<T> {
         let unsigned = signed_id.unsigned_abs() as usize;
         assert!(
@@ -476,15 +602,27 @@ impl<T: IsComplex + IsRingOrField + Units> MatchTypeIndex<T> {
         mt.apply(rats, rats)
     }
 
+    /// All candidate matches that start at edge `(tile_id, offset)` on
+    /// the A side. O(1) lookup; the returned slice borrows from the
+    /// pre-computed index.
     pub fn candidates_starting_at(&self, tile_id: usize, offset: usize) -> &[CandidateMatch] {
         &self.by_start[tile_id][offset]
     }
 
+    /// All candidate matches for `tile_id`, grouped by starting
+    /// offset. `result[offset]` is the same as `candidates_starting_at(tile_id, offset)`.
     pub fn all_candidates_for_tile(&self, tile_id: usize) -> &[Vec<CandidateMatch>] {
         &self.by_start[tile_id]
     }
 }
 
+/// Cheap angle-sum check for a single-edge (`len == 1`) match between
+/// boundary `a` at offset `ia` and tile `b` at offset `ib`.
+///
+/// A glue is single-edge-valid when the angles on both sides of the
+/// matched edge sum to strictly positive boundary turns (convex
+/// junctions). Returns `true` if both junction angle sums are
+/// positive.
 pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
     let na = a.len();
     let nb = b.len();
@@ -493,6 +631,10 @@ pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize)
     left > 0 && right > 0
 }
 
+/// Cheap angle-sum check for a multi-edge match: the two new junctions
+/// (at the CW and CCW endpoints of the match) must have non-negative
+/// boundary turn. Used as a pre-filter before the more expensive
+/// `try_glue_precomputed` validation.
 pub(crate) fn junction_gap_nonnegative(
     a: &[i8],
     ns: usize,

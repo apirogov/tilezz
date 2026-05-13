@@ -398,7 +398,7 @@ A balanced review should call this out:
 |-----|----------|------------------|----------|-------|
 | C1  | Critical | naming           | done     | renamed type to `RedelmeierPatch`; renamed module file `growing.rs` → `redelmeier.rs` |
 | C2  | Critical | visibility       | done     | `redelmeier.rs`: `RedelmeierPatch` and `GrowStats` → `pub(crate)`; deleted unused `RedelmeierPatch::{len, is_empty}` and `grow_redelmeier_profiled`; `make_free` is now `#[cfg(test)]` private. `PatchPos`/`HasPatchPos`/`Pos2`/`Pos4`/`Pos8` kept `pub` (required by the bound on the public `grow_redelmeier*` entry functions) |
-| C3  | Critical | docs             | pending  | doc-pass across patch/tileset/matchtypes/growing/rat |
+| C3  | Critical | docs             | done     | doc-pass across tileset, matchtypes, patch, tiles, redelmeier. Adds module-level docs to tileset/matchtypes/redelmeier; struct + method docs on `TileSet`, `MatchType` (incl. field semantics), `CandidateMatch`, `MatchFinder` (incl. `new` vs `crossing`), `MatchTypeIndex`, `EdgeInfo`, `PatchMatch`, `TransitionSide`, and the core `GrowingPatch` methods. Tetromino constructors now documented |
 | H1  | High     | dead code        | DECLINED | match API is intentional public surface — leave alone |
 | H2  | High     | dead code        | DECLINED | tetromino catalog is intentional public surface — leave alone |
 | H3  | High     | visibility       | done     | `is_junction_at`, `vertex_type_raw_from`, `update_inner_chains`, `junction_angle_sequence`, `compute_glue_angles`, `RawBoundary`, `RawGlueResult`, `glue_tile_to_raw_boundary`, `glue_match_to_raw_boundary`, `raw_is_junction`, `next_junction_on_raw_boundary` — all downgraded to private. `forward_match_length` stays `pub(crate)` (used by `neighborhood.rs`) |
@@ -409,7 +409,7 @@ A balanced review should call this out:
 | M4  | Medium   | visibility       | done     | `PatchVertexInfo` + its fields → `pub(crate)` + `#[allow(dead_code)]` |
 | M5  | Medium   | visibility       | done     | `TileSegment` + its fields → `pub(crate)` |
 | M6  | Medium   | visibility       | DECLINED | match API is intentional public surface — leave alone |
-| L1  | Low      | docs             | pending  | doc-comment on `MatchType` field semantics |
-| L2  | Low      | docs             | pending  | doc `MatchFinder::new` vs `crossing` |
-| L3  | Low      | docs             | pending  | document `cyclotomic_intersect` feature flag |
+| L1  | Low      | docs             | done     | done as part of C3 — `MatchType` and `CandidateMatch` now document the start_a/start_b edge-offset convention |
+| L2  | Low      | docs             | done     | done as part of C3 — `MatchFinder::new` (self-match) and `crossing` (a vs b) clearly distinguished |
+| L3  | Low      | docs             | done     | done as part of C3 — module-level doc on `redelmeier.rs` explains both backends and when to toggle `cyclotomic_intersect` |
 | L4  | Low      | visibility       | done     | done as part of C2 |
