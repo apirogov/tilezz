@@ -24,10 +24,11 @@ pub struct EdgeInfo {
 /// This is instrumental infrastructure — the interesting structure lives
 /// in [`OpenVertexType`] at actual junction vertices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PatchVertexInfo {
-    pub angle: i8,
-    pub cw: EdgeInfo,
-    pub ccw: EdgeInfo,
+#[allow(dead_code)] // only used in patch.rs tests today; kept as crate-internal API
+pub(crate) struct PatchVertexInfo {
+    pub(crate) angle: i8,
+    pub(crate) cw: EdgeInfo,
+    pub(crate) ccw: EdgeInfo,
 }
 
 /// A maximal contiguous range `[patch_start, patch_end)` of boundary
@@ -48,11 +49,11 @@ pub struct PatchVertexInfo {
 /// continue, modulo tile length, into the first segment's). Callers
 /// that need cyclic tile instances rather than linear segments must
 /// stitch these two halves themselves.
-pub struct TileSegment {
-    pub patch_start: usize,
-    pub patch_end: usize,
-    pub tile_id: usize,
-    pub offset_start: usize,
+pub(crate) struct TileSegment {
+    pub(crate) patch_start: usize,
+    pub(crate) patch_end: usize,
+    pub(crate) tile_id: usize,
+    pub(crate) offset_start: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,7 +170,7 @@ enum PatchState<T: IsComplex> {
 /// Returns true if position `pos` on the boundary is a junction vertex,
 /// i.e. the boundary angle differs from the tile's internal angle at the
 /// outgoing edge.
-pub(crate) fn is_junction_at<T: IsComplex + IsRingOrField + Units>(
+fn is_junction_at<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
@@ -185,7 +186,7 @@ pub(crate) fn is_junction_at<T: IsComplex + IsRingOrField + Units>(
 /// Used only by tests; prefer [`GrowingPatch::junction_vertex_type_at`] which
 /// returns `None` at non-junction positions.
 #[cfg(test)]
-pub(crate) fn vertex_type_raw_from(
+fn vertex_type_raw_from(
     edges: &[EdgeInfo],
     inner_chains: &[Vec<EdgeInfo>],
     pos: usize,
@@ -232,7 +233,7 @@ pub(crate) fn forward_match_length(
     len
 }
 
-pub fn update_inner_chains(
+fn update_inner_chains(
     old_inner: &[Vec<EdgeInfo>],
     old_edges: &[EdgeInfo],
     pm: &PatchMatch,
@@ -278,15 +279,15 @@ pub fn update_inner_chains(
 /// hole-free invariant applies here too: code that consumes a
 /// `RawBoundary` may assume the underlying region is simply connected.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RawBoundary {
-    pub angles: Vec<i8>,
-    pub edges: Vec<EdgeInfo>,
-    pub inner_chains: Vec<Vec<EdgeInfo>>,
-    pub patch_tile_ids: Vec<usize>,
+struct RawBoundary {
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    inner_chains: Vec<Vec<EdgeInfo>>,
+    patch_tile_ids: Vec<usize>,
 }
 
 #[cfg(test)]
-pub(crate) fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
+fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
     pos: usize,
@@ -295,7 +296,7 @@ pub(crate) fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[cfg(test)]
-pub(crate) fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
     from_pos: usize,
@@ -317,12 +318,12 @@ pub(crate) fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units
 /// Equivalently, it equals `old_survivor_len` (see the **rotation
 /// convention** documented on [`glue_match_to_raw_boundary`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RawGlueResult {
-    pub boundary: RawBoundary,
-    pub new_junc_pos: usize,
-    pub match_len: usize,
-    pub old_survivor_len: usize,
-    pub new_tile_survivor_len: usize,
+struct RawGlueResult {
+    boundary: RawBoundary,
+    new_junc_pos: usize,
+    match_len: usize,
+    old_survivor_len: usize,
+    new_tile_survivor_len: usize,
 }
 
 /// Glue one tile to a raw boundary at a boundary junction.
@@ -332,7 +333,7 @@ pub(crate) struct RawGlueResult {
 /// are therefore `tile_offset, tile_offset + 1, ...`, modulo the tile edge
 /// count. This helper is intentionally shared by VT witness construction and NT
 /// enumeration so that edge-offset conventions cannot diverge again.
-pub(crate) fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     junc_pos: usize,
     target: EdgeInfo,
@@ -389,7 +390,7 @@ pub(crate) fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 /// "anchor at CCW survivor" choice keeps the formula uniform — a single
 /// modular subtraction — and matches what's most natural for callers
 /// that just glued at a junction and want the next junction's index.
-pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     boundary: &RawBoundary,
     pm: &PatchMatch,
     tileset: &TileSet<T>,
@@ -467,7 +468,7 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 /// For convex tiles (positive internal angles), the sequence is
 /// monotonically non-increasing. This is asserted by
 /// `assert_junction_angle_sequence_valid` in tests.
-pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
+fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
     vtype: &OpenVertexType,
     tileset: &TileSet<T>,
 ) -> Vec<i8> {
@@ -884,7 +885,11 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn get_matches_for_tile(&self, tile_id: usize) -> impl Iterator<Item = PatchMatch> + '_ {
+    #[allow(dead_code)]
+    pub(crate) fn get_matches_for_tile(
+        &self,
+        tile_id: usize,
+    ) -> impl Iterator<Item = PatchMatch> + '_ {
         self.get_all_matches()
             .into_iter()
             .filter(move |m| m.tile_id == tile_id)
@@ -938,7 +943,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn ensure_candidates_materialized(&mut self) {
+    #[allow(dead_code)]
+    pub(crate) fn ensure_candidates_materialized(&mut self) {
         if let PatchState::Growing {
             angles,
             edges,
@@ -1010,7 +1016,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn next_tile_id(&self) -> usize {
+    #[allow(dead_code)]
+    pub(crate) fn next_tile_id(&self) -> usize {
         match &self.state {
             PatchState::Growing { next_tile_id, .. } => *next_tile_id,
             _ => 0,
@@ -1111,7 +1118,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         };
     }
 
-    pub fn candidates_by_start(&self) -> &[Vec<PatchMatch>] {
+    #[allow(dead_code)]
+    pub(crate) fn candidates_by_start(&self) -> &[Vec<PatchMatch>] {
         match &self.state {
             PatchState::Growing {
                 candidates_by_start,
@@ -1121,7 +1129,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    pub fn vertex_type_at(&self, i: usize) -> Option<PatchVertexInfo> {
+    #[allow(dead_code)]
+    pub(crate) fn vertex_type_at(&self, i: usize) -> Option<PatchVertexInfo> {
         let n = self.boundary_len();
         if n == 0 || i >= n {
             return None;
@@ -1203,7 +1212,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Some((cw_offset, ccw_offset))
     }
 
-    pub fn junction_vertices(&self) -> Vec<(usize, PatchVertexInfo)> {
+    #[allow(dead_code)]
+    pub(crate) fn junction_vertices(&self) -> Vec<(usize, PatchVertexInfo)> {
         let n = self.boundary_len();
         let mut result = Vec::new();
         for i in 0..n {
@@ -1220,7 +1230,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     /// See [`TileSegment`] for the cyclic-vs-linear caveat: when position
     /// 0 is not at a junction, one cyclic tile-instance run is split into
     /// two linear segments at the array seam.
-    pub fn tile_segments(&self) -> Vec<TileSegment> {
+    #[allow(dead_code)]
+    pub(crate) fn tile_segments(&self) -> Vec<TileSegment> {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
             _ => return vec![],
@@ -1833,7 +1844,7 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
 /// raw-boundary path used by witness construction (`glue_match_to_raw_boundary`)
 /// is intentionally permissive at this level — see
 /// [`construct_witness_from_vt_sequence`] for the open-VT enforcement.
-pub fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
+fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,

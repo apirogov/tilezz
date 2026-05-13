@@ -399,16 +399,16 @@ A balanced review should call this out:
 | C1  | Critical | naming           | done     | renamed type to `RedelmeierPatch`; renamed module file `growing.rs` → `redelmeier.rs` |
 | C2  | Critical | visibility       | done     | `redelmeier.rs`: `RedelmeierPatch` and `GrowStats` → `pub(crate)`; deleted unused `RedelmeierPatch::{len, is_empty}` and `grow_redelmeier_profiled`; `make_free` is now `#[cfg(test)]` private. `PatchPos`/`HasPatchPos`/`Pos2`/`Pos4`/`Pos8` kept `pub` (required by the bound on the public `grow_redelmeier*` entry functions) |
 | C3  | Critical | docs             | pending  | doc-pass across patch/tileset/matchtypes/growing/rat |
-| H1  | High     | dead code        | pending  | delete ~10 unused `MatchFinder` methods |
-| H2  | High     | dead code        | pending  | delete 6 unused tetromino constructors |
-| H3  | High     | visibility       | pending  | tighten internal `pub`/`pub(crate)` in `patch.rs` |
-| H4  | High     | visibility       | pending  | triage `GrowingPatch` `pub` methods (3 buckets) |
+| H1  | High     | dead code        | DECLINED | match API is intentional public surface — leave alone |
+| H2  | High     | dead code        | DECLINED | tetromino catalog is intentional public surface — leave alone |
+| H3  | High     | visibility       | done     | `is_junction_at`, `vertex_type_raw_from`, `update_inner_chains`, `junction_angle_sequence`, `compute_glue_angles`, `RawBoundary`, `RawGlueResult`, `glue_tile_to_raw_boundary`, `glue_match_to_raw_boundary`, `raw_is_junction`, `next_junction_on_raw_boundary` — all downgraded to private. `forward_match_length` stays `pub(crate)` (used by `neighborhood.rs`) |
+| H4  | High     | visibility       | done     | 7 `GrowingPatch` methods downgraded to `pub(crate)` with `#[allow(dead_code)]`: `get_matches_for_tile`, `ensure_candidates_materialized`, `next_tile_id`, `candidates_by_start`, `vertex_type_at`, `junction_vertices`, `tile_segments`. Public-API methods (`from_parts`, `construct_minimal_witness`, `construct_witness_from_vt_sequence`, `compute_candidates_covering_position`, `compute_all_candidates`) kept `pub` |
 | M1  | Medium   | architecture     | DEFERRED | split Seed/Growing types — wait for natural trigger |
 | M2  | Medium   | visibility       | pending  | downgrade 9 unused `Rat` methods |
 | M3  | Medium   | visibility       | pending  | `TileSet::index_of` → `pub(crate)`/`#[cfg(test)]` |
-| M4  | Medium   | visibility       | pending  | `PatchVertexInfo` → `pub(crate)` |
-| M5  | Medium   | visibility       | pending  | `TileSegment` → `pub(crate)` |
-| M6  | Medium   | visibility       | pending  | tighten 5 `MatchTypeIndex` + `MatchType::apply` methods |
+| M4  | Medium   | visibility       | done     | `PatchVertexInfo` + its fields → `pub(crate)` + `#[allow(dead_code)]` |
+| M5  | Medium   | visibility       | done     | `TileSegment` + its fields → `pub(crate)` |
+| M6  | Medium   | visibility       | DECLINED | match API is intentional public surface — leave alone |
 | L1  | Low      | docs             | pending  | doc-comment on `MatchType` field semantics |
 | L2  | Low      | docs             | pending  | doc `MatchFinder::new` vs `crossing` |
 | L3  | Low      | docs             | pending  | document `cyclotomic_intersect` feature flag |
