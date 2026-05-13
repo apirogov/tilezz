@@ -247,13 +247,15 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     /// Shift the starting node of the tile (does not affect equivalence).
-    pub fn cycle(mut self, offset: i64) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn cycle(mut self, offset: i64) -> Self {
         self.cyc = (self.cyc as i64 + offset).rem_euclid(self.len() as i64) as usize;
         self
     }
 
     /// Return a copy with shifted starting node.
-    pub fn cycled(&self, offset: i64) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn cycled(&self, offset: i64) -> Self {
         self.clone().cycle(offset)
     }
 
@@ -267,7 +269,8 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     /// Return a slice of the angle sequence with length n.
-    pub fn slice_from(&self, start: i64, len: usize) -> &[i8] {
+    #[allow(dead_code)]
+    pub(crate) fn slice_from(&self, start: i64, len: usize) -> &[i8] {
         self.slice_from_canonical(
             (self.cyc as i64 + start).rem_euclid(self.len() as i64) as usize,
             len,
@@ -275,7 +278,8 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     /// Return a slice of the angle sequence with length n.
-    pub fn slice(&self, len: usize) -> &[i8] {
+    #[allow(dead_code)]
+    pub(crate) fn slice(&self, len: usize) -> &[i8] {
         self.slice_from(0, len)
     }
 
@@ -289,7 +293,8 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     /// Return the maximal length of a match described by the given pair of indices.
     /// Note that this still does NOT mean that the tiles can be legally glued along the match,
     /// because outside of the match the sequence could have self-intersections.
-    pub fn match_length(&self, (self_start, other_end): (i64, i64), other: &Self) -> usize {
+    #[allow(dead_code)]
+    pub(crate) fn match_length(&self, (self_start, other_end): (i64, i64), other: &Self) -> usize {
         let x_seq = self.slice_from(self_start, self.len());
         let y_seq = other.revcomp_seq(other_end);
         match_length(x_seq, y_seq.as_slice()).0
