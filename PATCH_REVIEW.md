@@ -191,9 +191,9 @@ larger refactors after the file is shorter and the cruft is gone.
 | M3  | duplicate  | done     | new `enumerate_junction_candidates_at` helper takes `keep`/`emit` |
 | M4  | duplicate  | done     | `get_matches_touching_vertex` picks source up front, one shared loop |
 | M9  | test churn | done     | generic `brute_force_patches`; shared helpers `assert_minimal_witness_roundtrips_for`, `assert_witness_matches_brute_force`, `assert_junction_angle_sequence_valid`; deleted 3 strict-subset edges tests |
-| H6  | test       | pending  | add "state unchanged on failed add" |
-| H7  | test       | pending  | add self-intersection rejection |
-| H5  | test       | pending  | add reverse-direction coverage |
+| H5  | test       | done     | `compute_candidates_covering_position_matches_full_enumeration` asserts multiset equality with full enumeration (was: subset-only) |
+| H6  | test       | done     | `add_tile_failure_leaves_state_unchanged` snapshots state+candidate classification, exercises early-bound and geometric rollback paths |
+| H7  | test       | done     | `add_tile_rejects_geometrically_invalid_candidate` pins that some spectre candidates trigger the `check_segment_clear` rejection |
 | H3  | refactor   | DEFERRED | two-phase write — ask before invasive change |
 | H4  | semantics  | DEFERRED | hturn asymmetry — ask before changing |
 | M2  | refactor   | DEFERRED | edge-construction helper, after H3 |

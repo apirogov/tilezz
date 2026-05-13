@@ -2400,7 +2400,7 @@ mod tests {
     }
 
     #[test]
-    fn compute_candidates_covering_position_is_subset_of_all_candidates() {
+    fn compute_candidates_covering_position_matches_full_enumeration() {
         let ts: Arc<TileSet<ZZ12>> =
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
@@ -2412,35 +2412,178 @@ mod tests {
 
         let all_cands = GrowingPatch::compute_all_candidates(&mi, gp.angles(), gp.edges());
         let n = gp.angles().len();
-        let max_tile_len = ts.rats().iter().map(|r| r.len()).max().unwrap_or(0);
-        let k = max_tile_len.min(n);
+        let sort_key = |pm: &PatchMatch| (pm.start_a, pm.len, pm.start_b, pm.tile_id);
 
         for target in 0..n {
-            let covering = GrowingPatch::compute_candidates_covering_position(
+            let mut covering = GrowingPatch::compute_candidates_covering_position(
                 &mi,
                 gp.angles(),
                 gp.edges(),
                 target,
             );
 
-            let mut touching_from_all: Vec<_> = Vec::new();
-            for offset in 0..=k {
-                let start = (target + n - offset) % n;
-                for pm in &all_cands[start] {
-                    if cyclic_range_contains(pm.start_a, pm.len, target, n) {
-                        touching_from_all.push(pm.clone());
-                    }
-                }
-            }
+            // Ground truth: every match in the full enumeration that touches
+            // `target`. Compared as multisets via sorting.
+            let mut touching_truth: Vec<PatchMatch> = all_cands
+                .iter()
+                .flatten()
+                .filter(|pm| cyclic_range_contains(pm.start_a, pm.len, target, n))
+                .cloned()
+                .collect();
 
-            for pm in &covering {
-                assert!(
-                    touching_from_all.contains(pm),
-                    "covering returned extra match at target={target}: {:?}",
-                    pm
-                );
+            covering.sort_by_key(sort_key);
+            touching_truth.sort_by_key(sort_key);
+            assert_eq!(
+                covering, touching_truth,
+                "covering vs touching-from-all mismatch at target={target}",
+            );
+        }
+    }
+
+    /// Snapshot of externally observable patch state plus a probe of the
+    /// internal spatial grid via candidate accept/reject classification.
+    /// Two patches with equal snapshots behave identically against further
+    /// `add_tile` attempts — grid corruption would show up as a different
+    /// reject set even when angles/edges/etc. are still equal.
+    fn classify_candidates<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+    ) -> Vec<(PatchMatch, bool)> {
+        let mut results: Vec<(PatchMatch, bool)> = gp
+            .get_all_matches()
+            .into_iter()
+            .map(|pm| {
+                let mut trial = gp.clone_for_mutation();
+                let ok = trial.add_tile(&pm);
+                (pm, ok)
+            })
+            .collect();
+        results.sort_by_key(|(pm, _)| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
+        results
+    }
+
+    /// Snapshot every publicly observable component of a growing patch,
+    /// plus the candidate classification (which doubles as a grid probe).
+    #[allow(clippy::type_complexity)]
+    fn snapshot_growing<T: IsComplex + IsRingOrField + Units>(
+        gp: &GrowingPatch<T>,
+    ) -> (
+        Vec<i8>,
+        Vec<EdgeInfo>,
+        Vec<Vec<EdgeInfo>>,
+        Vec<usize>,
+        usize,
+        usize,
+        Vec<(PatchMatch, bool)>,
+    ) {
+        (
+            gp.angles().to_vec(),
+            gp.edges().to_vec(),
+            gp.inner_chains().to_vec(),
+            gp.patch_tile_ids().to_vec(),
+            gp.next_tile_id(),
+            gp.boundary_len(),
+            classify_candidates(gp),
+        )
+    }
+
+    /// `add_tile` has three failure rollback paths in `add_tile_growing`:
+    ///
+    /// 1. early bound check (`mlen == 0 || mlen > n || mlen > m`) — pre
+    ///    grid mutation;
+    /// 2. `compute_glue_angles` returns `None` — pre grid mutation;
+    /// 3. geometric collision (`check_segment_clear` failure) — post grid
+    ///    mutation, requires the segment-restoration step before
+    ///    `restore_growing`.
+    ///
+    /// All three must leave the patch state byte-identical. This test
+    /// exercises paths 1 and 3 (path 2 is filtered out by
+    /// `get_all_matches`'s `try_glue_precomputed`, so it's not easily
+    /// reachable from a public API).
+    #[test]
+    fn add_tile_failure_leaves_state_unchanged() {
+        // Path 1 fixture: any growing patch; the bad pm has len == 0.
+        let mut gp_p1 = hex_patch();
+        let first = gp_p1.get_all_matches()[0].clone();
+        assert!(gp_p1.add_tile(&first), "fixture setup");
+        let before_p1 = snapshot_growing(&gp_p1);
+        let bad_pm = PatchMatch {
+            start_a: 0,
+            len: 0,
+            start_b: 0,
+            tile_id: 0,
+        };
+        assert!(!gp_p1.add_tile(&bad_pm), "path 1 must reject len=0");
+        assert_eq!(
+            snapshot_growing(&gp_p1),
+            before_p1,
+            "path 1: state changed after a rejected pm with len=0",
+        );
+
+        // Path 3 fixture: 2-spectre patch where some candidates collide.
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp_p3 = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp_p3.get_all_matches().into_iter().next().unwrap();
+        assert!(gp_p3.add_tile(&first), "fixture setup");
+        let before_p3 = snapshot_growing(&gp_p3);
+        let failing_pm = before_p3
+            .6
+            .iter()
+            .find(|(_, ok)| !*ok)
+            .map(|(pm, _)| pm.clone())
+            .expect("path 3 needs at least one colliding candidate");
+        assert!(
+            !gp_p3.add_tile(&failing_pm),
+            "path 3 must reject a colliding candidate",
+        );
+        assert_eq!(
+            snapshot_growing(&gp_p3),
+            before_p3,
+            "path 3: state changed after a geometrically-rejected pm",
+        );
+    }
+
+    /// `get_all_matches()` returns edge-compatible candidates without
+    /// checking spatial overlap (it only filters via single-edge
+    /// compatibility and angle math). For non-convex tiles like spectre,
+    /// some of those candidates would self-intersect with existing tiles,
+    /// and `add_tile`'s `check_segment_clear` path is the safety net that
+    /// catches them. This test pins that behavior: at least one returned
+    /// candidate must be rejected, and at least one must be accepted (so
+    /// we know the candidate list is non-trivial).
+    #[test]
+    fn add_tile_rejects_geometrically_invalid_candidate() {
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(
+                vec![Rat::try_from(&tiles::spectre()).unwrap()],
+            ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first));
+
+        let candidates = gp.get_all_matches();
+        let (mut accepted, mut rejected) = (0usize, 0usize);
+        for pm in &candidates {
+            let mut trial = gp.clone_for_mutation();
+            if trial.add_tile(pm) {
+                accepted += 1;
+            } else {
+                rejected += 1;
             }
         }
+        assert!(
+            rejected > 0,
+            "expected at least one geometrically-invalid candidate to be rejected; \
+             all {} candidates were accepted",
+            candidates.len()
+        );
+        assert!(
+            accepted > 0,
+            "expected at least one valid candidate to be accepted; all {} rejected",
+            candidates.len()
+        );
     }
 
     #[test]
