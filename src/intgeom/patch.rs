@@ -2015,45 +2015,123 @@ mod tests {
         assert_eq!(angles.len(), n, "[{}] angles length", label);
     }
 
-    #[test]
-    fn edges_bi_hex_consistency() {
-        let gp = hex_patch();
-        for pm in gp.get_all_matches() {
-            let mut gp2 = hex_patch();
-            if gp2.add_tile(&pm) && gp2.is_growing() {
-                verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-hex pm {:?}", pm));
-            }
+    /// For each junction position on `glued`, build the minimal VT witness
+    /// and assert that extracting the VT from the witness yields the original.
+    /// Returns the number of junctions checked (asserts at least one).
+    fn assert_minimal_witness_roundtrips_for<T: IsComplex + IsRingOrField + Units>(
+        glued: &GrowingPatch<T>,
+        mi: &Arc<MatchTypeIndex<T>>,
+        label: &str,
+    ) {
+        let mut checked = 0;
+        for pos in 0..glued.boundary_len() {
+            let vt = match glued.junction_vertex_type_at(pos) {
+                Some(vt) => vt,
+                None => continue,
+            };
+            let (witness, wpos) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(mi))
+                .unwrap_or_else(|| {
+                    panic!("{label}: construct_minimal_witness failed at pos={pos} vt={vt:?}")
+                });
+            let reconstructed = vertex_type_raw_from(witness.edges(), witness.inner_chains(), wpos);
+            assert_eq!(
+                reconstructed, vt,
+                "{label}: roundtrip failed at pos={pos} for vt={vt:?}",
+            );
+            checked += 1;
         }
+        assert!(checked > 0, "{label}: expected at least one junction");
     }
 
-    #[test]
-    fn edges_bi_square_consistency() {
-        let gp = square_patch();
-        for pm in gp.get_all_matches() {
-            let mut gp2 = square_patch();
-            if gp2.add_tile(&pm) && gp2.is_growing() {
-                verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-sq pm {:?}", pm));
-            }
-        }
-    }
+    /// For each junction position on `brute`, construct the minimal witness,
+    /// locate the matching position in the witness boundary, and assert the
+    /// witness/brute VTs agree. Also asserts that the witness angle multiset
+    /// equals the brute-force angle multiset.
+    fn assert_witness_matches_brute_force<T: IsComplex + IsRingOrField + Units>(
+        brute: &GrowingPatch<T>,
+        mi: &Arc<MatchTypeIndex<T>>,
+        label: &str,
+    ) {
+        let brute_angles = brute.angles().to_vec();
+        let brute_edges = brute.edges().to_vec();
+        let brute_inner = brute.inner_chains().to_vec();
 
-    #[test]
-    fn edges_multi_hex_consistency() {
-        let gp = hex_patch();
-        let matches = gp.get_all_matches();
-        for pm1 in &matches {
-            let mut gp2 = hex_patch();
-            if !gp2.add_tile(pm1) || !gp2.is_growing() {
-                continue;
-            }
-            verify_edges_consistency(&gp2, gp2.tileset(), "2-hex");
-            for pm2 in gp2.get_all_matches() {
-                let mut gp3 = gp2.clone();
-                if gp3.add_tile(&pm2) && gp3.is_growing() {
-                    verify_edges_consistency(&gp3, gp3.tileset(), "3-hex");
+        for pos in 0..brute.boundary_len() {
+            let vt = match brute.junction_vertex_type_at(pos) {
+                Some(vt) => vt,
+                None => continue,
+            };
+            let (witness, _wpos) = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(mi))
+                .unwrap_or_else(|| panic!("{label}: witness construction failed at pos={pos}"));
+            let w_edges = witness.edges();
+            let w_inner = witness.inner_chains();
+
+            let mut found = false;
+            for wpos in 0..witness.boundary_len() {
+                let wvt = vertex_type_raw_from(w_edges, w_inner, wpos);
+                if wvt == vt {
+                    let brute_vt = vertex_type_raw_from(&brute_edges, &brute_inner, pos);
+                    assert_eq!(
+                        wvt, brute_vt,
+                        "{label}: witness VT != brute-force VT at pos={pos}"
+                    );
+                    found = true;
+                    break;
                 }
             }
+            assert!(
+                found,
+                "{label}: no matching position in witness for vt={vt:?} at pos={pos}"
+            );
+
+            let mut wa = witness.angles().to_vec();
+            let mut ba = brute_angles.clone();
+            wa.sort();
+            ba.sort();
+            assert_eq!(
+                wa, ba,
+                "{label}: witness angle multiset should equal brute-force angle multiset"
+            );
         }
+    }
+
+    /// For each junction on `glued`, assert that `junction_angle_sequence`
+    /// (a) ends at the witness junction angle, and (b) is monotonically
+    /// non-increasing. Returns the number of junctions checked (asserts at
+    /// least one).
+    fn assert_junction_angle_sequence_valid<T: IsComplex + IsRingOrField + Units>(
+        glued: &GrowingPatch<T>,
+        mi: &Arc<MatchTypeIndex<T>>,
+        label: &str,
+    ) {
+        let tileset = mi.tileset();
+        let mut checked = 0;
+        for pos in 0..glued.boundary_len() {
+            let vt = match glued.junction_vertex_type_at(pos) {
+                Some(vt) => vt,
+                None => continue,
+            };
+            let angles = junction_angle_sequence::<T>(&vt, tileset.as_ref());
+            let (witness, wpos) =
+                GrowingPatch::construct_minimal_witness(&vt, Arc::clone(mi)).expect("witness");
+            assert_eq!(
+                *angles.last().unwrap(),
+                witness.angles()[wpos],
+                "{label}: last angle should match witness junction angle for vt={vt:?}",
+            );
+            assert!(
+                angles[0] > 0,
+                "{label}: seed angle should be positive for vt={vt:?} (convex-tile invariant)",
+            );
+            for i in 1..angles.len() {
+                assert!(
+                    angles[i] <= angles[i - 1],
+                    "{label}: angles should be monotone decreasing at i={i} for vt={vt:?}: {angles:?}",
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 0, "{label}: expected at least one junction");
     }
 
     #[test]
@@ -2084,7 +2162,7 @@ mod tests {
         let sq: Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let patches = brute_force_zz4(&ts, 4);
+        let patches = brute_force_patches(&ts, 4);
 
         let mut by_tiles: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
         for ways in patches.values() {
@@ -2111,7 +2189,7 @@ mod tests {
         let hex: Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let patches = brute_force_zz12(&ts, 3);
+        let patches = brute_force_patches(&ts, 3);
 
         let mut by_tiles: BTreeMap<usize, usize> = BTreeMap::new();
         for ways in patches.values() {
@@ -2127,86 +2205,35 @@ mod tests {
         );
     }
 
-    fn brute_force_zz4(
-        ts: &Arc<TileSet<ZZ4>>,
+    fn brute_force_recurse<T: IsComplex + IsRingOrField + Units>(
+        gp: &mut GrowingPatch<T>,
+        history: &mut Vec<PatchMatch>,
         max_tiles: usize,
-    ) -> BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>> {
-        let mut results: BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
+        results: &mut BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>>,
+    ) {
+        let num_tiles = history.len() + 1;
+        let rat = gp.to_rat();
+        results.entry(rat).or_default().push(history.clone());
 
-        fn recurse(
-            gp: &mut GrowingPatch<ZZ4>,
-            history: &mut Vec<PatchMatch>,
-            max_tiles: usize,
-            results: &mut BTreeMap<Rat<ZZ4>, Vec<Vec<PatchMatch>>>,
-        ) {
-            let num_tiles = history.len() + 1;
-            let rat = gp.to_rat();
-            results.entry(rat).or_default().push(history.clone());
-
-            if num_tiles >= max_tiles || !gp.is_growing() {
-                return;
-            }
-
-            let matches = gp.get_all_matches();
-            for pm in &matches {
-                let mut gp2 = gp.clone();
-                if gp2.add_tile(pm) {
-                    history.push(pm.clone());
-                    recurse(&mut gp2, history, max_tiles, results);
-                    history.pop();
-                }
-            }
+        if num_tiles >= max_tiles || !gp.is_growing() {
+            return;
         }
 
-        results
-            .entry(ts.rat(0).clone())
-            .or_default()
-            .push(Vec::new());
-
-        let seed_matches = GrowingPatch::new(Arc::clone(ts), 0).get_all_matches();
-        for pm in &seed_matches {
-            let mut gp = GrowingPatch::new(Arc::clone(ts), 0);
-            assert!(gp.add_tile(pm), "first add");
-            let mut history = vec![pm.clone()];
-            recurse(&mut gp, &mut history, max_tiles, &mut results);
+        for pm in &gp.get_all_matches() {
+            let mut gp2 = gp.clone();
+            if gp2.add_tile(pm) {
+                history.push(pm.clone());
+                brute_force_recurse(&mut gp2, history, max_tiles, results);
+                history.pop();
+            }
         }
-
-        results
     }
 
-    fn brute_force_zz12(
-        ts: &Arc<TileSet<ZZ12>>,
+    fn brute_force_patches<T: IsComplex + IsRingOrField + Units>(
+        ts: &Arc<TileSet<T>>,
         max_tiles: usize,
-    ) -> BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>> {
-        let mut results: BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
-
-        fn recurse(
-            gp: &mut GrowingPatch<ZZ12>,
-            history: &mut Vec<PatchMatch>,
-            max_tiles: usize,
-            results: &mut BTreeMap<Rat<ZZ12>, Vec<Vec<PatchMatch>>>,
-        ) {
-            let num_tiles = history.len() + 1;
-            if gp.is_growing() {
-                let rat = gp.to_rat();
-                results.entry(rat).or_default().push(history.clone());
-            }
-
-            if num_tiles >= max_tiles || !gp.is_growing() {
-                return;
-            }
-
-            let matches = gp.get_all_matches();
-            for pm in &matches {
-                let mut gp2 = gp.clone();
-                if gp2.add_tile(pm) {
-                    history.push(pm.clone());
-                    recurse(&mut gp2, history, max_tiles, results);
-                    history.pop();
-                }
-            }
-        }
-
+    ) -> BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>> {
+        let mut results: BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>> = BTreeMap::new();
         results
             .entry(ts.rat(0).clone())
             .or_default()
@@ -2217,7 +2244,7 @@ mod tests {
             let mut gp = GrowingPatch::new(Arc::clone(ts), 0);
             assert!(gp.add_tile(pm), "first add");
             let mut history = vec![pm.clone()];
-            recurse(&mut gp, &mut history, max_tiles, &mut results);
+            brute_force_recurse(&mut gp, &mut history, max_tiles, &mut results);
         }
 
         results
@@ -2302,100 +2329,42 @@ mod tests {
     #[test]
     fn construct_minimal_witness_hex_roundtrip() {
         let gp = hex_patch();
-        let matches = gp.get_all_matches();
-        let ts = gp.match_index.clone();
-
-        for pm in &matches {
+        let mi = gp.match_index().clone();
+        for pm in &gp.get_all_matches() {
             let mut glued = gp.clone();
             assert!(glued.add_tile(pm), "glue should succeed");
-            let n = glued.boundary_len();
-            for pos in 0..n {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-                let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
-                assert!(
-                    result.is_some(),
-                    "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
-                );
-                let (witness, wpos) = result.unwrap();
-                let w_edges = witness.edges();
-                let w_inner = witness.inner_chains();
-                let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
-                assert_eq!(
-                    reconstructed, vt,
-                    "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
-                );
-            }
+            assert_minimal_witness_roundtrips_for(&glued, &mi, &format!("hex pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_square_roundtrip() {
         let gp = square_patch();
-        let matches = gp.get_all_matches();
-        let ts = gp.match_index.clone();
-
-        for pm in &matches {
+        let mi = gp.match_index().clone();
+        for pm in &gp.get_all_matches() {
             let mut glued = gp.clone();
             assert!(glued.add_tile(pm), "glue should succeed");
-            let n = glued.boundary_len();
-            for pos in 0..n {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-                let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
-                assert!(
-                    result.is_some(),
-                    "construct_minimal_witness should succeed for vt={vt:?} from pm={pm:?} pos={pos}"
-                );
-                let (witness, wpos) = result.unwrap();
-                let w_edges = witness.edges();
-                let w_inner = witness.inner_chains();
-                let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
-                assert_eq!(
-                    reconstructed, vt,
-                    "roundtrip failed for vt={vt:?} from pm={pm:?} pos={pos}"
-                );
-            }
+            assert_minimal_witness_roundtrips_for(&glued, &mi, &format!("square pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_hex_with_inner() {
         let gp = hex_patch();
-        let ts = gp.match_index.clone();
+        let mi = gp.match_index().clone();
         let first = gp.get_all_matches()[0].clone();
         let mut gp2 = gp.clone();
         assert!(gp2.add_tile(&first), "first add");
 
-        let second_candidates = gp2.get_all_matches();
-        let len1_match = second_candidates
-            .iter()
+        let len1_match = gp2
+            .get_all_matches()
+            .into_iter()
             .find(|pm| pm.len == 1)
-            .expect("need len-1 match")
-            .clone();
+            .expect("need len-1 match");
         let mut gp3 = gp2.clone();
         assert!(gp3.add_tile(&len1_match), "second add");
 
-        for pos in 0..gp3.boundary_len() {
-            let vt = match gp3.junction_vertex_type_at(pos) {
-                Some(vt) => vt,
-                None => continue,
-            };
-            let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts));
-            assert!(
-                result.is_some(),
-                "construct_minimal_witness should succeed for vt={vt:?} with inner"
-            );
-            let (witness, wpos) = result.unwrap();
-            let w_edges = witness.edges();
-            let w_inner = witness.inner_chains();
-            let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
-            assert_eq!(reconstructed, vt, "roundtrip failed for vt={vt:?}");
-        }
+        assert_minimal_witness_roundtrips_for(&gp3, &mi, "hex two-glue with inner");
     }
 
     #[test]
@@ -2477,94 +2446,22 @@ mod tests {
     #[test]
     fn construct_minimal_witness_hex_boundary_matches_brute_force() {
         let gp = hex_patch();
-        let ts = gp.match_index.clone();
-
+        let mi = gp.match_index().clone();
         for pm in &gp.get_all_matches() {
             let mut brute = gp.clone();
             assert!(brute.add_tile(pm), "brute glue");
-            let brute_angles = brute.angles().to_vec();
-            let brute_edges = brute.edges().to_vec();
-            let brute_inner = brute.inner_chains().to_vec();
-
-            for pos in 0..brute.boundary_len() {
-                let vt = match brute.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let (witness, _wpos) =
-                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
-                        .expect("reconstruction should succeed");
-
-                let w_edges = witness.edges();
-                let w_inner = witness.inner_chains();
-
-                let mut found = false;
-                for wpos in 0..witness.boundary_len() {
-                    let wvt = vertex_type_raw_from(w_edges, w_inner, wpos);
-                    if wvt == vt {
-                        let brute_vt = vertex_type_raw_from(&brute_edges, &brute_inner, pos);
-                        assert_eq!(
-                            wvt, brute_vt,
-                            "reconstructed VT should match brute-force VT"
-                        );
-                        found = true;
-                        break;
-                    }
-                }
-                assert!(found, "should find matching position in witness");
-
-                let mut wa: Vec<i8> = witness.angles().to_vec();
-                let mut ba = brute_angles.clone();
-                wa.sort();
-                ba.sort();
-                assert_eq!(
-                    wa, ba,
-                    "reconstructed angles should be a rotation of brute-force angles"
-                );
-            }
+            assert_witness_matches_brute_force(&brute, &mi, &format!("hex pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_square_boundary_matches_brute_force() {
         let gp = square_patch();
-        let ts = gp.match_index.clone();
-
+        let mi = gp.match_index().clone();
         for pm in &gp.get_all_matches() {
             let mut brute = gp.clone();
             assert!(brute.add_tile(pm), "brute glue");
-            let brute_edges = brute.edges().to_vec();
-            let brute_inner = brute.inner_chains().to_vec();
-
-            for pos in 0..brute.boundary_len() {
-                let vt = match brute.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let (witness, _wpos) =
-                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts))
-                        .expect("reconstruction should succeed");
-
-                let w_edges = witness.edges();
-                let w_inner = witness.inner_chains();
-
-                let mut found = false;
-                for wpos in 0..witness.boundary_len() {
-                    let wvt = vertex_type_raw_from(w_edges, w_inner, wpos);
-                    if wvt == vt {
-                        let brute_vt = vertex_type_raw_from(&brute_edges, &brute_inner, pos);
-                        assert_eq!(wvt, brute_vt);
-                        found = true;
-                        break;
-                    }
-                }
-                assert!(
-                    found,
-                    "should find matching position in witness for vt={vt:?}"
-                );
-            }
+            assert_witness_matches_brute_force(&brute, &mi, &format!("square pm {:?}", pm));
         }
     }
 
@@ -2575,27 +2472,10 @@ mod tests {
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
         let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-
         let pm = gp.get_all_matches().into_iter().next().unwrap();
         assert!(gp.add_tile(&pm), "first spectre glue");
-
-        let mi = gp.match_index.clone();
-        for pos in 0..gp.boundary_len() {
-            let vt = match gp.junction_vertex_type_at(pos) {
-                Some(vt) => vt,
-                None => continue,
-            };
-            let result = GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&mi));
-            assert!(
-                result.is_some(),
-                "spectre witness should succeed for vt={vt:?} at pos={pos}"
-            );
-            let (witness, wpos) = result.unwrap();
-            let w_edges = witness.edges();
-            let w_inner = witness.inner_chains();
-            let reconstructed = vertex_type_raw_from(w_edges, w_inner, wpos);
-            assert_eq!(reconstructed, vt, "spectre roundtrip failed for vt={vt:?}");
-        }
+        let mi = gp.match_index().clone();
+        assert_minimal_witness_roundtrips_for(&gp, &mi, "spectre first-glue");
     }
 
     #[test]
@@ -2659,54 +2539,12 @@ mod tests {
     #[test]
     fn test_junction_angle_sequence_hex() {
         let gp = hex_patch();
-        let matches = gp.get_all_matches();
-        let ts = gp.match_index.clone();
-        let tileset = ts.tileset();
-
-        let mut checked = 0;
-        for pm in &matches {
+        let mi = gp.match_index().clone();
+        for pm in &gp.get_all_matches() {
             let mut glued = gp.clone();
             assert!(glued.add_tile(pm), "glue");
-            for pos in 0..glued.boundary_len() {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let angles = junction_angle_sequence::<ZZ12>(&vt, tileset.as_ref());
-
-                let (witness, wpos) =
-                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts)).expect("witness");
-                let witness_angle = witness.angles()[wpos];
-
-                assert_eq!(
-                    *angles.last().unwrap(),
-                    witness_angle,
-                    "last angle should match witness junction angle for vt={:?}",
-                    vt
-                );
-
-                assert!(
-                    angles[0] > 0,
-                    "seed angle should be positive for vt={:?}",
-                    vt
-                );
-
-                for i in 1..angles.len() {
-                    assert!(
-                        angles[i] <= angles[i - 1],
-                        "angles should be monotonically decreasing at i={} for vt={:?}: {:?}",
-                        i,
-                        vt,
-                        angles
-                    );
-                }
-
-                checked += 1;
-            }
+            assert_junction_angle_sequence_valid(&glued, &mi, &format!("hex pm {:?}", pm));
         }
-        eprintln!("hex: checked {} VTs", checked);
-        assert!(checked > 0);
     }
 
     #[test]
@@ -2908,46 +2746,12 @@ mod tests {
     #[test]
     fn test_junction_angle_sequence_square() {
         let gp = square_patch();
-        let matches = gp.get_all_matches();
-        let ts = gp.match_index.clone();
-        let tileset = ts.tileset();
-
-        let mut checked = 0;
-        for pm in &matches {
+        let mi = gp.match_index().clone();
+        for pm in &gp.get_all_matches() {
             let mut glued = gp.clone();
             assert!(glued.add_tile(pm), "glue");
-            for pos in 0..glued.boundary_len() {
-                let vt = match glued.junction_vertex_type_at(pos) {
-                    Some(vt) => vt,
-                    None => continue,
-                };
-
-                let angles = junction_angle_sequence::<ZZ4>(&vt, tileset.as_ref());
-
-                let (witness, wpos) =
-                    GrowingPatch::construct_minimal_witness(&vt, Arc::clone(&ts)).expect("witness");
-                assert_eq!(
-                    *angles.last().unwrap(),
-                    witness.angles()[wpos],
-                    "last angle mismatch for vt={:?}",
-                    vt
-                );
-
-                for i in 1..angles.len() {
-                    assert!(
-                        angles[i] <= angles[i - 1],
-                        "non-decreasing at i={} for vt={:?}: {:?}",
-                        i,
-                        vt,
-                        angles
-                    );
-                }
-
-                checked += 1;
-            }
+            assert_junction_angle_sequence_valid(&glued, &mi, &format!("square pm {:?}", pm));
         }
-        eprintln!("square: checked {} VTs", checked);
-        assert!(checked > 0);
     }
 
     #[test]
