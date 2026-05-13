@@ -388,7 +388,7 @@ fn trace_positions_from<P: PatchPos>(start: P, start_dir: i8, angles: &[i8]) -> 
     positions
 }
 
-pub struct GrowingPatch<T: HasPatchPos> {
+pub struct RedelmeierPatch<T: HasPatchPos> {
     angles: Vec<i8>,
     counters: Vec<usize>,
     next_counter: usize,
@@ -398,7 +398,7 @@ pub struct GrowingPatch<T: HasPatchPos> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: HasPatchPos> GrowingPatch<T> {
+impl<T: HasPatchPos> RedelmeierPatch<T> {
     pub fn len(&self) -> usize {
         self.angles.len()
     }
@@ -408,7 +408,7 @@ impl<T: HasPatchPos> GrowingPatch<T> {
     }
 }
 
-impl<T: HasPatchPos> GrowingPatch<T> {
+impl<T: HasPatchPos> RedelmeierPatch<T> {
     pub fn from_seed(seed: &Rat<T>) -> Self {
         let canonical = seed.clone().canonical();
         let seq = canonical.seq();
@@ -417,7 +417,7 @@ impl<T: HasPatchPos> GrowingPatch<T> {
         let all_positions = trace_positions_from(T::Pos::zero(), 0, seq);
         let positions = all_positions[..n].to_vec();
         let visited = all_positions.into_iter().collect();
-        GrowingPatch {
+        RedelmeierPatch {
             angles: seq.to_vec(),
             counters: (0..n).collect(),
             next_counter: n,
@@ -515,7 +515,7 @@ impl<T: HasPatchPos> GrowingPatch<T> {
         sites
     }
 
-    fn apply_site(&self, site: &GlueSite, seed: &Rat<T>) -> Option<GrowingPatch<T>> {
+    fn apply_site(&self, site: &GlueSite, seed: &Rat<T>) -> Option<RedelmeierPatch<T>> {
         let seed_seq = seed.seq();
         let m = seed_seq.len();
         let n = self.angles.len();
@@ -598,7 +598,7 @@ impl<T: HasPatchPos> GrowingPatch<T> {
 
         let cached_rat = Rat::from_canonical_angles_unchecked(new_angles.clone());
 
-        Some(GrowingPatch {
+        Some(RedelmeierPatch {
             angles: new_angles,
             counters: new_counters,
             next_counter: nc,
@@ -670,7 +670,7 @@ where
         results: BTreeMap::new(),
         stats: GrowStats::default(),
     };
-    let initial = GrowingPatch::from_seed(seed);
+    let initial = RedelmeierPatch::from_seed(seed);
     let initial_rat = initial.to_rat();
     let stored = if free {
         std::cmp::min(initial_rat.clone(), initial_rat.reflected())
@@ -683,7 +683,7 @@ where
 }
 
 fn grow_recursive_inner<T>(
-    patch: &GrowingPatch<T>,
+    patch: &RedelmeierPatch<T>,
     seed: &Rat<T>,
     min_counter: usize,
     current_size: usize,
