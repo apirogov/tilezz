@@ -2158,6 +2158,33 @@ mod tests {
         }
     }
 
+    /// Assert two angle sequences are equal up to cyclic rotation (i.e.
+    /// describe the same closed shape). Stronger than the
+    /// sort-the-multisets comparison: two unrelated sequences with the
+    /// same angle counts would pass a sorted equality but fail this.
+    fn assert_same_cyclic_shape(a: &[i8], b: &[i8], label: &str) {
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "{label}: angle sequences have different lengths ({} vs {})",
+            a.len(),
+            b.len(),
+        );
+        if a.is_empty() {
+            return;
+        }
+        let mut a_canon = a.to_vec();
+        let a_rot = crate::intgeom::rat::lex_min_rot(&a_canon);
+        a_canon.rotate_left(a_rot);
+        let mut b_canon = b.to_vec();
+        let b_rot = crate::intgeom::rat::lex_min_rot(&b_canon);
+        b_canon.rotate_left(b_rot);
+        assert_eq!(
+            a_canon, b_canon,
+            "{label}: angle sequences are not cyclic rotations of each other"
+        );
+    }
+
     fn verify_edges_consistency<T: IsComplex + IsRingOrField + Units>(
         gp: &GrowingPatch<T>,
         ts: &Arc<TileSet<T>>,
@@ -2274,13 +2301,14 @@ mod tests {
                 "{label}: no matching position in witness for vt={vt:?} at pos={pos}"
             );
 
-            let mut wa = witness.angles().to_vec();
-            let mut ba = brute_angles.clone();
-            wa.sort();
-            ba.sort();
-            assert_eq!(
-                wa, ba,
-                "{label}: witness angle multiset should equal brute-force angle multiset"
+            // For these fixtures (bi-hex and bi-square), the brute patch
+            // *is* the minimum-witness shape, so witness and brute should
+            // describe the same closed shape — same boundary up to
+            // cyclic rotation.
+            assert_same_cyclic_shape(
+                witness.angles(),
+                &brute_angles,
+                &format!("{label}: witness vs brute"),
             );
         }
     }
@@ -3224,14 +3252,9 @@ mod tests {
         let rat_result = rat.try_glue((0, 0), &rat).expect("rat glue");
         let raw_result = angles::glue_raw_angles::<ZZ12>(seq, seq, 0, 1, 0).expect("raw glue");
 
-        let rat_seq = rat_result.seq();
-        let raw_seq = &raw_result.angles;
-
-        let mut rat_sorted: Vec<i8> = rat_seq.to_vec();
-        let mut raw_sorted = raw_seq.clone();
-        rat_sorted.sort();
-        raw_sorted.sort();
-        assert_eq!(rat_sorted, raw_sorted);
+        // Both glue paths must produce the same boundary up to cyclic
+        // rotation (they may pick different starting positions).
+        assert_same_cyclic_shape(rat_result.seq(), &raw_result.angles, "rat vs raw glue");
     }
 
     #[test]
@@ -3267,13 +3290,12 @@ mod tests {
             GrowingPatch::construct_witness_from_vt_sequence(std::slice::from_ref(&vt), mi)
                 .expect("reconstruction");
 
-        assert_eq!(minimal.boundary_len(), reconstructed.boundary_len());
-
-        let mut min_angles: Vec<i8> = minimal.angles().to_vec();
-        let mut recon_angles: Vec<i8> = reconstructed.angles().to_vec();
-        min_angles.sort();
-        recon_angles.sort();
-        assert_eq!(min_angles, recon_angles);
+        // construct_minimal_witness delegates to
+        // construct_witness_from_vt_sequence for single-element input,
+        // so the two outputs must be byte-identical, not just congruent.
+        assert_eq!(minimal.angles(), reconstructed.angles());
+        assert_eq!(minimal.edges(), reconstructed.edges());
+        assert_eq!(minimal.inner_chains(), reconstructed.inner_chains());
     }
 
     /// Build a 5-hexagon plus-shaped cross: a central hex with four
@@ -3408,12 +3430,11 @@ mod tests {
         let result = GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, mi);
         let (reconstructed, _junc_positions) = result.expect("reconstruction should succeed");
 
-        let mut orig_angles: Vec<i8> = gp.angles().to_vec();
-        let mut recon_angles: Vec<i8> = reconstructed.angles().to_vec();
-        orig_angles.sort();
-        recon_angles.sort();
-        assert_eq!(orig_angles, recon_angles, "sorted angles should match");
-
+        assert_same_cyclic_shape(
+            gp.angles(),
+            reconstructed.angles(),
+            "5-hex-cross: reconstructed vs original",
+        );
         assert_eq!(
             reconstructed.boundary_len(),
             gp.boundary_len(),
@@ -3587,13 +3608,10 @@ mod tests {
         assert_eq!(n, 10);
 
         let ref_angles = t_tetromino_angles();
-        let mut ref_sorted = ref_angles.clone();
-        ref_sorted.sort();
-        let mut angles_sorted = gp.angles().to_vec();
-        angles_sorted.sort();
-        assert_eq!(
-            angles_sorted, ref_sorted,
-            "built patch should be T tetromino"
+        assert_same_cyclic_shape(
+            gp.angles(),
+            &ref_angles,
+            "built patch should be the T tetromino shape",
         );
 
         let mut vt_seq: Vec<OpenVertexType> = Vec::new();
@@ -3620,11 +3638,10 @@ mod tests {
             "boundary length should match"
         );
 
-        let mut recon_sorted = reconstructed.angles().to_vec();
-        recon_sorted.sort();
-        assert_eq!(
-            recon_sorted, ref_sorted,
-            "reconstructed angles should match T"
+        assert_same_cyclic_shape(
+            reconstructed.angles(),
+            &ref_angles,
+            "reconstructed angles should match T",
         );
 
         let recon_juncs: Vec<usize> = (0..reconstructed.boundary_len())
