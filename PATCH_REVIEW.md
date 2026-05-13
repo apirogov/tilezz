@@ -202,6 +202,9 @@ larger refactors after the file is shorter and the cruft is gone.
 | L3  | smell      | done | `cyclic_range_contains` doc explains inclusive-on-both-ends "vertex touched by match" semantics |
 | L4  | smell      | done | doc comments on `forward_match_length`, `junction_angle_sequence`, `compute_glue_angles` |
 | L7  | smell      | done | comment on `init_from_first_add`'s Snake-batch path explains why it differs from `add_tile_growing`'s incremental path (and points to the cross-check test) |
+| M13 | test       | done | deleted `segment_cyclic_invariant` and `mixed_hex_square_add_tile` (vacuous subsets of `edges_self_consistent` / `edges_mixed_consistency`) |
+| M14 | new tests  | done | `vertex_type_at_returns_consistent_info`, `neighbor_junction_offsets_returns_valid_offsets`, `tile_segments_partitions_boundary` (with explicit handling of the linear-vs-cyclic segment-start seam) |
+| docs/refactor | refactor | done | `compute_segments` now uses the **canonical** `is_junction_at` check as the segment-break condition (the prior `tile_change` heuristic over-segmented on intra-tile wrap-arounds and could under-segment for pathological same-tile-id glues); `GrowingPatch` + `RawBoundary` doc the hole-free / edge-to-edge invariants; `TileSegment` docs the cyclic-vs-linear seam |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
 | M6  | design     | DEFERRED | rotation convention — own ticket |
 | M10 | refactor   | DEFERRED | seg_data GC — needs design |
