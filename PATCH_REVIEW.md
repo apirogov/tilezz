@@ -404,8 +404,8 @@ A balanced review should call this out:
 | H3  | High     | visibility       | done     | `is_junction_at`, `vertex_type_raw_from`, `update_inner_chains`, `junction_angle_sequence`, `compute_glue_angles`, `RawBoundary`, `RawGlueResult`, `glue_tile_to_raw_boundary`, `glue_match_to_raw_boundary`, `raw_is_junction`, `next_junction_on_raw_boundary` — all downgraded to private. `forward_match_length` stays `pub(crate)` (used by `neighborhood.rs`) |
 | H4  | High     | visibility       | done     | 7 `GrowingPatch` methods downgraded to `pub(crate)` with `#[allow(dead_code)]`: `get_matches_for_tile`, `ensure_candidates_materialized`, `next_tile_id`, `candidates_by_start`, `vertex_type_at`, `junction_vertices`, `tile_segments`. Public-API methods (`from_parts`, `construct_minimal_witness`, `construct_witness_from_vt_sequence`, `compute_candidates_covering_position`, `compute_all_candidates`) kept `pub` |
 | M1  | Medium   | architecture     | DEFERRED | split Seed/Growing types — wait for natural trigger |
-| M2  | Medium   | visibility       | pending  | downgrade 9 unused `Rat` methods |
-| M3  | Medium   | visibility       | pending  | `TileSet::index_of` → `pub(crate)`/`#[cfg(test)]` |
+| M2  | Medium   | visibility       | done     | 5 internal-helper `Rat` methods (`cycle`, `cycled`, `slice`, `slice_from`, `match_length` method-form) → `pub(crate)` + `#[allow(dead_code)]`. Conservative: kept `len`, `is_empty`, `is_convex`, `is_canonical`, `double_area` as `pub` since they're conventional/semantic public accessors |
+| M3  | Medium   | visibility       | done     | `TileSet::index_of` → `pub(crate)` + `#[allow(dead_code)]` |
 | M4  | Medium   | visibility       | done     | `PatchVertexInfo` + its fields → `pub(crate)` + `#[allow(dead_code)]` |
 | M5  | Medium   | visibility       | done     | `TileSegment` + its fields → `pub(crate)` |
 | M6  | Medium   | visibility       | DECLINED | match API is intentional public surface — leave alone |

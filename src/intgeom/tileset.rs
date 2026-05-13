@@ -38,7 +38,8 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
         &self.rats
     }
 
-    pub fn index_of(&self, rat: &Rat<T>) -> Option<usize> {
+    #[allow(dead_code)]
+    pub(crate) fn index_of(&self, rat: &Rat<T>) -> Option<usize> {
         self.rats.binary_search(rat).ok()
     }
 }
