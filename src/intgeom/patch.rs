@@ -1219,8 +1219,58 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> bool {
+        // === Pre-checks against immutable state ===
+        //
+        // Paths 1, 2, 4 are invariant violations that legitimate callers
+        // (i.e. `get_all_matches`) never produce: bounds (1) are enforced by
+        // `forward_match_length`, the ±hturn rejection (2) is already done
+        // by `try_glue_precomputed` inside `get_all_matches`, and full
+        // closure (4) is geometrically impossible since the patch interior
+        // is already filled. The `debug_assert!`s catch any bugs in tests;
+        // the `return false`s are release-mode safety nets that leave
+        // `self.state` untouched (no mem::take has happened yet).
+        let n = self.boundary_len();
+        let mlen = pm.len;
+        let m = self.match_index.tileset().rat(pm.tile_id).seq().len();
+
+        debug_assert!(
+            mlen > 0 && mlen <= n && mlen <= m,
+            "add_tile_growing: invalid mlen={mlen} (n={n}, m={m}); \
+             get_all_matches() should never produce this"
+        );
+        if mlen == 0 || mlen > n || mlen > m {
+            return false;
+        }
+
+        let new_angles =
+            match compute_glue_angles::<T>(self.angles(), pm, self.match_index.tileset()) {
+                Some(a) => a,
+                None => {
+                    debug_assert!(
+                        false,
+                        "compute_glue_angles returned None; get_all_matches() \
+                         should already filter ±hturn glues via try_glue_precomputed"
+                    );
+                    return false;
+                }
+            };
+
+        let seg_len_old = n - mlen;
+        let seg_len_new = m - mlen;
+        let new_len = seg_len_old + seg_len_new;
+        debug_assert!(
+            new_len > 0,
+            "add_tile_growing: new_len == 0 is geometrically impossible — \
+             would require placing the new tile entirely inside the existing patch"
+        );
+        if new_len == 0 {
+            return false;
+        }
+
+        // === Take state. Path 3 (geometric collision) is the only remaining
+        // rollback path; it mutates `grid`, so we must restore on failure. ===
         let (
-            angles,
+            old_angles,
             edges,
             old_inner,
             positions,
@@ -1257,54 +1307,6 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             ),
             _ => return false,
         };
-
-        let n = angles.len();
-        let mlen = pm.len;
-        let tileset = self.match_index.tileset();
-        let m = tileset.rat(pm.tile_id).seq().len();
-
-        if mlen == 0 || mlen > n || mlen > m {
-            self.restore_growing(
-                angles,
-                edges,
-                old_inner,
-                positions,
-                grid,
-                seg_data,
-                boundary_edge_ids,
-                next_edge_id,
-                patch_tile_ids,
-                next_tile_id,
-            );
-            return false;
-        }
-
-        let new_angles = match compute_glue_angles::<T>(&angles, pm, tileset) {
-            Some(a) => a,
-            None => {
-                self.restore_growing(
-                    angles,
-                    edges,
-                    old_inner,
-                    positions,
-                    grid,
-                    seg_data,
-                    boundary_edge_ids,
-                    next_edge_id,
-                    patch_tile_ids,
-                    next_tile_id,
-                );
-                return false;
-            }
-        };
-
-        let seg_len_old = n - mlen;
-        let seg_len_new = m - mlen;
-        let new_len = seg_len_old + seg_len_new;
-
-        if new_len == 0 {
-            return false;
-        }
 
         let ccw_pos = (pm.start_a + mlen) % n;
 
@@ -1358,7 +1360,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 register_segment::<T>(&mut grid, p1, p2, id);
             }
             self.restore_growing(
-                angles,
+                old_angles,
                 edges,
                 old_inner,
                 positions,
@@ -1837,27 +1839,29 @@ mod tests {
     #[test]
     fn junction_vertex_ids_nonempty_after_each_add() {
         let mut gp = hex_patch();
-        let matches = gp.get_all_matches();
-
-        for (step, pm) in matches.iter().enumerate() {
-            if !gp.add_tile(pm) {
+        let mut step = 0;
+        // Recompute candidates after each add — pms from a stale patch
+        // state are not valid input to `add_tile` once the boundary changes.
+        while step < 3 {
+            let candidates = gp.get_all_matches();
+            let pm = match candidates.first() {
+                Some(pm) => pm.clone(),
+                None => break,
+            };
+            if !gp.add_tile(&pm) {
                 break;
             }
-            let edges = gp.edges();
             assert!(
-                !edges.is_empty(),
-                "step {}: edges should not be empty",
-                step
+                !gp.edges().is_empty(),
+                "step {step}: edges should not be empty"
             );
-            if step < 3 {
-                let junctions = gp.junction_vertices();
-                assert!(
-                    !junctions.is_empty(),
-                    "step {}: should have junction vertices",
-                    step
-                );
-            }
+            assert!(
+                !gp.junction_vertices().is_empty(),
+                "step {step}: should have junction vertices"
+            );
+            step += 1;
         }
+        assert!(step > 0, "expected at least one successful add");
     }
 
     #[test]
@@ -2486,62 +2490,36 @@ mod tests {
         )
     }
 
-    /// `add_tile` has three failure rollback paths in `add_tile_growing`:
-    ///
-    /// 1. early bound check (`mlen == 0 || mlen > n || mlen > m`) — pre
-    ///    grid mutation;
-    /// 2. `compute_glue_angles` returns `None` — pre grid mutation;
-    /// 3. geometric collision (`check_segment_clear` failure) — post grid
-    ///    mutation, requires the segment-restoration step before
-    ///    `restore_growing`.
-    ///
-    /// All three must leave the patch state byte-identical. This test
-    /// exercises paths 1 and 3 (path 2 is filtered out by
-    /// `get_all_matches`'s `try_glue_precomputed`, so it's not easily
-    /// reachable from a public API).
+    /// The only legitimate rejection path in `add_tile_growing` is the
+    /// geometric collision check (`check_segment_clear`) — paths 1, 2, 4
+    /// are invariants that legitimate callers (`get_all_matches`) never
+    /// violate. This test exercises path 3 against a 2-spectre patch and
+    /// asserts that the full patch state (plus a grid probe via candidate
+    /// classification) is byte-identical after the failed `add_tile`.
     #[test]
     fn add_tile_failure_leaves_state_unchanged() {
-        // Path 1 fixture: any growing patch; the bad pm has len == 0.
-        let mut gp_p1 = hex_patch();
-        let first = gp_p1.get_all_matches()[0].clone();
-        assert!(gp_p1.add_tile(&first), "fixture setup");
-        let before_p1 = snapshot_growing(&gp_p1);
-        let bad_pm = PatchMatch {
-            start_a: 0,
-            len: 0,
-            start_b: 0,
-            tile_id: 0,
-        };
-        assert!(!gp_p1.add_tile(&bad_pm), "path 1 must reject len=0");
-        assert_eq!(
-            snapshot_growing(&gp_p1),
-            before_p1,
-            "path 1: state changed after a rejected pm with len=0",
-        );
-
-        // Path 3 fixture: 2-spectre patch where some candidates collide.
         let ts: Arc<TileSet<ZZ12>> =
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp_p3 = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp_p3.get_all_matches().into_iter().next().unwrap();
-        assert!(gp_p3.add_tile(&first), "fixture setup");
-        let before_p3 = snapshot_growing(&gp_p3);
-        let failing_pm = before_p3
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first), "fixture setup");
+        let before = snapshot_growing(&gp);
+        let failing_pm = before
             .6
             .iter()
             .find(|(_, ok)| !*ok)
             .map(|(pm, _)| pm.clone())
-            .expect("path 3 needs at least one colliding candidate");
+            .expect("expected at least one colliding candidate");
         assert!(
-            !gp_p3.add_tile(&failing_pm),
-            "path 3 must reject a colliding candidate",
+            !gp.add_tile(&failing_pm),
+            "must reject a colliding candidate",
         );
         assert_eq!(
-            snapshot_growing(&gp_p3),
-            before_p3,
-            "path 3: state changed after a geometrically-rejected pm",
+            snapshot_growing(&gp),
+            before,
+            "state changed after a geometrically-rejected pm",
         );
     }
 

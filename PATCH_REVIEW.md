@@ -194,7 +194,7 @@ larger refactors after the file is shorter and the cruft is gone.
 | H5  | test       | done     | `compute_candidates_covering_position_matches_full_enumeration` asserts multiset equality with full enumeration (was: subset-only) |
 | H6  | test       | done     | `add_tile_failure_leaves_state_unchanged` snapshots state+candidate classification, exercises early-bound and geometric rollback paths |
 | H7  | test       | done     | `add_tile_rejects_geometrically_invalid_candidate` pins that some spectre candidates trigger the `check_segment_clear` rejection |
-| H3  | refactor   | DEFERRED | two-phase write — ask before invasive change |
+| H3  | refactor   | done     | hoisted paths 1, 2, 4 above `mem::take` as `debug_assert!` + release-mode `return false`; path 3 (geometric) remains the only `restore_growing` caller; latent path-4 bug fixed for free. Updated 2 tests that fed adversarial/stale pms |
 | H4  | semantics  | DEFERRED | hturn asymmetry — ask before changing |
 | M2  | refactor   | DEFERRED | edge-construction helper, after H3 |
 | M5  | refactor   | DEFERRED | RawBoundary ownership, after M3 |
