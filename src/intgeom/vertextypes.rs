@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{
-    cyclic_range_contains, GrowingPatch, PatchMatch, TransitionSide, VertexType,
+    cyclic_range_contains, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
 };
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
@@ -40,8 +40,8 @@ impl VTypeKind {
     }
 }
 
-pub struct VertexTypeInfo<T: IsComplex> {
-    vtype: VertexType,
+pub struct OpenVertexTypeInfo<T: IsComplex> {
+    vtype: OpenVertexType,
     #[allow(dead_code)]
     has_transitions: HasTransitions,
     #[allow(dead_code)]
@@ -58,8 +58,8 @@ pub struct VertexTypeInfo<T: IsComplex> {
     ccw_neighbor_offset: usize,
 }
 
-impl<T: IsComplex> VertexTypeInfo<T> {
-    pub fn vtype(&self) -> &VertexType {
+impl<T: IsComplex> OpenVertexTypeInfo<T> {
+    pub fn vtype(&self) -> &OpenVertexType {
         &self.vtype
     }
 
@@ -136,29 +136,30 @@ impl TransitionInfo {
     }
 }
 
-pub struct VertexTypeIndex<T: IsComplex> {
+pub struct OpenVertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
-    entries: Vec<VertexTypeInfo<T>>,
+    entries: Vec<OpenVertexTypeInfo<T>>,
     transitions: Vec<TransitionInfo>,
-    reverse: HashMap<VertexType, usize>,
+    reverse: HashMap<OpenVertexType, usize>,
 }
 
-impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
+impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let mut all_types: BTreeSet<VertexType> = BTreeSet::new();
-        let mut initial_types: BTreeSet<VertexType> = BTreeSet::new();
-        let mut transition_map: HashMap<VertexType, HasTransitions> = HashMap::new();
+        let mut all_types: BTreeSet<OpenVertexType> = BTreeSet::new();
+        let mut initial_types: BTreeSet<OpenVertexType> = BTreeSet::new();
+        let mut transition_map: HashMap<OpenVertexType, HasTransitions> = HashMap::new();
         let mut raw_transitions: BTreeSet<(
-            VertexType,
-            Option<VertexType>,
+            OpenVertexType,
+            Option<OpenVertexType>,
             TransitionSide,
             usize,
             usize,
         )> = BTreeSet::new();
 
-        let mut visited: BTreeSet<VertexType> = BTreeSet::new();
-        let mut queue: VecDeque<VertexType> = VecDeque::new();
-        let mut witness_store: HashMap<VertexType, (GrowingPatch<T>, usize, i8)> = HashMap::new();
+        let mut visited: BTreeSet<OpenVertexType> = BTreeSet::new();
+        let mut queue: VecDeque<OpenVertexType> = VecDeque::new();
+        let mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)> =
+            HashMap::new();
 
         for seed_id in 0..tileset.num_tiles() {
             eprintln!(
@@ -299,8 +300,8 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             }
         }
 
-        let entries: Vec<VertexType> = all_types.into_iter().collect();
-        let reverse: HashMap<VertexType, usize> = entries
+        let entries: Vec<OpenVertexType> = all_types.into_iter().collect();
+        let reverse: HashMap<OpenVertexType, usize> = entries
             .iter()
             .enumerate()
             .map(|(i, vt)| (vt.clone(), i + 1))
@@ -342,7 +343,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         let is_cursed = compute_cursed(&entries, &transition_map, &succ_sets);
         let is_blessed = compute_blessed(&entries, &transition_infos);
 
-        let info_entries: Vec<VertexTypeInfo<T>> = entries
+        let info_entries: Vec<OpenVertexTypeInfo<T>> = entries
             .into_iter()
             .enumerate()
             .map(|(i, vt)| {
@@ -362,7 +363,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
                 } else {
                     VTypeKind::Free
                 };
-                VertexTypeInfo {
+                OpenVertexTypeInfo {
                     has_transitions: if no_transitions {
                         HasTransitions::No
                     } else {
@@ -383,7 +384,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
             })
             .collect();
 
-        VertexTypeIndex {
+        OpenVertexTypeIndex {
             tileset,
             entries: info_entries,
             transitions: transition_infos,
@@ -399,11 +400,11 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         &self.transitions
     }
 
-    pub fn entries(&self) -> &[VertexTypeInfo<T>] {
+    pub fn entries(&self) -> &[OpenVertexTypeInfo<T>] {
         &self.entries
     }
 
-    pub fn range_by_cw(&self, tile_id: usize) -> &[VertexTypeInfo<T>] {
+    pub fn range_by_cw(&self, tile_id: usize) -> &[OpenVertexTypeInfo<T>] {
         let start = self
             .entries
             .partition_point(|e| e.vtype().cw.tile_id < tile_id);
@@ -413,11 +414,11 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         &self.entries[start..end]
     }
 
-    pub fn get_id(&self, vtype: &VertexType) -> Option<usize> {
+    pub fn get_id(&self, vtype: &OpenVertexType) -> Option<usize> {
         self.reverse.get(vtype).copied()
     }
 
-    pub fn get_type(&self, id: usize) -> &VertexType {
+    pub fn get_type(&self, id: usize) -> &OpenVertexType {
         assert!(
             id >= 1 && id <= self.entries.len(),
             "vertex type id out of range"
@@ -425,7 +426,7 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
         &self.entries[id - 1].vtype
     }
 
-    pub fn get_info(&self, id: usize) -> &VertexTypeInfo<T> {
+    pub fn get_info(&self, id: usize) -> &OpenVertexTypeInfo<T> {
         assert!(
             id >= 1 && id <= self.entries.len(),
             "vertex type id out of range"
@@ -439,8 +440,8 @@ impl<T: IsComplex + IsRingOrField + Units> VertexTypeIndex<T> {
 }
 
 fn compute_cursed(
-    entries: &[VertexType],
-    transition_map: &HashMap<VertexType, HasTransitions>,
+    entries: &[OpenVertexType],
+    transition_map: &HashMap<OpenVertexType, HasTransitions>,
     succ_sets: &[BTreeSet<usize>],
 ) -> HashMap<usize, bool> {
     let n = entries.len();
@@ -473,7 +474,10 @@ fn compute_cursed(
     cursed
 }
 
-fn compute_blessed(entries: &[VertexType], transitions: &[TransitionInfo]) -> HashMap<usize, bool> {
+fn compute_blessed(
+    entries: &[OpenVertexType],
+    transitions: &[TransitionInfo],
+) -> HashMap<usize, bool> {
     let n = entries.len();
     let mut blessed: HashMap<usize, bool> = HashMap::with_capacity(n);
 
@@ -521,7 +525,7 @@ mod tests {
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
         assert!(idx.num_types() > 0, "should discover some vertex types");
         let alive = idx.entries.iter().filter(|e| e.is_alive()).count();
         let dead = idx.entries.iter().filter(|e| e.is_dead()).count();
@@ -540,7 +544,7 @@ mod tests {
         let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
         assert!(idx.num_types() > 0);
         let alive = idx.entries.iter().filter(|e| e.is_alive()).count();
         eprintln!("square: {} types ({} alive)", idx.num_types(), alive);
@@ -551,7 +555,7 @@ mod tests {
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
         for info in &idx.entries {
             let vt = info.witness().junction_vertex_type_at(info.witness_pos());
             assert_eq!(
@@ -567,7 +571,7 @@ mod tests {
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
 
         let slice = idx.range_by_cw(0);
         assert_eq!(
@@ -590,7 +594,7 @@ mod tests {
         let sq_rat = Rat::try_from(&sq).unwrap();
         let hex_rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
 
         let n = idx.num_types();
         assert!(n > 0);
@@ -625,7 +629,7 @@ mod tests {
         let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        let idx = VertexTypeIndex::new(ts);
+        let idx = OpenVertexTypeIndex::new(ts);
         eprintln!("hex: {} vertex types", idx.num_types());
     }
 }

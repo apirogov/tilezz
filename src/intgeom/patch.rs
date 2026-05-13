@@ -22,7 +22,7 @@ pub struct EdgeInfo {
 ///
 /// Each boundary position has an angle and two adjacent edges (cw, ccw).
 /// This is instrumental infrastructure — the interesting structure lives
-/// in [`VertexType`] at actual junction vertices.
+/// in [`OpenVertexType`] at actual junction vertices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PatchVertexInfo {
     pub angle: i8,
@@ -45,14 +45,26 @@ pub struct PatchMatch {
     pub tile_id: usize,
 }
 
-/// Junction vertex type: the arrangement of tiles meeting at a single junction vertex.
+/// An **open** junction vertex: the arrangement of tiles meeting at a
+/// boundary vertex that is *not* fully surrounded.
 ///
-/// At a junction (where the boundary angle differs from the tile's internal angle),
-/// multiple tile instances converge. `cw` is the edge arriving from the CW direction,
-/// `ccw` is the edge departing in the CCW direction, and `inner` lists any enclosed
-/// tile edges between them. Only meaningful at junction positions.
+/// At a junction (where the boundary angle differs from the tile's internal
+/// angle), multiple tile instances converge. `cw` is the edge arriving from
+/// the CW direction, `ccw` is the edge departing in the CCW direction, and
+/// `inner` lists any enclosed tile edges between them.
+///
+/// "Open" means the vertex is on the patch boundary — there is still room
+/// for additional tiles to be glued in (i.e. the cumulative angle around
+/// the vertex is strictly less than a full turn). Equivalently, the boundary
+/// angle at the vertex is **not** ±half-turn — a half-turn boundary angle
+/// would mean the boundary doubles back on itself (a degenerate pinched
+/// vertex), which is excluded by construction.
+///
+/// In contrast, a *closed* vertex type (not represented by this struct)
+/// would describe a fully-surrounded interior vertex, where the petals
+/// cover the entire turn and the vertex no longer lies on any boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct VertexType {
+pub struct OpenVertexType {
     pub cw: EdgeInfo,
     pub inner: Vec<EdgeInfo>,
     pub ccw: EdgeInfo,
@@ -115,9 +127,9 @@ pub(crate) fn vertex_type_raw_from(
     edges: &[EdgeInfo],
     inner_chains: &[Vec<EdgeInfo>],
     pos: usize,
-) -> VertexType {
+) -> OpenVertexType {
     let n = edges.len();
-    VertexType {
+    OpenVertexType {
         cw: edges[(pos + n - 1) % n],
         inner: inner_chains[pos].clone(),
         ccw: edges[pos],
@@ -329,7 +341,7 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 }
 
 pub fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
-    vtype: &VertexType,
+    vtype: &OpenVertexType,
     tileset: &TileSet<T>,
 ) -> Vec<i8> {
     let seed_seq = tileset.rat(vtype.cw.tile_id).seq();
@@ -475,8 +487,16 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         })
     }
 
+    /// Construct the smallest patch that realises a single
+    /// [`OpenVertexType`] at one of its boundary junction positions.
+    ///
+    /// Returns the resulting patch and the junction position `wpos` within
+    /// it. Returns `None` if the witness cannot be realised — including
+    /// the case where the requested vertex would close into a degenerate
+    /// (±hturn / pinched) boundary, which would violate the open-VT
+    /// contract.
     pub fn construct_minimal_witness(
-        vtype: &VertexType,
+        vtype: &OpenVertexType,
         match_index: Arc<MatchTypeIndex<T>>,
     ) -> Option<(Self, usize)> {
         let (patch, juncs) =
@@ -484,8 +504,20 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         Some((patch, juncs[0]))
     }
 
+    /// Construct a patch whose boundary realises the given sequence of
+    /// [`OpenVertexType`]s as consecutive junctions, in CCW order.
+    ///
+    /// Returns the patch plus the boundary positions of each junction in
+    /// `vtypes` order.
+    ///
+    /// Returns `None` if any of the requested junctions cannot be realised
+    /// as an open boundary vertex — specifically, if a construction step
+    /// would produce a ±hturn (pinched / degenerate) boundary angle at a
+    /// tracked junction position. Since the function's contract is to
+    /// deliver a chain of *open* boundary junctions, such a configuration
+    /// is rejected rather than returned silently.
     pub fn construct_witness_from_vt_sequence(
-        vtypes: &[VertexType],
+        vtypes: &[OpenVertexType],
         match_index: Arc<MatchTypeIndex<T>>,
     ) -> Option<(Self, Vec<usize>)> {
         if vtypes.is_empty() {
@@ -495,7 +527,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 
     fn construct_witness_from_vt_sequence_inner(
-        vtypes: &[VertexType],
+        vtypes: &[OpenVertexType],
         start: usize,
         match_index: &Arc<MatchTypeIndex<T>>,
     ) -> Option<(Self, Vec<usize>)> {
@@ -538,6 +570,13 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             &mut next_tile_id,
             &mut junc_positions,
         )?;
+        // Open-VT invariant: the reconstructed junction must not be ±hturn.
+        // A ±hturn boundary angle means the boundary doubles back at this
+        // vertex (the vertex is closed/degenerate), which contradicts the
+        // input being a sequence of open boundary junctions.
+        if new_raw.angles[new_junc].abs() == T::hturn() {
+            return None;
+        }
         raw = new_raw;
         junc_positions.push(new_junc);
 
@@ -586,6 +625,10 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 &mut next_tile_id,
                 &mut junc_positions,
             )?;
+            // Open-VT invariant: see comment on the initial glue above.
+            if new_raw.angles[new_junc].abs() == T::hturn() {
+                return None;
+            }
             raw = new_raw;
             junc_positions.push(new_junc);
         }
@@ -1033,7 +1076,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     }
 
     /// Return the junction vertex type at position `i`, or `None` if not a junction.
-    pub fn junction_vertex_type_at(&self, i: usize) -> Option<VertexType> {
+    pub fn junction_vertex_type_at(&self, i: usize) -> Option<OpenVertexType> {
         let n = self.boundary_len();
         if n == 0 || i >= n {
             return None;
@@ -1048,7 +1091,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     return None;
                 }
                 let n = edges.len();
-                Some(VertexType {
+                Some(OpenVertexType {
                     cw: edges[(i + n - 1) % n],
                     inner: inner_chains[i].clone(),
                     ccw: edges[i],
@@ -2792,7 +2835,7 @@ mod tests {
         let mi = gp.match_index().clone();
 
         let n = gp.boundary_len();
-        let mut vt_seq: Vec<VertexType> = Vec::new();
+        let mut vt_seq: Vec<OpenVertexType> = Vec::new();
         for i in 0..n {
             if gp.is_junction(i) {
                 let vt = gp.junction_vertex_type_at(i).unwrap();
@@ -2969,7 +3012,7 @@ mod tests {
             "built patch should be T tetromino"
         );
 
-        let mut vt_seq: Vec<VertexType> = Vec::new();
+        let mut vt_seq: Vec<OpenVertexType> = Vec::new();
         for i in 0..n {
             if gp.is_junction(i) {
                 let vt = gp.junction_vertex_type_at(i).unwrap();

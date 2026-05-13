@@ -6,12 +6,12 @@ use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::MatchTypeIndex;
 use tilezz::intgeom::patch::{
-    cyclic_range_contains, EdgeInfo, GrowingPatch, PatchMatch, VertexType,
+    cyclic_range_contains, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch,
 };
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
-use tilezz::intgeom::vertextypes::VertexTypeIndex;
+use tilezz::intgeom::vertextypes::OpenVertexTypeIndex;
 
 #[cfg(feature = "pprof")]
 use pprof::ProfilerGuardBuilder;
@@ -120,7 +120,7 @@ struct ParsedFile {
 }
 
 fn write_collection<T: IsComplex + IsRingOrField + Units>(
-    idx: &VertexTypeIndex<T>,
+    idx: &OpenVertexTypeIndex<T>,
     ring_name: &str,
     path: &str,
 ) {
@@ -510,7 +510,7 @@ fn validate_common<T: IsComplex + IsRingOrField + Units>(
             }
         }
         let pvt = gp.junction_vertex_type_at(pos);
-        let expected = VertexType {
+        let expected = OpenVertexType {
             cw: EdgeInfo {
                 tile_id: pv.cw_tile_id,
                 tile_offset: pv.cw_offset,
@@ -747,7 +747,7 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
 ) {
     eprintln!("[{}] Running BFS...", label);
     let t0 = Instant::now();
-    let idx = VertexTypeIndex::new(ts);
+    let idx = OpenVertexTypeIndex::new(ts);
     let elapsed = t0.elapsed();
 
     let n_total = idx.num_types();
