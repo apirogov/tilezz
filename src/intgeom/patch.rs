@@ -284,7 +284,6 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
         return None;
     }
 
-    let ccw_pos = (pm.start_a + mlen) % n;
     let seg_len_old = n - mlen;
     let seg_len_new = m - mlen;
     if seg_len_new == 0 {
@@ -292,24 +291,13 @@ pub(crate) fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
     }
     let new_n = seg_len_old + seg_len_new;
 
-    let mut new_edges = Vec::with_capacity(new_n);
-    let mut new_patch_tile_ids = Vec::with_capacity(new_n);
-    for i in 0..seg_len_old {
-        new_edges.push(boundary.edges[(ccw_pos + i) % n]);
-        new_patch_tile_ids.push(boundary.patch_tile_ids[(ccw_pos + i) % n]);
-    }
-    new_edges.push(EdgeInfo {
-        tile_id: pm.tile_id,
-        tile_offset: pm.start_b,
-    });
-    new_patch_tile_ids.push(new_tile_id);
-    for k in 1..seg_len_new {
-        new_edges.push(EdgeInfo {
-            tile_id: pm.tile_id,
-            tile_offset: (pm.start_b + k) % m,
-        });
-        new_patch_tile_ids.push(new_tile_id);
-    }
+    let (new_edges, new_patch_tile_ids) = build_glued_edges(
+        &boundary.edges,
+        &boundary.patch_tile_ids,
+        pm,
+        m,
+        new_tile_id,
+    );
 
     let new_inner = if first_step {
         vec![vec![]; new_n]
@@ -1213,36 +1201,21 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         let (grid, seg_data, boundary_edge_ids, next_edge_id) =
             build_boundary_grid::<T>(&positions, new_len);
 
-        let ccw_pos = (pm.start_a + mlen) % n;
-
-        let mut edges = Vec::with_capacity(new_len);
-        for i in 0..seg_len_old {
-            edges.push(EdgeInfo {
+        // Synthesize the seed's "old edges" so we can share build_glued_edges
+        // with the growing path. The seed occupies patch_tile_id 0; the
+        // glued tile becomes patch_tile_id 1.
+        let seed_old_edges: Vec<EdgeInfo> = (0..n)
+            .map(|i| EdgeInfo {
                 tile_id: seed_id,
-                tile_offset: (ccw_pos + i) % n,
-            });
-        }
-        edges.push(EdgeInfo {
-            tile_id: pm.tile_id,
-            tile_offset: pm.start_b,
-        });
-        for k in 1..seg_len_new {
-            edges.push(EdgeInfo {
-                tile_id: pm.tile_id,
-                tile_offset: (pm.start_b + k) % m,
-            });
-        }
+                tile_offset: i,
+            })
+            .collect();
+        let seed_old_ptids = vec![0usize; n];
+        let (edges, patch_tile_ids) = build_glued_edges(&seed_old_edges, &seed_old_ptids, pm, m, 1);
 
         debug_assert_eq!(edges.len(), new_len);
 
         let inner_chains = vec![vec![]; new_len];
-
-        let patch_tile_ids = {
-            let mut ids = Vec::with_capacity(new_len);
-            ids.extend(std::iter::repeat_n(0, seg_len_old));
-            ids.extend(std::iter::repeat_n(1, seg_len_new));
-            ids
-        };
 
         self.state = PatchState::Growing {
             angles: new_angles,
@@ -1443,25 +1416,8 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             register_segment::<T>(&mut grid, p1, p2, id);
         }
 
-        let mut new_edges = Vec::with_capacity(new_len);
-        let mut new_patch_tile_ids = Vec::with_capacity(new_len);
-        for i in 0..seg_len_old {
-            new_edges.push(edges[(ccw_pos + i) % n]);
-            new_patch_tile_ids.push(patch_tile_ids[(ccw_pos + i) % n]);
-        }
-        new_edges.push(EdgeInfo {
-            tile_id: pm.tile_id,
-            tile_offset: pm.start_b,
-        });
-        new_patch_tile_ids.push(next_tile_id);
-        for k in 1..seg_len_new {
-            new_edges.push(EdgeInfo {
-                tile_id: pm.tile_id,
-                tile_offset: (pm.start_b + k) % m,
-            });
-            new_patch_tile_ids.push(next_tile_id);
-        }
-
+        let (new_edges, new_patch_tile_ids) =
+            build_glued_edges(&edges, &patch_tile_ids, pm, m, next_tile_id);
         debug_assert_eq!(new_edges.len(), new_len);
 
         let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len, &patch_tile_ids);
@@ -1551,6 +1507,48 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
 
         matches
     }
+}
+
+/// Build the post-glue `(edges, patch_tile_ids)` vectors.
+///
+/// Surviving old boundary edges come first (`seg_len_old` entries starting
+/// at `(pm.start_a + pm.len) % n`), then the new tile's surviving edges
+/// (`seg_len_new` entries starting at `pm.start_b`). The new tile's entries
+/// are tagged with `new_tile_id` in the returned ptid vector.
+fn build_glued_edges(
+    old_edges: &[EdgeInfo],
+    old_patch_tile_ids: &[usize],
+    pm: &PatchMatch,
+    m_tile: usize,
+    new_tile_id: usize,
+) -> (Vec<EdgeInfo>, Vec<usize>) {
+    let n = old_edges.len();
+    let mlen = pm.len;
+    let seg_len_old = n - mlen;
+    let seg_len_new = m_tile - mlen;
+    let ccw_pos = (pm.start_a + mlen) % n;
+    let new_len = seg_len_old + seg_len_new;
+
+    let mut new_edges = Vec::with_capacity(new_len);
+    let mut new_ptids = Vec::with_capacity(new_len);
+
+    for i in 0..seg_len_old {
+        new_edges.push(old_edges[(ccw_pos + i) % n]);
+        new_ptids.push(old_patch_tile_ids[(ccw_pos + i) % n]);
+    }
+    new_edges.push(EdgeInfo {
+        tile_id: pm.tile_id,
+        tile_offset: pm.start_b,
+    });
+    new_ptids.push(new_tile_id);
+    for k in 1..seg_len_new {
+        new_edges.push(EdgeInfo {
+            tile_id: pm.tile_id,
+            tile_offset: (pm.start_b + k) % m_tile,
+        });
+        new_ptids.push(new_tile_id);
+    }
+    (new_edges, new_ptids)
 }
 
 fn compute_segments<T: IsComplex + IsRingOrField + Units>(
