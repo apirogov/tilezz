@@ -104,130 +104,17 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// re-derivation is needed before reintroducing CW exploration.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        let mut entries: Vec<NeighborhoodType> = Vec::new();
-        let mut transitions: Vec<NtTransition> = Vec::new();
-        // IDs are 1-based so NT_CLOSED_ID = 0 is unambiguous: entries[i] has
-        // id i + 1. `seen` and transitions store ids, not indices.
-        let mut seen: FxHashMap<NeighborhoodType, usize> = FxHashMap::default();
-        let mut queue: VecDeque<NeighborhoodType> = VecDeque::new();
+        // IDs are 1-based so NT_CLOSED_ID = 0 is unambiguous: entries[i]
+        // has id i + 1. `seen` and transitions store ids, not indices.
+        let mut state = BfsState::default();
+        seed_phase(&mut state, &match_index);
+        bfs_phase(&mut state, &match_index);
 
-        for id in 1..=match_index.num_types() {
-            let mt = match_index.get(id);
-            let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.tile_a);
-            let pm = PatchMatch {
-                start_a: mt.start_a,
-                len: mt.len,
-                start_b: mt.start_b,
-                tile_id: mt.tile_b,
-            };
-            if !patch.add_tile(&pm) {
-                continue;
-            }
-            patch.normalize();
-            let patch_n = patch.boundary_len();
-
-            // Collect all ctx-ctx junctions with their positions, sorted by
-            // boundary position. We then filter per third_pm to only those
-            // incident with the match (= within the covered segment).
-            let all_juncs: Vec<(usize, OpenVertexType)> = (0..patch_n)
-                .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
-                .collect();
-
-            for third_pm in patch.get_all_matches() {
-                // get_all_matches returns edge-compatible glues but for
-                // non-convex tiles (e.g. spectre) the central might still
-                // collide with the existing two-tile patch. Try the glue on
-                // a clone first; skip if it fails.
-                let mut trial = patch.clone();
-                if !trial.add_tile(&third_pm) {
-                    continue;
-                }
-
-                let central_tile_id = third_pm.tile_id;
-                let central_n = match_index.tileset().rat(central_tile_id).seq().len();
-                let cw_anchor_on_central = third_pm.start_b;
-                // ccw_anchor_on_central is the central tile offset at the
-                // CCW anchor vertex. Per the shared-edge correspondence
-                // (CCW on context = CW on central), the CCW anchor vertex
-                // on context maps to tile offset `start_b - match_len` mod
-                // central_n.
-                let ccw_anchor_on_central =
-                    (cw_anchor_on_central + central_n - third_pm.len) % central_n;
-
-                // vt_seq is the junctions incident with the central match:
-                // those at positions in [anchor, anchor + match_len], i.e.
-                // CCW distance from the anchor is at most match_len.
-                let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
-                    .iter()
-                    .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
-                    .collect();
-                if filtered.is_empty() {
-                    continue;
-                }
-                let first_junc = filtered[0].0;
-                let last_junc = filtered[filtered.len() - 1].0;
-                let vt_seq: Vec<OpenVertexType> =
-                    filtered.iter().map(|(_, vt)| vt.clone()).collect();
-                // cw_anchor_on_context = CW distance from first_junc to the
-                // CW anchor on context. ccw_anchor_on_context = CCW distance
-                // from last_junc to the CCW anchor on context. Both stay
-                // small as the BFS only adds edges OUTSIDE [cw_anchor,
-                // ccw_anchor].
-                let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a) % patch_n;
-                let ccw_anchor_pos = (third_pm.start_a + third_pm.len) % patch_n;
-                let ccw_anchor_on_context = (ccw_anchor_pos + patch_n - last_junc) % patch_n;
-                let nt = NeighborhoodType {
-                    central_tile_id,
-                    cw_anchor_on_central,
-                    ccw_anchor_on_central,
-                    cw_anchor_on_context,
-                    ccw_anchor_on_context,
-                    num_ctx_tiles: 2,
-                    vt_seq,
-                };
-                if seen.contains_key(&nt) {
-                    continue;
-                }
-                // The trial.add_tile above verified the central glues into
-                // the normalized two-tile patch. Also verify the abstract NT
-                // reconstructs from its vt_seq (needed for non-convex tiles
-                // where seed-gen and reconstruct can diverge).
-                if !nt_is_valid(&nt, &match_index) {
-                    continue;
-                }
-                let id = entries.len() + 1;
-                seen.insert(nt.clone(), id);
-                entries.push(nt.clone());
-                queue.push_back(nt);
-            }
-        }
-
-        while let Some(state) = queue.pop_front() {
-            let src_id = *seen.get(&state).expect("dequeued state must be in seen");
-            for outcome in explore_one(&state, &match_index) {
-                let dst_id = match outcome.kind {
-                    OutcomeKind::Closed => NT_CLOSED_ID,
-                    OutcomeKind::Open { nt: new_nt, .. } => {
-                        if let Some(&id) = seen.get(&new_nt) {
-                            id
-                        } else {
-                            let id = entries.len() + 1;
-                            seen.insert(new_nt.clone(), id);
-                            entries.push(new_nt.clone());
-                            queue.push_back(new_nt);
-                            id
-                        }
-                    }
-                };
-                transitions.push(NtTransition {
-                    src_id,
-                    dst_id,
-                    side: outcome.side,
-                    tile_id: outcome.petal_pm.tile_id,
-                    tile_offset: outcome.petal_pm.start_b,
-                });
-            }
-        }
+        let BfsState {
+            entries,
+            transitions,
+            ..
+        } = state;
 
         NeighborhoodIndex {
             tileset,
@@ -594,6 +481,176 @@ fn parse_ntype_line(
         num_ctx_tiles,
         vt_seq,
     })
+}
+
+/// Mutable state shared across the seed and BFS phases of
+/// [`NeighborhoodIndex::new`].
+struct BfsState {
+    /// All discovered NTs in BFS order. `entries[i]` has 1-based id
+    /// `i + 1`.
+    entries: Vec<NeighborhoodType>,
+    /// All recorded transitions between NTs (and to the Closed sink).
+    transitions: Vec<NtTransition>,
+    /// `seen[nt]` = 1-based id of the NT in `entries`.
+    seen: FxHashMap<NeighborhoodType, usize>,
+    /// BFS frontier.
+    queue: VecDeque<NeighborhoodType>,
+}
+
+impl Default for BfsState {
+    fn default() -> Self {
+        BfsState {
+            entries: Vec::new(),
+            transitions: Vec::new(),
+            seen: FxHashMap::default(),
+            queue: VecDeque::new(),
+        }
+    }
+}
+
+/// Phase 1: enumerate every two-tile patch from `MatchTypeIndex`, try
+/// every third-tile glue against it, and accept each successful glue
+/// as a seed NT (after a self-consistency check via [`nt_is_valid`]).
+fn seed_phase<T: IsComplex + IsRingOrField + Units>(
+    state: &mut BfsState,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) {
+    for id in 1..=match_index.num_types() {
+        let mt = match_index.get(id);
+        let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.tile_a);
+        let pm = PatchMatch {
+            start_a: mt.start_a,
+            len: mt.len,
+            start_b: mt.start_b,
+            tile_id: mt.tile_b,
+        };
+        if !patch.add_tile(&pm) {
+            continue;
+        }
+        patch.normalize();
+        let patch_n = patch.boundary_len();
+
+        // Collect all ctx-ctx junctions with their positions. Filtered
+        // per third_pm to only those incident with the match.
+        let all_juncs: Vec<(usize, OpenVertexType)> = (0..patch_n)
+            .filter_map(|i| patch.junction_vertex_type_at(i).map(|vt| (i, vt)))
+            .collect();
+
+        for third_pm in patch.get_all_matches() {
+            // get_all_matches returns edge-compatible glues but for
+            // non-convex tiles (e.g. spectre) the central might still
+            // collide with the existing two-tile patch. Try the glue
+            // on a clone first; skip if it fails.
+            let mut trial = patch.clone();
+            if !trial.add_tile(&third_pm) {
+                continue;
+            }
+            if let Some(nt) =
+                build_seed_nt(&third_pm, patch_n, &all_juncs, match_index)
+            {
+                if state.seen.contains_key(&nt) {
+                    continue;
+                }
+                // trial.add_tile above verified the central glues into
+                // the normalized two-tile patch. Also verify the
+                // abstract NT reconstructs from its vt_seq (needed for
+                // non-convex tiles where seed-gen and reconstruct can
+                // diverge).
+                if !nt_is_valid(&nt, match_index) {
+                    continue;
+                }
+                let id = state.entries.len() + 1;
+                state.seen.insert(nt.clone(), id);
+                state.entries.push(nt.clone());
+                state.queue.push_back(nt);
+            }
+        }
+    }
+}
+
+/// Construct a candidate seed NT from `third_pm`'s glue position on a
+/// two-tile patch. Returns `None` if no junction is incident with the
+/// match (= the central tile shares no junction with the patch).
+fn build_seed_nt<T: IsComplex + IsRingOrField + Units>(
+    third_pm: &PatchMatch,
+    patch_n: usize,
+    all_juncs: &[(usize, OpenVertexType)],
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> Option<NeighborhoodType> {
+    let central_tile_id = third_pm.tile_id;
+    let central_n = match_index.tileset().rat(central_tile_id).seq().len();
+    let cw_anchor_on_central = third_pm.start_b;
+    // Per the shared-edge correspondence (CCW on context = CW on
+    // central), the CCW anchor vertex on context maps to tile offset
+    // `start_b - match_len` mod central_n.
+    let ccw_anchor_on_central =
+        (cw_anchor_on_central + central_n - third_pm.len) % central_n;
+
+    // vt_seq is the junctions incident with the central match: those
+    // at positions in [anchor, anchor + match_len], i.e. CCW distance
+    // from the anchor is at most match_len.
+    let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
+        .iter()
+        .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
+        .collect();
+    if filtered.is_empty() {
+        return None;
+    }
+    let first_junc = filtered[0].0;
+    let last_junc = filtered[filtered.len() - 1].0;
+    let vt_seq: Vec<OpenVertexType> = filtered.iter().map(|(_, vt)| vt.clone()).collect();
+    // cw_anchor_on_context = CW distance from first_junc to the CW
+    // anchor on context. ccw_anchor_on_context = CCW distance from
+    // last_junc to the CCW anchor. Both stay small as the BFS only
+    // adds edges OUTSIDE [cw_anchor, ccw_anchor].
+    let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a) % patch_n;
+    let ccw_anchor_pos = (third_pm.start_a + third_pm.len) % patch_n;
+    let ccw_anchor_on_context = (ccw_anchor_pos + patch_n - last_junc) % patch_n;
+    Some(NeighborhoodType {
+        central_tile_id,
+        cw_anchor_on_central,
+        ccw_anchor_on_central,
+        cw_anchor_on_context,
+        ccw_anchor_on_context,
+        num_ctx_tiles: 2,
+        vt_seq,
+    })
+}
+
+/// Phase 2: dequeue each NT, enumerate CCW one-petal successors via
+/// [`explore_one`], dedup against `seen`, and record transitions.
+/// Every step grows `num_ctx_tiles` by 1, so the transition graph is
+/// a DAG.
+fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
+    state: &mut BfsState,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) {
+    while let Some(nt) = state.queue.pop_front() {
+        let src_id = *state.seen.get(&nt).expect("dequeued state must be in seen");
+        for outcome in explore_one(&nt, match_index) {
+            let dst_id = match outcome.kind {
+                OutcomeKind::Closed => NT_CLOSED_ID,
+                OutcomeKind::Open { nt: new_nt, .. } => {
+                    if let Some(&id) = state.seen.get(&new_nt) {
+                        id
+                    } else {
+                        let id = state.entries.len() + 1;
+                        state.seen.insert(new_nt.clone(), id);
+                        state.entries.push(new_nt.clone());
+                        state.queue.push_back(new_nt);
+                        id
+                    }
+                }
+            };
+            state.transitions.push(NtTransition {
+                src_id,
+                dst_id,
+                side: outcome.side,
+                tile_id: outcome.petal_pm.tile_id,
+                tile_offset: outcome.petal_pm.start_b,
+            });
+        }
+    }
 }
 
 #[allow(dead_code)]
