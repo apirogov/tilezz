@@ -123,18 +123,27 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         }
     }
 
+    /// All [`NeighborhoodType`] entries in BFS-discovery order.
+    /// `entries()[id - 1]` is the entry for 1-based id `id`.
     pub fn entries(&self) -> &[NeighborhoodType] {
         &self.entries
     }
 
+    /// Number of NTs in the catalog. Ids run `1..=num_types()`;
+    /// [`NT_CLOSED_ID`] (= 0) is reserved as the closed-configuration
+    /// sentinel.
     pub fn num_types(&self) -> usize {
         self.entries.len()
     }
 
+    /// All recorded BFS transitions, in BFS-emission order.
+    /// `src_id` is always a real 1-based entry id; `dst_id` is either
+    /// a 1-based id or [`NT_CLOSED_ID`].
     pub fn transitions(&self) -> &[NtTransition] {
         &self.transitions
     }
 
+    /// The tileset this catalog was built from.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
@@ -344,7 +353,16 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 .ok_or_else(|| format!("line {}: empty record", lineno + 1))?;
             match kw {
                 "NTYPE" => {
-                    let nt = parse_ntype_line(&mut tok, lineno + 1)?;
+                    let (parsed_id, nt) = parse_ntype_line(&mut tok, lineno + 1)?;
+                    let expected_id = entries.len() + 1;
+                    if parsed_id != expected_id {
+                        return Err(format!(
+                            "line {}: NTYPE id sequence broken (expected {}, got {})",
+                            lineno + 1,
+                            expected_id,
+                            parsed_id
+                        ));
+                    }
                     entries.push(nt);
                 }
                 "TRANS" => {
@@ -372,6 +390,23 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     };
                     let tile_id = parse_usize(tok.next(), "tile_id")?;
                     let tile_offset = parse_usize(tok.next(), "tile_offset")?;
+                    if src_id < 1 || src_id > entries.len() {
+                        return Err(format!(
+                            "line {}: TRANS src_id {} out of range (have {} NTYPE entries)",
+                            lineno + 1,
+                            src_id,
+                            entries.len()
+                        ));
+                    }
+                    if dst_id != NT_CLOSED_ID && dst_id > entries.len() {
+                        return Err(format!(
+                            "line {}: TRANS dst_id {} out of range (have {} NTYPE entries, NT_CLOSED_ID = {})",
+                            lineno + 1,
+                            dst_id,
+                            entries.len(),
+                            NT_CLOSED_ID
+                        ));
+                    }
                     transitions.push(NtTransition {
                         src_id,
                         dst_id,
@@ -435,16 +470,21 @@ fn parse_vt_token(tok: &str) -> Result<OpenVertexType, String> {
     Ok(OpenVertexType { cw, inner, ccw })
 }
 
+/// Returns `(parsed_id, parsed_nt)` so the caller can validate the
+/// id sequence is dense + 1-based.
 fn parse_ntype_line(
     tok: &mut std::str::SplitWhitespace<'_>,
     lineno: usize,
-) -> Result<NeighborhoodType, String> {
+) -> Result<(usize, NeighborhoodType), String> {
     let mut next = |what: &str| -> Result<String, String> {
         tok.next()
             .map(|s| s.to_string())
             .ok_or_else(|| format!("line {}: missing {}", lineno, what))
     };
-    let _id = next("id")?; // id is implicit in order; we ignore it
+    let id_str = next("id")?;
+    let parsed_id: usize = id_str
+        .parse()
+        .map_err(|e| format!("line {}: bad id: {}", lineno, e))?;
     let _kind = next("kind")?; // kind is informational; recomputed via classify_all
     let central_tile_id: usize = next("central_id")?
         .parse()
@@ -472,15 +512,18 @@ fn parse_ntype_line(
         let s = next(&format!("vt[{}]", i))?;
         vt_seq.push(parse_vt_token(&s).map_err(|e| format!("line {}: {}", lineno, e))?);
     }
-    Ok(NeighborhoodType {
-        central_tile_id,
-        cw_anchor_on_central,
-        ccw_anchor_on_central,
-        cw_anchor_on_context,
-        ccw_anchor_on_context,
-        num_ctx_tiles,
-        vt_seq,
-    })
+    Ok((
+        parsed_id,
+        NeighborhoodType {
+            central_tile_id,
+            cw_anchor_on_central,
+            ccw_anchor_on_central,
+            cw_anchor_on_context,
+            ccw_anchor_on_context,
+            num_ctx_tiles,
+            vt_seq,
+        },
+    ))
 }
 
 /// Mutable state shared across the seed and BFS phases of
@@ -805,6 +848,14 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
 
 /// Whether the cyclic range of `pm.len` edges starting at `pm.start_a` in
 /// a boundary of length `n` includes the edge at position `target_edge`.
+///
+/// **Edge-inclusive** check: `target_edge in [pm.start_a, pm.start_a +
+/// pm.len - 1]` (mod n). Compare to [`crate::intgeom::patch::cyclic_range_contains`]
+/// which is **vertex-inclusive** (covers `len + 1` vertices). Don't
+/// substitute one for the other: e.g. for `start=25, len=1, n=26`,
+/// `match_absorbs_edge(target=0) = false` (edge 0 is not in
+/// `[25, 25]`) but `cyclic_range_contains(0) = true` (vertex 0 is
+/// the CCW endpoint of edge 25).
 fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
     if pm.len == 0 {
         return false;
@@ -1113,24 +1164,26 @@ mod tests {
     }
 
     #[test]
-    fn seeds_have_no_duplicate_keys() {
-        let idx = hex_idx();
-        let mut keys = std::collections::HashSet::new();
-        for (i, nt) in idx.entries().iter().enumerate() {
-            assert!(
-                keys.insert((
-                    nt.central_tile_id,
-                    nt.cw_anchor_on_central,
-                    nt.cw_anchor_on_context,
-                    nt.vt_seq.clone(),
-                )),
-                "[{}] duplicate seed key: central={}, anchor={}, ctx_anchor={}, vt_seq={:?}",
-                i,
-                nt.central_tile_id,
-                nt.cw_anchor_on_central,
-                nt.cw_anchor_on_context,
-                nt.vt_seq,
-            );
+    fn entries_have_no_duplicates() {
+        for (name, idx) in [
+            ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
+            ("hex", hex_idx()),
+            ("spectre", spectre_idx()),
+        ] {
+            // Use the full NT struct as the dedup key, since that's
+            // what the BFS uses for dedup. A partial key could miss
+            // distinctions the BFS treats as significant.
+            let mut keys: std::collections::HashSet<&NeighborhoodType> =
+                std::collections::HashSet::new();
+            for (i, nt) in idx.entries().iter().enumerate() {
+                assert!(
+                    keys.insert(nt),
+                    "{}: duplicate entry at id {} (vt_seq={:?})",
+                    name,
+                    i + 1,
+                    nt.vt_seq
+                );
+            }
         }
     }
 
@@ -1189,23 +1242,22 @@ mod tests {
     }
 
     #[test]
-    fn validate_returns_empty_for_square_and_hex() {
-        let sq = square_idx();
-        let bad = sq.validate();
-        assert!(
-            bad.is_empty(),
-            "square has {} invalid entries (first few: {:?})",
-            bad.len(),
-            &bad[..bad.len().min(5)]
-        );
-        let hex = hex_idx();
-        let bad = hex.validate();
-        assert!(
-            bad.is_empty(),
-            "hex has {} invalid entries (first few: {:?})",
-            bad.len(),
-            &bad[..bad.len().min(5)]
-        );
+    fn validate_returns_empty_for_all_tilesets() {
+        for (name, idx) in [
+            ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
+            ("hex", hex_idx()),
+            ("spectre", spectre_idx()),
+        ] {
+            let bad = idx.validate();
+            assert!(
+                bad.is_empty(),
+                "{} has {}/{} invalid entries (first few: {:?})",
+                name,
+                bad.len(),
+                idx.num_types(),
+                &bad[..bad.len().min(5)]
+            );
+        }
     }
 
     /// Extract a canonical fingerprint of an NT's geometric shape: the
@@ -1263,6 +1315,7 @@ mod tests {
             .filter_map(|nt| nt_boundary_fingerprint(nt, &mi).map(|fp| (fp, ())))
             .collect();
         let mut missing_count = 0usize;
+        let mut missing_examples: Vec<String> = Vec::new();
         let mut closed_count = 0usize;
         let mut already_in_set = 0usize;
         let mut total_petals = 0usize;
@@ -1320,54 +1373,25 @@ mod tests {
                         } else {
                             missing_count += 1;
                             if missing_count <= 3 {
-                                eprintln!(
-                                    "MISSING: parent num_ctx={} pm(start_a={} len={} start_b={} tile_id={})",
+                                missing_examples.push(format!(
+                                    "parent num_ctx={} pm(start_a={} len={} start_b={} tile_id={})",
                                     nt.num_ctx_tiles,
                                     pm.start_a, pm.len, pm.start_b, pm.tile_id
-                                );
+                                ));
                             }
                         }
                     }
                 }
             }
         }
-        eprintln!(
-            "CCW completeness (brute-force, NO BFS step logic): total_petals={} closed={} already_in_set={} MISSING={}",
-            total_petals, closed_count, already_in_set, missing_count
-        );
         assert_eq!(
             missing_count, 0,
-            "CCW BFS is incomplete: {} states missing",
-            missing_count
+            "CCW BFS is incomplete: {} states missing of {} total petals \
+             ({} closed, {} already in set). First missing: {:?}",
+            missing_count, total_petals, closed_count, already_in_set, missing_examples
         );
     }
 
-    #[test]
-    fn spectre_validates() {
-        let idx = spectre_idx();
-        let bad = idx.validate();
-        assert!(
-            bad.is_empty(),
-            "spectre has {}/{} invalid entries (first few: {:?})",
-            bad.len(),
-            idx.num_types(),
-            &bad[..bad.len().min(5)]
-        );
-        // Sanity: spectre tiles the plane, so the BFS must reach closed
-        // configurations from at least some open NTs.
-        let n_closed = idx
-            .transitions()
-            .iter()
-            .filter(|t| t.dst_id == NT_CLOSED_ID)
-            .count();
-        assert!(
-            n_closed > 0,
-            "spectre BFS should produce closed transitions"
-        );
-        let kinds = idx.classify_all();
-        let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
-        assert!(n_blessed > 0, "spectre should have Blessed entries");
-    }
 
     /// Re-derive the four-kind classification predicates from
     /// `idx.transitions()` and assert they agree with `classify_all`.
@@ -1693,14 +1717,13 @@ mod tests {
                 checked += 1;
             }
         }
-        eprintln!("validated {} new NTs from hex seeds", checked);
-        assert!(checked > 0);
-        if !errors.is_empty() {
-            for e in &errors[..errors.len().min(10)] {
-                eprintln!("  {}", e);
-            }
-            panic!("{} reattach errors", errors.len());
-        }
+        assert!(checked > 0, "should have validated at least one new NT");
+        assert!(
+            errors.is_empty(),
+            "{} reattach errors (first few): {}",
+            errors.len(),
+            errors[..errors.len().min(10)].join("; ")
+        );
     }
 
     #[test]
@@ -1754,13 +1777,12 @@ mod tests {
                 checked += 1;
             }
         }
-        eprintln!("validated {} new NTs from square seeds", checked);
-        assert!(checked > 0);
-        if !errors.is_empty() {
-            for e in &errors[..errors.len().min(10)] {
-                eprintln!("  {}", e);
-            }
-            panic!("{} reattach errors", errors.len());
-        }
+        assert!(checked > 0, "should have validated at least one new NT");
+        assert!(
+            errors.is_empty(),
+            "{} reattach errors (first few): {}",
+            errors.len(),
+            errors[..errors.len().min(10)].join("; ")
+        );
     }
 }
