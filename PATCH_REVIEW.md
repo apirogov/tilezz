@@ -378,8 +378,8 @@ that invariant."
 | V3  | High     | perf      | pending  | pre-bucket transitions in `compute_blessed` |
 | V4  | High     | perf      | pending  | `HashMap<usize, bool>` → `Vec<bool>` |
 | V5  | High     | refactor  | pending  | split `new` into 5 phase helpers |
-| V6  | High     | docs      | pending  | document `VTypeKind` variants + `segment_kind` |
-| V7  | High     | docs      | pending  | document `OpenVertexTypeIndex::new` algorithm |
+| V6  | High     | docs      | done     | `VTypeKind` has enum-level + per-variant docs explaining Dead/Undead/Blessed/Free; `segment_kind` documents the OR/AND lattice |
+| V7  | High     | docs      | done     | `OpenVertexTypeIndex` + `new()` documented with the 5-phase algorithm + cost notes |
 | V8  | Medium   | observability | pending | gate `eprintln!` progress logs |
 | V9  | Medium   | smell     | pending  | resolve 3 `#[allow(dead_code)]` fields |
 | V10 | Medium   | refactor  | pending  | derive `transition_map` post-BFS, not mid |
