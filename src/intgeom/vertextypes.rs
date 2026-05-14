@@ -2,9 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::patch::{
-    cyclic_range_contains, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
-};
+use crate::intgeom::patch::{GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
@@ -233,6 +231,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
     ///    - `compute_blessed`: a VT is blessed if every transition
     ///      either closes the junction or leads to another blessed
     ///      VT.
+    ///
     ///    Then label each VT as Dead / Undead / Blessed / Free.
     ///
     /// # Cost
@@ -330,22 +329,50 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
                     continue;
                 }
 
-                let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, n);
-                let covers_cw = cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n);
+                // Classify the glue by which incident boundary edges of
+                // the focus vertex `pos` it consumed.
+                //
+                // The focus vertex has two incident boundary edges:
+                //   CW edge:  edge position (pos + n - 1) % n
+                //             (goes vertex pos-1 -> pos)
+                //   CCW edge: edge position pos
+                //             (goes vertex pos -> pos+1)
+                //
+                // The match consumes a half-open edge range
+                // [pm.start_a, pm.start_a + pm.len). The focus is sealed
+                // iff BOTH incident edges are in that range. (Note: a
+                // vertex-range test would be too permissive — a single-
+                // edge match on the CW edge has vertex range [pos-1, pos]
+                // touching both pos-1 and pos without consuming the CCW
+                // edge of pos.)
+                let edge_in_match = |edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
+                let consumes_cw_edge = edge_in_match((pos + n - 1) % n);
+                let consumes_ccw_edge = edge_in_match(pos);
 
-                let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+                // `get_matches_touching_vertex(pos)` guarantees the match
+                // touches the focus vertex, so at least one incident
+                // edge must be consumed.
+                debug_assert!(
+                    consumes_cw_edge || consumes_ccw_edge,
+                    "touching match doesn't consume any incident edge of pos"
+                );
 
-                let covers_both = covers_cw && covers_ccw;
-                let side = if covers_both || covers_cw {
-                    TransitionSide::Cw
-                } else {
-                    TransitionSide::Ccw
+                let side = match (consumes_cw_edge, consumes_ccw_edge) {
+                    (true, true) => TransitionSide::Both,
+                    (true, false) => TransitionSide::Cw,
+                    (false, true) => TransitionSide::Ccw,
+                    (false, false) => unreachable!(),
                 };
 
-                let edge_pos = if side == TransitionSide::Cw {
-                    (pos + n - 1) % n
-                } else {
-                    pos
+                // Canonical recorded edge for the tile_offset
+                // computation:
+                //   - Cw side: the CW edge.
+                //   - Ccw side: the CCW edge.
+                //   - Both (closing): CW edge by convention (documented
+                //     on TransitionSide::Both).
+                let edge_pos = match side {
+                    TransitionSide::Ccw => pos,
+                    TransitionSide::Cw | TransitionSide::Both => (pos + n - 1) % n,
                 };
                 let offset_in_match =
                     (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
@@ -353,7 +380,21 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
                 let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
                     .rem_euclid(m as i64) as usize;
 
-                if covers_both {
+                // Where is the focus's new junction (if any) in the
+                // post-glue boundary?
+                //   - side == Ccw: pm.start_a == pos; new boundary's
+                //     index 0 is at old vertex (pos + len) % n; new
+                //     junction at the CW endpoint of the match lives
+                //     at new index seg_len_old = n - pm.len.
+                //   - side == Cw: pm ended at vertex pos (start_a + len
+                //     == pos); new boundary's index 0 is at old vertex
+                //     pos; new junction at the CCW endpoint of the
+                //     match lives at new index 0.
+                //   - side == Both: focus vertex is sealed; no junction
+                //     position.
+                let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+
+                if matches!(side, TransitionSide::Both) {
                     raw_transitions.insert((vt.clone(), None, side, pm.tile_id, tile_offset));
                 } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
                     raw_transitions.insert((

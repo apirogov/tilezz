@@ -220,6 +220,7 @@ fn write_collection<T: IsComplex + IsRingOrField + Units>(
         let side_str = match tr.side {
             tilezz::intgeom::patch::TransitionSide::Cw => "cw",
             tilezz::intgeom::patch::TransitionSide::Ccw => "ccw",
+            tilezz::intgeom::patch::TransitionSide::Both => "both",
         };
         out.push_str(&format!(
             "TRANS {} {} {} {} {}\n",

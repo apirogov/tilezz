@@ -119,15 +119,35 @@ pub struct OpenVertexType {
     pub ccw: EdgeInfo,
 }
 
-/// Direction tag indicating which side of a vertex type a transition
-/// emerges from when stepping through the NT enumeration.
+/// Which incident edge(s) of a focus junction vertex a transition
+/// consumed.
 ///
-/// Used by `vertextypes` and `neighborhood` code to disambiguate the
-/// CW-vs-CCW orientation of edges incident with an open junction.
+/// Used by both VT and NT enumeration. At an open vertex with two
+/// incident boundary edges (CW and CCW), a glue can:
+///
+/// - consume only the CW edge → [`TransitionSide::Cw`],
+/// - consume only the CCW edge → [`TransitionSide::Ccw`],
+/// - consume **both** incident edges, sealing the vertex →
+///   [`TransitionSide::Both`].
+///
+/// When the side is `Both`, the destination of the transition is
+/// always the closed-vertex sentinel (`vertextypes::CLOSED_ID`); the
+/// transition's `tile_offset` is normalized to the **CW edge's**
+/// matching tile-offset by convention.
+///
+/// For NT transitions (in `neighborhood`), only `Cw` and `Ccw` arise
+/// — NT enumeration steps the central tile along one direction at a
+/// time and never produces a `Both` step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TransitionSide {
+    /// The glue consumed only the CW edge of the focus vertex.
     Cw,
+    /// The glue consumed only the CCW edge of the focus vertex.
     Ccw,
+    /// The glue consumed both incident edges, sealing the focus
+    /// vertex. The transition's `tile_offset` is canonicalized to
+    /// the CW edge.
+    Both,
 }
 
 /// An incrementally grown, edge-to-edge tiling of a connected,
