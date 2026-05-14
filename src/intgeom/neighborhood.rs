@@ -673,7 +673,7 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
         for outcome in explore_one(&nt, match_index) {
             let dst_id = match outcome.kind {
                 OutcomeKind::Closed => NT_CLOSED_ID,
-                OutcomeKind::Open { nt: new_nt, .. } => {
+                OutcomeKind::Open(new_nt) => {
                     if let Some(&id) = state.seen.get(&new_nt) {
                         id
                     } else {
@@ -696,45 +696,37 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
-#[allow(dead_code)]
-struct ExploreOutcome<T: IsComplex> {
+struct ExploreOutcome {
     side: TransitionSide,
     petal_pm: PatchMatch,
-    kind: OutcomeKind<T>,
+    kind: OutcomeKind,
 }
 
-#[allow(dead_code, clippy::large_enum_variant)]
-enum OutcomeKind<T: IsComplex> {
+enum OutcomeKind {
     Closed,
-    Open {
-        nt: NeighborhoodType,
-        trial: GrowingPatch<T>,
-        central_ptid: usize,
-    },
+    Open(NeighborhoodType),
 }
 
-#[allow(dead_code)]
 struct AttachedContext<T: IsComplex> {
     aug: GrowingPatch<T>,
     central_ptid: usize,
     /// CCW frontier position on aug (gap_end vertex, always a junction).
     frontier_pos_on_aug: usize,
-    /// CW frontier (= anchor) position on aug = gap_start.
-    cw_frontier_pos_on_aug: usize,
+    /// Whether the CCW frontier vertex was already a junction on the
+    /// pre-glue context boundary. Drives CCW Case A vs Case B in
+    /// [`try_step_ccw`].
     frontier_is_junction_in_ctx: bool,
-    cw_anchor_is_junction_in_ctx: bool,
+    /// Last context boundary edge covered by the central tile.
+    /// Used as the `cw` edge of a freshly-appended vt in Case B.
     last_covered_ctx_edge: EdgeInfo,
-    /// The first covered ctx edge (ctx.edges()[cw_anchor_pos]).
-    first_covered_ctx_edge: EdgeInfo,
     /// Number of context boundary edges on `aug` (= `ctx_n - match_len`).
     /// On `aug`, positions `[0, gap_start)` are surviving context edges
-    /// and `[gap_start, aug_n)` are the central tile gap edges.
+    /// and `[gap_start, aug_n)` are the central tile gap edges. Read
+    /// only by tests; the production CCW step uses `frontier_pos_on_aug`
+    /// instead.
+    #[cfg_attr(not(test), allow(dead_code))]
     gap_start: usize,
     aug_n: usize,
-    /// Old `match_len = (ccw_anchor_on_central - cw_anchor_on_central) mod
-    /// central_n`. Cached here so the BFS step can compute the new
-    /// match_len = old + petal_gap_consumed without recomputing.
-    match_len: usize,
 }
 
 #[allow(dead_code)]
@@ -766,9 +758,7 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
 
     let frontier_on_ctx = (anchor_pos + match_len) % ctx_n;
     let frontier_is_junction_in_ctx = ctx.is_junction(frontier_on_ctx);
-    let cw_anchor_is_junction_in_ctx = ctx.is_junction(anchor_pos);
     let last_covered_ctx_edge = ctx.edges()[(anchor_pos + match_len - 1) % ctx_n];
-    let first_covered_ctx_edge = ctx.edges()[anchor_pos];
 
     let central_pm = PatchMatch {
         start_a: anchor_pos,
@@ -798,30 +788,22 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
     if !found {
         return None;
     }
-    // CW frontier on aug: gap_start vertex (always a junction since the
-    // central tile begins there).
-    let cw_frontier_pos_on_aug = gap_start;
 
     Some(AttachedContext {
         aug,
         central_ptid,
         frontier_pos_on_aug,
-        cw_frontier_pos_on_aug,
         frontier_is_junction_in_ctx,
-        cw_anchor_is_junction_in_ctx,
         last_covered_ctx_edge,
-        first_covered_ctx_edge,
         gap_start,
         aug_n,
-        match_len,
     })
 }
 
-#[allow(dead_code)]
 fn explore_one<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
-) -> Vec<ExploreOutcome<T>> {
+) -> Vec<ExploreOutcome> {
     let ac = match build_attached_context(nt, match_index) {
         Some(a) => a,
         None => return Vec::new(),
@@ -875,7 +857,7 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     ac: &AttachedContext<T>,
     petal_pm: PatchMatch,
     match_index: &Arc<MatchTypeIndex<T>>,
-) -> Option<ExploreOutcome<T>> {
+) -> Option<ExploreOutcome> {
     let mut trial = ac.aug.clone();
     if !trial.add_tile(&petal_pm) {
         return None;
@@ -933,11 +915,7 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     Some(ExploreOutcome {
         side: TransitionSide::Ccw,
         petal_pm,
-        kind: OutcomeKind::Open {
-            nt: new_nt,
-            trial,
-            central_ptid: ac.central_ptid,
-        },
+        kind: OutcomeKind::Open(new_nt),
     })
 }
 
@@ -1156,8 +1134,14 @@ mod tests {
             spectre_idx(),
         ] {
             assert!(idx.num_types() > 0, "expected non-empty seed collection");
+            let num_tiles = idx.tileset().num_tiles();
             for nt in idx.entries() {
-                assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
+                assert!(
+                    nt.central_tile_id < num_tiles,
+                    "central_tile_id {} out of range (have {} tiles)",
+                    nt.central_tile_id,
+                    num_tiles
+                );
                 assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
             }
         }
@@ -1676,7 +1660,7 @@ mod tests {
             for outcome in explore_one(nt, &mi) {
                 let new_nt = match &outcome.kind {
                     OutcomeKind::Closed => continue,
-                    OutcomeKind::Open { nt, .. } => nt.clone(),
+                    OutcomeKind::Open(nt) => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
@@ -1736,7 +1720,7 @@ mod tests {
             for outcome in explore_one(nt, &mi) {
                 let new_nt = match &outcome.kind {
                     OutcomeKind::Closed => continue,
-                    OutcomeKind::Open { nt, .. } => nt.clone(),
+                    OutcomeKind::Open(nt) => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
