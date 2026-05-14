@@ -272,18 +272,24 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         let mut succ_count = vec![0usize; n]; // non-closed successors of i
         let mut preds: Vec<Vec<usize>> = vec![vec![]; n]; // reverse edges (non-closed dst -> src)
         let mut has_outgoing = vec![false; n];
+        let mut has_closing = vec![false; n];
         for t in &self.transitions {
             debug_assert!(t.src_id != NT_CLOSED_ID, "closed cannot be a src");
             let src_idx = t.src_id - 1;
             has_outgoing[src_idx] = true;
-            if t.dst_id != NT_CLOSED_ID {
+            if t.dst_id == NT_CLOSED_ID {
+                has_closing[src_idx] = true;
+            } else {
                 succ_count[src_idx] += 1;
                 preds[t.dst_id - 1].push(src_idx);
             }
         }
 
         // Cursed: every non-closed successor is cursed, AND there is at
-        // least one non-closed successor or no outgoing at all.
+        // least one non-closed successor or no outgoing at all, AND no
+        // closing transition exists (a closing transition is an edge to
+        // the Closed sink, which is not cursed - an NT with a closing
+        // transition has an escape path and is therefore not cursed).
         let mut cursed = vec![false; n];
         let mut remaining = succ_count.clone();
         let mut queue: VecDeque<usize> = VecDeque::new();
@@ -299,7 +305,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     continue;
                 }
                 remaining[p] -= 1;
-                if remaining[p] == 0 && succ_count[p] > 0 {
+                if remaining[p] == 0 && succ_count[p] > 0 && !has_closing[p] {
                     cursed[p] = true;
                     queue.push_back(p);
                 }
@@ -1348,6 +1354,87 @@ mod tests {
         let kinds = idx.classify_all();
         let n_blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
         assert!(n_blessed > 0, "spectre should have Blessed entries");
+    }
+
+    /// Re-derive the four-kind classification predicates from
+    /// `idx.transitions()` and assert they agree with `classify_all`.
+    /// Catches the V2b shape: a cursed NT must not have any closing
+    /// transition (the closing edge to `Closed` is an escape path).
+    fn assert_classify_invariants<T: IsComplex + IsRingOrField + Units>(
+        idx: &NeighborhoodIndex<T>,
+    ) {
+        let kinds = idx.classify_all();
+        for (i, &kind) in kinds.iter().enumerate() {
+            let id = i + 1;
+            let outgoing: Vec<&NtTransition> = idx
+                .transitions()
+                .iter()
+                .filter(|t| t.src_id == id)
+                .collect();
+            match kind {
+                NtKind::Dead => {
+                    assert!(
+                        outgoing.is_empty(),
+                        "Dead NT id {id} must have no transitions; got {}",
+                        outgoing.len()
+                    );
+                }
+                NtKind::Undead => {
+                    assert!(
+                        !outgoing.is_empty(),
+                        "Undead NT id {id} must have transitions"
+                    );
+                    for t in &outgoing {
+                        assert!(
+                            t.dst_id != NT_CLOSED_ID,
+                            "Undead NT id {id} has a closing transition - \
+                             closing is an escape to Closed, so this NT should be Free or Blessed"
+                        );
+                        let dst_kind = kinds[t.dst_id - 1];
+                        assert!(
+                            matches!(dst_kind, NtKind::Dead | NtKind::Undead),
+                            "Undead NT id {id} has open transition to non-cursed \
+                             NT id {} (kind={dst_kind:?})",
+                            t.dst_id
+                        );
+                    }
+                }
+                NtKind::Blessed => {
+                    assert!(
+                        !outgoing.is_empty(),
+                        "Blessed NT id {id} must have at least one transition"
+                    );
+                    for t in &outgoing {
+                        if t.dst_id == NT_CLOSED_ID {
+                            continue;
+                        }
+                        let dst_kind = kinds[t.dst_id - 1];
+                        assert_eq!(
+                            dst_kind, NtKind::Blessed,
+                            "Blessed NT id {id} has open transition to non-Blessed \
+                             NT id {} (kind={dst_kind:?})",
+                            t.dst_id
+                        );
+                    }
+                }
+                NtKind::Free => {}
+            }
+        }
+    }
+
+    #[test]
+    fn square_classify_invariants() {
+        assert_classify_invariants(square_idx());
+    }
+
+    #[test]
+    fn hex_classify_invariants() {
+        assert_classify_invariants(hex_idx());
+    }
+
+    #[test]
+    fn spectre_classify_invariants() {
+        assert_classify_invariants(spectre_idx());
     }
 
     #[test]
