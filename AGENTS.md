@@ -1,3 +1,34 @@
+# TL;DR
+
+    PRIMARY RECURSIVE META-DIRECTIVE: 
+        ALWAYS REMIND YOURSELF to follow and follow this rule:
+
+        When working on a task given by the user, always CAREFULLY:
+            survey the codebase,
+            reseach all relevant details,
+            ITERATE UNTIL FIXPOINT REACHED:
+                DISCUSS,
+                understand the task or issue thoroughly,
+                (re)design a solution, 
+                DISCUSS,
+                plan implementation, validation and documentation, 
+                DISCUSS,
+                implement, document, test, and then
+                CRITICALLY REVIEW in accordance with best practices (!!)
+
+        INVARIANT:
+            Before presenting an output to the user you BELIEVE is ready,
+            if you would critically review the work,
+            you would not change ANYTHING without further discussion, and
+            you include all such discussion points as part of your output.
+            
+        In other words:
+            * The presented solution is the local optimum under 
+              given information, constraints and chosen trade-offs.
+            * The presented solution anticipates and presents improvement
+              paths requiring discussion with and decision by the user.
+                
+
 # Agent Instructions
 
 REVIEW YOUR OWN WORK BEFORE SHIPPING. The most common agent failure is
