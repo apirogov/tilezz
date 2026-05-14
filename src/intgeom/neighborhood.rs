@@ -68,6 +68,40 @@ pub struct NeighborhoodIndex<T: IsComplex> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
+    /// Build the full open-NT catalog for `tileset` by BFS over the
+    /// neighborhood-transition graph.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Seed generation.** For every match-type `(tile_a,
+    ///    start_a, tile_b, start_b, len)` in [`MatchTypeIndex`]:
+    ///    build a two-tile patch by gluing `tile_b` to `tile_a` and
+    ///    normalize. For every additional candidate from
+    ///    [`GrowingPatch::get_all_matches`], try gluing a third
+    ///    ("central") tile to a clone (non-convex tiles can collide;
+    ///    skip on failure). Filter the patch's junctions to those
+    ///    incident with the match (CCW distance from the match
+    ///    anchor is at most the match length) - that's `vt_seq`.
+    ///    Validate via [`nt_is_valid`] and dedup.
+    /// 2. **BFS growth.** Dequeue each NT and run [`explore_one`] to
+    ///    enumerate one-petal CCW successors. New NTs are enqueued;
+    ///    transitions are recorded with the right `TransitionSide`.
+    ///    Every step grows `num_ctx_tiles` by exactly 1, so the
+    ///    transition graph is a DAG.
+    ///
+    /// # CW direction
+    ///
+    /// CW-direction exploration is **not implemented**. The CCW-only
+    /// BFS is verified complete by the brute-force regression test
+    /// `spectre_ccw_only_is_complete`: starting from every NT in the
+    /// catalog, every direct `get_match` candidate at the CCW
+    /// frontier either closes the configuration or produces an NT
+    /// already in the catalog. Earlier attempts at `try_step_cw`
+    /// produced spurious NTs because the CCW Case-A/Case-B
+    /// `vt_seq` mutation breaks down when the OLD CW anchor's
+    /// junction status flips between old ctx and new ctx (= when
+    /// the petal contributes zero angle at that vertex); a clean
+    /// re-derivation is needed before reintroducing CW exploration.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
         let mut entries: Vec<NeighborhoodType> = Vec::new();
@@ -168,9 +202,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             }
         }
 
-        let mut explored = 0usize;
         while let Some(state) = queue.pop_front() {
-            explored += 1;
             let src_id = *seen.get(&state).expect("dequeued state must be in seen");
             for outcome in explore_one(&state, &match_index) {
                 let dst_id = match outcome.kind {
@@ -197,13 +229,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             }
         }
 
-        eprintln!(
-            "  total: {} types, {} transitions, {} explored",
-            entries.len(),
-            transitions.len(),
-            explored,
-        );
-
         NeighborhoodIndex {
             tileset,
             entries,
@@ -227,13 +252,22 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         &self.tileset
     }
 
+    /// Classify every entry as Dead / Undead / Blessed / Free by
+    /// walking the transition graph.
+    ///
+    /// * `Dead` - no outgoing transitions.
+    /// * `Undead` - has transitions, every reachable path terminates
+    ///   at a Dead/Undead (never at the Closed sink).
+    /// * `Blessed` - every outgoing transition reaches Closed or
+    ///   another Blessed.
+    /// * `Free` - has at least one Closed-reaching path and at least
+    ///   one Dead-terminating path.
+    ///
+    /// O(n + m) via worklist propagation on the reverse adjacency.
     pub fn classify_all(&self) -> Vec<NtKind> {
         // Transition ids are 1-based; convert with `- 1` when indexing into
         // these per-entry vectors. NT_CLOSED_ID (= 0) is the closed sentinel
         // and never appears as a src_id.
-        // Worklist propagation over the reverse adjacency. O(n + m) total.
-        // IDs are 1-based; NT_CLOSED_ID (= 0) is the closed sentinel and
-        // never appears as a src_id.
         let n = self.entries.len();
         let mut succ_count = vec![0usize; n]; // non-closed successors of i
         let mut preds: Vec<Vec<usize>> = vec![vec![]; n]; // reverse edges (non-closed dst -> src)
@@ -1043,6 +1077,11 @@ fn try_construct_nt_from_cw<T: IsComplex + IsRingOrField + Units>(
     })
 }
 
+/// Check that an NT is self-consistent: reconstruct from the CW-side
+/// fields and verify the stored CCW-side fields agree with what the
+/// geometry implies. Used as a post-hoc validator (see
+/// [`NeighborhoodIndex::validate`]) and as a seed-acceptance filter
+/// during BFS construction.
 fn nt_is_valid<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
