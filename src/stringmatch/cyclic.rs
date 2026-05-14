@@ -214,7 +214,19 @@ mod tests {
                 if l == 0 {
                     continue;
                 }
-                if !is_cyclic_left_maximal(a, b, ia, pos_b, l) {
+                // Cyclic left-maximality check, inlined (not via the
+                // production `is_cyclic_left_maximal`) so this naïve
+                // reference is fully independent of the code under test.
+                // A match that wraps a full tile (len >= n_a or n_b) is
+                // trivially left-maximal — there's nothing to extend onto.
+                let left_maximal = if l >= n_a || l >= n_b {
+                    true
+                } else {
+                    let prev_a = a[(ia + n_a - 1) % n_a];
+                    let prev_b_rc = -b[(pos_b + 1) % n_b];
+                    prev_a != prev_b_rc
+                };
+                if !left_maximal {
                     continue;
                 }
                 result.push((ia, pos_b, l));
