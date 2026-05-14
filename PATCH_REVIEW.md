@@ -413,8 +413,8 @@ that invariant."
 |-----|----------|-----------|----------|-------|
 | V1  | Critical | dead code | done     | confirmed leftover from commit efbd56e (segment-type removal); deleted |
 | V2  | Critical | docs+invariant | done | replaced vertex-touch predicate with edge-consumed predicate (correctness fix: the old vertex-touch heuristic misclassified length-1 CW-side glues as closing for non-hex tiles); added `TransitionSide::Both` variant with canonical-CW-edge rule documented; added `debug_assert!` on the invariant; documented the modular arithmetic |
-| V3  | High     | perf      | pending  | pre-bucket transitions in `compute_blessed` |
-| V4  | High     | perf      | pending  | `HashMap<usize, bool>` → `Vec<bool>` |
+| V3  | High     | perf      | done     | `compute_blessed` now uses pre-built `succ_sets` (non-closing successors) + `transition_map` (for "has any transition") instead of scanning the full transition list per VT per iteration. O(T·N²) → O(T·N) |
+| V4  | High     | perf      | done     | both `compute_cursed` and `compute_blessed` return `Vec<bool>` indexed by `id - 1`; `classify_and_finalize` takes them as `&[bool]` |
 | V5  | High     | refactor  | done     | new `BfsState<T>` shared-state struct + 5 free-function phase helpers: `seed_phase`, `bfs_phase`, `build_id_map`, `build_transition_arrays`, `classify_and_finalize`. `OpenVertexTypeIndex::new` is now a ~30-line orchestrator |
 | V6  | High     | docs      | done     | `VTypeKind` has enum-level + per-variant docs explaining Dead/Undead/Blessed/Free; `segment_kind` documents the OR/AND lattice |
 | V7  | High     | docs      | done     | `OpenVertexTypeIndex` + `new()` documented with the 5-phase algorithm + cost notes |
