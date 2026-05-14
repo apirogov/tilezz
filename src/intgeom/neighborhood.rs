@@ -1,3 +1,49 @@
+//! Neighborhood types: catalog of local *interfaces* between a tile
+//! and any legal context patch that could meet it along one
+//! contiguous edge run.
+//!
+//! # What we are enumerating
+//!
+//! For a given tileset, this module produces every distinct way a
+//! tile (the **central**) can meet a surrounding patch of other tiles
+//! (the **context**) along a single contiguous matched segment.
+//! What matters for the interface is only the central + the shape of
+//! the matched edge run; the *outer* perimeter of the context (the
+//! part not touching the central) is irrelevant for "what tile can
+//! grow next here". The output is therefore the set of all possible
+//! such interfaces, classified by whether they extend to a fully
+//! surrounded central or trap somewhere along the way.
+//!
+//! # Why the abstraction, not pure boundary enumeration
+//!
+//! A naive "enumerate all length-≤k boundary strings that can occur
+//! as a match interface" approach has to separately filter realizable
+//! from junk strings - a costly secondary step. Growing the context
+//! one tile at a time via BFS gives realizability for free: every NT
+//! is built from a known-realizable predecessor, so no candidate has
+//! to be checked against geometric legality post-hoc.
+//!
+//! The trade-off: the BFS catalog is **finer** than the interface
+//! equivalence quotient. The same interface can be reached by
+//! multiple distinct growth histories (different sequences of petal
+//! attachments), and each history becomes its own catalog entry. The
+//! true interface quotient is a coarser, derived view.
+//!
+//! # Classification → forbidden patterns
+//!
+//! Every NT gets a `Dead`/`Undead`/`Blessed`/`Free` reachability
+//! kind via [`NeighborhoodIndex::classify_all`]. The Dead and Undead
+//! interfaces are the actionable output: they are the local boundary
+//! patterns a tiling can never recover from. Downstream consumers
+//! treat the set of Dead/Undead match-side boundary strings as
+//! **forbidden patterns** that must not appear in any extending
+//! glue. Together with the dead/undead VTs (a finer per-vertex
+//! constraint, see `vertextypes.rs`), these constraints prune the
+//! tile-growth search.
+//!
+//! See [`NeighborhoodType`] for the data layout and
+//! [`NeighborhoodIndex::new`] for the BFS algorithm.
+
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -8,9 +54,29 @@ use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::intgeom::tileset::TileSet;
 
-/// A neighborhood type: a central tile, a context patch matched against a
-/// contiguous segment of the central's perimeter, and the open gap that
-/// remains on the central.
+/// One catalog entry of a local **interface** between a tile and any
+/// legal context patch sharing one contiguous matched edge run with
+/// it. The geometrically-significant content is the central + the
+/// shape of the matched segment; everything else about the context
+/// (its outer perimeter, internal tile arrangement, total tile
+/// count) is incidental to the interface but is retained here to
+/// support the BFS that generates the catalog.
+///
+/// # Interface vs BFS entry
+///
+/// **A `NeighborhoodType` is a BFS state, not an interface class.**
+/// The catalog can contain multiple BFS entries that describe the
+/// same interface, reached via different growth histories. The
+/// interface-equivalence quotient (= same `central_tile_id`, same
+/// `cw_anchor_on_central`, same canonical matched-segment boundary)
+/// is a coarser view, computable from this catalog but not
+/// represented as a separate type. Downstream consumers exporting
+/// forbidden-pattern sets work at the interface level; the BFS works
+/// at the entry level for combinatorial cleanliness (every step
+/// adds exactly one tile, no canonicalization-collapse cases to
+/// reason about).
+///
+/// # Field semantics
 ///
 /// The matched segment is the CCW range `[cw_anchor_on_central,
 /// ccw_anchor_on_central)` on the central tile (mod `central_n`); its
@@ -92,6 +158,19 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// Build the full open-NT catalog for `tileset` by BFS over the
     /// neighborhood-transition graph.
     ///
+    /// # Catalog vs interface quotient
+    ///
+    /// The catalog is **finer than the interface-equivalence
+    /// quotient**: the same interface (= same central +
+    /// same canonical matched-segment boundary) can be reached by
+    /// multiple growth histories, and the BFS records each as a
+    /// distinct entry. The interface quotient is therefore a derived
+    /// view, not directly stored. This is intentional - the BFS gets
+    /// "every step adds exactly one tile" as a clean invariant in
+    /// exchange for that over-counting. Consumers wanting the
+    /// quotient compute it post-hoc by grouping entries by their
+    /// canonical interface fingerprint.
+    ///
     /// # Algorithm
     ///
     /// 1. **Seed generation.** For every match-type `(tile_a,
@@ -103,7 +182,9 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     ///    skip on failure). Filter the patch's junctions to those
     ///    incident with the match (CCW distance from the match
     ///    anchor is at most the match length) - that's `vt_seq`.
-    ///    Validate via [`nt_is_valid`] and dedup.
+    ///    Validate via [`nt_is_valid`] and dedup against the BFS's
+    ///    `PartialEq` dedup key (which is the full
+    ///    `NeighborhoodType`, not the interface).
     /// 2. **BFS growth.** Dequeue each NT and run [`explore_one`] to
     ///    enumerate one-petal CCW successors. New NTs are enqueued;
     ///    transitions are recorded with the right `TransitionSide`.
@@ -179,6 +260,22 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     ///   another Blessed.
     /// * `Free` - has at least one Closed-reaching path and at least
     ///   one Dead-terminating path.
+    ///
+    /// # Downstream use: forbidden patterns
+    ///
+    /// The Dead and Undead kinds are the actionable output of the
+    /// classification. Their match-side boundary strings are
+    /// **forbidden local boundary patterns** for the tileset: any
+    /// tile growth that would create one of these interfaces is
+    /// guaranteed to never complete to a full corona, so consumers
+    /// growing tilings prune candidate glues against this set. The
+    /// vertex-level analog lives in `vertextypes.rs` (Dead/Undead
+    /// VTs are even smaller local forbidden patterns; every
+    /// Dead/Undead NT contains at least one Dead/Undead VT, so the
+    /// VT antichain is the minimal-pattern compression of the
+    /// constraint set).
+    ///
+    /// # Algorithm
     ///
     /// O(n + m) via worklist propagation on the reverse adjacency.
     pub fn classify_all(&self) -> Vec<NtKind> {
@@ -1206,16 +1303,20 @@ mod tests {
         }
     }
 
+    /// No two catalog entries are equal by `PartialEq`. This is the
+    /// dedup contract of the BFS — not interface-level
+    /// canonicalization. The catalog **does** contain multiple
+    /// entries per interface class by design (different growth
+    /// histories produce distinct `NeighborhoodType`s with the same
+    /// match-side interface); see the module doc on the
+    /// interface-quotient view.
     #[test]
-    fn entries_have_no_duplicates() {
+    fn entries_have_no_partial_eq_duplicates() {
         for (name, idx) in [
             ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
             ("hex", hex_idx()),
             ("spectre", spectre_idx()),
         ] {
-            // Use the full NT struct as the dedup key, since that's
-            // what the BFS uses for dedup. A partial key could miss
-            // distinctions the BFS treats as significant.
             let mut keys: std::collections::HashSet<&NeighborhoodType> =
                 std::collections::HashSet::new();
             for (i, nt) in idx.entries().iter().enumerate() {
@@ -1389,11 +1490,24 @@ mod tests {
         }
     }
 
-    /// Extract a canonical fingerprint of an NT's geometric shape: the
-    /// lex_min_rot-normalized aug boundary angle sequence + central tile
-    /// id + cw_anchor_on_central. Two NTs with the same fingerprint are
-    /// the same geometric state regardless of vt_seq encoding.
-    fn nt_boundary_fingerprint<T: IsComplex + IsRingOrField + Units>(
+    /// Canonical fingerprint of the **augmented patch boundary** of
+    /// an NT (= context + central glued together, lex_min_rot of the
+    /// resulting cyclic angle sequence, paired with the central tile
+    /// id and cw_anchor_on_central).
+    ///
+    /// **This is not the interface fingerprint.** The interface
+    /// fingerprint would only canonicalize the matched edge run on
+    /// the context boundary (the linear segment shared with the
+    /// central), discarding everything else. The fingerprint here is
+    /// finer than the interface (it distinguishes patches whose
+    /// non-matched perimeters differ) and coarser than `PartialEq`
+    /// on `NeighborhoodType` (it ignores growth-history-dependent
+    /// fields like `num_ctx_tiles`).
+    ///
+    /// Used by the brute-force completeness + correctness tests as
+    /// an independent canonical form for comparing trial patches to
+    /// catalog entries.
+    fn aug_boundary_fingerprint<T: IsComplex + IsRingOrField + Units>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
     ) -> Option<(usize, usize, Vec<i8>)> {
@@ -1424,20 +1538,42 @@ mod tests {
     /// `rat.get_match` directly on each NT's augmented boundary as
     /// the independent reference.
     ///
-    /// Catalog entries can collide on boundary fingerprint without
-    /// being PartialEq-equal (e.g. two paths reach the same geometric
-    /// state via different `num_ctx_tiles` or `vt_seq` encodings, and
-    /// the BFS stores them as distinct NTs). Comparison must therefore
-    /// be at the fingerprint level, not the id level.
+    /// # Fingerprint level
     ///
-    /// For each src, for each canonical petal placement (brute-enumerated
-    /// via `rat.get_match`) absorbing the frontier edge:
-    ///   1. **Completeness**: the trial's canonical fingerprint must
-    ///      be in the catalog (or the petal closed the configuration).
+    /// Comparison is at the **augmented-boundary fingerprint** level
+    /// (see [`aug_boundary_fingerprint`]). That fingerprint is
+    /// stricter than the interface fingerprint and looser than
+    /// `PartialEq` on `NeighborhoodType`: it distinguishes patches
+    /// whose full perimeters differ but treats two BFS entries with
+    /// the same augmented patch as equivalent (= the BFS may produce
+    /// multiple entries per geometric state via different
+    /// `num_ctx_tiles` / `vt_seq` encodings, and we want to ignore
+    /// that here).
+    ///
+    /// # Properties
+    ///
+    /// For each src, for each canonical petal placement
+    /// (brute-enumerated via `rat.get_match`) absorbing the frontier
+    /// edge:
+    ///
+    ///   1. **Completeness**: the trial's augmented-boundary
+    ///      fingerprint is in the catalog, or the petal closed the
+    ///      configuration. Catches "BFS missed a reachable state".
     ///   2. **Transition fingerprint coverage**: the set of distinct
     ///      destination fingerprints recorded for `(src, tile_id,
-    ///      tile_offset)` must include the trial's destination
-    ///      fingerprint.
+    ///      tile_offset)` includes the trial's destination
+    ///      fingerprint. Catches "BFS recorded a transition pointing
+    ///      to a geometrically-wrong destination".
+    ///
+    /// Failure modes NOT caught by this check:
+    ///   - A bug at *interface* granularity where two distinct
+    ///     interfaces collapse to the same augmented-boundary
+    ///     fingerprint by accident (unlikely; geometrically rare).
+    ///   - A bug at *id* granularity where two entries with the same
+    ///     augmented fingerprint differ in some other respect that
+    ///     matters to downstream consumers. (Currently no consumer
+    ///     cares about anything other than the interface, so this
+    ///     wouldn't matter.)
     ///
     /// Uses NO logic from `explore_one` / `try_step_*` /
     /// `compute_candidates_covering_position` - pure brute force.
@@ -1452,7 +1588,7 @@ mod tests {
         let mut id_to_fp: Vec<Option<(usize, usize, Vec<i8>)>> =
             Vec::with_capacity(idx.num_types());
         for nt in idx.entries() {
-            let fp = nt_boundary_fingerprint(nt, &mi);
+            let fp = aug_boundary_fingerprint(nt, &mi);
             if let Some(ref fp) = fp {
                 fp_set.insert(fp.clone(), ());
             }
