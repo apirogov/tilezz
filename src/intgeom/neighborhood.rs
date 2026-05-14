@@ -389,6 +389,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             let side = match t.side {
                 TransitionSide::Cw => "cw",
                 TransitionSide::Ccw => "ccw",
+                TransitionSide::Both => "both",
             };
             writeln!(
                 out,
@@ -433,6 +434,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     let side = match side_tok {
                         "cw" => TransitionSide::Cw,
                         "ccw" => TransitionSide::Ccw,
+                        "both" => TransitionSide::Both,
                         other => {
                             return Err(format!(
                                 "line {}: unknown transition side `{}`",

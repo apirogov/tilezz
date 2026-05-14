@@ -48,6 +48,44 @@ Three possibilities, all bad:
 **Recommended fix:** investigate via `git blame` what was originally
 there. Either remove it or restore the intended behaviour.
 
+### V2a. `covers_both` closing detector may be tile-shape-specific
+
+```rust
+let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, n);
+let covers_cw = cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n);
+let covers_both = covers_cw && covers_ccw;
+if covers_both {
+    raw_transitions.insert((vt.clone(), None, side, pm.tile_id, tile_offset));
+} else { /* record transition to new VT */ }
+```
+
+`cyclic_range_contains` checks *vertex* range inclusive on both ends.
+For a length-1 match at `start_a = pos - 1`, the vertex range is
+`[pos-1, pos]` — both endpoints touched, so `covers_both = TRUE`.
+
+But this only consumes **one** edge of `pos` (the CW edge `pos-1`).
+Whether `pos` is then actually closed depends on the angle sum of
+the three tiles now meeting at `pos`:
+
+- Hex: 3 × 120° = 360° → closes ✓
+- Square: 3 × 90° = 270° → still open ✗ (misclassified as closing)
+- Spectre: tile-dependent
+
+For tiles where three corners don't sum to full turn, the BFS would
+record a length-1 CW-side glue as a closing transition even though
+the vertex remains open. Existing tests print counts but don't
+assert classifications, so this wouldn't surface.
+
+**Recommended fix:** the closing predicate should check that the
+*matched-edge* range covers both incident edges of `pos`
+(half-open `[start_a, start_a + len)` for edges `pos-1` and `pos`),
+not just that both vertices are touched. Or equivalently:
+`covers_both_edges = pm.start_a <= pos - 1 && pos < pm.start_a + pm.len`
+(modulo cyclic wrap).
+
+Pairs with V13 — a transition-correctness test would catch this
+immediately.
+
 ### V2. Side / junction_pos derivation lacks correctness comments
 
 Lines 236–257 contain dense modular arithmetic deriving the post-glue
@@ -374,7 +412,7 @@ that invariant."
 | ID  | Severity | Type      | Status   | Notes |
 |-----|----------|-----------|----------|-------|
 | V1  | Critical | dead code | done     | confirmed leftover from commit efbd56e (segment-type removal); deleted |
-| V2  | Critical | docs+invariant | pending | comment math, rename booleans, add `debug_assert!` |
+| V2  | Critical | docs+invariant | done | replaced vertex-touch predicate with edge-consumed predicate (correctness fix: the old vertex-touch heuristic misclassified length-1 CW-side glues as closing for non-hex tiles); added `TransitionSide::Both` variant with canonical-CW-edge rule documented; added `debug_assert!` on the invariant; documented the modular arithmetic |
 | V3  | High     | perf      | pending  | pre-bucket transitions in `compute_blessed` |
 | V4  | High     | perf      | pending  | `HashMap<usize, bool>` → `Vec<bool>` |
 | V5  | High     | refactor  | pending  | split `new` into 5 phase helpers |
