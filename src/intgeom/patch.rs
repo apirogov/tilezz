@@ -415,6 +415,18 @@ fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 
 /// Glue one match onto a raw boundary.
 ///
+/// # Caller contract
+///
+/// Inherits the precondition from [`angles::glue_raw_angles`]: `pm`
+/// must describe a **real** match. The sibling helper
+/// [`glue_tile_to_raw_boundary`] satisfies this by computing
+/// `pm.len = forward_match_length(...)` (canonical max) before
+/// constructing the `PatchMatch`. Callers passing `pm` directly are
+/// responsible for ensuring the same invariant — there is no
+/// post-glue Snake/grid check on this path (the result is a
+/// `RawBoundary` consumed by [`GrowingPatch::from_parts`], which
+/// trusts the caller).
+///
 /// # Rotation convention
 ///
 /// The returned boundary is **rotated** so that index 0 is the first
@@ -1360,6 +1372,20 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     /// If the patch is in `Seed` state, the first successful call
     /// transitions it to `Growing` and constructs the initial
     /// boundary.
+    ///
+    /// # Caller contract
+    ///
+    /// `pm` must be a **canonical** match obtained from one of:
+    /// [`Self::get_all_matches`], [`Self::get_matches_touching_vertex`],
+    /// or — for hand construction — built via [`Rat::get_match`] /
+    /// [`forward_match_length`] and the boundary's own angle sequence.
+    /// `add_tile` does **not** validate that `(pm.start_a, pm.len,
+    /// pm.start_b)` describes a real match: it only checks ±hturn
+    /// junction degeneracy and post-glue self-intersection. A bogus
+    /// interval that happens to produce a non-self-intersecting
+    /// polyline will be silently accepted with a geometrically
+    /// nonsensical boundary. A `debug_assert!` in
+    /// [`angles::glue_raw_angles`] catches this in test builds.
     pub fn add_tile(&mut self, pm: &PatchMatch) -> bool {
         match &self.state {
             PatchState::Seed { tile_id, .. } => {
@@ -1940,12 +1966,16 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     if len == 0 || n == 0 {
         return false;
     }
-    let end = start + len;
-    if end <= n {
-        index >= start && index <= end
-    } else {
-        index >= start || index <= end % n
-    }
+    // A match of `len` edges starting at edge `start` (cyclic) touches
+    // vertices `start, start+1, …, start+len` (mod n). Compute the
+    // forward cyclic distance from `start` to `index` and accept if
+    // it's ≤ len. This is correct regardless of whether `start + len`
+    // wraps around the boundary — the previous formulation had a bug
+    // exactly when `start + len == n`, because the `end <= n` branch
+    // checked `index <= end == n` (which `index < n` would fail) and
+    // missed the wrap vertex at `end % n == 0`.
+    let cyclic_diff = (index + n - start % n) % n;
+    cyclic_diff <= len
 }
 
 /// Compute the new boundary angles after gluing `pm.tile_id`'s tile onto
@@ -1961,6 +1991,18 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
 /// raw-boundary path used by witness construction (`glue_match_to_raw_boundary`)
 /// is intentionally permissive at this level — see
 /// [`construct_witness_from_vt_sequence`] for the open-VT enforcement.
+///
+/// # Caller contract
+///
+/// Inherits the precondition from [`angles::glue_raw_angles`]: `pm` must
+/// describe a **real** match — `(pm.start_a, pm.len, pm.start_b)` must
+/// satisfy the revcomp relation on the `pm.len - 1` interior angles.
+/// Obtain `pm` from `GrowingPatch::get_all_matches` /
+/// `GrowingPatch::get_matches_touching_vertex` /
+/// `Rat::get_match` / `forward_match_length`; hand-constructed
+/// `PatchMatch`es are not validated here and may produce geometrically
+/// nonsensical glues that downstream self-intersection checks happen
+/// to accept.
 fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
@@ -2125,6 +2167,62 @@ mod tests {
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         GrowingPatch::new(ts, 0)
+    }
+
+    /// Pure unit tests for [`cyclic_range_contains`]. Computed via the
+    /// brute reference "which vertices does a `len`-edge match anchored
+    /// at `start` touch on a cyclic boundary of length `n`?":
+    /// vertices `{start, start+1, …, start+len}` modulo `n` (i.e.
+    /// `len + 1` vertices).
+    ///
+    /// Regression: the previous implementation had a wrap-around bug
+    /// exactly when `start + len == n`. In that case the match's
+    /// CCW-endpoint vertex is `n mod n = 0`, but the function's
+    /// `end <= n` branch checked `index >= start && index <= end`
+    /// which is false for `index = 0` whenever `start > 0`.
+    /// This test pins all four interesting regimes (interior,
+    /// CCW-endpoint-no-wrap, CW-endpoint, wrap-around) plus the
+    /// `start + len == n` exact-fit boundary case.
+    #[test]
+    fn cyclic_range_contains_unit() {
+        // (start, len, n) → set of vertex indices the match touches.
+        fn brute(start: usize, len: usize, n: usize) -> std::collections::BTreeSet<usize> {
+            if len == 0 || n == 0 {
+                return std::collections::BTreeSet::new();
+            }
+            (0..=len).map(|i| (start + i) % n).collect()
+        }
+
+        // Pin the regression case directly:
+        // start=25, len=1, n=26 should touch vertices {25, 0}.
+        // Signature: cyclic_range_contains(start, len, index, n).
+        assert!(
+            cyclic_range_contains(25, 1, 0, 26),
+            "regression: end-at-n-mod-n=0 wrap"
+        );
+        assert!(cyclic_range_contains(25, 1, 25, 26), "CW endpoint");
+
+        // Exhaustive cross-check against brute over a moderate range.
+        for n in [1, 2, 5, 13, 26] {
+            for start in 0..n {
+                for len in 0..=(n + 1) {
+                    let want = brute(start, len, n);
+                    for index in 0..n {
+                        let got = cyclic_range_contains(start, len, index, n);
+                        let expected = want.contains(&index);
+                        assert_eq!(
+                            got,
+                            expected,
+                            "n={n} start={start} len={len} index={index}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Edge cases.
+        assert!(!cyclic_range_contains(0, 0, 0, 10), "len=0 → false");
+        assert!(!cyclic_range_contains(0, 5, 0, 0), "n=0 → false");
     }
 
     #[test]
@@ -3124,11 +3222,21 @@ mod tests {
             .collect();
 
         for target in 0..n {
+            // Brute-side filter must NOT use `cyclic_range_contains`,
+            // otherwise this cross-check is circular (a bug in
+            // `cyclic_range_contains` would affect both sides
+            // identically and pass). We instead use an explicit
+            // "vertex `target` is in `{start, start+1, …, start+len}`
+            // mod n" check via modular arithmetic — independent of the
+            // function under test.
             let touching_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
                 brute_set
                     .iter()
                     .copied()
-                    .filter(|(start_a, len, _, _)| cyclic_range_contains(*start_a, *len, target, n))
+                    .filter(|(start_a, len, _, _)| {
+                        let cyclic_diff = (target + n - *start_a % n) % n;
+                        cyclic_diff <= *len
+                    })
                     .collect();
             let touching_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
                 .get_matches_touching_vertex(target)

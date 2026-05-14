@@ -71,18 +71,61 @@ pub struct GlueResult {
     pub a_yx: Option<i8>,
 }
 
-/// Compute the angle sequence resulting from gluing two boundary segments.
+/// Compute the angle sequence resulting from gluing two boundary segments
+/// along a **known-valid** match interval.
 ///
 /// Given two cyclic angle sequences (`self_angles` and `other_angles`) and a
 /// match described by `(start_a, mlen, start_b)`, computes the new boundary
 /// formed by the non-matched portions of both sequences.
 ///
-/// The match covers `mlen` consecutive positions starting at `start_a` on
-/// `self_angles` (cyclically) and ends at `start_b` on `other_angles` (cyclically).
-/// The surviving portions are concatenated with corrected junction angles.
+/// # Match-interval convention
 ///
-/// Returns `None` if the result would be empty. Does **not** check for ±hturn
-/// degeneracy — the caller is responsible for rejecting degenerate junctions.
+/// The match covers `mlen` consecutive edges starting at index `start_a` on
+/// `self_angles` (so edges `start_a, start_a+1, …, start_a+mlen-1` are
+/// consumed, cyclically). On `other_angles` the match **ends** at index
+/// `start_b` — that is, `start_b` is the first *surviving* index on
+/// `other_angles` (the convention matches what [`super::Rat::get_match`]
+/// returns as `ext_end`). Surviving portions are concatenated and the two
+/// junction angles `a_yx` / `a_xy` are written in.
+///
+/// # Caller contract (preconditions)
+///
+/// Callers must guarantee:
+///
+/// 1. **Valid match interval.** The `mlen - 1` interior angle pairs along
+///    the match must satisfy the revcomp relation
+///    `self_angles[(start_a + i) % n] == -other_angles[(start_b + m - i) % m]`
+///    for every `i ∈ 1..mlen`. The canonical way to obtain such a tuple is
+///    [`super::Rat::get_match`] or [`super::patch::forward_match_length`] /
+///    [`super::patch::GrowingPatch::get_all_matches`]. Hand-constructed
+///    `PatchMatch`es that don't go through one of these enumerators are
+///    *not* validated by this function (or by `add_tile` downstream — the
+///    geometric self-intersection check downstream of this function may
+///    happen to accept a bogus interval if the resulting polyline is
+///    non-self-intersecting, producing a geometrically meaningless glue).
+///    A `debug_assert!` enforces the contract in test builds.
+/// 2. **No ±hturn junctions.** Caller must reject results whose `a_yx` or
+///    `a_xy` equals ±hturn (degenerate / pinched junction). This function
+///    does not perform that check.
+///
+/// # Non-local validity (post-glue self-intersection)
+///
+/// `glue_raw_angles` only builds the new angle sequence. Whether the
+/// resulting boundary is a valid simple polygon (no self-intersection,
+/// hole-free) is the caller's responsibility, enforced by one of:
+///
+/// - [`super::Snake::try_from`] on the returned `angles` (used by
+///   `Rat::try_glue` and `GrowingPatch::init_from_first_add`);
+/// - incremental grid-segment checks (`check_segment_clear`) used by
+///   `GrowingPatch::add_tile_growing`;
+/// - upstream canonical enumeration (`forward_match_length` chains in
+///   `flower_petal_glue`) guarantees the result is a valid simple polygon
+///   when fed back into `GrowingPatch::from_parts`.
+///
+/// # Returns
+///
+/// `Some(GlueResult)` on success; `None` if the surviving boundary would
+/// be empty.
 pub fn glue_raw_angles<T: SymNum>(
     self_angles: &[i8],
     other_angles: &[i8],
@@ -90,6 +133,23 @@ pub fn glue_raw_angles<T: SymNum>(
     mlen: usize,
     start_b: usize,
 ) -> Option<GlueResult> {
+    debug_assert!(
+        {
+            let n = self_angles.len();
+            let m = other_angles.len();
+            mlen == 0
+                || mlen > n
+                || mlen > m
+                || (1..mlen).all(|i| {
+                    self_angles[(start_a + i) % n]
+                        == -other_angles[(start_b + m - i) % m]
+                })
+        },
+        "glue_raw_angles: claimed match interval (start_a={start_a}, mlen={mlen}, \
+         start_b={start_b}) violates the revcomp relation at some interior offset. \
+         The caller must pass a real match — use Rat::get_match, \
+         forward_match_length, or GrowingPatch::get_all_matches to obtain one."
+    );
     let n = self_angles.len();
     let m = other_angles.len();
 
