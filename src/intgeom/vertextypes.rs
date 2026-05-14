@@ -391,6 +391,15 @@ struct BfsState<T: IsComplex> {
     /// BFS frontier.
     queue: VecDeque<OpenVertexType>,
     /// Witness patch + junction position + gap angle for each VT.
+    ///
+    /// Each `GrowingPatch` carries its full spatial grid (a few KB),
+    /// even though after the BFS terminates the grid is only used if
+    /// a caller asks for `info.witness().get_matches_touching_vertex(...)`
+    /// or similar grid-dependent operation. For tilesets with
+    /// thousands of VTs this is a few MB of mostly-cold memory.
+    /// If it becomes a bottleneck, switch to storing
+    /// `RawBoundary` here and reconstruct the `GrowingPatch` lazily
+    /// in `OpenVertexTypeInfo::witness()`.
     witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
 }
 

@@ -85,9 +85,6 @@ Some tests are slow (~5 min); ask before running the full `cargo
 test` repeatedly. Brute completeness tests are `#[ignore]`-gated and
 need `cargo test --release ... -- --ignored`.
 
-`PATCH_REVIEW.md` tracks open review items (V1, V2, ...) on
-`patch.rs` / `vertextypes.rs`. Reference these in commit messages.
-
 ## Conventions
 
 - Tiles and patch boundaries are **angle sequences** (turn angles at
