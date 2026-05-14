@@ -241,270 +241,36 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
     /// convex tilesets the VT space can be large (e.g. spectre);
     /// progress is logged to stderr every 100 VTs.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let mut all_types: BTreeSet<OpenVertexType> = BTreeSet::new();
-        let mut initial_types: BTreeSet<OpenVertexType> = BTreeSet::new();
-        let mut transition_map: HashMap<OpenVertexType, HasTransitions> = HashMap::new();
-        let mut raw_transitions: BTreeSet<(
-            OpenVertexType,
-            Option<OpenVertexType>,
-            TransitionSide,
-            usize,
-            usize,
-        )> = BTreeSet::new();
+        let mut state = BfsState::default();
+        seed_phase(&mut state, &tileset);
+        bfs_phase(&mut state, &tileset);
 
-        let mut visited: BTreeSet<OpenVertexType> = BTreeSet::new();
-        let mut queue: VecDeque<OpenVertexType> = VecDeque::new();
-        let mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)> =
-            HashMap::new();
+        let BfsState {
+            all_types,
+            initial_types,
+            transition_map,
+            raw_transitions,
+            witness_store,
+            ..
+        } = state;
 
-        for seed_id in 0..tileset.num_tiles() {
-            eprintln!(
-                "[VT BFS] seeding tile {}/{}...",
-                seed_id,
-                tileset.num_tiles()
-            );
-            let seed = GrowingPatch::new(Arc::clone(&tileset), seed_id);
-            for pm in seed.get_all_matches() {
-                let mut gp = seed.clone();
-                if !gp.add_tile(&pm) || !gp.is_growing() {
-                    continue;
-                }
-                for pos in 0..gp.boundary_len() {
-                    if !gp.is_junction(pos) {
-                        continue;
-                    }
-                    if let Some(vt) = gp.junction_vertex_type_at(pos) {
-                        all_types.insert(vt.clone());
-                        initial_types.insert(vt.clone());
-                        witness_store
-                            .entry(vt.clone())
-                            .or_insert_with(|| (gp.clone(), pos, gp.angles()[pos]));
-                        if visited.insert(vt.clone()) {
-                            queue.push_back(vt);
-                        }
-                    }
-                }
-            }
-        }
+        let (vt_list, reverse) = build_id_map(all_types);
+        let (succ_sets, pred_sets, transition_infos) =
+            build_transition_arrays(&reverse, &raw_transitions);
 
-        let mut bfs_processed: usize = 0;
-        let bfs_start = std::time::Instant::now();
+        let is_cursed = compute_cursed(&vt_list, &transition_map, &succ_sets);
+        let is_blessed = compute_blessed(&vt_list, &transition_infos);
 
-        while let Some(vt) = queue.pop_front() {
-            if transition_map.get(&vt) == Some(&HasTransitions::No) {
-                continue;
-            }
-
-            bfs_processed += 1;
-            if bfs_processed.is_multiple_of(100) || queue.is_empty() {
-                eprintln!(
-                    "[VT BFS] processed {} | queue {} | types {} | {:.1?}",
-                    bfs_processed,
-                    queue.len(),
-                    visited.len(),
-                    bfs_start.elapsed(),
-                );
-            }
-
-            let touching = {
-                let (gp, pos, _gap) = &witness_store[&vt];
-                let n = gp.boundary_len();
-                let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos);
-                if t.is_empty() {
-                    transition_map.insert(vt, HasTransitions::No);
-                    continue;
-                }
-                transition_map
-                    .entry(vt.clone())
-                    .or_insert(HasTransitions::Yes);
-                (t, n)
-            };
-            let (touching, n) = touching;
-            let pos = witness_store[&vt].1;
-
-            for pm in touching {
-                let gp = &witness_store[&vt].0;
-                let mut gp2 = gp.clone();
-                if !gp2.add_tile(&pm) || !gp2.is_growing() {
-                    continue;
-                }
-
-                // Classify the glue by which incident boundary edges of
-                // the focus vertex `pos` it consumed.
-                //
-                // The focus vertex has two incident boundary edges:
-                //   CW edge:  edge position (pos + n - 1) % n
-                //             (goes vertex pos-1 -> pos)
-                //   CCW edge: edge position pos
-                //             (goes vertex pos -> pos+1)
-                //
-                // The match consumes a half-open edge range
-                // [pm.start_a, pm.start_a + pm.len). The focus is sealed
-                // iff BOTH incident edges are in that range. (Note: a
-                // vertex-range test would be too permissive — a single-
-                // edge match on the CW edge has vertex range [pos-1, pos]
-                // touching both pos-1 and pos without consuming the CCW
-                // edge of pos.)
-                let edge_in_match = |edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
-                let consumes_cw_edge = edge_in_match((pos + n - 1) % n);
-                let consumes_ccw_edge = edge_in_match(pos);
-
-                // `get_matches_touching_vertex(pos)` guarantees the match
-                // touches the focus vertex, so at least one incident
-                // edge must be consumed.
-                debug_assert!(
-                    consumes_cw_edge || consumes_ccw_edge,
-                    "touching match doesn't consume any incident edge of pos"
-                );
-
-                let side = match (consumes_cw_edge, consumes_ccw_edge) {
-                    (true, true) => TransitionSide::Both,
-                    (true, false) => TransitionSide::Cw,
-                    (false, true) => TransitionSide::Ccw,
-                    (false, false) => unreachable!(),
-                };
-
-                // Canonical recorded edge for the tile_offset
-                // computation:
-                //   - Cw side: the CW edge.
-                //   - Ccw side: the CCW edge.
-                //   - Both (closing): CW edge by convention (documented
-                //     on TransitionSide::Both).
-                let edge_pos = match side {
-                    TransitionSide::Ccw => pos,
-                    TransitionSide::Cw | TransitionSide::Both => (pos + n - 1) % n,
-                };
-                let offset_in_match =
-                    (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
-                let m = tileset.rat(pm.tile_id).len();
-                let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
-                    .rem_euclid(m as i64) as usize;
-
-                // Where is the focus's new junction (if any) in the
-                // post-glue boundary?
-                //   - side == Ccw: pm.start_a == pos; new boundary's
-                //     index 0 is at old vertex (pos + len) % n; new
-                //     junction at the CW endpoint of the match lives
-                //     at new index seg_len_old = n - pm.len.
-                //   - side == Cw: pm ended at vertex pos (start_a + len
-                //     == pos); new boundary's index 0 is at old vertex
-                //     pos; new junction at the CCW endpoint of the
-                //     match lives at new index 0.
-                //   - side == Both: focus vertex is sealed; no junction
-                //     position.
-                let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
-
-                if matches!(side, TransitionSide::Both) {
-                    raw_transitions.insert((vt.clone(), None, side, pm.tile_id, tile_offset));
-                } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
-                    raw_transitions.insert((
-                        vt.clone(),
-                        Some(new_vt),
-                        side,
-                        pm.tile_id,
-                        tile_offset,
-                    ));
-                }
-
-                for new_pos in 0..gp2.boundary_len() {
-                    if !gp2.is_junction(new_pos) {
-                        continue;
-                    }
-                    if let Some(nv) = gp2.junction_vertex_type_at(new_pos) {
-                        all_types.insert(nv.clone());
-                        if visited.insert(nv.clone()) {
-                            witness_store
-                                .insert(nv.clone(), (gp2.clone(), new_pos, gp2.angles()[new_pos]));
-                            queue.push_back(nv);
-                        }
-                    }
-                }
-            }
-        }
-
-        let entries: Vec<OpenVertexType> = all_types.into_iter().collect();
-        let reverse: HashMap<OpenVertexType, usize> = entries
-            .iter()
-            .enumerate()
-            .map(|(i, vt)| (vt.clone(), i + 1))
-            .collect();
-
-        let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
-        let mut pred_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); entries.len()];
-
-        let mut transition_infos: Vec<TransitionInfo> = Vec::new();
-        for (src, dst, side, tid, toff) in &raw_transitions {
-            if let Some(&src_id) = reverse.get(src) {
-                match dst {
-                    Some(dst_vt) => {
-                        if let Some(&dst_id) = reverse.get(dst_vt) {
-                            succ_sets[src_id - 1].insert(dst_id);
-                            pred_sets[dst_id - 1].insert(src_id);
-                            transition_infos.push(TransitionInfo {
-                                src_id,
-                                dst_id,
-                                side: *side,
-                                tile_id: *tid,
-                                tile_offset: *toff,
-                            });
-                        }
-                    }
-                    None => {
-                        transition_infos.push(TransitionInfo {
-                            src_id,
-                            dst_id: CLOSED_ID,
-                            side: *side,
-                            tile_id: *tid,
-                            tile_offset: *toff,
-                        });
-                    }
-                }
-            }
-        }
-
-        let is_cursed = compute_cursed(&entries, &transition_map, &succ_sets);
-        let is_blessed = compute_blessed(&entries, &transition_infos);
-
-        let info_entries: Vec<OpenVertexTypeInfo<T>> = entries
-            .into_iter()
-            .enumerate()
-            .map(|(i, vt)| {
-                let id = i + 1;
-                let (witness, witness_pos, gap_angle) = witness_store.remove(&vt).unwrap();
-                let rat = witness.to_rat();
-                let (cw_nbr, ccw_nbr) = witness
-                    .neighbor_junction_offsets(witness_pos)
-                    .unwrap_or((0, 0));
-                let no_transitions = transition_map.get(&vt) == Some(&HasTransitions::No);
-                let kind = if no_transitions {
-                    VTypeKind::Dead
-                } else if is_cursed[&id] {
-                    VTypeKind::Undead
-                } else if is_blessed[&id] {
-                    VTypeKind::Blessed
-                } else {
-                    VTypeKind::Free
-                };
-                OpenVertexTypeInfo {
-                    has_transitions: if no_transitions {
-                        HasTransitions::No
-                    } else {
-                        HasTransitions::Yes
-                    },
-                    successors: succ_sets[i].iter().copied().collect(),
-                    predecessors: pred_sets[i].iter().copied().collect(),
-                    kind,
-                    is_initial: initial_types.contains(&vt),
-                    realizing_rat: rat,
-                    vtype: vt,
-                    witness,
-                    witness_pos,
-                    gap_angle,
-                    cw_neighbor_offset: cw_nbr,
-                    ccw_neighbor_offset: ccw_nbr,
-                }
-            })
-            .collect();
+        let info_entries = classify_and_finalize(
+            vt_list,
+            &succ_sets,
+            &pred_sets,
+            &transition_map,
+            witness_store,
+            &initial_types,
+            &is_cursed,
+            &is_blessed,
+        );
 
         OpenVertexTypeIndex {
             tileset,
@@ -559,6 +325,355 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
+}
+
+/// A single raw transition tuple, accumulated by the BFS before id
+/// assignment turns it into a [`TransitionInfo`].
+///
+/// Layout: `(src_vt, dst_vt_or_None_for_closing, side, tile_id, tile_offset)`.
+type RawTransition = (
+    OpenVertexType,
+    Option<OpenVertexType>,
+    TransitionSide,
+    usize,
+    usize,
+);
+
+/// Mutable state shared across the seed and BFS phases of
+/// [`OpenVertexTypeIndex::new`].
+struct BfsState<T: IsComplex> {
+    /// Every VT discovered so far (seed phase + BFS).
+    all_types: BTreeSet<OpenVertexType>,
+    /// Subset of `all_types` originating from the seed phase.
+    initial_types: BTreeSet<OpenVertexType>,
+    /// Records whether each VT had any touching matches.
+    transition_map: HashMap<OpenVertexType, HasTransitions>,
+    /// Raw transition tuples; deduplicated via the BTreeSet.
+    raw_transitions: BTreeSet<RawTransition>,
+    /// VTs already enqueued for BFS exploration.
+    visited: BTreeSet<OpenVertexType>,
+    /// BFS frontier.
+    queue: VecDeque<OpenVertexType>,
+    /// Witness patch + junction position + gap angle for each VT.
+    witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
+}
+
+impl<T: IsComplex> Default for BfsState<T> {
+    fn default() -> Self {
+        BfsState {
+            all_types: BTreeSet::new(),
+            initial_types: BTreeSet::new(),
+            transition_map: HashMap::new(),
+            raw_transitions: BTreeSet::new(),
+            visited: BTreeSet::new(),
+            queue: VecDeque::new(),
+            witness_store: HashMap::new(),
+        }
+    }
+}
+
+/// Phase 1: extract every junction VT from every legal first-glue of
+/// every seed tile. Each discovered VT records a representative
+/// witness patch (the 2-tile patch that contains it).
+fn seed_phase<T: IsComplex + IsRingOrField + Units>(
+    state: &mut BfsState<T>,
+    tileset: &Arc<TileSet<T>>,
+) {
+    for seed_id in 0..tileset.num_tiles() {
+        eprintln!(
+            "[VT BFS] seeding tile {}/{}...",
+            seed_id,
+            tileset.num_tiles()
+        );
+        let seed = GrowingPatch::new(Arc::clone(tileset), seed_id);
+        for pm in seed.get_all_matches() {
+            let mut gp = seed.clone();
+            if !gp.add_tile(&pm) || !gp.is_growing() {
+                continue;
+            }
+            for pos in 0..gp.boundary_len() {
+                if !gp.is_junction(pos) {
+                    continue;
+                }
+                if let Some(vt) = gp.junction_vertex_type_at(pos) {
+                    state.all_types.insert(vt.clone());
+                    state.initial_types.insert(vt.clone());
+                    state
+                        .witness_store
+                        .entry(vt.clone())
+                        .or_insert_with(|| (gp.clone(), pos, gp.angles()[pos]));
+                    if state.visited.insert(vt.clone()) {
+                        state.queue.push_back(vt);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Phase 2: process every VT in the queue. For each, enumerate
+/// touching matches and emit raw transitions; also discover any new
+/// VTs exposed by the glues and enqueue them.
+fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
+    state: &mut BfsState<T>,
+    tileset: &Arc<TileSet<T>>,
+) {
+    let mut bfs_processed: usize = 0;
+    let bfs_start = std::time::Instant::now();
+
+    while let Some(vt) = state.queue.pop_front() {
+        if state.transition_map.get(&vt) == Some(&HasTransitions::No) {
+            continue;
+        }
+
+        bfs_processed += 1;
+        if bfs_processed.is_multiple_of(100) || state.queue.is_empty() {
+            eprintln!(
+                "[VT BFS] processed {} | queue {} | types {} | {:.1?}",
+                bfs_processed,
+                state.queue.len(),
+                state.visited.len(),
+                bfs_start.elapsed(),
+            );
+        }
+
+        let (touching, n) = {
+            let (gp, pos, _gap) = &state.witness_store[&vt];
+            let n = gp.boundary_len();
+            let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos);
+            if t.is_empty() {
+                state.transition_map.insert(vt, HasTransitions::No);
+                continue;
+            }
+            state
+                .transition_map
+                .entry(vt.clone())
+                .or_insert(HasTransitions::Yes);
+            (t, n)
+        };
+        let pos = state.witness_store[&vt].1;
+
+        for pm in touching {
+            let gp = &state.witness_store[&vt].0;
+            let mut gp2 = gp.clone();
+            if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                continue;
+            }
+
+            // Classify the glue by which incident boundary edges of
+            // the focus vertex `pos` it consumed.
+            //
+            // The focus vertex has two incident boundary edges:
+            //   CW edge:  edge position (pos + n - 1) % n
+            //             (goes vertex pos-1 -> pos)
+            //   CCW edge: edge position pos
+            //             (goes vertex pos -> pos+1)
+            //
+            // The match consumes a half-open edge range
+            // [pm.start_a, pm.start_a + pm.len). The focus is sealed
+            // iff BOTH incident edges are in that range. (Note: a
+            // vertex-range test would be too permissive — a single-
+            // edge match on the CW edge has vertex range [pos-1, pos]
+            // touching both pos-1 and pos without consuming the CCW
+            // edge of pos.)
+            let edge_in_match = |edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
+            let consumes_cw_edge = edge_in_match((pos + n - 1) % n);
+            let consumes_ccw_edge = edge_in_match(pos);
+
+            // `get_matches_touching_vertex(pos)` guarantees the match
+            // touches the focus vertex, so at least one incident
+            // edge must be consumed.
+            debug_assert!(
+                consumes_cw_edge || consumes_ccw_edge,
+                "touching match doesn't consume any incident edge of pos"
+            );
+
+            let side = match (consumes_cw_edge, consumes_ccw_edge) {
+                (true, true) => TransitionSide::Both,
+                (true, false) => TransitionSide::Cw,
+                (false, true) => TransitionSide::Ccw,
+                (false, false) => unreachable!(),
+            };
+
+            // Canonical recorded edge for the tile_offset
+            // computation:
+            //   - Cw side: the CW edge.
+            //   - Ccw side: the CCW edge.
+            //   - Both (closing): CW edge by convention (documented
+            //     on TransitionSide::Both).
+            let edge_pos = match side {
+                TransitionSide::Ccw => pos,
+                TransitionSide::Cw | TransitionSide::Both => (pos + n - 1) % n,
+            };
+            let offset_in_match =
+                (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
+            let m = tileset.rat(pm.tile_id).len();
+            let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                .rem_euclid(m as i64) as usize;
+
+            // Where is the focus's new junction (if any) in the
+            // post-glue boundary?
+            //   - side == Ccw: pm.start_a == pos; new boundary's
+            //     index 0 is at old vertex (pos + len) % n; new
+            //     junction at the CW endpoint of the match lives
+            //     at new index seg_len_old = n - pm.len.
+            //   - side == Cw: pm ended at vertex pos (start_a + len
+            //     == pos); new boundary's index 0 is at old vertex
+            //     pos; new junction at the CCW endpoint of the
+            //     match lives at new index 0.
+            //   - side == Both: focus vertex is sealed; no junction
+            //     position.
+            let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+
+            if matches!(side, TransitionSide::Both) {
+                state
+                    .raw_transitions
+                    .insert((vt.clone(), None, side, pm.tile_id, tile_offset));
+            } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
+                state.raw_transitions.insert((
+                    vt.clone(),
+                    Some(new_vt),
+                    side,
+                    pm.tile_id,
+                    tile_offset,
+                ));
+            }
+
+            for new_pos in 0..gp2.boundary_len() {
+                if !gp2.is_junction(new_pos) {
+                    continue;
+                }
+                if let Some(nv) = gp2.junction_vertex_type_at(new_pos) {
+                    state.all_types.insert(nv.clone());
+                    if state.visited.insert(nv.clone()) {
+                        state
+                            .witness_store
+                            .insert(nv.clone(), (gp2.clone(), new_pos, gp2.angles()[new_pos]));
+                        state.queue.push_back(nv);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Phase 3: sort discovered VTs canonically and assign 1-based ids.
+/// Returns `(vt_list, reverse)` where `reverse[vt] = id` and
+/// `vt_list[id - 1] = vt`.
+fn build_id_map(
+    all_types: BTreeSet<OpenVertexType>,
+) -> (Vec<OpenVertexType>, HashMap<OpenVertexType, usize>) {
+    let vt_list: Vec<OpenVertexType> = all_types.into_iter().collect();
+    let reverse: HashMap<OpenVertexType, usize> = vt_list
+        .iter()
+        .enumerate()
+        .map(|(i, vt)| (vt.clone(), i + 1))
+        .collect();
+    (vt_list, reverse)
+}
+
+/// Phase 4: turn the raw `(src, dst, side, tile_id, tile_offset)`
+/// tuples into `TransitionInfo` records using the id map; build the
+/// successor / predecessor sets used by the cursed fixpoint.
+fn build_transition_arrays(
+    reverse: &HashMap<OpenVertexType, usize>,
+    raw_transitions: &BTreeSet<RawTransition>,
+) -> (
+    Vec<BTreeSet<usize>>,
+    Vec<BTreeSet<usize>>,
+    Vec<TransitionInfo>,
+) {
+    let n = reverse.len();
+    let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut pred_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut transition_infos: Vec<TransitionInfo> = Vec::new();
+
+    for (src, dst, side, tid, toff) in raw_transitions {
+        let Some(&src_id) = reverse.get(src) else {
+            continue;
+        };
+        match dst {
+            Some(dst_vt) => {
+                if let Some(&dst_id) = reverse.get(dst_vt) {
+                    succ_sets[src_id - 1].insert(dst_id);
+                    pred_sets[dst_id - 1].insert(src_id);
+                    transition_infos.push(TransitionInfo {
+                        src_id,
+                        dst_id,
+                        side: *side,
+                        tile_id: *tid,
+                        tile_offset: *toff,
+                    });
+                }
+            }
+            None => {
+                transition_infos.push(TransitionInfo {
+                    src_id,
+                    dst_id: CLOSED_ID,
+                    side: *side,
+                    tile_id: *tid,
+                    tile_offset: *toff,
+                });
+            }
+        }
+    }
+
+    (succ_sets, pred_sets, transition_infos)
+}
+
+/// Phase 5: assemble per-VT [`OpenVertexTypeInfo`] records, classifying
+/// each as Dead / Undead / Blessed / Free from the fixpoint results.
+#[allow(clippy::too_many_arguments)]
+fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
+    vt_list: Vec<OpenVertexType>,
+    succ_sets: &[BTreeSet<usize>],
+    pred_sets: &[BTreeSet<usize>],
+    transition_map: &HashMap<OpenVertexType, HasTransitions>,
+    mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
+    initial_types: &BTreeSet<OpenVertexType>,
+    is_cursed: &HashMap<usize, bool>,
+    is_blessed: &HashMap<usize, bool>,
+) -> Vec<OpenVertexTypeInfo<T>> {
+    vt_list
+        .into_iter()
+        .enumerate()
+        .map(|(i, vt)| {
+            let id = i + 1;
+            let (witness, witness_pos, gap_angle) = witness_store.remove(&vt).unwrap();
+            let rat = witness.to_rat();
+            let (cw_nbr, ccw_nbr) = witness
+                .neighbor_junction_offsets(witness_pos)
+                .unwrap_or((0, 0));
+            let no_transitions = transition_map.get(&vt) == Some(&HasTransitions::No);
+            let kind = if no_transitions {
+                VTypeKind::Dead
+            } else if is_cursed[&id] {
+                VTypeKind::Undead
+            } else if is_blessed[&id] {
+                VTypeKind::Blessed
+            } else {
+                VTypeKind::Free
+            };
+            OpenVertexTypeInfo {
+                has_transitions: if no_transitions {
+                    HasTransitions::No
+                } else {
+                    HasTransitions::Yes
+                },
+                successors: succ_sets[i].iter().copied().collect(),
+                predecessors: pred_sets[i].iter().copied().collect(),
+                kind,
+                is_initial: initial_types.contains(&vt),
+                realizing_rat: rat,
+                vtype: vt,
+                witness,
+                witness_pos,
+                gap_angle,
+                cw_neighbor_offset: cw_nbr,
+                ccw_neighbor_offset: ccw_nbr,
+            }
+        })
+        .collect()
 }
 
 fn compute_cursed(
