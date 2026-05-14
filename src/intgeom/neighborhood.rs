@@ -1043,23 +1043,72 @@ mod tests {
         SPECTRE_IDX.get_or_init(|| NeighborhoodIndex::new(spectre_tileset()))
     }
 
-    #[test]
-    fn square_seed_count() {
-        let idx = square_idx();
-        assert!(idx.num_types() > 0, "expected non-empty seed collection");
-        for nt in idx.entries() {
-            assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
-            assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
-        }
+    /// Helper for the baked-in count tests: assert
+    /// `(num_types, transitions, dead, undead, blessed, free,
+    /// closed_transitions)` exactly. Catches silent drift in
+    /// seed generation, BFS exploration, or classification.
+    #[allow(clippy::too_many_arguments)]
+    fn assert_counts<T: IsComplex + IsRingOrField + Units>(
+        idx: &NeighborhoodIndex<T>,
+        expected_types: usize,
+        expected_transitions: usize,
+        expected_closed: usize,
+        expected_dead: usize,
+        expected_undead: usize,
+        expected_blessed: usize,
+        expected_free: usize,
+    ) {
+        let kinds = idx.classify_all();
+        let dead = kinds.iter().filter(|k| **k == NtKind::Dead).count();
+        let undead = kinds.iter().filter(|k| **k == NtKind::Undead).count();
+        let blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
+        let free = kinds.iter().filter(|k| **k == NtKind::Free).count();
+        let closed_trans = idx
+            .transitions()
+            .iter()
+            .filter(|t| t.dst_id == NT_CLOSED_ID)
+            .count();
+
+        assert_eq!(idx.num_types(), expected_types, "num_types");
+        assert_eq!(idx.transitions().len(), expected_transitions, "transitions");
+        assert_eq!(closed_trans, expected_closed, "closed_trans");
+        assert_eq!(dead, expected_dead, "dead");
+        assert_eq!(undead, expected_undead, "undead");
+        assert_eq!(blessed, expected_blessed, "blessed");
+        assert_eq!(free, expected_free, "free");
+        assert_eq!(dead + undead + blessed + free, expected_types, "kinds sum");
     }
 
     #[test]
-    fn hex_seed_count() {
-        let idx = hex_idx();
-        assert!(idx.num_types() > 0, "expected non-empty seed collection");
-        for nt in idx.entries() {
-            assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
-            assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
+    fn square_counts() {
+        // Square tiles the plane convexly; every NT is Blessed (every
+        // continuation closes).
+        assert_counts(square_idx(), 109184, 436736, 327680, 0, 0, 109184, 0);
+    }
+
+    #[test]
+    fn hex_counts() {
+        assert_counts(hex_idx(), 55944, 335664, 279936, 0, 0, 55944, 0);
+    }
+
+    #[test]
+    fn spectre_counts() {
+        // Spectre is non-convex; exercises every kind.
+        assert_counts(spectre_idx(), 10114, 11297, 1453, 6001, 1615, 584, 1914);
+    }
+
+    #[test]
+    fn seeds_are_well_formed() {
+        for idx in [
+            square_idx() as &NeighborhoodIndex<ZZ12>,
+            hex_idx(),
+            spectre_idx(),
+        ] {
+            assert!(idx.num_types() > 0, "expected non-empty seed collection");
+            for nt in idx.entries() {
+                assert_eq!(nt.central_tile_id, 0, "single-tile tileset");
+                assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
+            }
         }
     }
 
