@@ -282,22 +282,6 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
                     }
                 }
             }
-
-            {
-                let (gp, _, _) = &witness_store[&vt];
-                let all_matches: Vec<PatchMatch> = gp.get_all_matches();
-                for pm in &all_matches {
-                    if cyclic_range_contains(pm.start_a, pm.len, pos, n)
-                        || cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n)
-                    {
-                        continue;
-                    }
-                    let mut gp2 = gp.clone();
-                    if !gp2.add_tile(pm) || !gp2.is_growing() {
-                        continue;
-                    }
-                }
-            }
         }
 
         let entries: Vec<OpenVertexType> = all_types.into_iter().collect();
