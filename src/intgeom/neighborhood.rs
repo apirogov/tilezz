@@ -597,19 +597,6 @@ fn parse_ntype_line(
 }
 
 #[allow(dead_code)]
-struct AugmentedContext<T: IsComplex> {
-    augmented: GrowingPatch<T>,
-    gap_start: usize,
-    gap_len: usize,
-    central_ptid: usize,
-}
-
-#[allow(dead_code)]
-struct FrontierInfo {
-    dist_to_frontier: usize,
-}
-
-#[allow(dead_code)]
 struct ExploreOutcome<T: IsComplex> {
     side: TransitionSide,
     petal_pm: PatchMatch,
@@ -624,86 +611,6 @@ enum OutcomeKind<T: IsComplex> {
         trial: GrowingPatch<T>,
         central_ptid: usize,
     },
-}
-
-#[allow(dead_code)]
-fn attach_central<T: IsComplex + IsRingOrField + Units>(
-    nt: &NeighborhoodType,
-    match_index: &Arc<MatchTypeIndex<T>>,
-) -> Option<AugmentedContext<T>> {
-    let (mut context, junc_positions) =
-        GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(match_index))?;
-    let first_junc = junc_positions[0];
-    let ctx_n = context.boundary_len();
-    let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
-
-    let pm = PatchMatch {
-        start_a: anchor_pos,
-        len: {
-            let tileset = match_index.tileset();
-            let central_seq = tileset.rat(nt.central_tile_id).seq();
-            crate::intgeom::patch::forward_match_length(
-                context.angles(),
-                anchor_pos,
-                central_seq,
-                nt.cw_anchor_on_central,
-            )
-        },
-        start_b: nt.cw_anchor_on_central,
-        tile_id: nt.central_tile_id,
-    };
-
-    let tileset = match_index.tileset();
-    let central_len = tileset.rat(nt.central_tile_id).seq().len();
-    let ctx_n = context.boundary_len();
-
-    if !context.add_tile(&pm) {
-        return None;
-    }
-
-    let aug_n = context.boundary_len();
-    let gap_len = central_len - pm.len;
-    let seg_len_old = ctx_n - pm.len;
-    let gap_start = seg_len_old % aug_n;
-    let central_ptid = context.patch_tile_ids()[gap_start];
-
-    Some(AugmentedContext {
-        augmented: context,
-        gap_start,
-        gap_len,
-        central_ptid,
-    })
-}
-
-#[allow(dead_code)]
-fn find_gap_frontier<T: IsComplex + IsRingOrField + Units>(
-    aug: &AugmentedContext<T>,
-) -> Option<FrontierInfo> {
-    let patch = &aug.augmented;
-    let n = patch.boundary_len();
-
-    let gap_end = (aug.gap_start + aug.gap_len) % n;
-
-    let mut frontier_pos = gap_end;
-    for _ in 0..n {
-        if patch.is_junction(frontier_pos) {
-            break;
-        }
-        frontier_pos = (frontier_pos + 1) % n;
-    }
-    if !patch.is_junction(frontier_pos) {
-        return None;
-    }
-
-    let mut dist_to_frontier = aug.gap_start;
-    for i in (0..aug.gap_start).rev() {
-        if patch.is_junction(i) {
-            dist_to_frontier = aug.gap_start - i - 1;
-            break;
-        }
-    }
-
-    Some(FrontierInfo { dist_to_frontier })
 }
 
 #[allow(dead_code)]
@@ -1536,56 +1443,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn attach_central_square_seeds() {
-        let idx = square_idx();
+    /// Generic over the tileset: build_attached_context succeeds for
+    /// every seed, the gap is non-empty, and gap_start is in range.
+    fn assert_seed_geometry<T: IsComplex + IsRingOrField + Units>(
+        idx: &NeighborhoodIndex<T>,
+    ) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed for nt {:?}", i, nt));
-            assert!(aug.gap_len > 0, "seed {}: gap_len should be > 0", i);
+            let ac = build_attached_context(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: build_attached_context failed for nt {:?}", i, nt));
+            let gap_len = ac.aug_n - ac.gap_start;
+            assert!(gap_len > 0, "seed {}: gap should be non-empty", i);
+            assert!(ac.gap_start < ac.aug_n, "seed {}: gap_start out of range", i);
+            let central_len = idx.tileset().rat(nt.central_tile_id).seq().len();
             assert!(
-                aug.gap_start < aug.augmented.boundary_len(),
-                "seed {}: gap_start out of range",
-                i
-            );
-            let tileset = mi.tileset();
-            let central_len = tileset.rat(nt.central_tile_id).seq().len();
-            assert!(
-                aug.gap_len < central_len,
+                gap_len < central_len,
                 "seed {}: gap_len {} should be < central_len {}",
                 i,
-                aug.gap_len,
+                gap_len,
                 central_len
             );
-        }
-    }
-
-    #[test]
-    fn attach_central_hex_seeds() {
-        let idx = hex_idx();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed for nt {:?}", i, nt));
-            assert!(aug.gap_len > 0, "seed {}: gap_len should be > 0", i);
-        }
-    }
-
-    #[test]
-    fn find_gap_frontier_square_seeds() {
-        let idx = square_idx();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
-            let frontier = find_gap_frontier(&aug)
-                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
-            assert!(
-                frontier.dist_to_frontier < aug.augmented.boundary_len(),
-                "seed {}: dist_to_frontier out of range",
-                i
-            );
             assert!(
                 !explore_one(nt, &mi).is_empty(),
                 "seed {}: should have at least one successful petal",
@@ -1595,25 +1472,13 @@ mod tests {
     }
 
     #[test]
-    fn find_gap_frontier_hex_seeds() {
-        let idx = hex_idx();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
-            let frontier = find_gap_frontier(&aug)
-                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
-            assert!(
-                frontier.dist_to_frontier < aug.augmented.boundary_len(),
-                "seed {}: dist_to_frontier out of range",
-                i
-            );
-            assert!(
-                !explore_one(nt, &mi).is_empty(),
-                "seed {}: should have at least one successful petal",
-                i
-            );
-        }
+    fn square_seed_geometry() {
+        assert_seed_geometry(square_idx());
+    }
+
+    #[test]
+    fn hex_seed_geometry() {
+        assert_seed_geometry(hex_idx());
     }
 
     #[test]
@@ -1621,43 +1486,42 @@ mod tests {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
-            let edges = aug.augmented.edges();
-            let n = aug.augmented.boundary_len();
-            let ptids = aug.augmented.patch_tile_ids();
-            let central_ptid = ptids[aug.gap_start];
-            for k in 0..aug.gap_len {
-                let pos = (aug.gap_start + k) % n;
+            let ac = build_attached_context(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: build_attached_context failed", i));
+            let edges = ac.aug.edges();
+            let ptids = ac.aug.patch_tile_ids();
+            let central_ptid = ptids[ac.gap_start];
+            for k in ac.gap_start..ac.aug_n {
                 assert_eq!(
-                    edges[pos].tile_id, nt.central_tile_id,
+                    edges[k].tile_id, nt.central_tile_id,
                     "seed {}: gap edge at pos {} should be central tile",
-                    i, pos
+                    i, k
                 );
                 assert_eq!(
-                    ptids[pos], central_ptid,
+                    ptids[k], central_ptid,
                     "seed {}: gap edge at pos {} should have same ptid",
-                    i, pos
+                    i, k
                 );
             }
         }
     }
 
     #[test]
-    fn frontier_adjacent_to_gap() {
+    fn ccw_frontier_at_gap_end() {
+        // After `build_attached_context`, the boundary is rotated so
+        // gap_end == 0. The CCW frontier vertex must therefore be at
+        // position 0 - confirming gap_end is itself a junction.
         let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
-            let n = aug.augmented.boundary_len();
-            let gap_end = (aug.gap_start + aug.gap_len) % n;
-            assert!(
-                aug.augmented.is_junction(gap_end),
-                "seed {}: gap_end {} should be a junction",
-                i,
-                gap_end
+            let ac = build_attached_context(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: build_attached_context failed", i));
+            assert_eq!(
+                ac.frontier_pos_on_aug, 0,
+                "seed {}: gap_end (pos 0 on aug) should be the CCW frontier junction",
+                i
             );
+            assert!(ac.aug.is_junction(0), "seed {}: position 0 must be junction", i);
         }
     }
 
@@ -1730,23 +1594,6 @@ mod tests {
                 eprintln!("  {}", e);
             }
             panic!("{} reattach errors", errors.len());
-        }
-    }
-
-    #[test]
-    fn dist_to_frontier_computation() {
-        let idx = square_idx();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let aug = attach_central(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
-            let frontier = find_gap_frontier(&aug)
-                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
-            assert!(
-                frontier.dist_to_frontier < aug.augmented.boundary_len(),
-                "seed {}: dist_to_frontier out of range",
-                i
-            );
         }
     }
 
