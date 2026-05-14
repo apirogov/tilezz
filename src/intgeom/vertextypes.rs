@@ -14,15 +14,64 @@ enum HasTransitions {
     No,
 }
 
+/// Reachability classification of an open vertex type within the
+/// VT transition graph.
+///
+/// Computed by [`OpenVertexTypeIndex::new`] via two monotone fixpoint
+/// passes (one for dead/undead, one for blessed) over the transition
+/// graph.
+///
+/// The four kinds partition the VT space:
+///
+/// * [`VTypeKind::Dead`] — no outgoing transition exists. Every glue
+///   that touches this vertex either fails (geometric collision, bad
+///   angle) or no such glue exists at all. This is the base case for
+///   the cursed fixpoint.
+/// * [`VTypeKind::Undead`] — reachable but trapped. Has at least one
+///   outgoing transition, but every successor — transitively — is
+///   cursed (Dead or Undead). No glue path from here leads to a Free
+///   or Blessed state.
+/// * [`VTypeKind::Blessed`] — every outgoing transition either closes
+///   the junction (`dst_id == CLOSED_ID`) or leads to another Blessed
+///   VT (fixpoint). Geometrically: every continuation from this VT
+///   eventually seals the vertex into the interior of a patch.
+/// * [`VTypeKind::Free`] — alive (not cursed) and not blessed. Has at
+///   least one continuation that's still in play — neither known to
+///   dead-end nor known to inevitably close.
+///
+/// "Cursed" is shorthand for "Dead or Undead"; "alive" for "Free or
+/// Blessed". See [`OpenVertexTypeInfo::is_cursed`] / `is_alive`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum VTypeKind {
+    /// No outgoing transitions — every glue touching this vertex
+    /// fails or no candidate exists.
     Dead,
+    /// Reachable but trapped: every successor is itself cursed.
     Undead,
+    /// Every continuation either closes the vertex or stays Blessed.
     Blessed,
+    /// Alive and not Blessed — at least one continuation is still
+    /// in play.
     Free,
 }
 
 impl VTypeKind {
+    /// Combine two [`VTypeKind`]s into the kind that should be
+    /// assigned to a *segment* with these two vertex types at its
+    /// endpoints. (Used by downstream segment-type analysis in
+    /// `vtype_enum`.)
+    ///
+    /// The combination is a small lattice:
+    ///
+    /// * If either endpoint is `Dead`, the segment is `Dead` (a
+    ///   dead vertex anywhere in the segment kills the whole segment).
+    /// * Otherwise if either endpoint is cursed (Dead or Undead), the
+    ///   segment is `Undead`.
+    /// * Otherwise if *both* endpoints are `Blessed`, the segment is
+    ///   `Blessed`.
+    /// * Otherwise the segment is `Free`.
+    ///
+    /// (Cursed-ness propagates OR; blessedness propagates AND.)
     pub fn segment_kind(a: VTypeKind, b: VTypeKind) -> VTypeKind {
         let cursed = matches!(a, VTypeKind::Dead | VTypeKind::Undead)
             || matches!(b, VTypeKind::Dead | VTypeKind::Undead);
@@ -136,6 +185,14 @@ impl TransitionInfo {
     }
 }
 
+/// BFS-built catalog of every [`OpenVertexType`] reachable from a
+/// tileset's first-glue junctions, with [`TransitionInfo`]s between
+/// them and a [`VTypeKind`] classification for each.
+///
+/// Each entry gets a stable 1-based id (id 0 is reserved as the
+/// [`CLOSED_ID`] sentinel for transitions that close the junction).
+/// Entries are stored in canonical (sorted) order by `OpenVertexType`,
+/// which makes [`Self::range_by_cw`] a partition over the entries.
 pub struct OpenVertexTypeIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<OpenVertexTypeInfo<T>>,
@@ -144,6 +201,46 @@ pub struct OpenVertexTypeIndex<T: IsComplex> {
 }
 
 impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
+    /// Enumerate all open vertex types reachable from `tileset` and
+    /// classify each.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Seed.** For every tile in the tileset, take the seed
+    ///    patch, try every legal first glue, and extract every
+    ///    junction vertex type from the resulting 2-tile patch.
+    ///    These VTs are the initial set; one representative witness
+    ///    patch is recorded for each.
+    /// 2. **BFS.** Pop a VT from the queue, enumerate the matches
+    ///    touching its junction in the witness patch, and for each
+    ///    glue:
+    ///    - If the match consumes both edges incident to the focus
+    ///      vertex, record a *closing* transition (`dst_id =
+    ///      CLOSED_ID`).
+    ///    - Otherwise, record a transition to the new VT at the
+    ///      surviving side of the match.
+    ///    - Also walk the post-glue boundary to discover any *other*
+    ///      VTs the glue exposed; new ones get enqueued.
+    /// 3. **ID assignment.** Sort the discovered VTs canonically and
+    ///    assign 1-based ids. Build a `reverse: VT → id` map.
+    /// 4. **Transitions.** Materialize `TransitionInfo`s from the
+    ///    raw `(src_vt, dst_vt, side, tile_id, tile_offset)` tuples
+    ///    via the reverse map; build succ/pred sets for the fixpoint
+    ///    passes.
+    /// 5. **Classification.** Run two monotone fixpoints:
+    ///    - `compute_cursed` (Dead / Undead): a VT is cursed if all
+    ///      its successors are cursed; base case is "no transitions".
+    ///    - `compute_blessed`: a VT is blessed if every transition
+    ///      either closes the junction or leads to another blessed
+    ///      VT.
+    ///    Then label each VT as Dead / Undead / Blessed / Free.
+    ///
+    /// # Cost
+    ///
+    /// Dominated by the BFS — every reachable VT contributes a
+    /// candidate-enumeration over its witness boundary. For non-
+    /// convex tilesets the VT space can be large (e.g. spectre);
+    /// progress is logged to stderr every 100 VTs.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let mut all_types: BTreeSet<OpenVertexType> = BTreeSet::new();
         let mut initial_types: BTreeSet<OpenVertexType> = BTreeSet::new();
