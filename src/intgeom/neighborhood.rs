@@ -1282,6 +1282,68 @@ mod tests {
     /// disagrees with what classify_all re-derives from the parsed
     /// transitions. Catches stale catalogs from before a classifier
     /// fix.
+    /// Pure unit test for [`match_absorbs_edge`]. The function appears
+    /// in both production (`explore_one` filter) and in the brute
+    /// side of `spectre_ccw_only_is_complete`, so a bug here would
+    /// not be caught by the existing brute test (circular).
+    /// Exhaustive cross-check against a brute reference for moderate
+    /// `n`. The reference walks the edge set explicitly.
+    #[test]
+    fn match_absorbs_edge_unit() {
+        fn brute(start: usize, len: usize, target: usize, n: usize) -> bool {
+            if len == 0 || n == 0 {
+                return false;
+            }
+            (0..len).any(|i| (start + i) % n == target)
+        }
+
+        for n in [1usize, 2, 5, 13, 26] {
+            for start in 0..n {
+                // len > n is a precondition violation (a match
+                // cannot cover more edges than the boundary has).
+                // Don't test those inputs.
+                for len in 0..=n {
+                    for target in 0..n {
+                        let pm = PatchMatch {
+                            start_a: start,
+                            len,
+                            start_b: 0,
+                            tile_id: 0,
+                        };
+                        let got = match_absorbs_edge(&pm, target, n);
+                        let want = brute(start, len, target, n);
+                        assert_eq!(
+                            got, want,
+                            "n={n} start={start} len={len} target={target}"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Pin the wrap regression case directly: edge n-1, len 1.
+        let pm = PatchMatch {
+            start_a: 25,
+            len: 1,
+            start_b: 0,
+            tile_id: 0,
+        };
+        assert!(match_absorbs_edge(&pm, 25, 26));
+        assert!(!match_absorbs_edge(&pm, 0, 26));
+
+        // Pin the wrap-spanning case: starts at n-1, len 2, covers
+        // edges n-1 and 0.
+        let pm = PatchMatch {
+            start_a: 25,
+            len: 2,
+            start_b: 0,
+            tile_id: 0,
+        };
+        assert!(match_absorbs_edge(&pm, 25, 26));
+        assert!(match_absorbs_edge(&pm, 0, 26));
+        assert!(!match_absorbs_edge(&pm, 1, 26));
+    }
+
     #[test]
     fn parse_file_rejects_kind_mismatch() {
         let idx = square_idx();
@@ -1358,35 +1420,65 @@ mod tests {
         Some((nt.central_tile_id, nt.cw_anchor_on_central, canon))
     }
 
-    /// Completeness check for CCW-only BFS: for every NT in the BFS set,
-    /// brute-force enumerate all valid CCW petal candidates via direct
-    /// `get_match` calls on the aug boundary. For each candidate, the
-    /// new aug boundary (= trial.angles() after add_tile) is normalized
-    /// via lex_min_rot and compared against the fingerprint set of all
-    /// BFS NTs. Each candidate must yield either:
-    ///   - a closed configuration (= petal absorbs all of central), OR
-    ///   - an NT whose canonical boundary matches one in our set.
+    /// Combined completeness + transition correctness check, using
+    /// `rat.get_match` directly on each NT's augmented boundary as
+    /// the independent reference.
     ///
-    /// This uses NO logic from the BFS step (try_step_*) — it's a pure
-    /// brute-force independent check.
-    #[test]
-    fn spectre_ccw_only_is_complete() {
-        let ccw = spectre_idx();
-        let tileset = ccw.tileset().clone();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        // The fingerprint of an NT's geometric shape = (central_tile_id,
-        // cw_anchor_on_central, lex_min_rot of aug boundary angles).
-        let bfs_fps: FxHashMap<(usize, usize, Vec<i8>), ()> = ccw
-            .entries()
-            .iter()
-            .filter_map(|nt| nt_boundary_fingerprint(nt, &mi).map(|fp| (fp, ())))
-            .collect();
-        let mut missing_count = 0usize;
-        let mut missing_examples: Vec<String> = Vec::new();
-        let mut closed_count = 0usize;
-        let mut already_in_set = 0usize;
-        let mut total_petals = 0usize;
-        for nt in ccw.entries() {
+    /// Catalog entries can collide on boundary fingerprint without
+    /// being PartialEq-equal (e.g. two paths reach the same geometric
+    /// state via different `num_ctx_tiles` or `vt_seq` encodings, and
+    /// the BFS stores them as distinct NTs). Comparison must therefore
+    /// be at the fingerprint level, not the id level.
+    ///
+    /// For each src, for each canonical petal placement (brute-enumerated
+    /// via `rat.get_match`) absorbing the frontier edge:
+    ///   1. **Completeness**: the trial's canonical fingerprint must
+    ///      be in the catalog (or the petal closed the configuration).
+    ///   2. **Transition fingerprint coverage**: the set of distinct
+    ///      destination fingerprints recorded for `(src, tile_id,
+    ///      tile_offset)` must include the trial's destination
+    ///      fingerprint.
+    ///
+    /// Uses NO logic from `explore_one` / `try_step_*` /
+    /// `compute_candidates_covering_position` - pure brute force.
+    fn assert_brute_completeness_and_transition_correctness<T>(idx: &NeighborhoodIndex<T>)
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        // fp_set: set of canonical fingerprints in the catalog.
+        // id_to_fp: per-entry fingerprint for transition cross-check.
+        let mut fp_set: FxHashMap<(usize, usize, Vec<i8>), ()> = FxHashMap::default();
+        let mut id_to_fp: Vec<Option<(usize, usize, Vec<i8>)>> =
+            Vec::with_capacity(idx.num_types());
+        for nt in idx.entries() {
+            let fp = nt_boundary_fingerprint(nt, &mi);
+            if let Some(ref fp) = fp {
+                fp_set.insert(fp.clone(), ());
+            }
+            id_to_fp.push(fp);
+        }
+        // recorded_by_key: (src_id, tile_id, tile_offset) -> set of
+        // destination fingerprints (or "CLOSED" sentinel = None).
+        type DstFp = Option<(usize, usize, Vec<i8>)>;
+        let mut recorded_by_key: FxHashMap<
+            (usize, usize, usize),
+            std::collections::HashSet<DstFp>,
+        > = FxHashMap::default();
+        for t in idx.transitions() {
+            let dst_fp: DstFp = if t.dst_id == NT_CLOSED_ID {
+                None
+            } else {
+                id_to_fp[t.dst_id - 1].clone()
+            };
+            recorded_by_key
+                .entry((t.src_id, t.tile_id, t.tile_offset))
+                .or_default()
+                .insert(dst_fp);
+        }
+
+        for (i, nt) in idx.entries().iter().enumerate() {
+            let src_id = i + 1;
             let Some(ac) = build_attached_context(nt, &mi) else {
                 continue;
             };
@@ -1399,7 +1491,8 @@ mod tests {
                 let n_b = other.seq().len();
                 for pos in 0..n_aug {
                     for b_off in 0..n_b {
-                        let (ns, len, ne) = aug_rat.get_match((pos as i64, b_off as i64), other);
+                        let (ns, len, ne) =
+                            aug_rat.get_match((pos as i64, b_off as i64), other);
                         if len < 1 {
                             continue;
                         }
@@ -1422,107 +1515,149 @@ mod tests {
                             continue;
                         }
                         seen.insert((ns_u, len, ne_u, tile_b), ());
-                        total_petals += 1;
-                        if !trial.patch_tile_ids().contains(&ac.central_ptid) {
-                            closed_count += 1;
-                            continue;
-                        }
-                        // Brute-force compute the new fingerprint directly
-                        // from the trial's boundary angles. NO try_step_*
-                        // logic — purely the geometric result.
-                        let trial_angles = trial.angles().to_vec();
-                        let rot = crate::intgeom::rat::lex_min_rot(&trial_angles);
-                        let mut canon = trial_angles;
-                        canon.rotate_left(rot);
-                        let new_fp = (nt.central_tile_id, nt.cw_anchor_on_central, canon);
-                        if bfs_fps.contains_key(&new_fp) {
-                            already_in_set += 1;
-                        } else {
-                            missing_count += 1;
-                            if missing_count <= 3 {
-                                missing_examples.push(format!(
-                                    "parent num_ctx={} pm(start_a={} len={} start_b={} tile_id={})",
-                                    nt.num_ctx_tiles,
-                                    pm.start_a, pm.len, pm.start_b, pm.tile_id
-                                ));
-                            }
-                        }
+
+                        let trial_dst_fp: DstFp =
+                            if !trial.patch_tile_ids().contains(&ac.central_ptid) {
+                                None
+                            } else {
+                                let trial_angles = trial.angles().to_vec();
+                                let rot = crate::intgeom::rat::lex_min_rot(&trial_angles);
+                                let mut canon = trial_angles;
+                                canon.rotate_left(rot);
+                                let fp =
+                                    (nt.central_tile_id, nt.cw_anchor_on_central, canon);
+                                assert!(
+                                    fp_set.contains_key(&fp),
+                                    "completeness violation: src={} brute glue \
+                                     (tile={}, start_a={}, len={}, start_b={}) \
+                                     produces state not in catalog",
+                                    src_id, tile_b, ns_u, len, ne_u
+                                );
+                                Some(fp)
+                            };
+
+                        let key = (src_id, tile_b, ne_u);
+                        let recorded_set = recorded_by_key.get(&key);
+                        assert!(
+                            recorded_set.is_some_and(|s| s.contains(&trial_dst_fp)),
+                            "transition fingerprint mismatch: src={} brute glue \
+                             (tile={}, start_a={}, len={}, start_b={}) -> {} but \
+                             catalog has no transition with that destination \
+                             fingerprint for (src, tile, tile_offset)",
+                            src_id, tile_b, ns_u, len, ne_u,
+                            if trial_dst_fp.is_none() { "CLOSED".to_string() }
+                            else { "Open(fp)".to_string() }
+                        );
                     }
                 }
             }
         }
-        assert_eq!(
-            missing_count, 0,
-            "CCW BFS is incomplete: {} states missing of {} total petals \
-             ({} closed, {} already in set). First missing: {:?}",
-            missing_count, total_petals, closed_count, already_in_set, missing_examples
-        );
     }
+
+    #[test]
+    fn spectre_brute_complete_and_correct() {
+        assert_brute_completeness_and_transition_correctness(spectre_idx());
+    }
+
+    #[test]
+    fn hex_brute_complete_and_correct() {
+        assert_brute_completeness_and_transition_correctness(hex_idx());
+    }
+
+    /// Square has 109k entries and 437k transitions; gated behind
+    /// `--ignored` because runtime is order minutes.
+    #[test]
+    #[ignore]
+    fn square_brute_complete_and_correct() {
+        assert_brute_completeness_and_transition_correctness(square_idx());
+    }
+
 
 
     /// Re-derive the four-kind classification predicates from
     /// `idx.transitions()` and assert they agree with `classify_all`.
-    /// Catches the V2b shape: a cursed NT must not have any closing
-    /// transition (the closing edge to `Closed` is an escape path).
+    ///
+    /// Cross-checks each kind via global reachability computed
+    /// independently of `classify_all`'s algorithm:
+    ///   - `reaches_closed[i]` = exists a forward path from i to
+    ///     `NT_CLOSED_ID`
+    ///   - `reaches_dead[i]` = exists a forward path from i to a
+    ///     no-outgoing entry
+    ///
+    /// The four kinds are pinned by these reachability properties:
+    ///   - Dead: no outgoing transitions
+    ///   - Undead: has outgoing AND NOT reaches_closed
+    ///   - Blessed: has outgoing AND NOT reaches_dead
+    ///   - Free: has outgoing AND reaches_closed AND reaches_dead
+    ///
+    /// Catches the V2b shape (closing-as-escape blindspot) AND the
+    /// "Free is the trash bucket" shape where Free becomes vacuous.
     fn assert_classify_invariants<T: IsComplex + IsRingOrField + Units>(
         idx: &NeighborhoodIndex<T>,
     ) {
         let kinds = idx.classify_all();
+        let n = idx.num_types();
+
+        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+        let mut has_outgoing = vec![false; n];
+        let mut closing_seeds: Vec<usize> = Vec::new();
+        for t in idx.transitions() {
+            let src = t.src_id - 1;
+            has_outgoing[src] = true;
+            if t.dst_id == NT_CLOSED_ID {
+                closing_seeds.push(src);
+            } else {
+                succs[src].push(t.dst_id - 1);
+                preds[t.dst_id - 1].push(src);
+            }
+        }
+
+        let propagate = |seeds: Vec<usize>| -> Vec<bool> {
+            let mut reached = vec![false; n];
+            let mut queue: VecDeque<usize> = VecDeque::new();
+            for s in seeds {
+                if !reached[s] {
+                    reached[s] = true;
+                    queue.push_back(s);
+                }
+            }
+            while let Some(v) = queue.pop_front() {
+                for &p in &preds[v] {
+                    if !reached[p] {
+                        reached[p] = true;
+                        queue.push_back(p);
+                    }
+                }
+            }
+            reached
+        };
+
+        let reaches_closed = propagate(closing_seeds);
+        // Dead seeds for the reaches_dead reachability: NTs with no
+        // outgoing transitions are themselves Dead. A path to Dead
+        // means a path that traps. (Note: a Dead NT trivially reaches
+        // itself, so reaches_dead[Dead] = true for all Dead.)
+        let dead_seeds: Vec<usize> = (0..n).filter(|&i| !has_outgoing[i]).collect();
+        let reaches_dead = propagate(dead_seeds);
+
         for (i, &kind) in kinds.iter().enumerate() {
             let id = i + 1;
-            let outgoing: Vec<&NtTransition> = idx
-                .transitions()
-                .iter()
-                .filter(|t| t.src_id == id)
-                .collect();
-            match kind {
-                NtKind::Dead => {
-                    assert!(
-                        outgoing.is_empty(),
-                        "Dead NT id {id} must have no transitions; got {}",
-                        outgoing.len()
-                    );
-                }
-                NtKind::Undead => {
-                    assert!(
-                        !outgoing.is_empty(),
-                        "Undead NT id {id} must have transitions"
-                    );
-                    for t in &outgoing {
-                        assert!(
-                            t.dst_id != NT_CLOSED_ID,
-                            "Undead NT id {id} has a closing transition - \
-                             closing is an escape to Closed, so this NT should be Free or Blessed"
-                        );
-                        let dst_kind = kinds[t.dst_id - 1];
-                        assert!(
-                            matches!(dst_kind, NtKind::Dead | NtKind::Undead),
-                            "Undead NT id {id} has open transition to non-cursed \
-                             NT id {} (kind={dst_kind:?})",
-                            t.dst_id
-                        );
-                    }
-                }
-                NtKind::Blessed => {
-                    assert!(
-                        !outgoing.is_empty(),
-                        "Blessed NT id {id} must have at least one transition"
-                    );
-                    for t in &outgoing {
-                        if t.dst_id == NT_CLOSED_ID {
-                            continue;
-                        }
-                        let dst_kind = kinds[t.dst_id - 1];
-                        assert_eq!(
-                            dst_kind, NtKind::Blessed,
-                            "Blessed NT id {id} has open transition to non-Blessed \
-                             NT id {} (kind={dst_kind:?})",
-                            t.dst_id
-                        );
-                    }
-                }
-                NtKind::Free => {}
-            }
+            let expected = if !has_outgoing[i] {
+                NtKind::Dead
+            } else if !reaches_closed[i] {
+                NtKind::Undead
+            } else if !reaches_dead[i] {
+                NtKind::Blessed
+            } else {
+                NtKind::Free
+            };
+            assert_eq!(
+                kind, expected,
+                "NT id {id} classify_all says {:?} but reachability says {:?} \
+                 (has_outgoing={} reaches_closed={} reaches_dead={})",
+                kind, expected, has_outgoing[i], reaches_closed[i], reaches_dead[i]
+            );
         }
     }
 
