@@ -31,6 +31,27 @@ use crate::intgeom::tileset::TileSet;
 /// `num_ctx_tiles` records the number of context tiles in the matched
 /// patch; it grows by exactly 1 per BFS step regardless of direction, so
 /// it gives the natural DAG layering for both CCW and CW transitions.
+///
+/// # Derived (redundant) fields
+///
+/// The CCW-side anchors are cached derivations of the CW-side anchors
+/// plus the geometry; they are stored to avoid recomputation per
+/// BFS step but are not independent state:
+///
+/// * `ccw_anchor_on_central = (cw_anchor_on_central - match_len) mod
+///   central_n`, where
+///   `match_len = (cw_anchor_on_central - ccw_anchor_on_central) mod
+///   central_n` (the same equation in the other direction).
+/// * `ccw_anchor_on_context` is determined by walking the
+///   reconstructed context to find the CCW-most junction within the
+///   covered segment - see [`try_construct_nt_from_cw`] for the
+///   canonical re-derivation.
+///
+/// Constructing a `NeighborhoodType` directly (as the parser and
+/// `seed_phase` do) can produce inconsistent CCW fields. The
+/// invariant - "stored CCW fields equal what the geometry implies" -
+/// is checked by [`nt_is_valid`] and is part of `validate`'s
+/// contract.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NeighborhoodType {
     pub central_tile_id: usize,
@@ -339,9 +360,16 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// Parse a collection previously written by [`write_collection`]. The
     /// tileset must match the one used to produce the file (we do not store
     /// or verify it here).
+    ///
+    /// Validation: NTYPE ids are 1-based and dense (`1, 2, ...,
+    /// num_entries`), TRANS `src_id`/`dst_id` are in range, and the
+    /// recorded NTYPE `kind` agrees with what [`Self::classify_all`]
+    /// re-derives from the parsed transitions. Mismatched kinds catch
+    /// stale serialized catalogs after a classification change.
     pub fn parse_file(tileset: Arc<TileSet<T>>, input: &str) -> Result<Self, String> {
         let mut entries: Vec<NeighborhoodType> = Vec::new();
         let mut transitions: Vec<NtTransition> = Vec::new();
+        let mut recorded_kinds: Vec<NtKind> = Vec::new();
         for (lineno, line) in input.lines().enumerate() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -353,7 +381,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 .ok_or_else(|| format!("line {}: empty record", lineno + 1))?;
             match kw {
                 "NTYPE" => {
-                    let (parsed_id, nt) = parse_ntype_line(&mut tok, lineno + 1)?;
+                    let (parsed_id, parsed_kind, nt) = parse_ntype_line(&mut tok, lineno + 1)?;
                     let expected_id = entries.len() + 1;
                     if parsed_id != expected_id {
                         return Err(format!(
@@ -364,6 +392,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                         ));
                     }
                     entries.push(nt);
+                    recorded_kinds.push(parsed_kind);
                 }
                 "TRANS" => {
                     let parse_usize = |s: Option<&str>, what: &str| -> Result<usize, String> {
@@ -424,11 +453,30 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 }
             }
         }
-        Ok(NeighborhoodIndex {
+        let idx = NeighborhoodIndex {
             tileset,
             entries,
             transitions,
-        })
+        };
+        // Cross-check the recorded kinds against what classify_all
+        // re-derives from the transitions. Catches stale serialized
+        // catalogs (e.g. written before a classifier fix).
+        let computed_kinds = idx.classify_all();
+        for (i, (recorded, computed)) in recorded_kinds
+            .iter()
+            .zip(computed_kinds.iter())
+            .enumerate()
+        {
+            if recorded != computed {
+                return Err(format!(
+                    "NTYPE id {} kind mismatch: file says {:?}, classify_all derives {:?}",
+                    i + 1,
+                    recorded,
+                    computed
+                ));
+            }
+        }
+        Ok(idx)
     }
 }
 
@@ -470,12 +518,13 @@ fn parse_vt_token(tok: &str) -> Result<OpenVertexType, String> {
     Ok(OpenVertexType { cw, inner, ccw })
 }
 
-/// Returns `(parsed_id, parsed_nt)` so the caller can validate the
-/// id sequence is dense + 1-based.
+/// Returns `(parsed_id, parsed_kind, parsed_nt)` so the caller can
+/// validate the id sequence is dense + 1-based and cross-check the
+/// recorded kind against `classify_all`.
 fn parse_ntype_line(
     tok: &mut std::str::SplitWhitespace<'_>,
     lineno: usize,
-) -> Result<(usize, NeighborhoodType), String> {
+) -> Result<(usize, NtKind, NeighborhoodType), String> {
     let mut next = |what: &str| -> Result<String, String> {
         tok.next()
             .map(|s| s.to_string())
@@ -485,7 +534,16 @@ fn parse_ntype_line(
     let parsed_id: usize = id_str
         .parse()
         .map_err(|e| format!("line {}: bad id: {}", lineno, e))?;
-    let _kind = next("kind")?; // kind is informational; recomputed via classify_all
+    let kind_str = next("kind")?;
+    let parsed_kind = match kind_str.as_str() {
+        "dead" => NtKind::Dead,
+        "undead" => NtKind::Undead,
+        "blessed" => NtKind::Blessed,
+        "free" => NtKind::Free,
+        other => {
+            return Err(format!("line {}: unknown kind `{}`", lineno, other));
+        }
+    };
     let central_tile_id: usize = next("central_id")?
         .parse()
         .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
@@ -514,6 +572,7 @@ fn parse_ntype_line(
     }
     Ok((
         parsed_id,
+        parsed_kind,
         NeighborhoodType {
             central_tile_id,
             cw_anchor_on_central,
@@ -1217,6 +1276,30 @@ mod tests {
     fn hex_roundtrip_collection() {
         let idx = hex_idx();
         assert_roundtrip(idx);
+    }
+
+    /// parse_file must reject a serialized catalog whose NTYPE kind
+    /// disagrees with what classify_all re-derives from the parsed
+    /// transitions. Catches stale catalogs from before a classifier
+    /// fix.
+    #[test]
+    fn parse_file_rejects_kind_mismatch() {
+        let idx = square_idx();
+        let mut buf: Vec<u8> = Vec::new();
+        idx.write_collection(&mut buf).expect("write");
+        let text = std::str::from_utf8(&buf).expect("utf8");
+        // Square's NTs are all Blessed; swap the first one's kind
+        // to "dead" - that must fail to parse.
+        let corrupted = text.replacen(" blessed ", " dead ", 1);
+        assert_ne!(corrupted, text, "test fixture did not introduce a swap");
+        let err = match NeighborhoodIndex::parse_file(Arc::clone(idx.tileset()), &corrupted) {
+            Ok(_) => panic!("parser should reject kind mismatch"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("kind mismatch"),
+            "expected kind-mismatch error, got: {err}"
+        );
     }
 
     fn spectre_tileset() -> Arc<TileSet<ZZ12>> {
