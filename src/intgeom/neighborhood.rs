@@ -701,74 +701,6 @@ fn find_gap_frontier<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[allow(dead_code)]
-fn explore_step<T: IsComplex + IsRingOrField + Units>(
-    nt: &NeighborhoodType,
-    match_index: &Arc<MatchTypeIndex<T>>,
-) -> Option<(AugmentedContext<T>, FrontierInfo, Vec<ExploreOutcome<T>>)> {
-    let aug = attach_central(nt, match_index)?;
-    let frontier = find_gap_frontier(&aug)?;
-    let patch = &aug.augmented;
-    let n = patch.boundary_len();
-    let central_ptid = aug.central_ptid;
-
-    let gap_end = (aug.gap_start + aug.gap_len) % n;
-    let mut frontier_pos = gap_end;
-    for _ in 0..n {
-        if patch.is_junction(frontier_pos) {
-            break;
-        }
-        frontier_pos = (frontier_pos + 1) % n;
-    }
-
-    let candidates = GrowingPatch::compute_candidates_covering_position(
-        patch.match_index(),
-        patch.angles(),
-        patch.edges(),
-        frontier_pos,
-    );
-
-    let mut outcomes = Vec::new();
-    for petal_pm in &candidates {
-        let mut trial = aug.augmented.clone();
-        if !trial.add_tile(petal_pm) {
-            continue;
-        }
-
-        let kind = if find_remaining_gap(&trial, central_ptid).is_none() {
-            OutcomeKind::Closed
-        } else {
-            OutcomeKind::Open {
-                nt: nt.clone(),
-                trial,
-                central_ptid,
-            }
-        };
-        outcomes.push(ExploreOutcome {
-            side: TransitionSide::Ccw,
-            petal_pm: petal_pm.clone(),
-            kind,
-        });
-    }
-
-    Some((aug, frontier, outcomes))
-}
-
-#[allow(dead_code)]
-fn find_remaining_gap<T: IsComplex + IsRingOrField + Units>(
-    trial: &GrowingPatch<T>,
-    central_ptid: usize,
-) -> Option<(usize, usize)> {
-    let n = trial.boundary_len();
-    let ptids = trial.patch_tile_ids();
-    let first = (0..n).find(|&i| ptids[i] == central_ptid)?;
-    let mut len = 1;
-    while len < n && ptids[(first + len) % n] == central_ptid {
-        len += 1;
-    }
-    Some((first, len))
-}
-
-#[allow(dead_code)]
 struct AttachedContext<T: IsComplex> {
     aug: GrowingPatch<T>,
     central_ptid: usize,
@@ -1558,15 +1490,17 @@ mod tests {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, frontier, petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
+            let aug = attach_central(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
+            let frontier = find_gap_frontier(&aug)
+                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
             assert!(
                 frontier.dist_to_frontier < aug.augmented.boundary_len(),
                 "seed {}: dist_to_frontier out of range",
                 i
             );
             assert!(
-                !petal_outcomes.is_empty(),
+                !explore_one(nt, &mi).is_empty(),
                 "seed {}: should have at least one successful petal",
                 i
             );
@@ -1578,15 +1512,17 @@ mod tests {
         let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, frontier, petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
+            let aug = attach_central(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
+            let frontier = find_gap_frontier(&aug)
+                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
             assert!(
                 frontier.dist_to_frontier < aug.augmented.boundary_len(),
                 "seed {}: dist_to_frontier out of range",
                 i
             );
             assert!(
-                !petal_outcomes.is_empty(),
+                !explore_one(nt, &mi).is_empty(),
                 "seed {}: should have at least one successful petal",
                 i
             );
@@ -1625,8 +1561,8 @@ mod tests {
         let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, _frontier, _petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
+            let aug = attach_central(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
             let n = aug.augmented.boundary_len();
             let gap_end = (aug.gap_start + aug.gap_len) % n;
             assert!(
@@ -1639,66 +1575,14 @@ mod tests {
     }
 
     #[test]
-    fn explore_step_square_has_petals() {
+    fn explore_one_square_has_petals() {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let nt = &idx.entries()[0];
-        let (_aug, _frontier, petal_outcomes) =
-            explore_step(nt, &mi).expect("explore_step on first seed");
         assert!(
-            !petal_outcomes.is_empty(),
+            !explore_one(nt, &mi).is_empty(),
             "should have at least one petal outcome"
         );
-    }
-
-    #[test]
-    fn find_remaining_gap_after_petal() {
-        let idx = square_idx();
-        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, _frontier, petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
-            let central_ptid = aug.central_ptid;
-            for outcome in &petal_outcomes {
-                match &outcome.kind {
-                    OutcomeKind::Closed => {}
-                    OutcomeKind::Open {
-                        trial,
-                        central_ptid: cptid,
-                        ..
-                    } => {
-                        let gap = find_remaining_gap(trial, *cptid);
-                        let n = trial.boundary_len();
-                        let ptids = trial.patch_tile_ids();
-                        let central_count = ptids.iter().filter(|&&id| id == central_ptid).count();
-                        if central_count == 0 {
-                            assert!(
-                                gap.is_none(),
-                                "seed {}: gap should be None when fully consumed",
-                                i
-                            );
-                        } else {
-                            let (gs, gl) = gap.unwrap_or_else(|| {
-                                panic!(
-                                    "seed {}: gap should exist ({} central edges)",
-                                    i, central_count
-                                )
-                            });
-                            assert_eq!(gl, central_count, "seed {}: gap length mismatch", i);
-                            for k in 0..gl {
-                                assert_eq!(
-                                    ptids[(gs + k) % n],
-                                    central_ptid,
-                                    "seed {}: gap edge at offset {} should be central_ptid",
-                                    i,
-                                    k
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     #[test]
@@ -1767,8 +1651,10 @@ mod tests {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, nt) in idx.entries().iter().enumerate() {
-            let (aug, frontier, _petal_outcomes) =
-                explore_step(nt, &mi).unwrap_or_else(|| panic!("seed {}: explore_step failed", i));
+            let aug = attach_central(nt, &mi)
+                .unwrap_or_else(|| panic!("seed {}: attach_central failed", i));
+            let frontier = find_gap_frontier(&aug)
+                .unwrap_or_else(|| panic!("seed {}: find_gap_frontier failed", i));
             assert!(
                 frontier.dist_to_frontier < aug.augmented.boundary_len(),
                 "seed {}: dist_to_frontier out of range",
