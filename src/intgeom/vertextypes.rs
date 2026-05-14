@@ -259,7 +259,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
             build_transition_arrays(&reverse, &raw_transitions);
 
         let is_cursed = compute_cursed(&vt_list, &transition_map, &succ_sets);
-        let is_blessed = compute_blessed(&vt_list, &transition_infos);
+        let is_blessed = compute_blessed(&vt_list, &transition_map, &succ_sets);
 
         let info_entries = classify_and_finalize(
             vt_list,
@@ -631,14 +631,13 @@ fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
     transition_map: &HashMap<OpenVertexType, HasTransitions>,
     mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
     initial_types: &BTreeSet<OpenVertexType>,
-    is_cursed: &HashMap<usize, bool>,
-    is_blessed: &HashMap<usize, bool>,
+    is_cursed: &[bool],
+    is_blessed: &[bool],
 ) -> Vec<OpenVertexTypeInfo<T>> {
     vt_list
         .into_iter()
         .enumerate()
         .map(|(i, vt)| {
-            let id = i + 1;
             let (witness, witness_pos, gap_angle) = witness_store.remove(&vt).unwrap();
             let rat = witness.to_rat();
             let (cw_nbr, ccw_nbr) = witness
@@ -647,9 +646,9 @@ fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
             let no_transitions = transition_map.get(&vt) == Some(&HasTransitions::No);
             let kind = if no_transitions {
                 VTypeKind::Dead
-            } else if is_cursed[&id] {
+            } else if is_cursed[i] {
                 VTypeKind::Undead
-            } else if is_blessed[&id] {
+            } else if is_blessed[i] {
                 VTypeKind::Blessed
             } else {
                 VTypeKind::Free
@@ -676,33 +675,38 @@ fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
         .collect()
 }
 
+/// Compute the "cursed" status (Dead ∪ Undead) for each VT via a
+/// monotone fixpoint over the successor graph.
+///
+/// Base case: a VT with no outgoing transitions is cursed.
+/// Inductive step: a VT all of whose successors are cursed is cursed.
+///
+/// Returns a `Vec<bool>` indexed by `id - 1`. O(T·N) total work
+/// (each iteration is O(T), at most N iterations until convergence).
 fn compute_cursed(
     entries: &[OpenVertexType],
     transition_map: &HashMap<OpenVertexType, HasTransitions>,
     succ_sets: &[BTreeSet<usize>],
-) -> HashMap<usize, bool> {
+) -> Vec<bool> {
     let n = entries.len();
-    let mut cursed: HashMap<usize, bool> = HashMap::with_capacity(n);
-
-    for (i, vt) in entries.iter().enumerate() {
-        let id = i + 1;
-        cursed.insert(id, transition_map.get(vt) == Some(&HasTransitions::No));
-    }
+    let mut cursed: Vec<bool> = entries
+        .iter()
+        .map(|vt| transition_map.get(vt) == Some(&HasTransitions::No))
+        .collect();
 
     let mut changed = true;
     while changed {
         changed = false;
-        for (i, _vt) in entries.iter().enumerate() {
-            let id = i + 1;
-            if cursed[&id] {
+        for i in 0..n {
+            if cursed[i] {
                 continue;
             }
             let succs = &succ_sets[i];
             if succs.is_empty() {
                 continue;
             }
-            if succs.iter().all(|s| cursed[s]) {
-                cursed.insert(id, true);
+            if succs.iter().all(|&s| cursed[s - 1]) {
+                cursed[i] = true;
                 changed = true;
             }
         }
@@ -711,36 +715,42 @@ fn compute_cursed(
     cursed
 }
 
+/// Compute the "blessed" status for each VT via a monotone fixpoint.
+///
+/// A VT is blessed iff it has at least one outgoing transition AND
+/// every non-closing transition leads to an already-blessed VT
+/// (closing transitions count vacuously). Uses the pre-built
+/// `succ_sets` (non-closing successors only) plus the
+/// `transition_map` to detect the "has any transition" condition.
+///
+/// Returns a `Vec<bool>` indexed by `id - 1`. O(T·N) total work.
 fn compute_blessed(
     entries: &[OpenVertexType],
-    transitions: &[TransitionInfo],
-) -> HashMap<usize, bool> {
+    transition_map: &HashMap<OpenVertexType, HasTransitions>,
+    succ_sets: &[BTreeSet<usize>],
+) -> Vec<bool> {
     let n = entries.len();
-    let mut blessed: HashMap<usize, bool> = HashMap::with_capacity(n);
-
-    for (i, _vt) in entries.iter().enumerate() {
-        let id = i + 1;
-        blessed.insert(id, false);
-    }
+    let mut blessed: Vec<bool> = vec![false; n];
 
     let mut changed = true;
     while changed {
         changed = false;
-        for (i, _vt) in entries.iter().enumerate() {
-            let id = i + 1;
-            if blessed[&id] {
+        for i in 0..n {
+            if blessed[i] {
                 continue;
             }
-            let has_any = transitions.iter().any(|t| t.src_id == id);
-            if !has_any {
+            // A VT must have at least one transition (open or closing)
+            // to be blessable. VTs with no transitions are Dead, not
+            // Blessed.
+            if transition_map.get(&entries[i]) != Some(&HasTransitions::Yes) {
                 continue;
             }
-            let all_closed_or_blessed = transitions
-                .iter()
-                .filter(|t| t.src_id == id)
-                .all(|t| t.is_closed() || blessed.get(&t.dst_id).copied().unwrap_or(false));
-            if all_closed_or_blessed {
-                blessed.insert(id, true);
+            // Every non-closing successor (succ_sets only stores those)
+            // must already be blessed. An empty succ_sets means "only
+            // closing transitions exist", which vacuously satisfies
+            // the condition.
+            if succ_sets[i].iter().all(|&dst| blessed[dst - 1]) {
+                blessed[i] = true;
                 changed = true;
             }
         }
