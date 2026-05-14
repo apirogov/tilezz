@@ -373,7 +373,7 @@ that invariant."
 
 | ID  | Severity | Type      | Status   | Notes |
 |-----|----------|-----------|----------|-------|
-| V1  | Critical | dead code | pending  | investigate + remove or restore |
+| V1  | Critical | dead code | done     | confirmed leftover from commit efbd56e (segment-type removal); deleted |
 | V2  | Critical | docs+invariant | pending | comment math, rename booleans, add `debug_assert!` |
 | V3  | High     | perf      | pending  | pre-bucket transitions in `compute_blessed` |
 | V4  | High     | perf      | pending  | `HashMap<usize, bool>` → `Vec<bool>` |
