@@ -6,12 +6,6 @@ use crate::intgeom::patch::{GrowingPatch, OpenVertexType, PatchMatch, Transition
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum HasTransitions {
-    Yes,
-    No,
-}
-
 /// Reachability classification of an open vertex type within the
 /// VT transition graph.
 ///
@@ -86,12 +80,6 @@ impl VTypeKind {
 
 pub struct OpenVertexTypeInfo<T: IsComplex> {
     vtype: OpenVertexType,
-    #[allow(dead_code)]
-    has_transitions: HasTransitions,
-    #[allow(dead_code)]
-    successors: Vec<usize>,
-    #[allow(dead_code)]
-    predecessors: Vec<usize>,
     kind: VTypeKind,
     is_initial: bool,
     realizing_rat: Rat<T>,
@@ -103,10 +91,12 @@ pub struct OpenVertexTypeInfo<T: IsComplex> {
 }
 
 impl<T: IsComplex> OpenVertexTypeInfo<T> {
+    /// The canonical [`OpenVertexType`] this entry describes.
     pub fn vtype(&self) -> &OpenVertexType {
         &self.vtype
     }
 
+    /// Reachability classification: see [`VTypeKind`].
     pub fn kind(&self) -> VTypeKind {
         self.kind
     }
@@ -127,50 +117,80 @@ impl<T: IsComplex> OpenVertexTypeInfo<T> {
         self.kind == VTypeKind::Free
     }
 
+    /// `true` for Dead or Undead (non-closable).
     pub fn is_cursed(&self) -> bool {
         matches!(self.kind, VTypeKind::Dead | VTypeKind::Undead)
     }
 
+    /// `true` for Blessed or Free (closable along at least one path).
     pub fn is_alive(&self) -> bool {
         matches!(self.kind, VTypeKind::Blessed | VTypeKind::Free)
     }
 
+    /// `true` if this VT was discovered during the seed phase (as a
+    /// junction in some tile's first-glue patch), not just via a
+    /// later BFS step.
     pub fn is_initial(&self) -> bool {
         self.is_initial
     }
 
+    /// A `Rat` representation of the (minimal) witness boundary,
+    /// useful for displaying or hashing the realized shape.
     pub fn realizing_rat(&self) -> &Rat<T> {
         &self.realizing_rat
     }
 
+    /// Boundary turn angle at the focus vertex of the witness.
     pub fn gap_angle(&self) -> i8 {
         self.gap_angle
     }
 
+    /// The minimal patch that realizes this VT at a boundary junction.
     pub fn witness(&self) -> &GrowingPatch<T> {
         &self.witness
     }
 
+    /// Boundary position of the focus vertex in [`Self::witness`].
     pub fn witness_pos(&self) -> usize {
         self.witness_pos
     }
 
+    /// Boundary distance (CW) from the focus vertex to the next
+    /// junction in the witness.
     pub fn cw_neighbor_offset(&self) -> usize {
         self.cw_neighbor_offset
     }
 
+    /// Boundary distance (CCW) from the focus vertex to the next
+    /// junction in the witness.
     pub fn ccw_neighbor_offset(&self) -> usize {
         self.ccw_neighbor_offset
     }
 }
 
+/// Sentinel destination id used by closing transitions in
+/// [`TransitionInfo::dst_id`]: a transition with `dst_id == CLOSED_ID`
+/// seals the source vertex (no successor VT). All real VT ids are
+/// 1-based and `>= 1`, so id `0` is reserved.
 pub const CLOSED_ID: usize = 0;
 
+/// A single transition in the VT graph: gluing tile `tile_id` to
+/// `src_id`'s recorded witness, with the matched edge anchored at
+/// `tile_offset` on the tile and the focus vertex consumed on `side`,
+/// produces a patch whose junction is the VT with id `dst_id`
+/// (or seals the focus if `dst_id == CLOSED_ID`).
 pub struct TransitionInfo {
+    /// 1-based VT id of the source.
     pub src_id: usize,
+    /// 1-based VT id of the destination, or [`CLOSED_ID`] if the
+    /// transition seals the focus vertex.
     pub dst_id: usize,
+    /// Which incident edge(s) of the focus vertex the glue consumed.
     pub side: TransitionSide,
+    /// Tile being glued.
     pub tile_id: usize,
+    /// Offset within `tile_id` of the canonical-CW anchor of the
+    /// matched edge (see [`TransitionSide`] doc for the anchor rule).
     pub tile_offset: usize,
 }
 
@@ -245,14 +265,13 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         let BfsState {
             all_types,
             initial_types,
-            transition_map,
             raw_transitions,
             witness_store,
             ..
         } = state;
 
         let (vt_list, reverse) = build_id_map(all_types);
-        let (succ_sets, pred_sets, transition_infos) =
+        let (succ_sets, transition_infos) =
             build_transition_arrays(&reverse, &raw_transitions);
         let has_any_realized = compute_has_any_realized(vt_list.len(), &transition_infos);
         let has_closing = compute_has_closing(vt_list.len(), &transition_infos);
@@ -262,10 +281,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
 
         let info_entries = classify_and_finalize(
             vt_list,
-            &succ_sets,
-            &pred_sets,
             &has_any_realized,
-            &transition_map,
             witness_store,
             &initial_types,
             &is_cursed,
@@ -280,18 +296,34 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         }
     }
 
+    /// Number of distinct VT entries in the catalog. Ids run
+    /// `1..=num_types()`.
     pub fn num_types(&self) -> usize {
         self.entries.len()
     }
 
+    /// All [`TransitionInfo`]s in the catalog, in the order produced
+    /// by the BFS (deterministic, but not sorted by any particular
+    /// key).
     pub fn transitions(&self) -> &[TransitionInfo] {
         &self.transitions
     }
 
+    /// All [`OpenVertexTypeInfo`] entries in canonical
+    /// `(cw, inner, ccw)` lex order. `entries()[id - 1]` is the entry
+    /// for VT id `id`.
     pub fn entries(&self) -> &[OpenVertexTypeInfo<T>] {
         &self.entries
     }
 
+    /// The slice of entries whose `vtype.cw.tile_id == tile_id`.
+    ///
+    /// Relies on the invariant that entries are stored in
+    /// `(cw, inner, ccw)` lex order, so `cw.tile_id` is the
+    /// most-significant sort key and entries sharing a `cw.tile_id`
+    /// form a contiguous range. A refactor that changes the entry
+    /// sort order would silently break this method; preserve the
+    /// ordering or update both together.
     pub fn range_by_cw(&self, tile_id: usize) -> &[OpenVertexTypeInfo<T>] {
         let start = self
             .entries
@@ -302,10 +334,13 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         &self.entries[start..end]
     }
 
+    /// Look up the 1-based id of `vtype`, if it's in the catalog.
     pub fn get_id(&self, vtype: &OpenVertexType) -> Option<usize> {
         self.reverse.get(vtype).copied()
     }
 
+    /// Return the canonical [`OpenVertexType`] for id `id`. Panics if
+    /// `id` is out of range (not in `1..=num_types()`).
     pub fn get_type(&self, id: usize) -> &OpenVertexType {
         assert!(
             id >= 1 && id <= self.entries.len(),
@@ -314,6 +349,8 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         &self.entries[id - 1].vtype
     }
 
+    /// Return the full [`OpenVertexTypeInfo`] for id `id`. Panics if
+    /// `id` is out of range.
     pub fn get_info(&self, id: usize) -> &OpenVertexTypeInfo<T> {
         assert!(
             id >= 1 && id <= self.entries.len(),
@@ -322,6 +359,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         &self.entries[id - 1]
     }
 
+    /// The tileset this catalog was built from.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
@@ -346,8 +384,6 @@ struct BfsState<T: IsComplex> {
     all_types: BTreeSet<OpenVertexType>,
     /// Subset of `all_types` originating from the seed phase.
     initial_types: BTreeSet<OpenVertexType>,
-    /// Records whether each VT had any touching matches.
-    transition_map: HashMap<OpenVertexType, HasTransitions>,
     /// Raw transition tuples; deduplicated via the BTreeSet.
     raw_transitions: BTreeSet<RawTransition>,
     /// VTs already enqueued for BFS exploration.
@@ -363,7 +399,6 @@ impl<T: IsComplex> Default for BfsState<T> {
         BfsState {
             all_types: BTreeSet::new(),
             initial_types: BTreeSet::new(),
-            transition_map: HashMap::new(),
             raw_transitions: BTreeSet::new(),
             visited: BTreeSet::new(),
             queue: VecDeque::new(),
@@ -380,11 +415,6 @@ fn seed_phase<T: IsComplex + IsRingOrField + Units>(
     tileset: &Arc<TileSet<T>>,
 ) {
     for seed_id in 0..tileset.num_tiles() {
-        eprintln!(
-            "[VT BFS] seeding tile {}/{}...",
-            seed_id,
-            tileset.num_tiles()
-        );
         let seed = GrowingPatch::new(Arc::clone(tileset), seed_id);
         for pm in seed.get_all_matches() {
             let mut gp = seed.clone();
@@ -418,37 +448,14 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
     state: &mut BfsState<T>,
     tileset: &Arc<TileSet<T>>,
 ) {
-    let mut bfs_processed: usize = 0;
-    let bfs_start = std::time::Instant::now();
-
     while let Some(vt) = state.queue.pop_front() {
-        if state.transition_map.get(&vt) == Some(&HasTransitions::No) {
-            continue;
-        }
-
-        bfs_processed += 1;
-        if bfs_processed.is_multiple_of(100) || state.queue.is_empty() {
-            eprintln!(
-                "[VT BFS] processed {} | queue {} | types {} | {:.1?}",
-                bfs_processed,
-                state.queue.len(),
-                state.visited.len(),
-                bfs_start.elapsed(),
-            );
-        }
-
         let (touching, n) = {
             let (gp, pos, _gap) = &state.witness_store[&vt];
             let n = gp.boundary_len();
             let t: Vec<PatchMatch> = gp.get_matches_touching_vertex(*pos);
             if t.is_empty() {
-                state.transition_map.insert(vt, HasTransitions::No);
                 continue;
             }
-            state
-                .transition_map
-                .entry(vt.clone())
-                .or_insert(HasTransitions::Yes);
             (t, n)
         };
         let pos = state.witness_store[&vt].1;
@@ -546,9 +553,15 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
                 if let Some(nv) = gp2.junction_vertex_type_at(new_pos) {
                     state.all_types.insert(nv.clone());
                     if state.visited.insert(nv.clone()) {
-                        state
-                            .witness_store
-                            .insert(nv.clone(), (gp2.clone(), new_pos, gp2.angles()[new_pos]));
+                        // `or_insert_with` matches the seed phase's
+                        // first-seen-wins semantics. The `visited`
+                        // check above already ensures we only get here
+                        // on first visit, but keeping the API
+                        // symmetric guards against future loosening
+                        // of that guard.
+                        state.witness_store.entry(nv.clone()).or_insert_with(|| {
+                            (gp2.clone(), new_pos, gp2.angles()[new_pos])
+                        });
                         state.queue.push_back(nv);
                     }
                 }
@@ -574,18 +587,13 @@ fn build_id_map(
 
 /// Phase 4: turn the raw `(src, dst, side, tile_id, tile_offset)`
 /// tuples into `TransitionInfo` records using the id map; build the
-/// successor / predecessor sets used by the cursed fixpoint.
+/// successor sets used by the cursed / blessed fixpoints.
 fn build_transition_arrays(
     reverse: &HashMap<OpenVertexType, usize>,
     raw_transitions: &BTreeSet<RawTransition>,
-) -> (
-    Vec<BTreeSet<usize>>,
-    Vec<BTreeSet<usize>>,
-    Vec<TransitionInfo>,
-) {
+) -> (Vec<BTreeSet<usize>>, Vec<TransitionInfo>) {
     let n = reverse.len();
     let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
-    let mut pred_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
     let mut transition_infos: Vec<TransitionInfo> = Vec::new();
 
     for (src, dst, side, tid, toff) in raw_transitions {
@@ -596,7 +604,6 @@ fn build_transition_arrays(
             Some(dst_vt) => {
                 if let Some(&dst_id) = reverse.get(dst_vt) {
                     succ_sets[src_id - 1].insert(dst_id);
-                    pred_sets[dst_id - 1].insert(src_id);
                     transition_infos.push(TransitionInfo {
                         src_id,
                         dst_id,
@@ -618,18 +625,14 @@ fn build_transition_arrays(
         }
     }
 
-    (succ_sets, pred_sets, transition_infos)
+    (succ_sets, transition_infos)
 }
 
 /// Phase 5: assemble per-VT [`OpenVertexTypeInfo`] records, classifying
 /// each as Dead / Undead / Blessed / Free from the fixpoint results.
-#[allow(clippy::too_many_arguments)]
 fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
     vt_list: Vec<OpenVertexType>,
-    succ_sets: &[BTreeSet<usize>],
-    pred_sets: &[BTreeSet<usize>],
     has_any_realized: &[bool],
-    transition_map: &HashMap<OpenVertexType, HasTransitions>,
     mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
     initial_types: &BTreeSet<OpenVertexType>,
     is_cursed: &[bool],
@@ -644,11 +647,9 @@ fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
             let (cw_nbr, ccw_nbr) = witness
                 .neighbor_junction_offsets(witness_pos)
                 .unwrap_or((0, 0));
-            // "Dead" = no transitions in the realized catalog. The
-            // BFS-time transition_map answer (which only sees "did
-            // get_matches_touching_vertex return anything") is too
-            // permissive — some touching matches fail add_tile or
-            // produce no destination VT, leaving the catalog empty.
+            // "Dead" = no transitions in the realized catalog. (BFS
+            // touching matches may fail add_tile or produce no
+            // destination VT, leaving the catalog empty for this VT.)
             let no_transitions = !has_any_realized[i];
             let kind = if no_transitions {
                 VTypeKind::Dead
@@ -659,16 +660,7 @@ fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
             } else {
                 VTypeKind::Free
             };
-            // has_transitions field mirrors the BFS-time answer for
-            // diagnostic / future use; kept as-is.
             OpenVertexTypeInfo {
-                has_transitions: if transition_map.get(&vt) == Some(&HasTransitions::No) {
-                    HasTransitions::No
-                } else {
-                    HasTransitions::Yes
-                },
-                successors: succ_sets[i].iter().copied().collect(),
-                predecessors: pred_sets[i].iter().copied().collect(),
                 kind,
                 is_initial: initial_types.contains(&vt),
                 realizing_rat: rat,
