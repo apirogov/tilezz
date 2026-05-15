@@ -1759,6 +1759,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_counts() {
         // Square tiles convexly; every continuation closes. All
         // 240 256 entries are Blessed: 109 184 phase-1 + 131 072
@@ -1791,6 +1792,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: iterates square_idx (~21s build in release)")]
     fn seeds_are_well_formed() {
         for idx in [
             square_idx() as &NeighborhoodIndex<ZZ12>,
@@ -1827,6 +1829,7 @@ mod tests {
     /// histories produce distinct entries with the same match-side
     /// interface); see the module doc on the interface-quotient view.
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: iterates square_idx (~21s build in release)")]
     fn entries_have_no_partial_eq_duplicates() {
         for (name, idx) in [
             ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
@@ -1883,6 +1886,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_roundtrip_collection() {
         let idx = square_idx();
         assert_roundtrip(idx);
@@ -1985,6 +1989,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: validate() reconstructs all square phase-2 patches (~28s in release)")]
     fn validate_returns_empty_for_all_tilesets() {
         for (name, idx) in [
             ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
@@ -2485,6 +2490,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_classify_invariants() {
         assert_classify_invariants(square_idx());
     }
@@ -2579,6 +2585,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_seeds_validate() {
         let idx = square_idx();
         let errors = validate_seeds(idx);
@@ -2635,6 +2642,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_seed_geometry() {
         assert_seed_geometry(square_idx());
     }
@@ -2811,6 +2819,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
     fn square_seeds_match_brute() {
         assert_seeds_match_brute(Arc::clone(square_idx().tileset()), square_idx());
     }
