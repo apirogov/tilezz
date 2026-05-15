@@ -1534,6 +1534,147 @@ mod tests {
         Some((nt.central_tile_id, nt.cw_anchor_on_central, canon))
     }
 
+    /// **Canonical-class fingerprint of an NT**: the equivalence
+    /// class that exactly preserves the four-kind classification.
+    /// Two NTs with the same value here are physically identical
+    /// configurations (modulo translation and reflection-free
+    /// rotation in the plane), so their futures of growth and hence
+    /// their kinds are identical.
+    ///
+    /// Components:
+    ///   - `central_tile_id` - which tile is the central.
+    ///   - `cw_anchor_on_central` - which edge of the central is the
+    ///     CW endpoint of the matched segment (= identifies the
+    ///     "first central-side gap edge" at the anchor).
+    ///   - The **canonical (lex_min_rot) aug-boundary angle sequence** -
+    ///     captures the shape of the entire post-glue (ctx + central)
+    ///     patch.
+    ///   - The **CW anchor's position on that canonical boundary** -
+    ///     pins where the central is attached on the canonical
+    ///     shape. Without this, two NTs differing only by where the
+    ///     central is glued on the same shape would collapse to the
+    ///     same class but have different futures (different
+    ///     neighboring un-matched-ctx geometry near the anchor).
+    ///
+    /// Empirically (`diagnose_canonical_class_compression`):
+    /// kind-constancy across this fingerprint holds on hex, square,
+    /// and spectre (0 violations on all three). Compression vs the
+    /// BFS catalog ranges from ~1x (spectre, near-canonical) to
+    /// ~2300x (hex, massively redundant).
+    fn canonical_class_fingerprint<T: IsComplex + IsRingOrField + Units>(
+        nt: &NeighborhoodType,
+        mi: &Arc<MatchTypeIndex<T>>,
+    ) -> Option<(usize, usize, Vec<i8>, usize)> {
+        let ac = build_attached_context(nt, mi)?;
+        let aug_n = ac.aug_n;
+        let angles = ac.aug.angles().to_vec();
+        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+        let mut canon = angles;
+        canon.rotate_left(rot);
+        // canon[i] = aug.angles()[(i + rot) % aug_n]. The CW anchor
+        // vertex on aug lives at index ac.gap_start (= first gap
+        // edge's starting vertex). Its position on the canonical
+        // boundary is (gap_start - rot) mod aug_n.
+        let cw_anchor_in_canon = (ac.gap_start + aug_n - rot) % aug_n;
+        Some((
+            nt.central_tile_id,
+            nt.cw_anchor_on_central,
+            canon,
+            cw_anchor_in_canon,
+        ))
+    }
+
+    /// Count catalog entries that share a canonical-class fingerprint
+    /// but disagree on kind. Returns `(violations, first_violation,
+    /// total_classes)`.
+    fn count_canonical_class_kind_violations<T: IsComplex + IsRingOrField + Units>(
+        idx: &NeighborhoodIndex<T>,
+    ) -> (usize, Option<String>, usize) {
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+        let kinds = idx.classify_all();
+        let mut fp_to_kind: FxHashMap<
+            (usize, usize, Vec<i8>, usize),
+            (NtKind, usize),
+        > = FxHashMap::default();
+        let mut violations = 0usize;
+        let mut first_violation: Option<String> = None;
+        for (i, nt) in idx.entries().iter().enumerate() {
+            let Some(fp) = canonical_class_fingerprint(nt, &mi) else {
+                continue;
+            };
+            let kind = kinds[i];
+            if let Some(&(prev_kind, prev_id)) = fp_to_kind.get(&fp) {
+                if kind != prev_kind {
+                    violations += 1;
+                    if first_violation.is_none() {
+                        first_violation = Some(format!(
+                            "entry id {} kind={:?} shares canonical class with id {} kind={:?}",
+                            i + 1,
+                            kind,
+                            prev_id,
+                            prev_kind
+                        ));
+                    }
+                }
+            } else {
+                fp_to_kind.insert(fp, (kind, i + 1));
+            }
+        }
+        (violations, first_violation, fp_to_kind.len())
+    }
+
+    /// Pin the classification-preserving invariant: every catalog
+    /// entry's kind is determined by its
+    /// [`canonical_class_fingerprint`]. Two entries with the same
+    /// fingerprint must classify the same. Holds on convex tilesets
+    /// trivially (lots of redundancy in the BFS) and on non-convex
+    /// tilesets non-trivially (the BFS is near-canonical but the
+    /// frontier-position component matters).
+    #[test]
+    fn hex_kind_constant_per_canonical_class() {
+        let (violations, msg, _) = count_canonical_class_kind_violations(hex_idx());
+        assert_eq!(violations, 0, "{:?}", msg);
+    }
+
+    #[test]
+    fn spectre_kind_constant_per_canonical_class() {
+        let (violations, msg, _) = count_canonical_class_kind_violations(spectre_idx());
+        assert_eq!(violations, 0, "{:?}", msg);
+    }
+
+    /// Square is the largest tileset; gated for cost.
+    #[test]
+    #[ignore]
+    fn square_kind_constant_per_canonical_class() {
+        let (violations, msg, _) = count_canonical_class_kind_violations(square_idx());
+        assert_eq!(violations, 0, "{:?}", msg);
+    }
+
+    /// Data-only diagnostic: prints (entries, canonical-class count,
+    /// compression ratio) per tileset. Useful for tracking the BFS's
+    /// canonicalization quality over time without pinning fragile
+    /// exact-count regressions. Run via
+    /// `cargo test --release intgeom::neighborhood::tests::diagnose_canonical_class_compression -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn diagnose_canonical_class_compression() {
+        for (name, idx) in [
+            ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
+            ("hex", hex_idx()),
+            ("spectre", spectre_idx()),
+        ] {
+            let (violations, _, n_classes) = count_canonical_class_kind_violations(idx);
+            let n = idx.num_types();
+            eprintln!(
+                "{name}: entries={} canonical_classes={} ratio={:.2}x violations={}",
+                n,
+                n_classes,
+                n as f64 / n_classes as f64,
+                violations
+            );
+        }
+    }
+
     /// Combined completeness + transition correctness check, using
     /// `rat.get_match` directly on each NT's augmented boundary as
     /// the independent reference.
