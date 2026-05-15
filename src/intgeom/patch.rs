@@ -717,6 +717,59 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     /// tracked junction position. Since the function's contract is to
     /// deliver a chain of *open* boundary junctions, such a configuration
     /// is rejected rather than returned silently.
+    ///
+    /// # Precondition 1: vtypes is a LINEAR sequence, not a cyclic description
+    ///
+    /// `vtypes` must describe a **partial / open** boundary segment, not a
+    /// cyclic description of an entire closed boundary. The construction
+    /// glues tiles one at a time at each successive junction without
+    /// recognising any closure between `vtypes[n-1]` and `vtypes[0]`. If
+    /// the supplied sequence happens to encode a closed loop, the chain
+    /// will keep adding tiles past where the loop would close and produce
+    /// a geometrically invalid (self-intersecting) patch.
+    ///
+    /// For example: the 6 outer-corner junctions of a 7-hex full corona
+    /// form a cyclic boundary trace (= they describe the full closed
+    /// outer perimeter). Passing those 6 vtypes to this function does
+    /// **not** rebuild the corona's 18-edge boundary — it produces a
+    /// 30-edge self-intersecting spiral of 7 tiles, with the 7th tile
+    /// overlapping the seed.
+    ///
+    /// Valid use cases pass partial vt_seqs: phase-1 NT matched-segment
+    /// junctions, single open-VT witnesses, and similar.
+    ///
+    /// # Precondition 2: vtypes must capture every tile of the realising patch
+    ///
+    /// Each [`OpenVertexType`] carries the tile edges meeting at one
+    /// boundary junction via its `cw`, `inner`, and `ccw` fields. This
+    /// covers every tile *incident with the boundary* at that vertex.
+    /// **Tiles that are fully interior to the patch — i.e., have no
+    /// vertex on the boundary, so they appear in no junction's `inner`
+    /// field — are not captured by any vtype and will not be placed by
+    /// this function.**
+    ///
+    /// For the 7-hex full corona, this also bites: the central hex is
+    /// fully interior with respect to the outer boundary and is in no
+    /// outer junction's `inner`. Without the central's geometric
+    /// constraint, `flower_petal_glue` lays the outer hexes out as a
+    /// curving chain rather than a corona — the chain spirals inward
+    /// instead of maintaining the spacing the central would force.
+    ///
+    /// # Summary of caller obligations
+    ///
+    /// - `vtypes` describes a partial / open boundary segment.
+    /// - Every tile of the realising patch has at least one vertex on
+    ///   the boundary segment described by `vtypes`, captured via
+    ///   `cw` / `ccw` / `inner` of some entry.
+    ///
+    /// Both conditions hold for minimal-witness uses (one open-VT, a
+    /// chain of phase-1 NT matched-segment junctions with the central
+    /// appearing in `inner` where it meets the boundary). Neither
+    /// holds for phase-2 *closed* SurroundedTile coronas, where the
+    /// outer boundary is cyclic and the central is fully interior.
+    /// The function does **not** validate either precondition and
+    /// will silently return a bogus patch on violation; callers must
+    /// guarantee.
     pub fn construct_witness_from_vt_sequence(
         vtypes: &[OpenVertexType],
         match_index: Arc<MatchTypeIndex<T>>,
@@ -2190,6 +2243,188 @@ mod tests {
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         GrowingPatch::new(ts, 0)
+    }
+
+    /// User-suggested hollow-ring construction: build a curving chain
+    /// of hexagons by always gluing the latest hex's edge 1 to the
+    /// new hex's edge 5 (= a 60° wedge angle, so the chain curves
+    /// inward). The first 4 glues succeed and produce a 5-hex C
+    /// around an empty hex-shaped center. The 5th glue (= closing
+    /// into a 6-hex hollow ring around the empty center) would
+    /// produce a non-simply-connected patch with a hole — which
+    /// `GrowingPatch::add_tile` correctly rejects.
+    ///
+    /// At each step the latest hex's edge 1 sits at boundary position
+    /// `boundary_len - 4` (= second of the latest hex's surviving
+    /// edges in CCW order after the rotation applied by
+    /// `glue_match_to_raw_boundary`).
+    #[test]
+    fn hollow_hex_ring_closure_rejected() {
+        let mut gp = hex_patch();
+        // First glue: hex_0's edge 1 → hex_1's edge 5 (start_a=1 on
+        // the seed's notional boundary, len=1, start_b=0 so the
+        // matched petal edge is start_b-1 = 5 mod 6).
+        let first = PatchMatch { start_a: 1, len: 1, start_b: 0, tile_id: 0 };
+        assert!(gp.add_tile(&first), "first glue should succeed");
+        // Glues 2-4: continue the chain. start_a is tracked from
+        // the post-glue boundary's "second surviving edge of latest
+        // hex" = boundary_len - 4.
+        for step in 2..=4 {
+            let start_a = gp.boundary_len() - 4;
+            let pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+            assert!(
+                gp.add_tile(&pm),
+                "step {} glue (pm={:?}) should succeed",
+                step,
+                pm
+            );
+        }
+        assert_eq!(
+            gp.boundary_len(),
+            22,
+            "after 4 glues = 5 hexes in a C, boundary should be 22 edges"
+        );
+
+        // Step 5: would add hex_5 closing the chain into a 6-hex
+        // ring AROUND AN EMPTY CENTER. The chain has curved enough
+        // that hex_5's surviving edges would spatially coincide
+        // with hex_0's exposed edges on the other side of the gap
+        // (= the chain endpoints face each other across the empty
+        // center). `check_segment_clear` rejects: the new tile's
+        // segments would touch the existing boundary at non-
+        // endpoint positions.
+        let start_a = gp.boundary_len() - 4;
+        let closing_pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+        let ok = gp.add_tile(&closing_pm);
+        assert!(
+            !ok,
+            "GrowingPatch::add_tile must refuse the closing glue \
+             (= would build a 6-hex ring with a hex-shaped hole at \
+             the center, which is non-simply-connected). \
+             pm={:?}, current boundary_len={}",
+            closing_pm,
+            gp.boundary_len()
+        );
+        // After rejection the patch is unchanged.
+        assert_eq!(gp.boundary_len(), 22, "rejected glue must leave state unchanged");
+    }
+
+    /// Build a 7-hex full corona (1 central + 6 ring tiles) via the
+    /// user-suggested approach: glue the central as the FIRST chain
+    /// step, then continue the same curving "edge 1 → edge 5"
+    /// pattern. Returns the patch.
+    ///
+    /// Step 1 glues central to hex_0's edge 0 (`start_a = 0`,
+    /// `len = 1`). After this glue the rotation puts hex_0's edge 1
+    /// at boundary position 0, so step 2 also uses `start_a = 0`.
+    /// From step 3 onward, the latest hex's edge 1 sits at
+    /// `boundary_len - 4` per the rotation convention.
+    fn seven_hex_full_corona() -> GrowingPatch<ZZ12> {
+        // Build via three phases:
+        //   1. Chain (4 glues): 5 hexes curving around an empty center.
+        //   2. Fill (1 glue): central tile fills the inner concavity
+        //      via mlen=5 (matching all 5 center-facing edges).
+        //   3. Close (1 glue): 6th corona at the remaining wedge via
+        //      mlen=3 (matching the 3 wedge-facing edges).
+        let mut gp = hex_patch();
+        let first = PatchMatch { start_a: 1, len: 1, start_b: 0, tile_id: 0 };
+        assert!(gp.add_tile(&first), "chain glue 1");
+        for _ in 2..=4 {
+            let start_a = gp.boundary_len() - 4;
+            let pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+            assert!(gp.add_tile(&pm), "chain glue {:?}", pm);
+        }
+        // Brute-force pick: a match with mlen=5 fills central.
+        let central = gp
+            .get_all_matches()
+            .into_iter()
+            .find(|pm| {
+                pm.len == 5 && {
+                    let mut trial = gp.clone();
+                    trial.add_tile(pm)
+                }
+            })
+            .unwrap_or_else(|| panic!("no mlen=5 candidate to fill central"));
+        assert!(gp.add_tile(&central), "central fill");
+        // Close via mlen=3.
+        let closer = gp
+            .get_all_matches()
+            .into_iter()
+            .find(|pm| {
+                pm.len == 3 && {
+                    let mut trial = gp.clone();
+                    trial.add_tile(pm) && trial.boundary_len() == 18
+                }
+            })
+            .unwrap_or_else(|| panic!("no mlen=3 candidate closing the corona"));
+        assert!(gp.add_tile(&closer), "ring closure");
+        gp
+    }
+
+    /// User-flagged invariant (2): the 7-hex full corona's outer
+    /// boundary has 18 edges and 6 junctions. Feeding that vt_seq
+    /// to `construct_witness_from_vt_sequence` does NOT produce the
+    /// 7-hex full corona — it produces a 7-hex CHAIN with boundary
+    /// length 30 (= 6 adjacencies, no closure). The vt_seq encodes a
+    /// chain of 6 junctions but doesn't enforce the closing
+    /// adjacency that would form the ring.
+    ///
+    /// So neither "hollow ring" (= 6 hexes around empty center) nor
+    /// "full corona" (= 7 hexes around central) is produced by
+    /// minimal-witness reconstruction. The function returns a chain
+    /// — a different geometric shape that also realizes 6 junctions.
+    ///
+    /// This documents the actual current behavior. It means closed
+    /// SurroundedTile entries (which carry the corona's outer
+    /// vt_seq, no central) **cannot** be reconstructed back to the
+    /// corona via `construct_witness_from_vt_sequence`; doing so
+    /// silently produces a chain. We don't currently reconstruct
+    /// closed entries, so this is latent.
+    /// Precondition test for [`GrowingPatch::construct_witness_from_vt_sequence`]:
+    /// when the input vt_seq describes a patch that has FULLY INTERIOR
+    /// tiles not captured by any junction's `inner` field, the function
+    /// returns a geometrically invalid patch (= self-intersecting
+    /// boundary, `Snake::try_from` rejects). This documents the
+    /// precondition stated on the function: every realising-patch tile
+    /// must appear in at least one junction (as cw / ccw / inner).
+    ///
+    /// Concrete case: 7-hex full corona has 6 outer junctions (= cw/ccw
+    /// from the 2 outer hexes meeting at each corner; `inner` empty).
+    /// The central hex is not in any junction's `inner`. Reconstruction
+    /// from these 6 vtypes silently produces a self-intersecting chain.
+    #[test]
+    fn construct_witness_self_intersects_with_fully_interior_tile() {
+        let gp = seven_hex_full_corona();
+        assert_eq!(gp.boundary_len(), 18);
+        let mut vt_seq: Vec<OpenVertexType> = Vec::new();
+        for i in 0..gp.boundary_len() {
+            if let Some(vt) = gp.junction_vertex_type_at(i) {
+                vt_seq.push(vt);
+            }
+        }
+        assert_eq!(vt_seq.len(), 6, "7-hex corona has 6 outer junctions");
+        // None of the 6 outer junctions has the central in `inner`.
+        for vt in &vt_seq {
+            assert!(
+                vt.inner.is_empty(),
+                "outer-corner junctions have empty inner — central not captured"
+            );
+        }
+        let mi = Arc::clone(gp.match_index());
+        let (rebuilt, _) =
+            GrowingPatch::construct_witness_from_vt_sequence(&vt_seq, mi).expect("returns Some");
+        assert_eq!(
+            rebuilt.boundary_len(),
+            30,
+            "reconstruction places 7 tiles in a spiral (wrong) instead of 6 \
+             corona tiles around the central — the central's constraint is \
+             missing from the vt_seq."
+        );
+        assert!(
+            Snake::<ZZ12>::try_from(rebuilt.angles()).is_err(),
+            "the spiral self-intersects — Snake rejects, but \
+             construct_witness_from_vt_sequence does not validate."
+        );
     }
 
     /// Pure unit tests for [`cyclic_range_contains`]. Computed via the
