@@ -1,48 +1,61 @@
 //! Neighborhood types: catalog of local *interfaces* between a tile
 //! and any legal context patch that could meet it along one
-//! contiguous edge run.
+//! contiguous edge run, plus the post-absorption "surrounded tile"
+//! states that arise once the central tile's edges are all
+//! consumed.
 //!
-//! # What we are enumerating
+//! # Two phases
 //!
-//! For a given tileset, this module produces every distinct way a
-//! tile (the **central**) can meet a surrounding patch of other tiles
-//! (the **context**) along a single contiguous matched segment.
-//! What matters for the interface is only the central + the shape of
-//! the matched edge run; the *outer* perimeter of the context (the
-//! part not touching the central) is irrelevant for "what tile can
-//! grow next here". The output is therefore the set of all possible
-//! such interfaces, classified by whether they extend to a fully
-//! surrounded central or trap somewhere along the way.
+//! The catalog has two kinds of entries (unified as [`NtEntry`]):
 //!
-//! # Why the abstraction, not pure boundary enumeration
+//! - **Phase 1 — [`NeighborhoodType`]**: the central tile is still
+//!   on the patch boundary along a matched segment, with CW/CCW
+//!   frontier vertices where context tiles can still be added.
+//!   This is the original "open NT" model.
 //!
-//! A naive "enumerate all length-≤k boundary strings that can occur
-//! as a match interface" approach has to separately filter realizable
-//! from junk strings - a costly secondary step. Growing the context
-//! one tile at a time via BFS gives realizability for free: every NT
-//! is built from a known-realizable predecessor, so no candidate has
-//! to be checked against geometric legality post-hoc.
+//! - **Phase 2 — [`SurroundedTile`]**: a phase-1 step absorbed the
+//!   last central edge, so the central is now interior; only its
+//!   vertices may remain incident with the boundary (= an "open
+//!   vertex" where the angle gap hasn't closed). The full
+//!   `GrowingPatch` boundary state is stored, in normalized form;
+//!   see [`SurroundedTile::to_patch`] for reconstruction.
+//!
+//! Phase-2 entries either:
+//!   - **closed** (no open vertex remaining; central fully
+//!     surrounded — terminal Blessed state), or
+//!   - **open** (one open vertex remains; phase-2 BFS attempts to
+//!     close it by gluing further petals).
+//!
+//! # Why grow incrementally
+//!
+//! A naive "enumerate all length-≤k boundary strings" approach has
+//! to separately filter realizable from junk strings — a costly
+//! secondary step. Growing the patch one tile at a time via BFS
+//! gives realizability for free: every entry is built from a
+//! known-realizable predecessor, so no candidate has to be checked
+//! against geometric legality post-hoc.
 //!
 //! The trade-off: the BFS catalog is **finer** than the interface
-//! equivalence quotient. The same interface can be reached by
-//! multiple distinct growth histories (different sequences of petal
-//! attachments), and each history becomes its own catalog entry. The
-//! true interface quotient is a coarser, derived view.
+//! equivalence quotient. The same configuration can be reached by
+//! multiple distinct growth histories, and each history becomes its
+//! own catalog entry. The true interface quotient is a coarser,
+//! derived view; the canonicalisation pass that runs after each
+//! glue (via [`GrowingPatch::normalize`]) deduplicates aggressively
+//! but not exhaustively.
 //!
 //! # Classification → forbidden patterns
 //!
-//! Every NT gets a `Dead`/`Undead`/`Blessed`/`Free` reachability
-//! kind via [`NeighborhoodIndex::classify_all`]. The Dead and Undead
-//! interfaces are the actionable output: they are the local boundary
+//! Every entry gets a `Dead`/`Undead`/`Blessed`/`Free` reachability
+//! kind via [`NeighborhoodIndex::classify_all`]. The Dead and
+//! Undead interfaces are the actionable output: they are the local
 //! patterns a tiling can never recover from. Downstream consumers
-//! treat the set of Dead/Undead match-side boundary strings as
-//! **forbidden patterns** that must not appear in any extending
-//! glue. Together with the dead/undead VTs (a finer per-vertex
-//! constraint, see `vertextypes.rs`), these constraints prune the
-//! tile-growth search.
+//! treat them as **forbidden patterns** that must not appear in any
+//! extending glue. Together with the dead/undead VTs (a finer
+//! per-vertex constraint, see `vertextypes.rs`), these constraints
+//! prune the tile-growth search.
 //!
-//! See [`NeighborhoodType`] for the data layout and
-//! [`NeighborhoodIndex::new`] for the BFS algorithm.
+//! See [`NeighborhoodType`] / [`SurroundedTile`] for entry layout
+//! and [`NeighborhoodIndex::new`] for the BFS algorithm.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -129,7 +142,131 @@ pub struct NeighborhoodType {
     pub vt_seq: Vec<OpenVertexType>,
 }
 
-pub const NT_CLOSED_ID: usize = 0;
+/// Phase-2 entry: the central tile has had all of its edges absorbed
+/// by surrounding tiles ("surrounded"). Stores the full `GrowingPatch`
+/// boundary state, in **normalized** form (= rotated to lex-min
+/// boundary angles, `patch_tile_ids` densified to `0..k` by
+/// CCW-first-occurrence). Two SurroundedTiles describing geometrically
+/// equivalent patches compare equal via derived `Eq`/`Hash`.
+///
+/// `is_closed = true` when the corona fully encloses the central
+/// (no boundary vertex incident with central). The entry is a
+/// terminal Blessed state — it has no outgoing transitions, and
+/// [`NeighborhoodIndex::classify_all`] recognises it as an
+/// escape destination for the entries that transition into it.
+///
+/// `is_closed = false` when an open vertex remains on the boundary.
+/// `open_vertex_pos` is the boundary position of that open vertex
+/// in the normalized boundary (= where phase-2 BFS attaches petals).
+///
+/// To reconstruct as a `GrowingPatch`, use [`SurroundedTile::to_patch`].
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SurroundedTile {
+    pub central_tile_id: usize,
+    pub is_closed: bool,
+    /// Open vertex's boundary position in the normalized boundary
+    /// (only meaningful when `!is_closed`; set to 0 by convention
+    /// for closed entries).
+    pub open_vertex_pos: usize,
+    /// Number of distinct boundary tile instances (= `next_tile_id`
+    /// after [`GrowingPatch::normalize`]). Fully-interior tiles are
+    /// not counted here — see normalize's note.
+    pub num_tile_instances: usize,
+    pub angles: Vec<i8>,
+    pub edges: Vec<EdgeInfo>,
+    pub inner_chains: Vec<Vec<EdgeInfo>>,
+    pub patch_tile_ids: Vec<usize>,
+}
+
+impl SurroundedTile {
+    /// Reconstruct the surrounded-tile patch as a `GrowingPatch`. Returns
+    /// `None` only on `from_parts` invariant violations (= shouldn't
+    /// happen for SurroundedTiles produced by the BFS).
+    ///
+    /// In debug builds, asserts the internal-consistency invariants
+    /// callers must uphold:
+    /// - Per-position arrays (`angles`, `edges`, `inner_chains`,
+    ///   `patch_tile_ids`) are the same length.
+    /// - `num_tile_instances` equals `max(patch_tile_ids) + 1` (= the
+    ///   dense-renumbering output of [`GrowingPatch::normalize`]).
+    /// - `open_vertex_pos < angles.len()` when `!is_closed`.
+    pub fn to_patch<T: IsComplex + IsRingOrField + Units>(
+        &self,
+        match_index: Arc<MatchTypeIndex<T>>,
+    ) -> Option<GrowingPatch<T>> {
+        let n = self.angles.len();
+        debug_assert_eq!(self.edges.len(), n, "edges length mismatch");
+        debug_assert_eq!(self.inner_chains.len(), n, "inner_chains length mismatch");
+        debug_assert_eq!(
+            self.patch_tile_ids.len(),
+            n,
+            "patch_tile_ids length mismatch"
+        );
+        debug_assert_eq!(
+            self.num_tile_instances,
+            self.patch_tile_ids.iter().max().map_or(0, |m| m + 1),
+            "num_tile_instances doesn't match patch_tile_ids"
+        );
+        debug_assert!(
+            self.is_closed || self.open_vertex_pos < n,
+            "open_vertex_pos {} out of range for boundary len {}",
+            self.open_vertex_pos,
+            n
+        );
+        GrowingPatch::from_parts(
+            match_index,
+            self.angles.clone(),
+            self.edges.clone(),
+            self.inner_chains.clone(),
+            self.patch_tile_ids.clone(),
+            self.num_tile_instances,
+        )
+    }
+}
+
+/// A catalog entry: either a phase-1 NT (central still on the
+/// patch boundary along a matched segment) or a phase-2 SurroundedTile
+/// (central fully edge-absorbed, possibly with an open vertex).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NtEntry {
+    Phase1(NeighborhoodType),
+    Phase2(SurroundedTile),
+}
+
+impl NtEntry {
+    pub fn central_tile_id(&self) -> usize {
+        match self {
+            NtEntry::Phase1(nt) => nt.central_tile_id,
+            NtEntry::Phase2(st) => st.central_tile_id,
+        }
+    }
+
+    /// For phase-1 entries: the matched-segment `vt_seq`. For phase-2
+    /// entries: an empty slice (the surrounded-tile representation is
+    /// now boundary state, not a junction sequence; query
+    /// [`SurroundedTile::to_patch`] and `junction_vertex_type_at` for
+    /// per-junction info).
+    pub fn vt_seq(&self) -> &[OpenVertexType] {
+        match self {
+            NtEntry::Phase1(nt) => &nt.vt_seq,
+            NtEntry::Phase2(_) => &[],
+        }
+    }
+
+    pub fn as_phase1(&self) -> Option<&NeighborhoodType> {
+        match self {
+            NtEntry::Phase1(nt) => Some(nt),
+            _ => None,
+        }
+    }
+
+    pub fn as_phase2(&self) -> Option<&SurroundedTile> {
+        match self {
+            NtEntry::Phase2(st) => Some(st),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum NtKind {
@@ -150,7 +287,7 @@ pub struct NtTransition {
 
 pub struct NeighborhoodIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
-    entries: Vec<NeighborhoodType>,
+    entries: Vec<NtEntry>,
     transitions: Vec<NtTransition>,
 }
 
@@ -185,29 +322,32 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     ///    Validate via [`nt_is_valid`] and dedup against the BFS's
     ///    `PartialEq` dedup key (which is the full
     ///    `NeighborhoodType`, not the interface).
-    /// 2. **BFS growth.** Dequeue each NT and run [`explore_one`] to
-    ///    enumerate one-petal CCW successors. New NTs are enqueued;
-    ///    transitions are recorded with the right `TransitionSide`.
-    ///    Every step grows `num_ctx_tiles` by exactly 1, so the
-    ///    transition graph is a DAG.
+    /// 2. **BFS growth.** Dequeue each entry id and dispatch:
+    ///    - [`NtEntry::Phase1`]: enumerate one-petal CCW successors
+    ///      via [`explore_phase1`]. Each successor is either another
+    ///      phase-1 NT (central edges still remain) or a phase-2
+    ///      [`SurroundedTile`] (central edges all absorbed).
+    ///    - [`NtEntry::Phase2`] (open only): explore one petal at
+    ///      the open vertex via [`explore_phase2`]; closed phase-2
+    ///      entries are terminal Blessed states with no outgoing
+    ///      transitions ([`Self::classify_all`] recognises them
+    ///      directly as escape destinations).
+    ///    New entries are enqueued; transitions are recorded.
+    ///    Every step adds exactly one tile to the underlying patch,
+    ///    so the transition graph is a DAG.
     ///
-    /// # CW direction
+    /// # CCW-only exploration
     ///
-    /// CW-direction exploration is **not implemented**. The CCW-only
-    /// BFS is verified complete by the brute-force regression test
-    /// `spectre_ccw_only_is_complete`: starting from every NT in the
-    /// catalog, every direct `get_match` candidate at the CCW
-    /// frontier either closes the configuration or produces an NT
-    /// already in the catalog. Earlier attempts at `try_step_cw`
-    /// produced spurious NTs because the CCW Case-A/Case-B
-    /// `vt_seq` mutation breaks down when the OLD CW anchor's
-    /// junction status flips between old ctx and new ctx (= when
-    /// the petal contributes zero angle at that vertex); a clean
-    /// re-derivation is needed before reintroducing CW exploration.
+    /// Phase-1 BFS only explores in the CCW direction; the
+    /// `spectre_ccw_only_is_complete` regression test confirms this
+    /// is complete (= every brute-force petal candidate at the CCW
+    /// frontier either closes the central or produces an NT already
+    /// in the catalog). Phase-2 BFS likewise only attaches at the
+    /// open vertex's CCW edge.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        // IDs are 1-based so NT_CLOSED_ID = 0 is unambiguous: entries[i]
-        // has id i + 1. `seen` and transitions store ids, not indices.
+        // IDs are 1-based: entries[i] has id i + 1. `seen` and
+        // transitions store ids, not indices.
         let mut state = BfsState::default();
         seed_phase(&mut state, &match_index);
         bfs_phase(&mut state, &match_index);
@@ -225,22 +365,36 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         }
     }
 
-    /// All [`NeighborhoodType`] entries in BFS-discovery order.
+    /// All catalog entries in BFS-discovery order.
     /// `entries()[id - 1]` is the entry for 1-based id `id`.
-    pub fn entries(&self) -> &[NeighborhoodType] {
+    pub fn entries(&self) -> &[NtEntry] {
         &self.entries
     }
 
-    /// Number of NTs in the catalog. Ids run `1..=num_types()`;
-    /// [`NT_CLOSED_ID`] (= 0) is reserved as the closed-configuration
-    /// sentinel.
+    /// Number of catalog entries (phase 1 + phase 2). Ids run
+    /// `1..=num_types()`.
     pub fn num_types(&self) -> usize {
         self.entries.len()
     }
 
-    /// All recorded BFS transitions, in BFS-emission order.
-    /// `src_id` is always a real 1-based entry id; `dst_id` is either
-    /// a 1-based id or [`NT_CLOSED_ID`].
+    /// Number of phase-1 (open-NT) entries.
+    pub fn num_phase1(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e, NtEntry::Phase1(_)))
+            .count()
+    }
+
+    /// Number of phase-2 (SurroundedTile) entries.
+    pub fn num_phase2(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e, NtEntry::Phase2(_)))
+            .count()
+    }
+
+    /// All recorded BFS transitions, in BFS-emission order. Both
+    /// `src_id` and `dst_id` are 1-based entry ids.
     pub fn transitions(&self) -> &[NtTransition] {
         &self.transitions
     }
@@ -253,13 +407,15 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// Classify every entry as Dead / Undead / Blessed / Free by
     /// walking the transition graph.
     ///
-    /// * `Dead` - no outgoing transitions.
-    /// * `Undead` - has transitions, every reachable path terminates
-    ///   at a Dead/Undead (never at the Closed sink).
-    /// * `Blessed` - every outgoing transition reaches Closed or
-    ///   another Blessed.
-    /// * `Free` - has at least one Closed-reaching path and at least
-    ///   one Dead-terminating path.
+    /// * `Dead` — no outgoing transitions, not a closed phase-2 terminal.
+    /// * `Undead` — has outgoing transitions, every reachable path
+    ///   eventually traps at a Dead/Undead entry (never reaches a
+    ///   closed phase-2 terminal).
+    /// * `Blessed` — every outgoing transition reaches a closed
+    ///   phase-2 terminal or another Blessed entry. Closed phase-2
+    ///   terminals are themselves Blessed.
+    /// * `Free` — has at least one path that reaches a closed
+    ///   terminal AND at least one that traps at Dead/Undead.
     ///
     /// # Downstream use: forbidden patterns
     ///
@@ -280,35 +436,44 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// O(n + m) via worklist propagation on the reverse adjacency.
     pub fn classify_all(&self) -> Vec<NtKind> {
         // Transition ids are 1-based; convert with `- 1` when indexing into
-        // these per-entry vectors. NT_CLOSED_ID (= 0) is the closed sentinel
-        // and never appears as a src_id.
+        // these per-entry vectors.
+        //
+        // Closed phase-2 SurroundedTile entries are "terminal-good" —
+        // they have no outgoing transitions but represent a valid
+        // closure (= central fully surrounded). They are the *only*
+        // Blessed seeds. All Blessed and Undead status reaches other
+        // entries via standard reverse-edge propagation.
         let n = self.entries.len();
-        let mut succ_count = vec![0usize; n]; // non-closed successors of i
-        let mut preds: Vec<Vec<usize>> = vec![vec![]; n]; // reverse edges (non-closed dst -> src)
-        let mut has_outgoing = vec![false; n];
-        let mut has_closing = vec![false; n];
-        for t in &self.transitions {
-            debug_assert!(t.src_id != NT_CLOSED_ID, "closed cannot be a src");
-            let src_idx = t.src_id - 1;
-            has_outgoing[src_idx] = true;
-            if t.dst_id == NT_CLOSED_ID {
-                has_closing[src_idx] = true;
-            } else {
-                succ_count[src_idx] += 1;
-                preds[t.dst_id - 1].push(src_idx);
+        let mut is_closed_terminal = vec![false; n];
+        for (i, entry) in self.entries.iter().enumerate() {
+            if let NtEntry::Phase2(st) = entry {
+                if st.is_closed {
+                    is_closed_terminal[i] = true;
+                }
             }
         }
 
-        // Cursed: every non-closed successor is cursed, AND there is at
-        // least one non-closed successor or no outgoing at all, AND no
-        // closing transition exists (a closing transition is an edge to
-        // the Closed sink, which is not cursed - an NT with a closing
-        // transition has an escape path and is therefore not cursed).
+        let mut succ_count = vec![0usize; n];
+        let mut preds: Vec<Vec<usize>> = vec![vec![]; n];
+        let mut has_outgoing = vec![false; n];
+        for t in &self.transitions {
+            let src_idx = t.src_id - 1;
+            let dst_idx = t.dst_id - 1;
+            has_outgoing[src_idx] = true;
+            succ_count[src_idx] += 1;
+            preds[dst_idx].push(src_idx);
+        }
+
+        // Cursed propagation: an entry becomes cursed when all of its
+        // successors are cursed. Closed terminals are never cursed
+        // (they're seeded as Blessed instead), so any entry with a
+        // closed-terminal successor has remaining > 0 permanently —
+        // the "has-closing-escape" exemption is implicit.
         let mut cursed = vec![false; n];
         let mut remaining = succ_count.clone();
         let mut queue: VecDeque<usize> = VecDeque::new();
         for i in 0..n {
-            if !has_outgoing[i] {
+            if !has_outgoing[i] && !is_closed_terminal[i] {
                 cursed[i] = true;
                 queue.push_back(i);
             }
@@ -319,20 +484,21 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                     continue;
                 }
                 remaining[p] -= 1;
-                if remaining[p] == 0 && succ_count[p] > 0 && !has_closing[p] {
+                if remaining[p] == 0 && succ_count[p] > 0 {
                     cursed[p] = true;
                     queue.push_back(p);
                 }
             }
         }
 
-        // Blessed: every outgoing transition leads to Closed or Blessed.
-        // Seed with entries whose only successors are closed.
+        // Blessed propagation: seed with closed terminals only.
+        // Standard reverse-edge propagation marks each predecessor
+        // Blessed once all of its successors are Blessed.
         let mut blessed = vec![false; n];
         let mut remaining = succ_count.clone();
         let mut queue: VecDeque<usize> = VecDeque::new();
         for i in 0..n {
-            if has_outgoing[i] && succ_count[i] == 0 {
+            if is_closed_terminal[i] {
                 blessed[i] = true;
                 queue.push_back(i);
             }
@@ -365,16 +531,27 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             .collect()
     }
 
-    /// Return the 1-based ids of entries that fail to reconstruct or that
-    /// cannot accept the central tile at the stored anchor. Empty result
-    /// means every entry is well-formed.
+    /// Return the 1-based ids of entries that fail self-consistency:
+    /// phase-1 entries that don't reconstruct from their CW-side
+    /// fields. Phase-2 entries are validated by attempting
+    /// [`SurroundedTile::to_patch`] — `from_parts` enforces the
+    /// shape's basic invariants.
     pub fn validate(&self) -> Vec<usize> {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&self.tileset)));
+        let num_tiles = self.tileset.num_tiles();
         self.entries
             .iter()
             .enumerate()
-            .filter_map(|(idx, nt)| {
-                if nt_is_valid(nt, &match_index) {
+            .filter_map(|(idx, entry)| {
+                let ok = match entry {
+                    NtEntry::Phase1(nt) => nt_is_valid(nt, &match_index),
+                    NtEntry::Phase2(st) => {
+                        st.central_tile_id < num_tiles
+                            && !st.angles.is_empty()
+                            && st.to_patch(Arc::clone(&match_index)).is_some()
+                    }
+                };
+                if ok {
                     None
                 } else {
                     Some(idx + 1)
@@ -388,11 +565,21 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// Format (one record per line, whitespace-separated tokens):
     ///
     /// ```text
-    /// NTYPE <id> <kind> <central_id> <ac> <ax> <n_vts> <vt0> <vt1> ...
-    /// TRANS <src_id> <dst_id> <tile_id> <tile_offset>
+    /// NTYPE <id> <kind> <central_id> <cwc> <ccwc> <cwx> <ccwx> <nctx> <n_vts> <vt0> ...
+    /// STYPE <id> <kind> <central_id> <is_closed:0|1> <open_vertex_pos> <num_tile_instances> <n>
+    ///   <angle0> ... <angle_{n-1}>
+    ///   <edge0> ... <edge_{n-1}>
+    ///   <ptid0> ... <ptid_{n-1}>
+    ///   <ichain0> ... <ichain_{n-1}>
+    /// TRANS <src_id> <dst_id> <side> <tile_id> <tile_offset>
     /// ```
     ///
-    /// Each `<vti>` encodes a single OpenVertexType as
+    /// STYPE records use a multi-line format because the patch state
+    /// is dense; the inner-chain entries are encoded
+    /// `<count>:<edge0>,<edge1>,...` or just `-` for empty. Each edge is
+    /// `<tile_id>.<tile_offset>`.
+    ///
+    /// NTYPE: each `<vti>` encodes a single OpenVertexType as
     /// `<cw_id>.<cw_off>|<inner_list>|<ccw_id>.<ccw_off>` where
     /// `<inner_list>` is either `-` (empty) or a comma-separated list of
     /// `<tile_id>.<tile_offset>` edges. `<kind>` is one of `dead`,
@@ -400,7 +587,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// must pass a matching tileset to `parse_file`.
     pub fn write_collection(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         let kinds = self.classify_all();
-        for (idx, nt) in self.entries.iter().enumerate() {
+        for (idx, entry) in self.entries.iter().enumerate() {
             let id = idx + 1;
             let kind = match kinds[idx] {
                 NtKind::Dead => "dead",
@@ -408,36 +595,59 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 NtKind::Blessed => "blessed",
                 NtKind::Free => "free",
             };
-            write!(
-                out,
-                "NTYPE {} {} {} {} {} {} {} {} {}",
-                id,
-                kind,
-                nt.central_tile_id,
-                nt.cw_anchor_on_central,
-                nt.ccw_anchor_on_central,
-                nt.cw_anchor_on_context,
-                nt.ccw_anchor_on_context,
-                nt.num_ctx_tiles,
-                nt.vt_seq.len(),
-            )?;
-            for vt in &nt.vt_seq {
-                let inner = if vt.inner.is_empty() {
-                    "-".to_string()
-                } else {
-                    vt.inner
-                        .iter()
-                        .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                };
-                write!(
-                    out,
-                    " {}.{}|{}|{}.{}",
-                    vt.cw.tile_id, vt.cw.tile_offset, inner, vt.ccw.tile_id, vt.ccw.tile_offset,
-                )?;
+            match entry {
+                NtEntry::Phase1(nt) => {
+                    write!(
+                        out,
+                        "NTYPE {} {} {} {} {} {} {} {} {}",
+                        id,
+                        kind,
+                        nt.central_tile_id,
+                        nt.cw_anchor_on_central,
+                        nt.ccw_anchor_on_central,
+                        nt.cw_anchor_on_context,
+                        nt.ccw_anchor_on_context,
+                        nt.num_ctx_tiles,
+                        nt.vt_seq.len(),
+                    )?;
+                    write_vt_seq(out, &nt.vt_seq)?;
+                    writeln!(out)?;
+                }
+                NtEntry::Phase2(st) => {
+                    let n = st.angles.len();
+                    write!(
+                        out,
+                        "STYPE {} {} {} {} {} {} {}",
+                        id,
+                        kind,
+                        st.central_tile_id,
+                        if st.is_closed { 1 } else { 0 },
+                        st.open_vertex_pos,
+                        st.num_tile_instances,
+                        n,
+                    )?;
+                    for &a in &st.angles {
+                        write!(out, " {}", a)?;
+                    }
+                    for e in &st.edges {
+                        write!(out, " {}.{}", e.tile_id, e.tile_offset)?;
+                    }
+                    for &p in &st.patch_tile_ids {
+                        write!(out, " {}", p)?;
+                    }
+                    for ic in &st.inner_chains {
+                        if ic.is_empty() {
+                            write!(out, " -")?;
+                        } else {
+                            write!(out, " {}", ic.len())?;
+                            for e in ic {
+                                write!(out, ",{}.{}", e.tile_id, e.tile_offset)?;
+                            }
+                        }
+                    }
+                    writeln!(out)?;
+                }
             }
-            writeln!(out)?;
         }
         for t in &self.transitions {
             let side = match t.side {
@@ -458,13 +668,13 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// tileset must match the one used to produce the file (we do not store
     /// or verify it here).
     ///
-    /// Validation: NTYPE ids are 1-based and dense (`1, 2, ...,
+    /// Validation: NTYPE/STYPE ids are 1-based and dense (`1, 2, ...,
     /// num_entries`), TRANS `src_id`/`dst_id` are in range, and the
-    /// recorded NTYPE `kind` agrees with what [`Self::classify_all`]
+    /// recorded entry `kind` agrees with what [`Self::classify_all`]
     /// re-derives from the parsed transitions. Mismatched kinds catch
     /// stale serialized catalogs after a classification change.
     pub fn parse_file(tileset: Arc<TileSet<T>>, input: &str) -> Result<Self, String> {
-        let mut entries: Vec<NeighborhoodType> = Vec::new();
+        let mut entries: Vec<NtEntry> = Vec::new();
         let mut transitions: Vec<NtTransition> = Vec::new();
         let mut recorded_kinds: Vec<NtKind> = Vec::new();
         for (lineno, line) in input.lines().enumerate() {
@@ -488,7 +698,21 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                             parsed_id
                         ));
                     }
-                    entries.push(nt);
+                    entries.push(NtEntry::Phase1(nt));
+                    recorded_kinds.push(parsed_kind);
+                }
+                "STYPE" => {
+                    let (parsed_id, parsed_kind, st) = parse_stype_line(&mut tok, lineno + 1)?;
+                    let expected_id = entries.len() + 1;
+                    if parsed_id != expected_id {
+                        return Err(format!(
+                            "line {}: STYPE id sequence broken (expected {}, got {})",
+                            lineno + 1,
+                            expected_id,
+                            parsed_id
+                        ));
+                    }
+                    entries.push(NtEntry::Phase2(st));
                     recorded_kinds.push(parsed_kind);
                 }
                 "TRANS" => {
@@ -524,13 +748,13 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                             entries.len()
                         ));
                     }
-                    if dst_id != NT_CLOSED_ID && dst_id > entries.len() {
+                    if dst_id < 1 || dst_id > entries.len() {
                         return Err(format!(
-                            "line {}: TRANS dst_id {} out of range (have {} NTYPE entries, NT_CLOSED_ID = {})",
+                            "line {}: TRANS dst_id {} out of range (have {} entries; \
+                             dst_id must be 1-based)",
                             lineno + 1,
                             dst_id,
-                            entries.len(),
-                            NT_CLOSED_ID
+                            entries.len()
                         ));
                     }
                     transitions.push(NtTransition {
@@ -559,10 +783,8 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
         // re-derives from the transitions. Catches stale serialized
         // catalogs (e.g. written before a classifier fix).
         let computed_kinds = idx.classify_all();
-        for (i, (recorded, computed)) in recorded_kinds
-            .iter()
-            .zip(computed_kinds.iter())
-            .enumerate()
+        for (i, (recorded, computed)) in
+            recorded_kinds.iter().zip(computed_kinds.iter()).enumerate()
         {
             if recorded != computed {
                 return Err(format!(
@@ -682,18 +904,135 @@ fn parse_ntype_line(
     ))
 }
 
+fn parse_stype_line(
+    tok: &mut std::str::SplitWhitespace<'_>,
+    lineno: usize,
+) -> Result<(usize, NtKind, SurroundedTile), String> {
+    let mut next = |what: &str| -> Result<String, String> {
+        tok.next()
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("line {}: missing {}", lineno, what))
+    };
+    let parsed_id: usize = next("id")?
+        .parse()
+        .map_err(|e| format!("line {}: bad id: {}", lineno, e))?;
+    let parsed_kind = match next("kind")?.as_str() {
+        "dead" => NtKind::Dead,
+        "undead" => NtKind::Undead,
+        "blessed" => NtKind::Blessed,
+        "free" => NtKind::Free,
+        other => return Err(format!("line {}: unknown kind `{}`", lineno, other)),
+    };
+    let central_tile_id: usize = next("central_id")?
+        .parse()
+        .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
+    let is_closed_raw: u32 = next("is_closed")?
+        .parse()
+        .map_err(|e| format!("line {}: bad is_closed: {}", lineno, e))?;
+    let is_closed = is_closed_raw != 0;
+    let open_vertex_pos: usize = next("open_vertex_pos")?
+        .parse()
+        .map_err(|e| format!("line {}: bad open_vertex_pos: {}", lineno, e))?;
+    let num_tile_instances: usize = next("num_tile_instances")?
+        .parse()
+        .map_err(|e| format!("line {}: bad num_tile_instances: {}", lineno, e))?;
+    let n: usize = next("n")?
+        .parse()
+        .map_err(|e| format!("line {}: bad n: {}", lineno, e))?;
+    let mut angles = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = next(&format!("angle[{}]", i))?;
+        angles.push(
+            s.parse::<i8>()
+                .map_err(|e| format!("line {}: bad angle[{}]: {}", lineno, i, e))?,
+        );
+    }
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = next(&format!("edge[{}]", i))?;
+        edges.push(parse_edge_info(&s).map_err(|e| format!("line {}: {}", lineno, e))?);
+    }
+    let mut patch_tile_ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = next(&format!("ptid[{}]", i))?;
+        patch_tile_ids.push(
+            s.parse::<usize>()
+                .map_err(|e| format!("line {}: bad ptid[{}]: {}", lineno, i, e))?,
+        );
+    }
+    let mut inner_chains = Vec::with_capacity(n);
+    for i in 0..n {
+        let s = next(&format!("ichain[{}]", i))?;
+        if s == "-" {
+            inner_chains.push(Vec::new());
+        } else {
+            let mut parts = s.splitn(2, ',');
+            let count_str = parts
+                .next()
+                .ok_or_else(|| format!("line {}: bad ichain[{}]: empty", lineno, i))?;
+            let _count: usize = count_str
+                .parse()
+                .map_err(|e| format!("line {}: bad ichain[{}] count: {}", lineno, i, e))?;
+            let rest = parts.next().unwrap_or("");
+            let chain: Vec<EdgeInfo> = if rest.is_empty() {
+                Vec::new()
+            } else {
+                rest.split(',')
+                    .map(parse_edge_info)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| format!("line {}: {}", lineno, e))?
+            };
+            inner_chains.push(chain);
+        }
+    }
+    Ok((
+        parsed_id,
+        parsed_kind,
+        SurroundedTile {
+            central_tile_id,
+            is_closed,
+            open_vertex_pos,
+            num_tile_instances,
+            angles,
+            edges,
+            inner_chains,
+            patch_tile_ids,
+        },
+    ))
+}
+
+fn write_vt_seq(out: &mut impl std::io::Write, vt_seq: &[OpenVertexType]) -> std::io::Result<()> {
+    for vt in vt_seq {
+        let inner = if vt.inner.is_empty() {
+            "-".to_string()
+        } else {
+            vt.inner
+                .iter()
+                .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        write!(
+            out,
+            " {}.{}|{}|{}.{}",
+            vt.cw.tile_id, vt.cw.tile_offset, inner, vt.ccw.tile_id, vt.ccw.tile_offset,
+        )?;
+    }
+    Ok(())
+}
+
 /// Mutable state shared across the seed and BFS phases of
 /// [`NeighborhoodIndex::new`].
 struct BfsState {
-    /// All discovered NTs in BFS order. `entries[i]` has 1-based id
-    /// `i + 1`.
-    entries: Vec<NeighborhoodType>,
-    /// All recorded transitions between NTs (and to the Closed sink).
+    /// All discovered entries in BFS order. `entries[i]` has 1-based id
+    /// `i + 1`. Phase-1 and phase-2 entries share one id space.
+    entries: Vec<NtEntry>,
+    /// All recorded transitions between entries.
     transitions: Vec<NtTransition>,
-    /// `seen[nt]` = 1-based id of the NT in `entries`.
-    seen: FxHashMap<NeighborhoodType, usize>,
-    /// BFS frontier.
-    queue: VecDeque<NeighborhoodType>,
+    /// `seen[entry]` = 1-based id of the entry in `entries`.
+    seen: FxHashMap<NtEntry, usize>,
+    /// BFS frontier of entry ids waiting to be explored.
+    queue: VecDeque<usize>,
 }
 
 impl Default for BfsState {
@@ -744,24 +1083,26 @@ fn seed_phase<T: IsComplex + IsRingOrField + Units>(
             if !trial.add_tile(&third_pm) {
                 continue;
             }
-            if let Some(nt) =
-                build_seed_nt(&third_pm, patch_n, &all_juncs, match_index)
-            {
-                if state.seen.contains_key(&nt) {
+            if let Some(nt) = build_seed_nt(&third_pm, patch_n, &all_juncs, match_index) {
+                let entry = NtEntry::Phase1(nt);
+                if state.seen.contains_key(&entry) {
                     continue;
                 }
+                let NtEntry::Phase1(ref nt_ref) = entry else {
+                    unreachable!()
+                };
                 // trial.add_tile above verified the central glues into
                 // the normalized two-tile patch. Also verify the
                 // abstract NT reconstructs from its vt_seq (needed for
                 // non-convex tiles where seed-gen and reconstruct can
                 // diverge).
-                if !nt_is_valid(&nt, match_index) {
+                if !nt_is_valid(nt_ref, match_index) {
                     continue;
                 }
                 let id = state.entries.len() + 1;
-                state.seen.insert(nt.clone(), id);
-                state.entries.push(nt.clone());
-                state.queue.push_back(nt);
+                state.seen.insert(entry.clone(), id);
+                state.entries.push(entry);
+                state.queue.push_back(id);
             }
         }
     }
@@ -782,8 +1123,7 @@ fn build_seed_nt<T: IsComplex + IsRingOrField + Units>(
     // Per the shared-edge correspondence (CCW on context = CW on
     // central), the CCW anchor vertex on context maps to tile offset
     // `start_b - match_len` mod central_n.
-    let ccw_anchor_on_central =
-        (cw_anchor_on_central + central_n - third_pm.len) % central_n;
+    let ccw_anchor_on_central = (cw_anchor_on_central + central_n - third_pm.len) % central_n;
 
     // vt_seq is the junctions incident with the central match: those
     // at positions in [anchor, anchor + match_len], i.e. CCW distance
@@ -816,30 +1156,53 @@ fn build_seed_nt<T: IsComplex + IsRingOrField + Units>(
     })
 }
 
-/// Phase 2: dequeue each NT, enumerate CCW one-petal successors via
-/// [`explore_one`], dedup against `seen`, and record transitions.
-/// Every step grows `num_ctx_tiles` by 1, so the transition graph is
-/// a DAG.
+/// BFS growth: dequeue each entry id, enumerate one-petal successors
+/// (phase-1 step for `NtEntry::Phase1`, phase-2 step for open
+/// `NtEntry::Phase2`), dedup against `seen`, and record transitions.
+/// Phase-1 entries grow `num_ctx_tiles` by 1 per step; phase-2 entries
+/// grow corona by 1 per step. The transition graph is a DAG.
+///
+/// Closed `SurroundedTile` entries (`is_closed = true`) are pushed
+/// into `entries` but not into the BFS queue — they are terminal.
+/// [`NeighborhoodIndex::classify_all`] recognises them directly as
+/// Blessed escape destinations.
 fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
     state: &mut BfsState,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) {
-    while let Some(nt) = state.queue.pop_front() {
-        let src_id = *state.seen.get(&nt).expect("dequeued state must be in seen");
-        for outcome in explore_one(&nt, match_index) {
-            let dst_id = match outcome.kind {
-                OutcomeKind::Closed => NT_CLOSED_ID,
-                OutcomeKind::Open(new_nt) => {
-                    if let Some(&id) = state.seen.get(&new_nt) {
-                        id
-                    } else {
-                        let id = state.entries.len() + 1;
-                        state.seen.insert(new_nt.clone(), id);
-                        state.entries.push(new_nt.clone());
-                        state.queue.push_back(new_nt);
-                        id
-                    }
+    while let Some(src_id) = state.queue.pop_front() {
+        let entry = state.entries[src_id - 1].clone();
+        let outcomes = match &entry {
+            NtEntry::Phase1(nt) => explore_phase1(nt, match_index),
+            NtEntry::Phase2(st) => explore_phase2(st, match_index),
+        };
+        for outcome in outcomes {
+            let new_entry = match outcome.kind {
+                OutcomeKind::Phase1(nt) => NtEntry::Phase1(nt),
+                OutcomeKind::Phase2(st) => NtEntry::Phase2(st),
+            };
+            let needs_bfs = matches!(
+                &new_entry,
+                NtEntry::Phase1(_)
+                    | NtEntry::Phase2(SurroundedTile {
+                        is_closed: false,
+                        ..
+                    })
+            );
+            let dst_id = if let Some(&id) = state.seen.get(&new_entry) {
+                id
+            } else {
+                let id = state.entries.len() + 1;
+                state.seen.insert(new_entry.clone(), id);
+                state.entries.push(new_entry);
+                // Phase-1 entries and open phase-2 entries get further
+                // BFS exploration. Closed phase-2 entries are terminal
+                // (= they carry the closed-corona data; no outgoing
+                // transitions, recognised as escape by classify_all).
+                if needs_bfs {
+                    state.queue.push_back(id);
                 }
+                id
             };
             state.transitions.push(NtTransition {
                 src_id,
@@ -858,9 +1221,14 @@ struct ExploreOutcome {
     kind: OutcomeKind,
 }
 
+/// The result of one BFS step: a new (or existing) catalog entry to
+/// transition into. Phase-1 entries describe states where the central
+/// is still on the boundary; phase-2 entries (`SurroundedTile`) describe
+/// states where the central has been edge-absorbed, with a flag for
+/// whether the surrounding corona has closed the final open vertex.
 enum OutcomeKind {
-    Closed,
-    Open(NeighborhoodType),
+    Phase1(NeighborhoodType),
+    Phase2(SurroundedTile),
 }
 
 struct AttachedContext<T: IsComplex> {
@@ -877,15 +1245,13 @@ struct AttachedContext<T: IsComplex> {
     last_covered_ctx_edge: EdgeInfo,
     /// Number of context boundary edges on `aug` (= `ctx_n - match_len`).
     /// On `aug`, positions `[0, gap_start)` are surviving context edges
-    /// and `[gap_start, aug_n)` are the central tile gap edges. Read
-    /// only by tests; the production CCW step uses `frontier_pos_on_aug`
-    /// instead.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// and `[gap_start, aug_n)` are the central tile gap edges. Used
+    /// by [`try_step_ccw`] to identify the CW frontier ctx edge for
+    /// the phase-2 transition's `is_closed` check.
     gap_start: usize,
     aug_n: usize,
 }
 
-#[allow(dead_code)]
 fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
@@ -956,7 +1322,7 @@ fn build_attached_context<T: IsComplex + IsRingOrField + Units>(
     })
 }
 
-fn explore_one<T: IsComplex + IsRingOrField + Units>(
+fn explore_phase1<T: IsComplex + IsRingOrField + Units>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Vec<ExploreOutcome> {
@@ -982,6 +1348,105 @@ fn explore_one<T: IsComplex + IsRingOrField + Units>(
         }
     }
     results
+}
+
+/// Phase-2 BFS step from a `SurroundedTile`. Reconstructs the corona
+/// patch via [`SurroundedTile::to_patch`] (which calls
+/// [`GrowingPatch::from_parts`] directly — no `vt_seq` reconstruction,
+/// so the closed-corona / fully-interior-tile pitfalls of
+/// `construct_witness_from_vt_sequence` are avoided). Attempts to
+/// attach a petal at the open vertex (= `st.open_vertex_pos`).
+///
+/// For each successful glue, builds the next `SurroundedTile`.
+/// `is_closed` on the result is true iff the petal's match absorbed
+/// both edges incident to the old open vertex (= the petal seals the
+/// angle around it).
+fn explore_phase2<T: IsComplex + IsRingOrField + Units>(
+    st: &SurroundedTile,
+    match_index: &Arc<MatchTypeIndex<T>>,
+) -> Vec<ExploreOutcome> {
+    debug_assert!(
+        !st.is_closed,
+        "explore_phase2 should not run on closed SurroundedTiles"
+    );
+    let corona = match st.to_patch(Arc::clone(match_index)) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let corona_n = corona.boundary_len();
+    if corona_n == 0 {
+        return Vec::new();
+    }
+    let open_vertex_pos = st.open_vertex_pos;
+    let ccw_edge = open_vertex_pos;
+    let cw_edge = (open_vertex_pos + corona_n - 1) % corona_n;
+
+    let candidates = GrowingPatch::compute_candidates_covering_position(
+        corona.match_index(),
+        corona.angles(),
+        corona.edges(),
+        ccw_edge,
+    );
+    let mut results = Vec::new();
+    for petal_pm in candidates {
+        if !match_absorbs_edge(&petal_pm, ccw_edge, corona_n) {
+            continue;
+        }
+        let mut trial = corona.clone();
+        if !trial.add_tile(&petal_pm) {
+            continue;
+        }
+        let is_closed = match_absorbs_edge(&petal_pm, cw_edge, corona_n);
+        let open_vertex_trial_pos = if is_closed {
+            None
+        } else {
+            let ccw_on_corona = (petal_pm.start_a + petal_pm.len) % corona_n;
+            Some((open_vertex_pos + corona_n - ccw_on_corona) % corona_n)
+        };
+        let new_st = build_surrounded_tile_from_trial(
+            trial,
+            st.central_tile_id,
+            is_closed,
+            open_vertex_trial_pos,
+        );
+        results.push(ExploreOutcome {
+            side: TransitionSide::Ccw,
+            petal_pm,
+            kind: OutcomeKind::Phase2(new_st),
+        });
+    }
+    results
+}
+
+/// Build a `SurroundedTile` from a trial patch. Normalizes the patch
+/// (= lex-min rotation + dense `0..k` `patch_tile_ids`) and stores
+/// its boundary state directly. For open entries, maps the original
+/// open-vertex position into the normalized boundary via the rotation
+/// offset that `normalize` reports.
+fn build_surrounded_tile_from_trial<T: IsComplex + IsRingOrField + Units>(
+    mut trial: GrowingPatch<T>,
+    central_tile_id: usize,
+    is_closed: bool,
+    open_vertex_trial_pos: Option<usize>,
+) -> SurroundedTile {
+    let n = trial.boundary_len();
+    let rot = trial.normalize();
+    let open_vertex_pos = match open_vertex_trial_pos {
+        Some(p) if n > 0 => (p + n - rot) % n,
+        _ => 0,
+    };
+    let patch_tile_ids = trial.patch_tile_ids().to_vec();
+    let num_tile_instances = patch_tile_ids.iter().max().map_or(0, |m| m + 1);
+    SurroundedTile {
+        central_tile_id,
+        is_closed,
+        open_vertex_pos,
+        num_tile_instances,
+        angles: trial.angles().to_vec(),
+        edges: trial.edges().to_vec(),
+        inner_chains: trial.inner_chains().to_vec(),
+        patch_tile_ids,
+    }
 }
 
 /// Whether the cyclic range of `pm.len` edges starting at `pm.start_a` in
@@ -1019,12 +1484,39 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
         return None;
     }
 
-    // Closed: petal absorbed all central edges.
+    // Central edges fully absorbed → emit a phase-2 SurroundedTile.
+    //
+    // The CCW frontier ctx edge (aug position 0) is always in the
+    // petal's match by the candidate filter, so the CCW anchor
+    // (aug vertex 0) is always absorbed when the petal absorbs all
+    // central. The CW anchor (aug vertex `gap_start`) survives iff
+    // its outer ctx edge (= aug edge `gap_start - 1`) is not also
+    // absorbed.
+    //
+    // - **Closed phase 2** (petal absorbs CW outer ctx too): both
+    //   anchors gone; central is fully surrounded; terminal.
+    // - **Open phase 2** (CW outer ctx not absorbed): CW anchor
+    //   survives as the sole frontier vertex touching the central;
+    //   phase-2 BFS continues there.
     if !trial.patch_tile_ids().contains(&ac.central_ptid) {
+        let cw_outer_edge = (ac.gap_start + ac.aug_n - 1) % ac.aug_n;
+        let is_closed = match_absorbs_edge(&petal_pm, cw_outer_edge, ac.aug_n);
+        let canonical_open_trial_pos = if is_closed {
+            None
+        } else {
+            let ccw_pos_on_aug = (petal_pm.start_a + petal_pm.len) % ac.aug_n;
+            Some((ac.gap_start + ac.aug_n - ccw_pos_on_aug) % ac.aug_n)
+        };
+        let st = build_surrounded_tile_from_trial(
+            trial,
+            nt.central_tile_id,
+            is_closed,
+            canonical_open_trial_pos,
+        );
         return Some(ExploreOutcome {
             side: TransitionSide::Ccw,
             petal_pm,
-            kind: OutcomeKind::Closed,
+            kind: OutcomeKind::Phase2(st),
         });
     }
 
@@ -1071,7 +1563,7 @@ fn try_step_ccw<T: IsComplex + IsRingOrField + Units>(
     Some(ExploreOutcome {
         side: TransitionSide::Ccw,
         petal_pm,
-        kind: OutcomeKind::Open(new_nt),
+        kind: OutcomeKind::Phase1(new_nt),
     })
 }
 
@@ -1237,7 +1729,7 @@ mod tests {
         idx: &NeighborhoodIndex<T>,
         expected_types: usize,
         expected_transitions: usize,
-        expected_closed: usize,
+        expected_closed_phase2: usize,
         expected_dead: usize,
         expected_undead: usize,
         expected_blessed: usize,
@@ -1248,15 +1740,17 @@ mod tests {
         let undead = kinds.iter().filter(|k| **k == NtKind::Undead).count();
         let blessed = kinds.iter().filter(|k| **k == NtKind::Blessed).count();
         let free = kinds.iter().filter(|k| **k == NtKind::Free).count();
-        let closed_trans = idx
-            .transitions()
+        // Closed phase-2 SurroundedTile entries (= the terminal-good
+        // states that classify_all treats as escape destinations).
+        let closed_phase2 = idx
+            .entries()
             .iter()
-            .filter(|t| t.dst_id == NT_CLOSED_ID)
+            .filter(|e| matches!(e, NtEntry::Phase2(st) if st.is_closed))
             .count();
 
         assert_eq!(idx.num_types(), expected_types, "num_types");
         assert_eq!(idx.transitions().len(), expected_transitions, "transitions");
-        assert_eq!(closed_trans, expected_closed, "closed_trans");
+        assert_eq!(closed_phase2, expected_closed_phase2, "closed_phase2");
         assert_eq!(dead, expected_dead, "dead");
         assert_eq!(undead, expected_undead, "undead");
         assert_eq!(blessed, expected_blessed, "blessed");
@@ -1266,20 +1760,46 @@ mod tests {
 
     #[test]
     fn square_counts() {
-        // Square tiles the plane convexly; every NT is Blessed (every
-        // continuation closes).
-        assert_counts(square_idx(), 109184, 436736, 327680, 0, 0, 109184, 0);
+        // Square tiles convexly; every continuation closes. Phase-2
+        // entries are all closed terminals. Numbers not pinned: a
+        // square_idx() build is ~8 minutes.
+        let idx = square_idx();
+        eprintln!(
+            "square: total={} phase1={} phase2={} trans={}",
+            idx.num_types(),
+            idx.num_phase1(),
+            idx.num_phase2(),
+            idx.transitions().len()
+        );
+        let kinds = idx.classify_all();
+        eprintln!(
+            "  dead={} undead={} blessed={} free={}",
+            kinds.iter().filter(|k| **k == NtKind::Dead).count(),
+            kinds.iter().filter(|k| **k == NtKind::Undead).count(),
+            kinds.iter().filter(|k| **k == NtKind::Blessed).count(),
+            kinds.iter().filter(|k| **k == NtKind::Free).count()
+        );
     }
 
     #[test]
     fn hex_counts() {
-        assert_counts(hex_idx(), 55944, 335664, 279936, 0, 0, 55944, 0);
+        // Hex tiles perfectly: every central-edge-absorption is a
+        // closed corona (no open vertex). All 46656 phase-2 entries
+        // are closed terminals, classified directly as Blessed.
+        assert_counts(hex_idx(), 102600, 335664, 46656, 0, 0, 102600, 0);
     }
 
     #[test]
     fn spectre_counts() {
-        // Spectre is non-convex; exercises every kind.
-        assert_counts(spectre_idx(), 10114, 11297, 1453, 6001, 1615, 584, 1914);
+        // Spectre is non-convex; exercises every kind. Phase-1
+        // entries classify the same as before phase-2 was introduced
+        // (dead=6001, undead=1615, free=1914), confirming the
+        // phase-1 BFS graph is structurally unchanged. Phase-2 adds
+        // 445 entries (251 closed terminals + 194 open
+        // intermediates), all Blessed (the closed terminals as
+        // direct Blessed seeds; the open ones via propagation
+        // through their successors).
+        assert_counts(spectre_idx(), 10559, 11742, 251, 6001, 1615, 1029, 1914);
     }
 
     #[test]
@@ -1291,14 +1811,23 @@ mod tests {
         ] {
             assert!(idx.num_types() > 0, "expected non-empty seed collection");
             let num_tiles = idx.tileset().num_tiles();
-            for nt in idx.entries() {
+            for entry in idx.entries() {
                 assert!(
-                    nt.central_tile_id < num_tiles,
+                    entry.central_tile_id() < num_tiles,
                     "central_tile_id {} out of range (have {} tiles)",
-                    nt.central_tile_id,
+                    entry.central_tile_id(),
                     num_tiles
                 );
-                assert!(!nt.vt_seq.is_empty(), "seeds must have non-empty vt_seq");
+                match entry {
+                    NtEntry::Phase1(nt) => assert!(
+                        !nt.vt_seq.is_empty(),
+                        "phase-1 seeds must have non-empty vt_seq"
+                    ),
+                    NtEntry::Phase2(st) => assert!(
+                        !st.angles.is_empty(),
+                        "phase-2 entries must have non-empty boundary"
+                    ),
+                }
             }
         }
     }
@@ -1307,9 +1836,8 @@ mod tests {
     /// dedup contract of the BFS — not interface-level
     /// canonicalization. The catalog **does** contain multiple
     /// entries per interface class by design (different growth
-    /// histories produce distinct `NeighborhoodType`s with the same
-    /// match-side interface); see the module doc on the
-    /// interface-quotient view.
+    /// histories produce distinct entries with the same match-side
+    /// interface); see the module doc on the interface-quotient view.
     #[test]
     fn entries_have_no_partial_eq_duplicates() {
         for (name, idx) in [
@@ -1317,15 +1845,14 @@ mod tests {
             ("hex", hex_idx()),
             ("spectre", spectre_idx()),
         ] {
-            let mut keys: std::collections::HashSet<&NeighborhoodType> =
-                std::collections::HashSet::new();
-            for (i, nt) in idx.entries().iter().enumerate() {
+            let mut keys: std::collections::HashSet<&NtEntry> = std::collections::HashSet::new();
+            for (i, entry) in idx.entries().iter().enumerate() {
                 assert!(
-                    keys.insert(nt),
+                    keys.insert(entry),
                     "{}: duplicate entry at id {} (vt_seq={:?})",
                     name,
                     i + 1,
-                    nt.vt_seq
+                    entry.vt_seq()
                 );
             }
         }
@@ -1384,9 +1911,10 @@ mod tests {
     /// transitions. Catches stale catalogs from before a classifier
     /// fix.
     /// Pure unit test for [`match_absorbs_edge`]. The function appears
-    /// in both production (`explore_one` filter) and in the brute
-    /// side of `spectre_ccw_only_is_complete`, so a bug here would
-    /// not be caught by the existing brute test (circular).
+    /// in both production (`explore_phase1` / `explore_phase2` filter)
+    /// and in the brute side of `spectre_ccw_only_is_complete`, so a
+    /// bug here would not be caught by the existing brute test
+    /// (circular).
     /// Exhaustive cross-check against a brute reference for moderate
     /// `n`. The reference walks the edge set explicitly.
     #[test]
@@ -1413,10 +1941,7 @@ mod tests {
                         };
                         let got = match_absorbs_edge(&pm, target, n);
                         let want = brute(start, len, target, n);
-                        assert_eq!(
-                            got, want,
-                            "n={n} start={start} len={len} target={target}"
-                        );
+                        assert_eq!(got, want, "n={n} start={start} len={len} target={target}");
                     }
                 }
             }
@@ -1592,13 +2117,14 @@ mod tests {
     ) -> (usize, Option<String>, usize) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let kinds = idx.classify_all();
-        let mut fp_to_kind: FxHashMap<
-            (usize, usize, Vec<i8>, usize),
-            (NtKind, usize),
-        > = FxHashMap::default();
+        let mut fp_to_kind: FxHashMap<(usize, usize, Vec<i8>, usize), (NtKind, usize)> =
+            FxHashMap::default();
         let mut violations = 0usize;
         let mut first_violation: Option<String> = None;
-        for (i, nt) in idx.entries().iter().enumerate() {
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             let Some(fp) = canonical_class_fingerprint(nt, &mi) else {
                 continue;
             };
@@ -1716,8 +2242,9 @@ mod tests {
     ///     cares about anything other than the interface, so this
     ///     wouldn't matter.)
     ///
-    /// Uses NO logic from `explore_one` / `try_step_*` /
-    /// `compute_candidates_covering_position` - pure brute force.
+    /// Uses NO logic from `explore_phase1` / `explore_phase2` /
+    /// `try_step_*` / `compute_candidates_covering_position` —
+    /// pure brute force.
     fn assert_brute_completeness_and_transition_correctness<T>(idx: &NeighborhoodIndex<T>)
     where
         T: IsComplex + IsRingOrField + Units,
@@ -1728,8 +2255,14 @@ mod tests {
         let mut fp_set: FxHashMap<(usize, usize, Vec<i8>), ()> = FxHashMap::default();
         let mut id_to_fp: Vec<Option<(usize, usize, Vec<i8>)>> =
             Vec::with_capacity(idx.num_types());
-        for nt in idx.entries() {
-            let fp = aug_boundary_fingerprint(nt, &mi);
+        for entry in idx.entries() {
+            let fp = match entry {
+                NtEntry::Phase1(nt) => aug_boundary_fingerprint(nt, &mi),
+                // Phase-2 entries have no aug boundary to fingerprint
+                // (central is interior). Skip; their classification
+                // correctness is checked separately.
+                NtEntry::Phase2(_) => None,
+            };
             if let Some(ref fp) = fp {
                 fp_set.insert(fp.clone(), ());
             }
@@ -1743,19 +2276,22 @@ mod tests {
             std::collections::HashSet<DstFp>,
         > = FxHashMap::default();
         for t in idx.transitions() {
-            let dst_fp: DstFp = if t.dst_id == NT_CLOSED_ID {
-                None
-            } else {
-                id_to_fp[t.dst_id - 1].clone()
-            };
+            // id_to_fp[i] is None for phase-2 destinations (= closed
+            // and open phase-2 entries don't have an aug-boundary
+            // fingerprint), so transitions to phase-2 surface as
+            // dst_fp = None.
+            let dst_fp: DstFp = id_to_fp[t.dst_id - 1].clone();
             recorded_by_key
                 .entry((t.src_id, t.tile_id, t.tile_offset))
                 .or_default()
                 .insert(dst_fp);
         }
 
-        for (i, nt) in idx.entries().iter().enumerate() {
+        for (i, entry) in idx.entries().iter().enumerate() {
             let src_id = i + 1;
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             let Some(ac) = build_attached_context(nt, &mi) else {
                 continue;
             };
@@ -1768,8 +2304,7 @@ mod tests {
                 let n_b = other.seq().len();
                 for pos in 0..n_aug {
                     for b_off in 0..n_b {
-                        let (ns, len, ne) =
-                            aug_rat.get_match((pos as i64, b_off as i64), other);
+                        let (ns, len, ne) = aug_rat.get_match((pos as i64, b_off as i64), other);
                         if len < 1 {
                             continue;
                         }
@@ -1801,14 +2336,17 @@ mod tests {
                                 let rot = crate::intgeom::rat::lex_min_rot(&trial_angles);
                                 let mut canon = trial_angles;
                                 canon.rotate_left(rot);
-                                let fp =
-                                    (nt.central_tile_id, nt.cw_anchor_on_central, canon);
+                                let fp = (nt.central_tile_id, nt.cw_anchor_on_central, canon);
                                 assert!(
                                     fp_set.contains_key(&fp),
                                     "completeness violation: src={} brute glue \
                                      (tile={}, start_a={}, len={}, start_b={}) \
                                      produces state not in catalog",
-                                    src_id, tile_b, ns_u, len, ne_u
+                                    src_id,
+                                    tile_b,
+                                    ns_u,
+                                    len,
+                                    ne_u
                                 );
                                 Some(fp)
                             };
@@ -1821,9 +2359,16 @@ mod tests {
                              (tile={}, start_a={}, len={}, start_b={}) -> {} but \
                              catalog has no transition with that destination \
                              fingerprint for (src, tile, tile_offset)",
-                            src_id, tile_b, ns_u, len, ne_u,
-                            if trial_dst_fp.is_none() { "CLOSED".to_string() }
-                            else { "Open(fp)".to_string() }
+                            src_id,
+                            tile_b,
+                            ns_u,
+                            len,
+                            ne_u,
+                            if trial_dst_fp.is_none() {
+                                "CLOSED".to_string()
+                            } else {
+                                "Open(fp)".to_string()
+                            }
                         );
                     }
                 }
@@ -1849,22 +2394,21 @@ mod tests {
         assert_brute_completeness_and_transition_correctness(square_idx());
     }
 
-
-
     /// Re-derive the four-kind classification predicates from
     /// `idx.transitions()` and assert they agree with `classify_all`.
     ///
     /// Cross-checks each kind via global reachability computed
     /// independently of `classify_all`'s algorithm:
-    ///   - `reaches_closed[i]` = exists a forward path from i to
-    ///     `NT_CLOSED_ID`
+    ///   - `reaches_closed[i]` = exists a forward path from i to a
+    ///     closed phase-2 terminal
     ///   - `reaches_dead[i]` = exists a forward path from i to a
-    ///     no-outgoing entry
+    ///     stuck (no-outgoing, not closed-terminal) entry
     ///
     /// The four kinds are pinned by these reachability properties:
-    ///   - Dead: no outgoing transitions
+    ///   - Dead: no outgoing, not closed-terminal
     ///   - Undead: has outgoing AND NOT reaches_closed
-    ///   - Blessed: has outgoing AND NOT reaches_dead
+    ///   - Blessed: has outgoing AND NOT reaches_dead (or IS
+    ///     closed-terminal)
     ///   - Free: has outgoing AND reaches_closed AND reaches_dead
     ///
     /// Catches the V2b shape (closing-as-escape blindspot) AND the
@@ -1875,19 +2419,19 @@ mod tests {
         let kinds = idx.classify_all();
         let n = idx.num_types();
 
-        let mut succs: Vec<Vec<usize>> = vec![Vec::new(); n];
+        // Identify closed phase-2 entries (= terminal Blessed states).
+        let is_closed_terminal: Vec<bool> = idx
+            .entries()
+            .iter()
+            .map(|e| matches!(e, NtEntry::Phase2(st) if st.is_closed))
+            .collect();
+
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut has_outgoing = vec![false; n];
-        let mut closing_seeds: Vec<usize> = Vec::new();
         for t in idx.transitions() {
             let src = t.src_id - 1;
             has_outgoing[src] = true;
-            if t.dst_id == NT_CLOSED_ID {
-                closing_seeds.push(src);
-            } else {
-                succs[src].push(t.dst_id - 1);
-                preds[t.dst_id - 1].push(src);
-            }
+            preds[t.dst_id - 1].push(src);
         }
 
         let propagate = |seeds: Vec<usize>| -> Vec<bool> {
@@ -1910,17 +2454,25 @@ mod tests {
             reached
         };
 
+        // "reaches_closed": there's a forward path from i to a
+        // closed-terminal entry (Blessed escape).
+        let closing_seeds: Vec<usize> = (0..n).filter(|&i| is_closed_terminal[i]).collect();
         let reaches_closed = propagate(closing_seeds);
-        // Dead seeds for the reaches_dead reachability: NTs with no
-        // outgoing transitions are themselves Dead. A path to Dead
-        // means a path that traps. (Note: a Dead NT trivially reaches
-        // itself, so reaches_dead[Dead] = true for all Dead.)
-        let dead_seeds: Vec<usize> = (0..n).filter(|&i| !has_outgoing[i]).collect();
+
+        // "reaches_dead": there's a forward path from i to an entry
+        // that's stuck (= has no outgoing AND is not closed-terminal).
+        let dead_seeds: Vec<usize> = (0..n)
+            .filter(|&i| !has_outgoing[i] && !is_closed_terminal[i])
+            .collect();
         let reaches_dead = propagate(dead_seeds);
 
         for (i, &kind) in kinds.iter().enumerate() {
             let id = i + 1;
-            let expected = if !has_outgoing[i] {
+            // Closed-terminal entries are always Blessed (no
+            // outgoing but reachable-as-closed trivially).
+            let expected = if is_closed_terminal[i] {
+                NtKind::Blessed
+            } else if !has_outgoing[i] {
                 NtKind::Dead
             } else if !reaches_closed[i] {
                 NtKind::Undead
@@ -1930,10 +2482,16 @@ mod tests {
                 NtKind::Free
             };
             assert_eq!(
-                kind, expected,
+                kind,
+                expected,
                 "NT id {id} classify_all says {:?} but reachability says {:?} \
-                 (has_outgoing={} reaches_closed={} reaches_dead={})",
-                kind, expected, has_outgoing[i], reaches_closed[i], reaches_dead[i]
+                 (has_outgoing={} reaches_closed={} reaches_dead={} closed_terminal={})",
+                kind,
+                expected,
+                has_outgoing[i],
+                reaches_closed[i],
+                reaches_dead[i],
+                is_closed_terminal[i]
             );
         }
     }
@@ -1974,11 +2532,10 @@ mod tests {
             !sq_idx.transitions().is_empty(),
             "BFS should produce transitions"
         );
-        // src_id is a 1-based entry id; dst_id is either 1-based or
-        // NT_CLOSED_ID (= 0).
+        // Both src_id and dst_id are 1-based entry ids.
         for t in sq_idx.transitions() {
             assert!(t.src_id >= 1 && t.src_id <= sq_idx.num_types());
-            assert!(t.dst_id == NT_CLOSED_ID || t.dst_id <= sq_idx.num_types());
+            assert!(t.dst_id >= 1 && t.dst_id <= sq_idx.num_types());
         }
 
         let hex_idx = hex_idx();
@@ -1986,7 +2543,7 @@ mod tests {
         assert!(!hex_idx.transitions().is_empty());
         for t in hex_idx.transitions() {
             assert!(t.src_id >= 1 && t.src_id <= hex_idx.num_types());
-            assert!(t.dst_id == NT_CLOSED_ID || t.dst_id <= hex_idx.num_types());
+            assert!(t.dst_id >= 1 && t.dst_id <= hex_idx.num_types());
         }
     }
 
@@ -1995,7 +2552,10 @@ mod tests {
     ) -> Vec<String> {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut errors = Vec::new();
-        for nt in idx.entries() {
+        for entry in idx.entries() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             let Some((mut ctx, junc_positions)) =
                 GrowingPatch::construct_witness_from_vt_sequence(&nt.vt_seq, Arc::clone(&mi))
             else {
@@ -2054,16 +2614,22 @@ mod tests {
 
     /// Generic over the tileset: build_attached_context succeeds for
     /// every seed, the gap is non-empty, and gap_start is in range.
-    fn assert_seed_geometry<T: IsComplex + IsRingOrField + Units>(
-        idx: &NeighborhoodIndex<T>,
-    ) {
+    fn assert_seed_geometry<T: IsComplex + IsRingOrField + Units>(idx: &NeighborhoodIndex<T>) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
-            let ac = build_attached_context(nt, &mi)
-                .unwrap_or_else(|| panic!("seed {}: build_attached_context failed for nt {:?}", i, nt));
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
+            let ac = build_attached_context(nt, &mi).unwrap_or_else(|| {
+                panic!("seed {}: build_attached_context failed for nt {:?}", i, nt)
+            });
             let gap_len = ac.aug_n - ac.gap_start;
             assert!(gap_len > 0, "seed {}: gap should be non-empty", i);
-            assert!(ac.gap_start < ac.aug_n, "seed {}: gap_start out of range", i);
+            assert!(
+                ac.gap_start < ac.aug_n,
+                "seed {}: gap_start out of range",
+                i
+            );
             let central_len = idx.tileset().rat(nt.central_tile_id).seq().len();
             assert!(
                 gap_len < central_len,
@@ -2073,7 +2639,7 @@ mod tests {
                 central_len
             );
             assert!(
-                !explore_one(nt, &mi).is_empty(),
+                !explore_phase1(nt, &mi).is_empty(),
                 "seed {}: should have at least one successful petal",
                 i
             );
@@ -2159,9 +2725,8 @@ mod tests {
                         }
                         patch.normalize();
                         let patch_n = patch.boundary_len();
-                        let patch_rat = crate::intgeom::rat::Rat::from_slice_unchecked(
-                            patch.angles(),
-                        );
+                        let patch_rat =
+                            crate::intgeom::rat::Rat::from_slice_unchecked(patch.angles());
 
                         // Brute third-tile candidates over the 2-tile boundary.
                         let mut seen_third: FxHashMap<(usize, usize, usize, usize), ()> =
@@ -2171,10 +2736,8 @@ mod tests {
                             let n_c = tile_c.seq().len();
                             for ic in 0..patch_n {
                                 for jc in 0..n_c {
-                                    let (ns3, len3, ne3) = patch_rat.get_match(
-                                        (ic as i64, jc as i64),
-                                        tile_c,
-                                    );
+                                    let (ns3, len3, ne3) =
+                                        patch_rat.get_match((ic as i64, jc as i64), tile_c);
                                     if len3 == 0 {
                                         continue;
                                     }
@@ -2213,12 +2776,8 @@ mod tests {
                                     let mut canon = aug_angles;
                                     canon.rotate_left(rot);
                                     let gap_start = patch_n - len3;
-                                    let cw_anchor_in_canon =
-                                        (gap_start + aug_n - rot) % aug_n;
-                                    brute.insert(
-                                        (c, ne3_u, canon, cw_anchor_in_canon),
-                                        (),
-                                    );
+                                    let cw_anchor_in_canon = (gap_start + aug_n - rot) % aug_n;
+                                    brute.insert((c, ne3_u, canon, cw_anchor_in_canon), ());
                                 }
                             }
                         }
@@ -2228,9 +2787,13 @@ mod tests {
         }
 
         // Catalog side: canonical class of every entry with
-        // num_ctx_tiles == 2 (= seed entries).
+        // num_ctx_tiles == 2 (= seed entries). Phase-2 entries have no
+        // num_ctx_tiles; skip them.
         let mut catalog: FxHashMap<Class, ()> = FxHashMap::default();
-        for nt in idx.entries() {
+        for entry in idx.entries() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             if nt.num_ctx_tiles != 2 {
                 continue;
             }
@@ -2240,7 +2803,8 @@ mod tests {
         }
 
         let brute_only: Vec<&Class> = brute.keys().filter(|k| !catalog.contains_key(*k)).collect();
-        let catalog_only: Vec<&Class> = catalog.keys().filter(|k| !brute.contains_key(*k)).collect();
+        let catalog_only: Vec<&Class> =
+            catalog.keys().filter(|k| !brute.contains_key(*k)).collect();
         assert!(
             brute_only.is_empty(),
             "seed completeness: {} canonical seed classes found by brute but missing from catalog",
@@ -2272,7 +2836,10 @@ mod tests {
     fn gap_edges_are_central_tile() {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             let ac = build_attached_context(nt, &mi)
                 .unwrap_or_else(|| panic!("seed {}: build_attached_context failed", i));
             let edges = ac.aug.edges();
@@ -2300,7 +2867,10 @@ mod tests {
         // position 0 - confirming gap_end is itself a junction.
         let idx = hex_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        for (i, nt) in idx.entries().iter().enumerate() {
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
             let ac = build_attached_context(nt, &mi)
                 .unwrap_or_else(|| panic!("seed {}: build_attached_context failed", i));
             assert_eq!(
@@ -2308,7 +2878,11 @@ mod tests {
                 "seed {}: gap_end (pos 0 on aug) should be the CCW frontier junction",
                 i
             );
-            assert!(ac.aug.is_junction(0), "seed {}: position 0 must be junction", i);
+            assert!(
+                ac.aug.is_junction(0),
+                "seed {}: position 0 must be junction",
+                i
+            );
         }
     }
 
@@ -2316,9 +2890,11 @@ mod tests {
     fn explore_one_square_has_petals() {
         let idx = square_idx();
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
-        let nt = &idx.entries()[0];
+        let nt = idx.entries()[0]
+            .as_phase1()
+            .expect("first entry should be phase-1");
         assert!(
-            !explore_one(nt, &mi).is_empty(),
+            !explore_phase1(nt, &mi).is_empty(),
             "should have at least one petal outcome"
         );
     }
@@ -2329,11 +2905,14 @@ mod tests {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut checked = 0usize;
         let mut errors = Vec::new();
-        for (i, nt) in idx.entries().iter().enumerate() {
-            for outcome in explore_one(nt, &mi) {
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
+            for outcome in explore_phase1(nt, &mi) {
                 let new_nt = match &outcome.kind {
-                    OutcomeKind::Closed => continue,
-                    OutcomeKind::Open(nt) => nt.clone(),
+                    OutcomeKind::Phase2(_) => continue,
+                    OutcomeKind::Phase1(nt) => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
@@ -2389,11 +2968,14 @@ mod tests {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut checked = 0usize;
         let mut errors = Vec::new();
-        for (i, nt) in idx.entries().iter().enumerate() {
-            for outcome in explore_one(nt, &mi) {
+        for (i, entry) in idx.entries().iter().enumerate() {
+            let Some(nt) = entry.as_phase1() else {
+                continue;
+            };
+            for outcome in explore_phase1(nt, &mi) {
                 let new_nt = match &outcome.kind {
-                    OutcomeKind::Closed => continue,
-                    OutcomeKind::Open(nt) => nt.clone(),
+                    OutcomeKind::Phase2(_) => continue,
+                    OutcomeKind::Phase1(nt) => nt.clone(),
                 };
                 let (mut ctx, junc_pos) = GrowingPatch::construct_witness_from_vt_sequence(
                     &new_nt.vt_seq,
