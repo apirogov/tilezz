@@ -25,3 +25,5 @@ pub mod vtseq_explorer;
 pub mod redelmeier;
 
 pub mod neighborhood;
+
+pub mod segtypes;
