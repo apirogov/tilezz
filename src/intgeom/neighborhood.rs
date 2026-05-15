@@ -2079,6 +2079,136 @@ mod tests {
     /// and spectre (0 violations on all three). Compression vs the
     /// BFS catalog ranges from ~1x (spectre, near-canonical) to
     /// ~2300x (hex, massively redundant).
+    /// **Extended-match-window fingerprint of a phase-1 NT**: a
+    /// strictly coarser quotient than [`canonical_class_fingerprint`].
+    /// Discards the deep-context boundary and keeps only the match
+    /// interval padded by one segment of ctx on each side.
+    ///
+    /// # Geometric meaning
+    ///
+    /// A **segment** of the boundary is the run of edges between two
+    /// consecutive junctions, all contributed by a single tile (= the
+    /// untouched piece of one tile's perimeter on the boundary).
+    /// Junctions are the vertices where two distinct tiles meet on
+    /// the patch boundary; segments are the tile-owned arcs between
+    /// them.
+    ///
+    /// On the aug boundary, the **match interval** is the run of
+    /// central-tile free edges between the two **matched junctions**:
+    ///   - **CW anchor** at vertex `gap_start` (= the junction where
+    ///     the CW-most ctx tile meets the central tile),
+    ///   - **CCW anchor / frontier** at vertex `0` (= the junction
+    ///     where the central tile meets the CCW-most ctx tile).
+    ///
+    /// The window **extends the match interval outward through one
+    /// segment of ctx on each side**, ending at the next junctions
+    /// past the two matched ones:
+    ///   - **j_cw** = next junction CW of `gap_start` (across one
+    ///     ctx-side segment on the CW side of the match),
+    ///   - **j_ccw** = next junction CCW of vertex `0` (across one
+    ///     ctx-side segment on the CCW side of the match).
+    ///
+    /// So geometrically the window is:
+    ///
+    /// ```text
+    ///  [ ctx tile X's tail-segment ] [ central's free edges ] [ ctx tile Y's head-segment ]
+    ///  j_cw —— gap_start ———————————————————————————————— 0 —— j_ccw
+    ///           ^ matched junction                  matched junction ^
+    /// ```
+    ///
+    /// where tile X is the CW-most ctx tile and tile Y the CCW-most.
+    /// If `gap_start` (or 0) is the only junction on its side of the
+    /// match (= the adjacent ctx tile's segment wraps all the way to
+    /// the opposite anchor), the extension reaches that opposite
+    /// anchor instead.
+    ///
+    /// # Encoding
+    ///
+    /// The key is `(central_tile_id, cw_anchor_on_central, window,
+    /// cw_anchor_in_window)`:
+    ///   - `window`: CCW traversal `j_cw → ... → gap_start → ... →
+    ///     aug_n-1 → 0 → ... → j_ccw`, length
+    ///     `aug_n - j_cw + j_ccw + 1`. Not canonicalized — the
+    ///     window is oriented and the anchor position pins the
+    ///     match interval inside it.
+    ///   - `cw_anchor_in_window = gap_start - j_cw` (= length of the
+    ///     CW extension segment).
+    ///
+    /// # Hypothesis (checked by [`diagnose_extended_window_stats`])
+    ///
+    /// For some tilesets kind is already determined by this local
+    /// padding alone — i.e., the deeper ctx doesn't matter. Verified
+    /// on spectre: 0 mixed-kind classes across 4 522 distinct phase-1
+    /// windows.
+    fn extended_match_window_fingerprint<T: IsComplex + IsRingOrField + Units>(
+        nt: &NeighborhoodType,
+        mi: &Arc<MatchTypeIndex<T>>,
+    ) -> Option<(usize, usize, Vec<i8>, usize)> {
+        let ac = build_attached_context(nt, mi)?;
+        let aug_n = ac.aug_n;
+        let gap_start = ac.gap_start;
+        let aug = &ac.aug;
+        // No CW survivor strip → degenerate (shouldn't happen for
+        // catalog entries since `num_ctx_tiles >= 2`).
+        if gap_start == 0 {
+            return None;
+        }
+        // j_cw: walk CW from gap_start (decreasing index), find next
+        // junction. Skip gap_start itself.
+        let mut j_cw: Option<usize> = None;
+        let mut pos = (gap_start + aug_n - 1) % aug_n;
+        for _ in 0..aug_n {
+            if pos == gap_start {
+                break;
+            }
+            if aug.is_junction(pos) {
+                j_cw = Some(pos);
+                break;
+            }
+            pos = (pos + aug_n - 1) % aug_n;
+        }
+        let j_cw = j_cw?;
+        // j_ccw: walk CCW from vertex 0 (increasing index), find next
+        // junction. Skip 0 itself.
+        let mut j_ccw: Option<usize> = None;
+        let mut pos = 1usize % aug_n;
+        for _ in 0..aug_n {
+            if pos == 0 {
+                break;
+            }
+            if aug.is_junction(pos) {
+                j_ccw = Some(pos);
+                break;
+            }
+            pos = (pos + 1) % aug_n;
+        }
+        let j_ccw = j_ccw?;
+        // Build window CCW from j_cw through gap_start, wrapping past
+        // aug_n-1 to 0, then to j_ccw.
+        let angles = aug.angles();
+        let mut window: Vec<i8> = Vec::new();
+        // j_cw..=gap_start (ctx CW extension into match start)
+        for i in j_cw..=gap_start {
+            window.push(angles[i]);
+        }
+        // (gap_start+1)..aug_n  (central's free edges minus the
+        // gap_start vertex which is already pushed)
+        for i in (gap_start + 1)..aug_n {
+            window.push(angles[i]);
+        }
+        // 0..=j_ccw  (ctx CCW extension out of match end)
+        for i in 0..=j_ccw {
+            window.push(angles[i]);
+        }
+        let cw_anchor_in_window = gap_start - j_cw;
+        Some((
+            nt.central_tile_id,
+            nt.cw_anchor_on_central,
+            window,
+            cw_anchor_in_window,
+        ))
+    }
+
     fn canonical_class_fingerprint<T: IsComplex + IsRingOrField + Units>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
@@ -2172,6 +2302,138 @@ mod tests {
     /// Data-only diagnostic: prints (entries, canonical-class count,
     /// compression ratio) per tileset. Useful for tracking the BFS's
     /// canonicalization quality over time without pinning fragile
+    /// Data-only diagnostic: groups entries by a coarser-than-BFS
+    /// equivalence and reports distinct-class counts per kind. The
+    /// phase-1 key is [`extended_match_window_fingerprint`] (match
+    /// interval + one ctx segment on each side); phase-2 keys are
+    /// the lex_min_rot of the patch boundary, with open and closed
+    /// tallied separately (open keeps the frontier vertex position;
+    /// closed is bare shape).
+    ///
+    /// Useful for measuring how local the kind-classification
+    /// invariant actually is: if the phase-1 mixed-kind count is 0,
+    /// kind is determined by the immediate neighborhood alone (no
+    /// deeper ctx needed).
+    ///
+    /// Run via:
+    /// `cargo test --release intgeom::neighborhood::tests::diagnose_extended_window_stats -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn diagnose_extended_window_stats() {
+        for (name, idx) in [
+            ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
+            ("hex", hex_idx()),
+            ("spectre", spectre_idx()),
+        ] {
+            let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+            let kinds = idx.classify_all();
+
+            // Phase-1 key: extended-match-window fingerprint
+            //   = (central_tile_id, cw_anchor_on_central,
+            //      window_angles, cw_anchor_in_window)
+            //   — strictly coarser than canonical_class_fingerprint.
+            // Phase-2 closed key: (central_tile_id,
+            //              lex_min_rot(st.angles))
+            //   — central is interior, no frontier; the bare shape
+            //   suffices.
+            // Phase-2 open key: (central_tile_id,
+            //              lex_min_rot(st.angles), open_vertex_in_canon)
+            //   — anchor by the frontier vertex's position on the
+            //   canonical boundary.
+            type P1Key = (usize, usize, Vec<i8>, usize);
+            type P2OpenKey = (usize, Vec<i8>, usize);
+            type P2ClosedKey = (usize, Vec<i8>);
+            let mut p1: FxHashMap<P1Key, Vec<NtKind>> = FxHashMap::default();
+            let mut p2_open: FxHashMap<P2OpenKey, Vec<NtKind>> = FxHashMap::default();
+            let mut p2_closed: FxHashMap<P2ClosedKey, Vec<NtKind>> = FxHashMap::default();
+            for (i, entry) in idx.entries().iter().enumerate() {
+                let kind = kinds[i];
+                match entry {
+                    NtEntry::Phase1(nt) => {
+                        let Some(fp) = extended_match_window_fingerprint(nt, &mi) else {
+                            continue;
+                        };
+                        p1.entry(fp).or_default().push(kind);
+                    }
+                    NtEntry::Phase2(st) => {
+                        let angles = st.angles.clone();
+                        let n = angles.len();
+                        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+                        let mut canon = angles;
+                        canon.rotate_left(rot);
+                        if st.is_closed {
+                            p2_closed
+                                .entry((st.central_tile_id, canon))
+                                .or_default()
+                                .push(kind);
+                        } else {
+                            let open_in_canon = if n > 0 {
+                                (st.open_vertex_pos + n - rot) % n
+                            } else {
+                                0
+                            };
+                            p2_open
+                                .entry((st.central_tile_id, canon, open_in_canon))
+                                .or_default()
+                                .push(kind);
+                        }
+                    }
+                }
+            }
+
+            // Per bucket: distinct classes per kind (using class's
+            // first-kind if uniform, else mark mixed).
+            fn tally<K>(buckets: &FxHashMap<K, Vec<NtKind>>) -> (usize, usize, [usize; 4]) {
+                let mut by_kind = [0usize; 4]; // dead, undead, blessed, free
+                let mut mixed = 0usize;
+                for kinds in buckets.values() {
+                    let first = kinds[0];
+                    if kinds.iter().any(|k| *k != first) {
+                        mixed += 1;
+                    }
+                    let idx = match first {
+                        NtKind::Dead => 0,
+                        NtKind::Undead => 1,
+                        NtKind::Blessed => 2,
+                        NtKind::Free => 3,
+                    };
+                    by_kind[idx] += 1;
+                }
+                (buckets.len(), mixed, by_kind)
+            }
+            let (n_p1, mixed_p1, k_p1) = tally(&p1);
+            let (n_p2o, mixed_p2o, k_p2o) = tally(&p2_open);
+            let (n_p2c, mixed_p2c, k_p2c) = tally(&p2_closed);
+
+            eprintln!("=== {name} ===");
+            eprintln!("  total entries: {}", idx.num_types());
+            eprintln!(
+                "  phase-1 distinct aug-boundaries: {}  (mixed-kind classes: {})",
+                n_p1, mixed_p1
+            );
+            eprintln!(
+                "    dead={} undead={} blessed={} free={}",
+                k_p1[0], k_p1[1], k_p1[2], k_p1[3]
+            );
+            eprintln!(
+                "  phase-2 open distinct boundaries: {}  (mixed-kind classes: {})",
+                n_p2o, mixed_p2o
+            );
+            eprintln!(
+                "    dead={} undead={} blessed={} free={}",
+                k_p2o[0], k_p2o[1], k_p2o[2], k_p2o[3]
+            );
+            eprintln!(
+                "  phase-2 closed distinct boundaries: {}  (mixed-kind classes: {})",
+                n_p2c, mixed_p2c
+            );
+            eprintln!(
+                "    dead={} undead={} blessed={} free={}",
+                k_p2c[0], k_p2c[1], k_p2c[2], k_p2c[3]
+            );
+        }
+    }
+
     /// exact-count regressions. Run via
     /// `cargo test --release intgeom::neighborhood::tests::diagnose_canonical_class_compression -- --ignored --nocapture`.
     #[test]
