@@ -271,8 +271,7 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         } = state;
 
         let (vt_list, reverse) = build_id_map(all_types);
-        let (succ_sets, transition_infos) =
-            build_transition_arrays(&reverse, &raw_transitions);
+        let (succ_sets, transition_infos) = build_transition_arrays(&reverse, &raw_transitions);
         let has_any_realized = compute_has_any_realized(vt_list.len(), &transition_infos);
         let has_closing = compute_has_closing(vt_list.len(), &transition_infos);
 
@@ -568,9 +567,10 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
                         // on first visit, but keeping the API
                         // symmetric guards against future loosening
                         // of that guard.
-                        state.witness_store.entry(nv.clone()).or_insert_with(|| {
-                            (gp2.clone(), new_pos, gp2.angles()[new_pos])
-                        });
+                        state
+                            .witness_store
+                            .entry(nv.clone())
+                            .or_insert_with(|| (gp2.clone(), new_pos, gp2.angles()[new_pos]));
                         state.queue.push_back(nv);
                     }
                 }
@@ -919,8 +919,11 @@ mod tests {
                 continue;
             }
             let id = idx.get_id(info.vtype()).unwrap();
-            let outgoing: Vec<&TransitionInfo> =
-                idx.transitions().iter().filter(|t| t.src_id == id).collect();
+            let outgoing: Vec<&TransitionInfo> = idx
+                .transitions()
+                .iter()
+                .filter(|t| t.src_id == id)
+                .collect();
             assert!(
                 !outgoing.is_empty(),
                 "non-cursed VT id {id} should have outgoing transitions"
@@ -955,8 +958,11 @@ mod tests {
                 continue;
             }
             let id = idx.get_id(info.vtype()).unwrap();
-            let outgoing: Vec<&TransitionInfo> =
-                idx.transitions().iter().filter(|t| t.src_id == id).collect();
+            let outgoing: Vec<&TransitionInfo> = idx
+                .transitions()
+                .iter()
+                .filter(|t| t.src_id == id)
+                .collect();
             assert!(
                 !outgoing.is_empty(),
                 "Blessed VT id {id} must have at least one transition"
@@ -1160,9 +1166,8 @@ mod tests {
 
             // Same brute as patch.rs:3108: canonical via rat.get_match,
             // filter via junction_gap_nonnegative + try_glue_precomputed.
-            let mut filtered_brute: std::collections::BTreeSet<
-                (usize, usize, usize, usize),
-            > = std::collections::BTreeSet::new();
+            let mut filtered_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
+                std::collections::BTreeSet::new();
             for tile_id in 0..ts.num_tiles() {
                 let tile_rat = ts.rat(tile_id);
                 let m = tile_rat.len();
@@ -1178,8 +1183,7 @@ mod tests {
                         // Edge-based touching filter (does NOT use
                         // cyclic_range_contains — independent of the
                         // function this test would have caught).
-                        let in_range =
-                            |edge: usize| (edge + n - ns_u) % n < len;
+                        let in_range = |edge: usize| (edge + n - ns_u) % n < len;
                         if !in_range((pos + n - 1) % n) && !in_range(pos) {
                             continue;
                         }
@@ -1202,12 +1206,11 @@ mod tests {
                 }
             }
 
-            let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> =
-                witness
-                    .get_matches_touching_vertex(pos)
-                    .into_iter()
-                    .map(|pm| (pm.tile_id, pm.start_a, pm.len, pm.start_b))
-                    .collect();
+            let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = witness
+                .get_matches_touching_vertex(pos)
+                .into_iter()
+                .map(|pm| (pm.tile_id, pm.start_a, pm.len, pm.start_b))
+                .collect();
 
             assert_eq!(
                 filtered_brute,
@@ -1322,8 +1325,7 @@ mod tests {
             let underlying_seq = ts.rat(underlying_tile).seq();
             let underlying_next_seq = ts.rat(underlying_next_tile).seq();
             let bnd_left = bnd_angles[sa] as i32 + tile_seq[sb] as i32;
-            let bnd_right = bnd_angles[next_sa] as i32
-                + tile_seq[(sb + m - len) % m] as i32;
+            let bnd_right = bnd_angles[next_sa] as i32 + tile_seq[(sb + m - len) % m] as i32;
             let clean_left = underlying_seq[underlying_off] as i32 + tile_seq[sb] as i32;
             let clean_right = underlying_next_seq[underlying_next_off] as i32
                 + tile_seq[(sb + m - len) % m] as i32;
@@ -1366,7 +1368,10 @@ mod tests {
             }
         }
         eprintln!("  junctions in witness: {juncs:?}");
-        eprintln!("  edges[25]: tile_id={} tile_offset={}", edges[25].tile_id, edges[25].tile_offset);
+        eprintln!(
+            "  edges[25]: tile_id={} tile_offset={}",
+            edges[25].tile_id, edges[25].tile_offset
+        );
         for i in (n - 3)..=(n - 1) {
             eprintln!(
                 "    edges[{i}]: tile_id={} tile_offset={}",
@@ -1382,7 +1387,9 @@ mod tests {
 
         // Compare: what does compute_all_candidates produce at result[25]?
         let result = crate::intgeom::patch::GrowingPatch::<ZZ12>::compute_all_candidates(
-            &Arc::new(crate::intgeom::matchtypes::MatchTypeIndex::new(Arc::clone(&ts))),
+            &Arc::new(crate::intgeom::matchtypes::MatchTypeIndex::new(Arc::clone(
+                &ts,
+            ))),
             witness.angles(),
             witness.edges(),
         );
@@ -1598,8 +1605,11 @@ mod tests {
                 continue;
             }
             let id = idx.get_id(info.vtype()).unwrap();
-            let outgoing: Vec<&TransitionInfo> =
-                idx.transitions().iter().filter(|t| t.src_id == id).collect();
+            let outgoing: Vec<&TransitionInfo> = idx
+                .transitions()
+                .iter()
+                .filter(|t| t.src_id == id)
+                .collect();
             if info.is_dead() {
                 assert!(
                     outgoing.is_empty(),
@@ -1645,8 +1655,11 @@ mod tests {
                 continue;
             }
             let id = idx.get_id(info.vtype()).unwrap();
-            let outgoing: Vec<&TransitionInfo> =
-                idx.transitions().iter().filter(|t| t.src_id == id).collect();
+            let outgoing: Vec<&TransitionInfo> = idx
+                .transitions()
+                .iter()
+                .filter(|t| t.src_id == id)
+                .collect();
             assert!(
                 !outgoing.is_empty(),
                 "Blessed VT id {id} has no transitions"
