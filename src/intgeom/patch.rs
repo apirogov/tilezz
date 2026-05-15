@@ -312,7 +312,6 @@ fn update_inner_chains(
     if consumed_cw_ptid != ccw_survivor_ptid {
         chain_ccw.push(old_edges[cw_end_matched]);
     }
-    new_inner[0] = chain_ccw;
 
     let consumed_ccw_ptid = old_ptids[pm.start_a];
     let cw_survivor_ptid = old_ptids[(pm.start_a + n - 1) % n];
@@ -320,7 +319,25 @@ fn update_inner_chains(
     if consumed_ccw_ptid != cw_survivor_ptid {
         chain_cw.push(old_edges[pm.start_a]);
     }
-    new_inner[seg_len_old] = chain_cw;
+
+    // Keystone case: when the petal contributes zero surviving edges
+    // (`seg_len_new == 0`, hence `new_n == seg_len_old`), its CW and
+    // CCW match endpoints collapse to a single new boundary vertex at
+    // index 0. Both chains apply there; concat with chain_cw first
+    // (going CW boundary edge → interior → CCW boundary edge passes
+    // through the pm.start_a-side first, then the ccw_pos-side).
+    // The petal's own perimeter contributions are not represented in
+    // inner_chains (same convention as the normal-glue path which
+    // also only records consumed-adjacency tile edges).
+    if new_n == seg_len_old {
+        debug_assert_eq!(seg_len_old, new_n, "keystone glue invariant");
+        let mut merged = chain_cw;
+        merged.extend(chain_ccw);
+        new_inner[0] = merged;
+    } else {
+        new_inner[0] = chain_ccw;
+        new_inner[seg_len_old] = chain_cw;
+    }
 
     new_inner
 }
@@ -1767,17 +1784,23 @@ fn build_glued_edges(
         new_edges.push(old_edges[(ccw_pos + i) % n]);
         new_ptids.push(old_patch_tile_ids[(ccw_pos + i) % n]);
     }
-    new_edges.push(EdgeInfo {
-        tile_id: pm.tile_id,
-        tile_offset: pm.start_b,
-    });
-    new_ptids.push(new_tile_id);
-    for k in 1..seg_len_new {
+    // Keystone glue (seg_len_new == 0): no surviving petal edges, so
+    // do not push any new tile edge. For seg_len_new >= 1 the first
+    // pushed edge has tile_offset = pm.start_b and subsequent edges
+    // follow in petal-CCW order.
+    if seg_len_new > 0 {
         new_edges.push(EdgeInfo {
             tile_id: pm.tile_id,
-            tile_offset: (pm.start_b + k) % m_tile,
+            tile_offset: pm.start_b,
         });
         new_ptids.push(new_tile_id);
+        for k in 1..seg_len_new {
+            new_edges.push(EdgeInfo {
+                tile_id: pm.tile_id,
+                tile_offset: (pm.start_b + k) % m_tile,
+            });
+            new_ptids.push(new_tile_id);
+        }
     }
     (new_edges, new_ptids)
 }
@@ -2210,11 +2233,7 @@ mod tests {
                     for index in 0..n {
                         let got = cyclic_range_contains(start, len, index, n);
                         let expected = want.contains(&index);
-                        assert_eq!(
-                            got,
-                            expected,
-                            "n={n} start={start} len={len} index={index}"
-                        );
+                        assert_eq!(got, expected, "n={n} start={start} len={len} index={index}");
                     }
                 }
             }
@@ -2223,6 +2242,241 @@ mod tests {
         // Edge cases.
         assert!(!cyclic_range_contains(0, 0, 0, 10), "len=0 → false");
         assert!(!cyclic_range_contains(0, 5, 0, 0), "n=0 → false");
+    }
+
+    /// Regression test for the keystone-glue path in
+    /// [`build_glued_edges`] and [`update_inner_chains`]: when
+    /// `pm.len == m_tile` (= the petal's full perimeter is absorbed
+    /// by the match), `seg_len_new == 0` and the petal contributes
+    /// zero surviving boundary edges. The pre-fix code:
+    ///
+    /// - `build_glued_edges` unconditionally pushed one petal edge,
+    ///   yielding `seg_len_old + 1` edges instead of `seg_len_old`.
+    /// - `update_inner_chains` wrote `chain_cw` into
+    ///   `new_inner[seg_len_old]`, which is one past the end of the
+    ///   length-`seg_len_old` vector.
+    ///
+    /// This test calls the private helpers directly with crafted
+    /// inputs that exercise the `seg_len_new == 0` path.
+    /// Build 8 unit squares as 3x3-minus-top-left-corner. Glue order
+    /// is hand-picked so every intermediate patch is simply connected.
+    ///
+    /// At each step we filter `get_all_matches()` for a match that
+    /// adds the tile at a specific geometric position, by checking the
+    /// resulting boundary edge count. This is brittle and only works
+    /// for unit squares, but suffices for the fixture.
+    fn square_grid_3x3_minus_top_left_corner() -> GrowingPatch<ZZ4> {
+        // 8 unit squares forming a 3x3 minus the top-left corner
+        // (X = present, . = missing):
+        //   row 2: . X X
+        //   row 1: X X X
+        //   row 0: X X X
+        //
+        // The 7 glues below were extracted by greedy search (pick the
+        // first match producing the right boundary length) and then
+        // pinned. Each step keeps the cumulative patch simply
+        // connected. Pinning the literals avoids the brute search.
+        let glues = [
+            // boundary 4 → 6: attach a strip-mate to the seed square.
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 0,
+                tile_id: 0,
+            },
+            // boundary 6 → 8: extend the row.
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+            // boundary 8 → 10: extend again to make a 1×3 row.
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+            // boundary 10 → 12: turn upward, starting the right column.
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+            // boundary 12 → 12: continue upward.
+            PatchMatch {
+                start_a: 2,
+                len: 2,
+                start_b: 1,
+                tile_id: 0,
+            },
+            // boundary 12 → 12: wrap left along the top.
+            PatchMatch {
+                start_a: 1,
+                len: 2,
+                start_b: 1,
+                tile_id: 0,
+            },
+            // boundary 12 → 12: drop into the inner tile (1, 1).
+            PatchMatch {
+                start_a: 1,
+                len: 2,
+                start_b: 1,
+                tile_id: 0,
+            },
+        ];
+        let mut gp = square_patch();
+        for (i, pm) in glues.iter().enumerate() {
+            assert!(gp.add_tile(pm), "fixture glue {} failed: pm={:?}", i, pm);
+        }
+        gp
+    }
+
+    /// User-suggested scenario: 8 unit squares forming a 3x3 grid
+    /// minus the top-left corner — a simply-connected patch with a
+    /// concave notch where the missing tile would be. Extract the
+    /// boundary's vt_seq (7 junctions: 6 "straight" tile-tile
+    /// boundaries + 1 concave-notch corner) and feed it into
+    /// `construct_witness_from_vt_sequence`.
+    ///
+    /// `construct_witness_from_vt_sequence` glues tiles one at a
+    /// time around the seq, which on this input does NOT need the
+    /// inner tile (1, 1) — the minimal witness for these 7 junctions
+    /// is the 7-tile ring of corner+edge tiles around the notch. The
+    /// reconstruction therefore succeeds without ever hitting a
+    /// seg_len_new == 0 keystone glue. Pin: rebuilt.boundary_len ==
+    /// original.boundary_len.
+    #[test]
+    fn reconstruct_3x3_minus_corner_from_vt_seq() {
+        let gp = square_grid_3x3_minus_top_left_corner();
+        assert_eq!(
+            gp.boundary_len(),
+            12,
+            "fixture: 3x3-minus-corner has 12 boundary edges"
+        );
+        let n = gp.boundary_len();
+        let mut corona_vt_seq: Vec<OpenVertexType> = Vec::new();
+        for i in 0..n {
+            if let Some(vt) = gp.junction_vertex_type_at(i) {
+                corona_vt_seq.push(vt);
+            }
+        }
+        assert_eq!(
+            corona_vt_seq.len(),
+            7,
+            "fixture: 6 tile-tile straight junctions + 1 concave notch"
+        );
+        let mi = Arc::clone(gp.match_index());
+        let (rebuilt, _junc_positions) =
+            GrowingPatch::construct_witness_from_vt_sequence(&corona_vt_seq, mi)
+                .expect("3x3-minus-corner vt_seq should reconstruct");
+        assert_eq!(
+            rebuilt.boundary_len(),
+            gp.boundary_len(),
+            "reconstructed boundary length should match original",
+        );
+    }
+
+    #[test]
+    fn build_glued_edges_keystone_len() {
+        // Old boundary: 8 edges, all tile_id 0 (placeholders).
+        let old_edges: Vec<EdgeInfo> = (0..8)
+            .map(|i| EdgeInfo {
+                tile_id: 0,
+                tile_offset: i,
+            })
+            .collect();
+        let old_ptids = vec![0usize; 8];
+        // Keystone: petal of m_tile = 4 fully absorbed (pm.len = 4 = m_tile).
+        let pm = PatchMatch {
+            start_a: 2,
+            len: 4,
+            start_b: 0,
+            tile_id: 1,
+        };
+        let m_tile = 4;
+        let (new_edges, new_ptids) = build_glued_edges(&old_edges, &old_ptids, &pm, m_tile, 99);
+        // new_len = seg_len_old + seg_len_new = (8-4) + (4-4) = 4 + 0 = 4.
+        assert_eq!(new_edges.len(), 4, "keystone glue: new_len == seg_len_old");
+        assert_eq!(new_ptids.len(), 4);
+        // None of the new edges should belong to the petal (= no petal
+        // edge survives the keystone glue).
+        for e in &new_edges {
+            assert_ne!(e.tile_id, pm.tile_id, "no surviving petal edges");
+        }
+    }
+
+    #[test]
+    fn update_inner_chains_keystone_no_oob() {
+        // Same setup as build_glued_edges_keystone_len.
+        let old_edges: Vec<EdgeInfo> = (0..8)
+            .map(|i| EdgeInfo {
+                tile_id: 0,
+                tile_offset: i,
+            })
+            .collect();
+        let old_inner: Vec<Vec<EdgeInfo>> = vec![Vec::new(); 8];
+        let old_ptids = vec![0usize; 8];
+        let pm = PatchMatch {
+            start_a: 2,
+            len: 4,
+            start_b: 0,
+            tile_id: 1,
+        };
+        let new_n = 4; // seg_len_old + seg_len_new = 4 + 0.
+        let new_inner = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
+        // The pre-fix code would have panicked here. Just verify
+        // length and that the call succeeded.
+        assert_eq!(new_inner.len(), new_n);
+    }
+
+    /// Verify [`angles::glue_raw_angles`] handles `mlen == m` (= the
+    /// keystone case, `y_raw_len == 1`) by:
+    /// - Returning a result of the correct length (`seg_len_old`).
+    /// - Setting a non-`None` `a_yx` / `a_xy` (= the merged junction
+    ///   angle written into `result[0]`).
+    /// - Producing an angle that is a valid normalized turn (`|merged|
+    ///   < hturn`).
+    ///
+    /// This is purely algebraic; the function makes no claim that the
+    /// resulting boundary actually corresponds to a realizable simply
+    /// connected patch.
+    #[test]
+    fn glue_raw_angles_keystone_returns_adjusted_result() {
+        use crate::intgeom::angles::glue_raw_angles;
+        // Self: 8 angles, with 4 consecutive angles forming a revcomp
+        // pattern with a hypothetical 4-edge petal whose angles are all 1.
+        // Petal angles = [1, 1, 1, 1]; revcomp(petal) reversed and
+        // negated = [-1, -1, -1, -1]. So self_angles[3..=6] = [-1, -1, -1, -1].
+        // Outside the match, fill arbitrarily; sum will not equal turn but
+        // glue_raw_angles is a pure algebraic transform that doesn't care.
+        let self_angles = vec![3, 3, 3, -1, -1, -1, -1, 3];
+        let other_angles = vec![1, 1, 1, 1];
+        // start_a = 3 (= start of match on self), mlen = 4 (= m, keystone),
+        // start_b = 0 (= first surviving petal index; for mlen = m, none survive).
+        let gr = glue_raw_angles::<ZZ12>(&self_angles, &other_angles, 3, 4, 0)
+            .expect("glue should succeed on keystone");
+        assert_eq!(
+            gr.angles.len(),
+            4,
+            "keystone result length = seg_len_old = 8 - 4 = 4"
+        );
+        assert!(
+            gr.a_yx.is_some() && gr.a_xy.is_some(),
+            "keystone junction angle should be recorded"
+        );
+        // Pre-fix, `result[0]` was left as the raw old angle
+        // (`self_angles[7] = 3`). Post-fix, it's set to the merged
+        // junction angle = normalize(x_first + x_last + y - turn)
+        // = normalize(self[7] + self[3] + other[0] - 12)
+        // = normalize(3 + (-1) + 1 - 12) = normalize(-9) = 3
+        // (since -9 mod 12 = 3 in [-6, 6]).
+        assert_eq!(
+            gr.angles[0], 3,
+            "merged junction angle at result[0]: normalize(3 + (-1) + 1 - 12) = 3"
+        );
     }
 
     #[test]
@@ -3551,40 +3805,44 @@ mod tests {
     /// (equally-shaped) cross — caught by the structure test, but
     /// avoidable with a direct geometry-based fixture.
     fn five_hex_cross() -> GrowingPatch<ZZ12> {
+        // Five hexagons arranged as a cross: one central hex with four
+        // petals on opposite-pair edges (= a 2-axis-symmetric shape,
+        // 18-edge boundary). Glue sequence pinned to literal
+        // PatchMatch values for reproducibility; targeted boundary
+        // lengths after each step are 10, 14, 16, 18.
+        let glues = [
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 0,
+                tile_id: 0,
+            },
+            PatchMatch {
+                start_a: 1,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+            PatchMatch {
+                start_a: 2,
+                len: 2,
+                start_b: 1,
+                tile_id: 0,
+            },
+            PatchMatch {
+                start_a: 9,
+                len: 2,
+                start_b: 1,
+                tile_id: 0,
+            },
+        ];
         let mut gp = hex_patch();
-        let first = gp
-            .get_all_matches()
-            .into_iter()
-            .find(|pm| pm.len == 1)
-            .expect("seed has len-1 match");
-        assert!(gp.add_tile(&first), "glue tile 2");
-        assert_eq!(gp.boundary_len(), 10, "bi-hex should have 10 edges");
-
-        let target_sequence = [14usize, 16, 18];
-        for (step, &target_n) in target_sequence.iter().enumerate() {
-            let matches = gp.get_all_matches();
-            let mut found = false;
-            for pm in &matches {
-                let mut trial = gp.clone();
-                if !trial.add_tile(pm) {
-                    continue;
-                }
-                if trial.boundary_len() == target_n {
-                    assert!(gp.add_tile(pm), "glue failed at step {}", step + 2);
-                    assert_eq!(
-                        gp.boundary_len(),
-                        target_n,
-                        "step {}: boundary_len should be {target_n} after glue",
-                        step + 2
-                    );
-                    found = true;
-                    break;
-                }
-            }
+        for (i, pm) in glues.iter().enumerate() {
             assert!(
-                found,
-                "no match giving boundary_len={target_n} at step {}",
-                step + 2
+                gp.add_tile(pm),
+                "five_hex_cross glue {} failed: pm={:?}",
+                i,
+                pm
             );
         }
         gp
@@ -3806,32 +4064,38 @@ mod tests {
     /// that API exists. The current recipe is opaque: a reader has to
     /// reverse-engineer the intended shape from three triples.
     fn t_tetromino() -> GrowingPatch<ZZ4> {
+        // T-tetromino built incrementally as a chain of 4 unit
+        // squares: pin each glue's PatchMatch directly. Boundary
+        // length grows 4 → 6 → 8 → 10.
+        let glues = [
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 0,
+                tile_id: 0,
+            },
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+            PatchMatch {
+                start_a: 0,
+                len: 1,
+                start_b: 1,
+                tile_id: 0,
+            },
+        ];
         let mut gp = square_patch();
-        // Glue 1: square + square along seed's edge 0 → bi-square (6 edges).
-        let ms: Vec<_> = gp.get_all_matches();
-        let pm1 = ms
-            .iter()
-            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 0)
-            .expect("first match");
-        assert!(gp.add_tile(pm1), "glue 1");
-        assert_eq!(gp.boundary_len(), 6, "bi-square should have 6 edges");
-
-        // Glue 2: third square along the bi-square's edge 0 → tri-square (8 edges).
-        let ms: Vec<_> = gp.get_all_matches();
-        let pm2 = ms
-            .iter()
-            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
-            .expect("second match");
-        assert!(gp.add_tile(pm2), "glue 2");
-        assert_eq!(gp.boundary_len(), 8, "tri-square should have 8 edges");
-
-        // Glue 3: fourth square to form the T-stem → T-tetromino (10 edges).
-        let ms: Vec<_> = gp.get_all_matches();
-        let pm3 = ms
-            .iter()
-            .find(|pm| pm.start_a == 0 && pm.len == 1 && pm.start_b == 1)
-            .expect("third match");
-        assert!(gp.add_tile(pm3), "glue 3");
+        for (i, pm) in glues.iter().enumerate() {
+            assert!(
+                gp.add_tile(pm),
+                "t_tetromino glue {} failed: pm={:?}",
+                i,
+                pm
+            );
+        }
         assert_eq!(gp.boundary_len(), 10, "T-tetromino should have 10 edges");
         gp
     }

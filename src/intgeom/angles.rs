@@ -140,10 +140,8 @@ pub fn glue_raw_angles<T: SymNum>(
             mlen == 0
                 || mlen > n
                 || mlen > m
-                || (1..mlen).all(|i| {
-                    self_angles[(start_a + i) % n]
-                        == -other_angles[(start_b + m - i) % m]
-                })
+                || (1..mlen)
+                    .all(|i| self_angles[(start_a + i) % n] == -other_angles[(start_b + m - i) % m])
         },
         "glue_raw_angles: claimed match interval (start_a={start_a}, mlen={mlen}, \
          start_b={start_b}) violates the revcomp relation at some interior offset. \
@@ -191,6 +189,26 @@ pub fn glue_raw_angles<T: SymNum>(
             result[0] = axy;
         }
         (Some(ayx), Some(axy))
+    } else if y_raw_len == 1 && x_raw_len > 1 {
+        // Keystone glue: the petal's full perimeter is matched, so it
+        // contributes no surviving boundary edges. The two normal-case
+        // junction vertices (`pm.start_a` and `ccw_pos`) collapse to a
+        // single new boundary vertex at `result[0]`. The merged angle
+        // there absorbs both adjustments — equivalently, `ayx + axy`
+        // less the first petal angle that would have lived at position
+        // `seg_len_old` in the normal case:
+        //     merged = ayx + axy - y
+        //            = (x_first + y - hturn) + (y + x_last - hturn) - y
+        //            = x_first + x_last + y - turn
+        let x_first = self_angles[(start_a + mlen) % n];
+        let x_last = self_angles[(start_a + mlen + seg_len_old) % n];
+        let y = other_angles[start_b % m];
+        let merged = normalize_angle::<T>(x_first + x_last + y - T::turn());
+        if merged.abs() == T::hturn() {
+            return None;
+        }
+        result[0] = merged;
+        (Some(merged), Some(merged))
     } else {
         (None, None)
     };
