@@ -1208,7 +1208,14 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     /// position and remap `patch_tile_ids` to dense `0..k` order so
     /// two patches with the same shape and same tile arrangement
     /// compare equal. Useful before hashing or storing as a key.
-    pub fn normalize(&mut self) {
+    ///
+    /// Returns the rotation offset applied (= `lex_min_rot(angles)`
+    /// computed on the pre-normalize state). A position `p` in the
+    /// pre-normalize boundary maps to `(p + n - rot) % n` in the
+    /// post-normalize boundary. Returns `0` when no rotation is
+    /// applied — including: `Seed` state, empty boundary, and an
+    /// already-normalized patch (where `lex_min_rot` returns 0).
+    pub fn normalize(&mut self) -> usize {
         let (
             angles,
             edges,
@@ -1245,12 +1252,12 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                 std::mem::take(patch_tile_ids),
                 *next_tile_id,
             ),
-            _ => return,
+            _ => return 0,
         };
 
         let n = angles.len();
         if n == 0 {
-            return;
+            return 0;
         }
 
         let rot = crate::intgeom::rat::lex_min_rot(&angles);
@@ -1300,6 +1307,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
             patch_tile_ids,
             next_tile_id: next,
         };
+        rot
     }
 
     #[allow(dead_code)]
@@ -2264,14 +2272,24 @@ mod tests {
         // First glue: hex_0's edge 1 → hex_1's edge 5 (start_a=1 on
         // the seed's notional boundary, len=1, start_b=0 so the
         // matched petal edge is start_b-1 = 5 mod 6).
-        let first = PatchMatch { start_a: 1, len: 1, start_b: 0, tile_id: 0 };
+        let first = PatchMatch {
+            start_a: 1,
+            len: 1,
+            start_b: 0,
+            tile_id: 0,
+        };
         assert!(gp.add_tile(&first), "first glue should succeed");
         // Glues 2-4: continue the chain. start_a is tracked from
         // the post-glue boundary's "second surviving edge of latest
         // hex" = boundary_len - 4.
         for step in 2..=4 {
             let start_a = gp.boundary_len() - 4;
-            let pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+            let pm = PatchMatch {
+                start_a,
+                len: 1,
+                start_b: 0,
+                tile_id: 0,
+            };
             assert!(
                 gp.add_tile(&pm),
                 "step {} glue (pm={:?}) should succeed",
@@ -2294,7 +2312,12 @@ mod tests {
         // segments would touch the existing boundary at non-
         // endpoint positions.
         let start_a = gp.boundary_len() - 4;
-        let closing_pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+        let closing_pm = PatchMatch {
+            start_a,
+            len: 1,
+            start_b: 0,
+            tile_id: 0,
+        };
         let ok = gp.add_tile(&closing_pm);
         assert!(
             !ok,
@@ -2306,7 +2329,11 @@ mod tests {
             gp.boundary_len()
         );
         // After rejection the patch is unchanged.
-        assert_eq!(gp.boundary_len(), 22, "rejected glue must leave state unchanged");
+        assert_eq!(
+            gp.boundary_len(),
+            22,
+            "rejected glue must leave state unchanged"
+        );
     }
 
     /// Build a 7-hex full corona (1 central + 6 ring tiles) via the
@@ -2327,11 +2354,21 @@ mod tests {
         //   3. Close (1 glue): 6th corona at the remaining wedge via
         //      mlen=3 (matching the 3 wedge-facing edges).
         let mut gp = hex_patch();
-        let first = PatchMatch { start_a: 1, len: 1, start_b: 0, tile_id: 0 };
+        let first = PatchMatch {
+            start_a: 1,
+            len: 1,
+            start_b: 0,
+            tile_id: 0,
+        };
         assert!(gp.add_tile(&first), "chain glue 1");
         for _ in 2..=4 {
             let start_a = gp.boundary_len() - 4;
-            let pm = PatchMatch { start_a, len: 1, start_b: 0, tile_id: 0 };
+            let pm = PatchMatch {
+                start_a,
+                len: 1,
+                start_b: 0,
+                tile_id: 0,
+            };
             assert!(gp.add_tile(&pm), "chain glue {:?}", pm);
         }
         // Brute-force pick: a match with mlen=5 fills central.

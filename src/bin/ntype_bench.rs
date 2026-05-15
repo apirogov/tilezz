@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
-use tilezz::intgeom::neighborhood::{NeighborhoodIndex, NtKind, NT_CLOSED_ID};
+use tilezz::intgeom::neighborhood::{NeighborhoodIndex, NtEntry, NtKind};
 use tilezz::intgeom::rat::Rat;
 
 use tilezz::intgeom::tiles;
@@ -50,11 +50,14 @@ fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<
     let classify_time = t1.elapsed();
 
     let transitions = idx.transitions();
-    let closed_transitions = transitions
+    // Closed phase-2 SurroundedTile entries are the terminal Blessed
+    // states (= the "closed corona" leaves). No more synthetic
+    // closing transitions in the BFS.
+    let closed_phase2 = idx
+        .entries()
         .iter()
-        .filter(|t| t.dst_id == NT_CLOSED_ID)
+        .filter(|e| matches!(e, NtEntry::Phase2(st) if st.is_closed))
         .count();
-    let close_branch = transitions.len() - closed_transitions;
 
     let dead = kinds.iter().filter(|&&k| k == NtKind::Dead).count();
     let undead = kinds.iter().filter(|&&k| k == NtKind::Undead).count();
@@ -72,10 +75,9 @@ fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<
     );
     println!();
     println!(
-        "  Transitions: {} (close-branch={}, CLOSED={})",
+        "  Transitions: {} (closed phase-2 entries: {})",
         transitions.len(),
-        close_branch,
-        closed_transitions
+        closed_phase2
     );
 
     #[cfg(feature = "pprof")]
