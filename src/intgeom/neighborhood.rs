@@ -1760,25 +1760,13 @@ mod tests {
 
     #[test]
     fn square_counts() {
-        // Square tiles convexly; every continuation closes. Phase-2
-        // entries are all closed terminals. Numbers not pinned: a
-        // square_idx() build is ~8 minutes.
-        let idx = square_idx();
-        eprintln!(
-            "square: total={} phase1={} phase2={} trans={}",
-            idx.num_types(),
-            idx.num_phase1(),
-            idx.num_phase2(),
-            idx.transitions().len()
-        );
-        let kinds = idx.classify_all();
-        eprintln!(
-            "  dead={} undead={} blessed={} free={}",
-            kinds.iter().filter(|k| **k == NtKind::Dead).count(),
-            kinds.iter().filter(|k| **k == NtKind::Undead).count(),
-            kinds.iter().filter(|k| **k == NtKind::Blessed).count(),
-            kinds.iter().filter(|k| **k == NtKind::Free).count()
-        );
+        // Square tiles convexly; every continuation closes. All
+        // 240 256 entries are Blessed: 109 184 phase-1 + 131 072
+        // phase-2 (split 65 536 closed terminals + 65 536 open
+        // intermediates that phase-2 BFS eventually closes).
+        // Unlike hex, square produces both open and closed phase-2
+        // entries from phase-1 → phase-2 transitions.
+        assert_counts(square_idx(), 240256, 698880, 65536, 0, 0, 240256, 0);
     }
 
     #[test]
