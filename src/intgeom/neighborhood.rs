@@ -2090,6 +2090,184 @@ mod tests {
         assert_seed_geometry(hex_idx());
     }
 
+    /// Brute-enumerate every legal 3-tile seed configuration via
+    /// `rat.get_match` directly (independent of `MatchTypeIndex` and
+    /// `patch.get_all_matches`, which `seed_phase` uses internally),
+    /// canonicalize each, and assert the resulting set equals the
+    /// catalog's seed entries (= entries with `num_ctx_tiles == 2`).
+    ///
+    /// Catches seed-completeness regressions of the V2c shape: if
+    /// the production match enumerator misses canonical matches, the
+    /// seed phase would silently under-produce, and downstream
+    /// closure tests (which iterate over existing entries) couldn't
+    /// recover the missing seeds.
+    fn assert_seeds_match_brute<T: IsComplex + IsRingOrField + Units>(
+        tileset: Arc<TileSet<T>>,
+        idx: &NeighborhoodIndex<T>,
+    ) {
+        type Class = (usize, usize, Vec<i8>, usize);
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+
+        // Brute side: enumerate canonical 3-tile patches via direct
+        // get_match, applying the same filters seed_phase does.
+        let mut brute: FxHashMap<Class, ()> = FxHashMap::default();
+        let num_tiles = tileset.num_tiles();
+        for a in 0..num_tiles {
+            let tile_a = tileset.rat(a);
+            let n_a = tile_a.seq().len();
+            for b in 0..num_tiles {
+                let tile_b = tileset.rat(b);
+                let n_b = tile_b.seq().len();
+                let mut seen_ab: FxHashMap<(usize, usize, usize), ()> = FxHashMap::default();
+                for ia in 0..n_a {
+                    for ib in 0..n_b {
+                        let (ns, len, ne) = tile_a.get_match((ia as i64, ib as i64), tile_b);
+                        if len == 0 {
+                            continue;
+                        }
+                        let ns_u = ns.rem_euclid(n_a as i64) as usize;
+                        let ne_u = ne.rem_euclid(n_b as i64) as usize;
+                        if seen_ab.contains_key(&(ns_u, len, ne_u)) {
+                            continue;
+                        }
+                        seen_ab.insert((ns_u, len, ne_u), ());
+                        if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                            tile_a.seq(),
+                            ns_u,
+                            len,
+                            tile_b.seq(),
+                            ne_u,
+                        ) {
+                            continue;
+                        }
+                        if tile_a
+                            .try_glue_precomputed((ns, len, ne), tile_b, true)
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        // Build the 2-tile patch.
+                        let mut patch = GrowingPatch::new(Arc::clone(&tileset), a);
+                        let pm1 = PatchMatch {
+                            start_a: ns_u,
+                            len,
+                            start_b: ne_u,
+                            tile_id: b,
+                        };
+                        if !patch.add_tile(&pm1) {
+                            continue;
+                        }
+                        patch.normalize();
+                        let patch_n = patch.boundary_len();
+                        let patch_rat = crate::intgeom::rat::Rat::from_slice_unchecked(
+                            patch.angles(),
+                        );
+
+                        // Brute third-tile candidates over the 2-tile boundary.
+                        let mut seen_third: FxHashMap<(usize, usize, usize, usize), ()> =
+                            FxHashMap::default();
+                        for c in 0..num_tiles {
+                            let tile_c = tileset.rat(c);
+                            let n_c = tile_c.seq().len();
+                            for ic in 0..patch_n {
+                                for jc in 0..n_c {
+                                    let (ns3, len3, ne3) = patch_rat.get_match(
+                                        (ic as i64, jc as i64),
+                                        tile_c,
+                                    );
+                                    if len3 == 0 {
+                                        continue;
+                                    }
+                                    let ns3_u = ns3.rem_euclid(patch_n as i64) as usize;
+                                    let ne3_u = ne3.rem_euclid(n_c as i64) as usize;
+                                    if seen_third.contains_key(&(ns3_u, len3, ne3_u, c)) {
+                                        continue;
+                                    }
+                                    seen_third.insert((ns3_u, len3, ne3_u, c), ());
+                                    let pm3 = PatchMatch {
+                                        start_a: ns3_u,
+                                        len: len3,
+                                        start_b: ne3_u,
+                                        tile_id: c,
+                                    };
+                                    let mut trial = patch.clone();
+                                    if !trial.add_tile(&pm3) {
+                                        continue;
+                                    }
+                                    // Filter: match must touch at least one
+                                    // junction of the 2-tile patch (else
+                                    // build_seed_nt returns None).
+                                    let touches_junction = (0..patch_n).any(|jp| {
+                                        if !patch.is_junction(jp) {
+                                            return false;
+                                        }
+                                        (jp + patch_n - ns3_u) % patch_n <= len3
+                                    });
+                                    if !touches_junction {
+                                        continue;
+                                    }
+                                    // Compute canonical class fingerprint.
+                                    let aug_angles = trial.angles().to_vec();
+                                    let aug_n = aug_angles.len();
+                                    let rot = crate::intgeom::rat::lex_min_rot(&aug_angles);
+                                    let mut canon = aug_angles;
+                                    canon.rotate_left(rot);
+                                    let gap_start = patch_n - len3;
+                                    let cw_anchor_in_canon =
+                                        (gap_start + aug_n - rot) % aug_n;
+                                    brute.insert(
+                                        (c, ne3_u, canon, cw_anchor_in_canon),
+                                        (),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Catalog side: canonical class of every entry with
+        // num_ctx_tiles == 2 (= seed entries).
+        let mut catalog: FxHashMap<Class, ()> = FxHashMap::default();
+        for nt in idx.entries() {
+            if nt.num_ctx_tiles != 2 {
+                continue;
+            }
+            if let Some(fp) = canonical_class_fingerprint(nt, &mi) {
+                catalog.insert(fp, ());
+            }
+        }
+
+        let brute_only: Vec<&Class> = brute.keys().filter(|k| !catalog.contains_key(*k)).collect();
+        let catalog_only: Vec<&Class> = catalog.keys().filter(|k| !brute.contains_key(*k)).collect();
+        assert!(
+            brute_only.is_empty(),
+            "seed completeness: {} canonical seed classes found by brute but missing from catalog",
+            brute_only.len()
+        );
+        assert!(
+            catalog_only.is_empty(),
+            "seed soundness: {} catalog seed classes not produced by brute",
+            catalog_only.len()
+        );
+    }
+
+    #[test]
+    fn hex_seeds_match_brute() {
+        assert_seeds_match_brute(Arc::clone(hex_idx().tileset()), hex_idx());
+    }
+
+    #[test]
+    fn square_seeds_match_brute() {
+        assert_seeds_match_brute(Arc::clone(square_idx().tileset()), square_idx());
+    }
+
+    #[test]
+    fn spectre_seeds_match_brute() {
+        assert_seeds_match_brute(Arc::clone(spectre_idx().tileset()), spectre_idx());
+    }
+
     #[test]
     fn gap_edges_are_central_tile() {
         let idx = square_idx();
