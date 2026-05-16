@@ -46,6 +46,31 @@ pub struct OpenSegmentTypeIndex {
 }
 
 impl OpenSegmentTypeIndex {
+    /// Empty index for incremental construction (e.g., by
+    /// [`crate::intgeom::segbfs::SegmentTypeBFS`]). Ids are assigned
+    /// in insertion order via [`Self::push_pair`].
+    pub fn new_empty() -> Self {
+        Self {
+            segments: Vec::new(),
+            by_pair: FxHashMap::default(),
+        }
+    }
+
+    /// Register the pair `(cw, ccw)` and return its 0-based id. If
+    /// the pair was already seen, returns the existing id without
+    /// duplicating. Ids reflect insertion order (= BFS discovery
+    /// order for the segment-anchored BFS).
+    pub fn push_pair(&mut self, cw: OpenVertexType, ccw: OpenVertexType) -> usize {
+        let key = (cw, ccw);
+        if let Some(&id) = self.by_pair.get(&key) {
+            return id;
+        }
+        let id = self.segments.len();
+        self.by_pair.insert(key.clone(), id);
+        self.segments.push(key);
+        id
+    }
+
     /// Build the index from a `NeighborhoodIndex`. For each phase-1
     /// state, walks the **extended-match window** on the ctx (LHS:
     /// `j_cw → vt_seq → j_ccw`) and on the aug (RHS: `j_cw → cw_anchor'

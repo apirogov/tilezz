@@ -27,3 +27,5 @@ pub mod redelmeier;
 pub mod neighborhood;
 
 pub mod segtypes;
+
+pub mod segbfs;
