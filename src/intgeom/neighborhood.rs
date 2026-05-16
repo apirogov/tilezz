@@ -56,6 +56,42 @@
 //!
 //! See [`NeighborhoodType`] / [`SurroundedTile`] for entry layout
 //! and [`NeighborhoodIndex::new`] for the BFS algorithm.
+//!
+//! # ⚠ KNOWN GAP — incomplete segment enumeration
+//!
+//! **The BFS as it stands does NOT enumerate every boundary segment
+//! that can appear on a legal patch.** A *segment* (in the sense of
+//! [`crate::intgeom::segtypes`]) is a maximal run of edges from one
+//! tile, bounded by two open-vertex junctions on the boundary. The
+//! catalog only sees segments that appear inside some BFS state's
+//! **extended-match window** (= matched interval + one ctx segment of
+//! pad on each side); segments that never sit inside such a window
+//! are missed.
+//!
+//! ## Concrete example
+//!
+//! In a hexagonal closed corona (= 7-hex flower, [`SurroundedTile`]
+//! `is_closed=true`), the outer boundary has 6 junctions, each between
+//! two adjacent outer hexes, spaced 3 hex edges apart. The segment
+//! between two consecutive corona junctions is **3 edges of one outer
+//! hex**. Locally this is "two hexes meeting at a junction with no
+//! inner edge" — geometrically the same junction structure as a plain
+//! 2-hex glue. But a 2-hex glue's segment spans **5 edges** of one
+//! hex, not 3. No phase-1 state's extended-match window produces the
+//! 3-edge-per-tile spacing, so its segment type is invisible to the
+//! BFS catalog. Empirically: of 216 distinct phase-2-closed seg pairs
+//! on hex, **0** match any phase-1 LHS segment pair. (Spectre shows
+//! the same asymmetry on a larger universe.)
+//!
+//! ## Why this matters
+//!
+//! Downstream uses that treat the seg catalog as exhaustive (e.g.,
+//! propagating per-seg classifications, rewriting-system analyses)
+//! will mis-classify the missed segs. A correct seg enumeration would
+//! need a different algorithm — one that doesn't tie segments to a
+//! match-anchor neighborhood. This is an open design problem;
+//! [`crate::intgeom::segtypes`] currently builds against the
+//! incomplete view and is limited accordingly.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
