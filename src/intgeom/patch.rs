@@ -119,6 +119,28 @@ pub struct OpenVertexType {
     pub ccw: EdgeInfo,
 }
 
+/// A coarser variant of [`OpenVertexType`] that ignores the interior
+/// tile arrangement at the junction and instead records the
+/// **boundary angle** at the vertex.
+///
+/// At a junction vertex, the boundary angle (= what the patch stores
+/// in its `angles` vec) is `full_turn − sum(incident interior tile
+/// angles)`. It captures the boundary's local "shape" at the junction
+/// — what matters for future tile attachments — without depending on
+/// which specific tiles are buried in the interior.
+///
+/// Two junctions with the same `(cw_edge, ccw_edge, angle)` admit the
+/// same outgoing tile attachments, even if their interior populations
+/// differ. This makes `CoarseJunction` the right equivalence for seg
+/// enumeration: it conflates configurations whose only difference is
+/// invisible from outside the boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CoarseJunction {
+    pub cw_edge: EdgeInfo,
+    pub ccw_edge: EdgeInfo,
+    pub angle: i8,
+}
+
 /// Which incident edge(s) of a focus junction vertex a transition
 /// consumed.
 ///
@@ -1391,6 +1413,31 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
                     cw: edges[(i + n - 1) % n],
                     inner: inner_chains[i].clone(),
                     ccw: edges[i],
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Coarser variant of [`Self::junction_vertex_type_at`]: returns
+    /// `Some(CoarseJunction)` if `i` is a junction, with `cw_edge` /
+    /// `ccw_edge` populated and `angle` equal to the boundary angle
+    /// at `i`. Drops the interior-tile list — see [`CoarseJunction`]
+    /// for the equivalence semantics.
+    pub fn coarse_junction_at(&self, i: usize) -> Option<CoarseJunction> {
+        let n = self.boundary_len();
+        if n == 0 || i >= n {
+            return None;
+        }
+        match &self.state {
+            PatchState::Growing { edges, .. } => {
+                if !self.is_junction(i) {
+                    return None;
+                }
+                Some(CoarseJunction {
+                    cw_edge: edges[(i + n - 1) % n],
+                    ccw_edge: edges[i],
+                    angle: self.angles()[i],
                 })
             }
             _ => None,
@@ -2676,6 +2723,66 @@ mod tests {
             got.sort_by_key(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
             assert_eq!(got, all, "full-boundary range from start={start}");
         }
+    }
+
+    /// Verify that the *set* of `(OpenVertexType, OpenVertexType)`
+    /// junction pairs on a patch boundary is invariant under
+    /// `normalize()`. Used by the segbfs closure check, which skips
+    /// `normalize()` on trial patches for speed.
+    ///
+    /// Rationale: `OpenVertexType` is built from `cw`, `inner`, and
+    /// `ccw` fields, all `EdgeInfo` (= `tile_id` + `tile_offset`) —
+    /// never `patch_tile_id`. And the set of consecutive pairs on a
+    /// cyclic boundary is rotation-invariant. So normalize, which
+    /// only rotates the boundary and renumbers `patch_tile_id`s,
+    /// can't change the pair set.
+    #[test]
+    fn junction_pair_set_is_normalize_invariant() {
+        for ts in [
+            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()])),
+            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()])),
+        ] {
+            // Grow a patch a few tiles deep and check at each step.
+            let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+            let first = gp.get_all_matches().into_iter().next().unwrap();
+            assert!(gp.add_tile(&first));
+            for _step in 0..4 {
+                let pre_pairs = collect_pair_set(&gp);
+                let mut normed = gp.clone();
+                normed.normalize();
+                let post_pairs = collect_pair_set(&normed);
+                assert_eq!(
+                    pre_pairs, post_pairs,
+                    "junction pair set differs across normalize"
+                );
+                // Grow one more tile for the next iteration.
+                if let Some(pm) = gp.get_all_matches().into_iter().next() {
+                    if !gp.add_tile(&pm) {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn collect_pair_set(
+        patch: &GrowingPatch<ZZ12>,
+    ) -> std::collections::BTreeSet<(OpenVertexType, OpenVertexType)> {
+        let n = patch.boundary_len();
+        let juncs: Vec<OpenVertexType> = (0..n)
+            .filter_map(|i| patch.junction_vertex_type_at(i))
+            .collect();
+        let k = juncs.len();
+        let mut out = std::collections::BTreeSet::new();
+        if k < 2 {
+            return out;
+        }
+        for j in 0..k {
+            out.insert((juncs[j].clone(), juncs[(j + 1) % k].clone()));
+        }
+        out
     }
 
     /// Empty-boundary patch: `get_matches_in_edge_range` returns an
