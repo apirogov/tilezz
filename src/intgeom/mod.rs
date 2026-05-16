@@ -31,3 +31,5 @@ pub mod segtypes;
 pub mod segbfs;
 
 pub mod segseqbfs;
+
+pub mod segrewrite;
