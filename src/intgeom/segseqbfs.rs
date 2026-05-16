@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch};
@@ -52,20 +52,25 @@ pub struct SegSeqBFS<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     seg_bfs: SegmentTypeBFS<T>,
 
-    // Deduped patches. patch_lookup ensures each unique patch is
-    // added at most once. `is_witness[i]` flags whether patch i
-    // contributed any new sequences.
+    // Witness patches only. patch_lookup maps canonical keys to
+    // witness slot ids. Patches that don't contribute new sequences
+    // are never interned; they're explored from the queue and
+    // dropped on the spot.
     patches: Vec<GrowingPatch<T>>,
     patch_lookup: FxHashMap<PatchKey, usize>,
-    is_witness: Vec<bool>,
 
-    // Discovered sequences with witnesses.
+    // Dedup for the BFS: every key we've ever enqueued (= prevents
+    // re-processing the same patch). Includes witnesses' keys.
+    seen_keys: FxHashSet<PatchKey>,
+
+    // Discovered sequences with witnesses (= patch_id + applied match).
     sequences: Vec<Vec<usize>>,
     seq_lookup: FxHashMap<Vec<usize>, usize>,
     seq_witnesses: Vec<SeqWitness>,
 
-    // BFS frontier: patch ids waiting to be explored.
-    queue: VecDeque<usize>,
+    // BFS frontier: patches awaiting exploration. Owned by value,
+    // since we may discard them entirely on exploration.
+    queue: VecDeque<GrowingPatch<T>>,
 
     seq_cap: usize,
     patch_cap: usize,
@@ -89,7 +94,7 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_bfs,
             patches: Vec::new(),
             patch_lookup: FxHashMap::default(),
-            is_witness: Vec::new(),
+            seen_keys: FxHashSet::default(),
             sequences: Vec::new(),
             seq_lookup: FxHashMap::default(),
             seq_witnesses: Vec::new(),
@@ -106,12 +111,14 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
         self.sequences.len()
     }
 
-    pub fn num_patches(&self) -> usize {
-        self.patches.len()
+    /// Number of distinct patches ever enqueued (= seen_keys size).
+    pub fn num_patches_seen(&self) -> usize {
+        self.seen_keys.len()
     }
 
+    /// Number of patches retained as witnesses.
     pub fn num_witness_patches(&self) -> usize {
-        self.is_witness.iter().filter(|&&w| w).count()
+        self.patches.len()
     }
 
     pub fn sequences(&self) -> &[Vec<usize>] {
@@ -124,6 +131,10 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
 
     pub fn patches(&self) -> &[GrowingPatch<T>] {
         &self.patches
+    }
+
+    pub fn patch(&self, patch_id: usize) -> Option<&GrowingPatch<T>> {
+        self.patches.get(patch_id)
     }
 
     pub fn seg_bfs(&self) -> &SegmentTypeBFS<T> {
@@ -141,44 +152,51 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
                     continue;
                 }
                 patch.normalize();
-                self.intern_patch(patch)?;
+                self.enqueue_if_unseen(patch)?;
             }
         }
         Ok(())
     }
 
-    /// Intern (dedup) a patch. If new, push onto `queue`. Returns the
-    /// patch id (whether new or pre-existing).
-    fn intern_patch(&mut self, patch: GrowingPatch<T>) -> Result<usize, SeqBfsError> {
+    /// Compute the patch's key; if not seen before, mark seen and
+    /// push onto the BFS queue. Otherwise drop the patch.
+    fn enqueue_if_unseen(&mut self, patch: GrowingPatch<T>) -> Result<(), SeqBfsError> {
         let key = patch_key(&patch);
-        if let Some(&id) = self.patch_lookup.get(&key) {
-            return Ok(id);
+        if self.seen_keys.contains(&key) {
+            return Ok(());
         }
-        let id = self.patches.len();
-        self.patch_lookup.insert(key, id);
-        self.patches.push(patch);
-        self.is_witness.push(false);
-        self.queue.push_back(id);
-        if self.patches.len() > self.patch_cap {
+        self.seen_keys.insert(key);
+        self.queue.push_back(patch);
+        if self.seen_keys.len() > self.patch_cap {
             return Err(SeqBfsError::PatchCapExceeded {
                 cap: self.patch_cap,
             });
         }
-        Ok(id)
+        Ok(())
+    }
+
+    /// Register a patch as a witness (only called after we know it
+    /// contributes new sequences). Returns the new slot id.
+    fn register_witness(&mut self, patch: GrowingPatch<T>) -> usize {
+        let key = patch_key(&patch);
+        let id = self.patches.len();
+        self.patch_lookup.insert(key, id);
+        self.patches.push(patch);
+        id
     }
 
     fn run_bfs(&mut self) -> Result<(), SeqBfsError> {
         let start = std::time::Instant::now();
         let mut explored = 0usize;
-        while let Some(patch_id) = self.queue.pop_front() {
-            self.explore_patch(patch_id)?;
+        while let Some(patch) = self.queue.pop_front() {
+            self.explore_patch(patch)?;
             explored += 1;
             if explored % 1000 == 0 {
                 eprintln!(
-                    "segseqbfs: explored {} patches, total interned={}, witnesses={}, sequences={}, queue={}, elapsed={:.1}s",
+                    "segseqbfs: explored {} patches, seen={}, witnesses={}, sequences={}, queue={}, elapsed={:.1}s",
                     explored,
+                    self.seen_keys.len(),
                     self.patches.len(),
-                    self.num_witness_patches(),
                     self.sequences.len(),
                     self.queue.len(),
                     start.elapsed().as_secs_f64(),
@@ -188,8 +206,7 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
         Ok(())
     }
 
-    fn explore_patch(&mut self, patch_id: usize) -> Result<(), SeqBfsError> {
-        let patch = self.patches[patch_id].clone();
+    fn explore_patch(&mut self, patch: GrowingPatch<T>) -> Result<(), SeqBfsError> {
         let n = patch.boundary_len();
         if n == 0 {
             return Ok(());
@@ -215,7 +232,14 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_ids.push(id);
         }
 
-        let mut any_new_seq = false;
+        // Enumerate matches. Each match producing a (globally-)new
+        // sequence: enqueue its trial eagerly and note (seq, pm) for
+        // later registration. Duplicates within this source — same
+        // seq from different matches — still enqueue distinct
+        // trials (they may be different patches under normalize),
+        // but the seq is only noted once.
+        let mut local_new_seqs: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
+        let mut local_seen: FxHashSet<Vec<usize>> = FxHashSet::default();
         for pm in patch.get_all_matches() {
             if pm.len == 0 {
                 continue;
@@ -225,8 +249,7 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             let start_seg = seg_containing_edge(&juncs, start_edge, n);
             let end_seg = seg_containing_edge(&juncs, end_edge, n);
 
-            // Build padded match sequence:
-            //   [seg_ids[cw_pad], seg_ids[start_seg], ..., seg_ids[end_seg], seg_ids[ccw_pad]]
+            // Build padded match sequence.
             let cw_pad = (start_seg + k - 1) % k;
             let ccw_pad = (end_seg + 1) % k;
             let mut seq = Vec::with_capacity(k + 2);
@@ -243,36 +266,41 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seq.push(seg_ids[ccw_pad]);
 
             if self.seq_lookup.contains_key(&seq) {
-                // Sequence already seen — don't enqueue trial; this
-                // glue isn't going to teach us anything new from
-                // this context.
+                continue;
+            }
+            if !local_seen.insert(seq.clone()) {
+                // Duplicate seq within this source — skip both the
+                // registration and the trial enqueue (= match the
+                // original BFS behavior where seq_lookup was updated
+                // inline).
                 continue;
             }
 
-            // New sequence: register, record witness, and apply the
-            // match so the resulting trial gets enqueued (only
-            // productive matches drive BFS exploration further).
+            // Trial.
+            let mut trial = patch.clone();
+            if !trial.add_tile(&pm) {
+                continue;
+            }
+            trial.normalize();
+            self.enqueue_if_unseen(trial)?;
+            local_new_seqs.push((seq, pm.clone()));
+        }
+
+        if local_new_seqs.is_empty() {
+            return Ok(());
+        }
+
+        // Source contributed — register it as a witness and claim
+        // the noted sequences.
+        let patch_id = self.register_witness(patch);
+        for (seq, pm) in local_new_seqs {
             let seq_id = self.sequences.len();
             self.seq_lookup.insert(seq.clone(), seq_id);
             self.sequences.push(seq);
-            self.seq_witnesses.push(SeqWitness {
-                patch_id,
-                pm: pm.clone(),
-            });
-            any_new_seq = true;
+            self.seq_witnesses.push(SeqWitness { patch_id, pm });
             if self.sequences.len() > self.seq_cap {
                 return Err(SeqBfsError::SeqCapExceeded { cap: self.seq_cap });
             }
-
-            let mut trial = patch.clone();
-            if trial.add_tile(&pm) {
-                trial.normalize();
-                self.intern_patch(trial)?;
-            }
-        }
-
-        if any_new_seq {
-            self.is_witness[patch_id] = true;
         }
         Ok(())
     }
@@ -331,10 +359,10 @@ mod tests {
         let bfs = SegSeqBFS::run(hex_tileset(), 1_000_000, 1_000_000)
             .expect("hex SegSeqBFS terminates within caps");
         eprintln!(
-            "hex: sequences={}, witness_patches={}/{} (total interned)",
+            "hex: sequences={}, witness_patches={}, seen={} (total enqueued)",
             bfs.num_sequences(),
             bfs.num_witness_patches(),
-            bfs.num_patches()
+            bfs.num_patches_seen()
         );
         assert!(bfs.num_sequences() > 0);
     }
