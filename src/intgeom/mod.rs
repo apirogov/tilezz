@@ -29,3 +29,5 @@ pub mod neighborhood;
 pub mod segtypes;
 
 pub mod segbfs;
+
+pub mod segseqbfs;
