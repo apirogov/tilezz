@@ -44,11 +44,26 @@ pub struct SegRewriteTable {
 
 impl SegRewriteTable {
     /// Build the table eagerly from a finished [`SegSeqBFS`].
+    /// Returns the table along with the number of `(LHS, MatchMeta)`
+    /// collisions observed during the build (= rule re-extracted from
+    /// multiple witnesses with the same key). Collisions are
+    /// asserted to produce the same RHS (= witness-independence).
     pub fn build_from<T: IsComplex + IsRingOrField + Units>(
         seq_bfs: &SegSeqBFS<T>,
     ) -> Self {
+        let (table, _collisions) = Self::build_with_stats(seq_bfs);
+        table
+    }
+
+    /// Same as `build_from` but also returns the collision count
+    /// (= number of times a `(LHS, MatchMeta)` was re-extracted from
+    /// a different witness).
+    pub fn build_with_stats<T: IsComplex + IsRingOrField + Units>(
+        seq_bfs: &SegSeqBFS<T>,
+    ) -> (Self, usize) {
         let mut by_lhs: FxHashMap<Vec<usize>, FxHashMap<MatchMeta, [usize; 3]>> =
             FxHashMap::default();
+        let mut collisions = 0usize;
         let seg_bfs = seq_bfs.seg_bfs();
         for patch in seq_bfs.patches() {
             let n = patch.boundary_len();
@@ -88,15 +103,20 @@ impl SegRewriteTable {
                 };
                 let entries = by_lhs.entry(lhs).or_default();
                 if let Some(prev) = entries.insert(meta, rhs) {
-                    debug_assert_eq!(
+                    // Witness-independence: the same (LHS, MatchMeta)
+                    // must produce the same RHS regardless of which
+                    // witness we extracted from.
+                    assert_eq!(
                         prev, rhs,
-                        "witness-independence violated for meta {:?}",
-                        meta
+                        "witness-independence violated for meta {:?}: \
+                         prev RHS {:?} vs new RHS {:?}",
+                        meta, prev, rhs
                     );
+                    collisions += 1;
                 }
             }
         }
-        SegRewriteTable { by_lhs }
+        (SegRewriteTable { by_lhs }, collisions)
     }
 
     /// Distinct LHS sequences.
@@ -267,19 +287,36 @@ mod tests {
 
     #[test]
     fn hex_rewrite_rules_extracted() {
-        let table = SegRewriteTable::build_from(hex_seq_bfs());
+        let (table, collisions) = SegRewriteTable::build_with_stats(hex_seq_bfs());
         eprintln!(
-            "hex rewrites: distinct_lhs={}, total_rules={}",
+            "hex rewrites: distinct_lhs={}, total_rules={}, collisions={}",
             table.num_lhs(),
-            table.num_rules()
+            table.num_rules(),
+            collisions
         );
         assert!(table.num_rules() > 0);
-        // Sanity: RHS is always 3 (= invariant from the LHS
-        // definition).
+        // Sanity: RHS is always 3.
         for metas in table.by_lhs.values() {
             for rhs in metas.values() {
                 assert_eq!(rhs.len(), 3);
             }
         }
+    }
+
+    /// Witness-independence is verified inside `build_with_stats` via
+    /// an `assert_eq` on every (LHS, MatchMeta) collision. The
+    /// collision count being >0 confirms the test actually
+    /// exercises that path (= multiple witnesses extract the same
+    /// rule and agree on the RHS).
+    #[test]
+    fn hex_witness_independence_exercised() {
+        let (_table, collisions) = SegRewriteTable::build_with_stats(hex_seq_bfs());
+        assert!(
+            collisions > 0,
+            "expected at least one (LHS, MatchMeta) collision \
+             to exercise witness-independence; got {}",
+            collisions
+        );
+        eprintln!("hex witness-independence collisions: {}", collisions);
     }
 }
