@@ -188,21 +188,30 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
         Ok(())
     }
 
-    /// Intern the (deduped) patch, enumerate its boundary coarse
-    /// junction pairs cyclically, and register any new seg types
-    /// (each with the just-interned patch as witness and the
-    /// corresponding junction positions).
+    /// Enumerate the patch's boundary coarse-junction pairs, and if
+    /// **any** is new, intern the patch and register the new seg
+    /// types (each with this patch as witness). If no pair is new,
+    /// the patch isn't interned at all — it contributes nothing the
+    /// BFS needs.
     fn harvest_segs_from(&mut self, patch: GrowingPatch<T>) -> Result<(), BfsError> {
-        let patch_id = self.intern_patch(patch)?;
-        let patch_ref = &self.patches[patch_id];
-        let n = patch_ref.boundary_len();
+        let n = patch.boundary_len();
         let juncs: Vec<(usize, CoarseJunction)> = (0..n)
-            .filter_map(|i| patch_ref.coarse_junction_at(i).map(|cj| (i, cj)))
+            .filter_map(|i| patch.coarse_junction_at(i).map(|cj| (i, cj)))
             .collect();
         let k = juncs.len();
         if k < 2 {
             return Ok(());
         }
+        // Pre-scan: do any of the junction pairs introduce a new seg?
+        // If not, skip this patch entirely.
+        let any_new = (0..k).any(|j| {
+            let pair = (juncs[j].1, juncs[(j + 1) % k].1);
+            !self.seg_lookup.contains_key(&pair)
+        });
+        if !any_new {
+            return Ok(());
+        }
+        let patch_id = self.intern_patch(patch)?;
         for j in 0..k {
             let (cw_pos, cw_cj) = juncs[j];
             let (ccw_pos, ccw_cj) = juncs[(j + 1) % k];
