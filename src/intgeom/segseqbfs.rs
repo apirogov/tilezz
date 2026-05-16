@@ -249,11 +249,15 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             let start_seg = seg_containing_edge(&juncs, start_edge, n);
             let end_seg = seg_containing_edge(&juncs, end_edge, n);
 
-            // Build padded match sequence.
-            let cw_pad = (start_seg + k - 1) % k;
-            let ccw_pad = (end_seg + 1) % k;
-            let mut seq = Vec::with_capacity(k + 2);
-            seq.push(seg_ids[cw_pad]);
+            // Build the LHS sequence: [start_seg, internal..., end_seg].
+            // Both endpoint segs are partially absorbed by the match —
+            // the match's CW anchor is inside start_seg, CCW anchor
+            // inside end_seg. Internal segs (= strictly between
+            // start_seg and end_seg cyclically) are fully absorbed.
+            // The OUTER junctions of this sequence (= start_seg's CW
+            // endpoint, end_seg's CCW endpoint) are preserved by the
+            // rewrite.
+            let mut seq = Vec::with_capacity(k);
             let mut idx = start_seg;
             loop {
                 seq.push(seg_ids[idx]);
@@ -261,9 +265,8 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
                     break;
                 }
                 idx = (idx + 1) % k;
-                debug_assert!(seq.len() <= k + 2, "infinite loop in seq build");
+                debug_assert!(seq.len() <= k, "infinite loop in seq build");
             }
-            seq.push(seg_ids[ccw_pad]);
 
             if self.seq_lookup.contains_key(&seq) {
                 continue;
@@ -352,6 +355,47 @@ mod tests {
         Arc::new(TileSet::new(vec![
             Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap(),
         ]))
+    }
+
+    fn spectre_tileset() -> Arc<TileSet<ZZ12>> {
+        Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap(),
+        ]))
+    }
+
+    fn mixed_tileset() -> Arc<TileSet<ZZ12>> {
+        Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::square::<ZZ12>()).unwrap(),
+            Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap(),
+        ]))
+    }
+
+    #[test]
+    #[ignore]
+    fn mixed_sequences_enumerated() {
+        let bfs = SegSeqBFS::run(mixed_tileset(), 20_000_000, 20_000_000)
+            .expect("mixed SegSeqBFS terminates within caps");
+        eprintln!(
+            "mixed (square+hex): sequences={}, witness_patches={}, seen={} (total enqueued)",
+            bfs.num_sequences(),
+            bfs.num_witness_patches(),
+            bfs.num_patches_seen()
+        );
+        assert!(bfs.num_sequences() > 0);
+    }
+
+    #[test]
+    #[ignore]
+    fn spectre_sequences_enumerated() {
+        let bfs = SegSeqBFS::run(spectre_tileset(), 10_000_000, 10_000_000)
+            .expect("spectre SegSeqBFS terminates within caps");
+        eprintln!(
+            "spectre: sequences={}, witness_patches={}, seen={} (total enqueued)",
+            bfs.num_sequences(),
+            bfs.num_witness_patches(),
+            bfs.num_patches_seen()
+        );
+        assert!(bfs.num_sequences() > 0);
     }
 
     #[test]
