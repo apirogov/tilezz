@@ -10,6 +10,12 @@
 //! segment types. By BFS order, the first patch to produce a given
 //! seg type is the minimal witness.
 //!
+//! Segment types are keyed by pairs of [`CoarseJunction`]s — the
+//! boundary-only equivalence (= `cw_edge`, `ccw_edge`, boundary
+//! `angle`). The interior-tile arrangement at a junction doesn't
+//! affect outgoing tile attachments, so coarser equivalence groups
+//! configurations that behave identically for further growth.
+//!
 //! Goal: produce a seg-type index that is **closed under one further
 //! glue** (= the gap diagnosed in `neighborhood`'s module docs).
 //! Rule extraction (LHS/RHS pairs) is intentionally out of scope —
@@ -23,9 +29,13 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType};
-use crate::intgeom::segtypes::OpenSegmentTypeIndex;
+use crate::intgeom::patch::{CoarseJunction, EdgeInfo, GrowingPatch};
 use crate::intgeom::tileset::TileSet;
+
+/// Pair of coarse junctions defining one segment type: the segment
+/// stretches CCW from `cw` to `ccw`, contributed by a single tile
+/// instance.
+pub type SegPair = (CoarseJunction, CoarseJunction);
 
 /// Canonical key for a `GrowingPatch` after `normalize()`.
 type PatchKey = (Vec<i8>, Vec<EdgeInfo>, Vec<Vec<EdgeInfo>>, Vec<usize>);
@@ -56,10 +66,13 @@ pub struct SegmentTypeBFS<T: IsComplex> {
     patches: Vec<GrowingPatch<T>>,
     patch_lookup: FxHashMap<PatchKey, usize>,
 
-    // Seg-type index (grows incrementally as new segs are discovered).
-    seg_index: OpenSegmentTypeIndex,
+    // Inline seg-type index: SegPair → seg id. Ids are assigned in
+    // BFS discovery order. The reverse mapping `seg_pairs[id] -> pair`
+    // is kept for lookup-by-id.
+    seg_lookup: FxHashMap<SegPair, usize>,
+    seg_pairs: Vec<SegPair>,
 
-    // Witness per seg id: matches the length of seg_index.
+    // Witness per seg id: matches the length of seg_pairs.
     seg_witnesses: Vec<SegWitness>,
 
     queue: VecDeque<usize>,
@@ -82,7 +95,8 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
             tileset,
             patches: Vec::new(),
             patch_lookup: FxHashMap::default(),
-            seg_index: OpenSegmentTypeIndex::new_empty(),
+            seg_lookup: FxHashMap::default(),
+            seg_pairs: Vec::new(),
             seg_witnesses: Vec::new(),
             queue: VecDeque::new(),
             seg_cap,
@@ -93,8 +107,12 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
         Ok(bfs)
     }
 
-    pub fn seg_index(&self) -> &OpenSegmentTypeIndex {
-        &self.seg_index
+    pub fn seg_pairs(&self) -> &[SegPair] {
+        &self.seg_pairs
+    }
+
+    pub fn lookup_seg(&self, cw: &CoarseJunction, ccw: &CoarseJunction) -> Option<usize> {
+        self.seg_lookup.get(&(*cw, *ccw)).copied()
     }
 
     pub fn patches(&self) -> &[GrowingPatch<T>] {
@@ -106,7 +124,7 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
     }
 
     pub fn num_segs(&self) -> usize {
-        self.seg_index.len()
+        self.seg_pairs.len()
     }
 
     pub fn num_patches(&self) -> usize {
@@ -141,8 +159,12 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
     }
 
     /// Expand one frontier seg: enumerate every legal tile attachment
-    /// that touches the seg's extended range, apply each, and harvest
-    /// the resulting boundary's seg pairs.
+    /// whose absorbed run **overlaps** the seg's extended range (=
+    /// seg edges + 1 edge of pad on each side). The witness patch
+    /// validates each match's full edge sequence — matches that
+    /// extend past the extended range are still legal so long as the
+    /// witness's edges accommodate them. Apply each, harvest the
+    /// resulting boundary's coarse junction pairs.
     fn expand_seg(&mut self, seg_id: usize) -> Result<(), BfsError> {
         let witness = self.seg_witnesses[seg_id].clone();
         let patch = self.patches[witness.patch_id].clone();
@@ -152,8 +174,6 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
         }
         let cw_junc = witness.cw_junc_pos;
         let ccw_junc = witness.ccw_junc_pos;
-        // Extended range: 1 edge of CW-adjacent seg + own seg edges +
-        // 1 edge of CCW-adjacent seg.
         let ext_start = (cw_junc + n - 1) % n;
         let ext_end = ccw_junc;
         let candidates = patch.get_matches_in_edge_range(ext_start, ext_end);
@@ -168,37 +188,39 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
         Ok(())
     }
 
-    /// Intern the (deduped) patch, enumerate its boundary junction
-    /// pairs cyclically, and register any new seg types (each with
-    /// the just-interned patch as witness and the corresponding
-    /// junction positions).
+    /// Intern the (deduped) patch, enumerate its boundary coarse
+    /// junction pairs cyclically, and register any new seg types
+    /// (each with the just-interned patch as witness and the
+    /// corresponding junction positions).
     fn harvest_segs_from(&mut self, patch: GrowingPatch<T>) -> Result<(), BfsError> {
         let patch_id = self.intern_patch(patch)?;
         let patch_ref = &self.patches[patch_id];
         let n = patch_ref.boundary_len();
-        let juncs: Vec<(usize, OpenVertexType)> = (0..n)
-            .filter_map(|i| patch_ref.junction_vertex_type_at(i).map(|vt| (i, vt)))
+        let juncs: Vec<(usize, CoarseJunction)> = (0..n)
+            .filter_map(|i| patch_ref.coarse_junction_at(i).map(|cj| (i, cj)))
             .collect();
         let k = juncs.len();
         if k < 2 {
             return Ok(());
         }
         for j in 0..k {
-            let (cw_pos, cw_vt) = (juncs[j].0, juncs[j].1.clone());
-            let (ccw_pos, ccw_vt) = (juncs[(j + 1) % k].0, juncs[(j + 1) % k].1.clone());
-            let before = self.seg_index.len();
-            let seg_id = self.seg_index.push_pair(cw_vt, ccw_vt);
-            if seg_id == before {
-                // Newly registered: record witness, enqueue.
-                self.seg_witnesses.push(SegWitness {
-                    patch_id,
-                    cw_junc_pos: cw_pos,
-                    ccw_junc_pos: ccw_pos,
-                });
-                self.queue.push_back(seg_id);
-                if self.seg_index.len() > self.seg_cap {
-                    return Err(BfsError::SegCapExceeded { cap: self.seg_cap });
-                }
+            let (cw_pos, cw_cj) = juncs[j];
+            let (ccw_pos, ccw_cj) = juncs[(j + 1) % k];
+            let pair = (cw_cj, ccw_cj);
+            if self.seg_lookup.contains_key(&pair) {
+                continue;
+            }
+            let seg_id = self.seg_pairs.len();
+            self.seg_lookup.insert(pair, seg_id);
+            self.seg_pairs.push(pair);
+            self.seg_witnesses.push(SegWitness {
+                patch_id,
+                cw_junc_pos: cw_pos,
+                ccw_junc_pos: ccw_pos,
+            });
+            self.queue.push_back(seg_id);
+            if self.seg_pairs.len() > self.seg_cap {
+                return Err(BfsError::SegCapExceeded { cap: self.seg_cap });
             }
         }
         Ok(())
@@ -274,20 +296,31 @@ mod tests {
     }
 
     /// Closure: starting from the BFS-produced seg index, take every
-    /// witness patch and try every legal further glue — no new segs
-    /// should arise.
-    fn assert_seg_set_closed<T: IsComplex + IsRingOrField + Units>(bfs: &SegmentTypeBFS<T>) {
+    /// witness patch and try every legal further glue — no new
+    /// `CoarseJunction` pairs should arise. Skips `normalize()` on
+    /// the trial because `CoarseJunction` is normalize-invariant.
+    /// Logs progress every `progress_every` patches.
+    fn assert_seg_set_closed<T: IsComplex + IsRingOrField + Units>(
+        bfs: &SegmentTypeBFS<T>,
+        name: &str,
+        progress_every: usize,
+    ) {
+        let total_patches = bfs.patches().len();
+        let start = std::time::Instant::now();
+        let mut glues_tried = 0usize;
+        let mut glues_succeeded = 0usize;
         let mut new_segs = 0usize;
-        for patch in bfs.patches() {
+        for (idx, patch) in bfs.patches().iter().enumerate() {
             for pm in patch.get_all_matches() {
+                glues_tried += 1;
                 let mut trial = patch.clone();
                 if !trial.add_tile(&pm) {
                     continue;
                 }
-                trial.normalize();
+                glues_succeeded += 1;
                 let n = trial.boundary_len();
-                let juncs: Vec<OpenVertexType> = (0..n)
-                    .filter_map(|i| trial.junction_vertex_type_at(i))
+                let juncs: Vec<CoarseJunction> = (0..n)
+                    .filter_map(|i| trial.coarse_junction_at(i))
                     .collect();
                 let k = juncs.len();
                 if k < 2 {
@@ -296,26 +329,110 @@ mod tests {
                 for j in 0..k {
                     let cw = &juncs[j];
                     let ccw = &juncs[(j + 1) % k];
-                    if bfs.seg_index().vertex_types_to_seg(cw, ccw).is_none() {
+                    if bfs.lookup_seg(cw, ccw).is_none() {
                         new_segs += 1;
                     }
                 }
             }
+            if progress_every > 0 && (idx + 1) % progress_every == 0 {
+                eprintln!(
+                    "{name}: closure check patch {}/{} ({:.1}%), glues tried={}, succeeded={}, new segs so far={}, elapsed={:.1}s",
+                    idx + 1,
+                    total_patches,
+                    100.0 * (idx + 1) as f64 / total_patches as f64,
+                    glues_tried,
+                    glues_succeeded,
+                    new_segs,
+                    start.elapsed().as_secs_f64(),
+                );
+            }
         }
-        assert_eq!(new_segs, 0, "BFS seg set should be closed under one more glue");
+        eprintln!(
+            "{name}: closure check FINAL: patches={}, glues tried={}, succeeded={}, new segs={}, elapsed={:.1}s",
+            total_patches,
+            glues_tried,
+            glues_succeeded,
+            new_segs,
+            start.elapsed().as_secs_f64(),
+        );
+        assert_eq!(new_segs, 0, "{name} BFS seg set should be closed under one more glue");
     }
 
     #[test]
     fn hex_seg_set_is_closed() {
         let bfs = SegmentTypeBFS::run(hex_tileset(), 100_000, 100_000).unwrap();
-        assert_seg_set_closed(&bfs);
+        assert_seg_set_closed(&bfs, "hex", 0);
+    }
+
+    /// Trace through one missing seg on spectre: find a witness patch
+    /// P and a glue M that produces a `CoarseJunction` pair NOT in
+    /// the BFS's seg index, then report the geometric details for
+    /// analysis.
+    #[test]
+    #[ignore]
+    fn spectre_diagnose_missing_seg() {
+        let bfs = SegmentTypeBFS::run(spectre_tileset(), 500_000, 500_000).unwrap();
+        eprintln!(
+            "spectre BFS: {} segs, {} witness patches",
+            bfs.num_segs(),
+            bfs.num_patches()
+        );
+        for (patch_idx, patch) in bfs.patches().iter().enumerate() {
+            let patch_n = patch.boundary_len();
+            for pm in patch.get_all_matches() {
+                let mut trial = patch.clone();
+                if !trial.add_tile(&pm) {
+                    continue;
+                }
+                let n = trial.boundary_len();
+                let juncs: Vec<(usize, CoarseJunction)> = (0..n)
+                    .filter_map(|i| trial.coarse_junction_at(i).map(|cj| (i, cj)))
+                    .collect();
+                let k = juncs.len();
+                if k < 2 {
+                    continue;
+                }
+                for j in 0..k {
+                    let (cw_pos, cw_cj) = &juncs[j];
+                    let (ccw_pos, ccw_cj) = &juncs[(j + 1) % k];
+                    if bfs.lookup_seg(cw_cj, ccw_cj).is_none() {
+                        eprintln!("---");
+                        eprintln!("MISSING SEG FOUND on patch {}:", patch_idx + 1);
+                        eprintln!("  patch boundary_len = {}", patch_n);
+                        eprintln!(
+                            "  applied match: start_a={}, len={}, start_b={}, tile_id={}",
+                            pm.start_a, pm.len, pm.start_b, pm.tile_id
+                        );
+                        eprintln!("  trial boundary_len = {}", n);
+                        eprintln!(
+                            "  missing pair position on trial: cw vertex {} → ccw vertex {}",
+                            cw_pos, ccw_pos
+                        );
+                        eprintln!("  missing seg cw junction: {:?}", cw_cj);
+                        eprintln!("  missing seg ccw junction: {:?}", ccw_cj);
+                        let dist_ccw = (ccw_pos + n - cw_pos) % n;
+                        eprintln!(
+                            "  CCW distance from cw_pos to ccw_pos on trial: {} edges",
+                            dist_ccw
+                        );
+                        eprintln!(
+                            "  match length: {} edges (tile {} perimeter)",
+                            pm.len, pm.tile_id
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        panic!("expected to find a missing seg but didn't");
     }
 
     /// Spectre closure: O(patches × glues_per_patch) — large; gated.
+    /// Reports progress every 1000 witness patches.
     #[test]
     #[ignore]
     fn spectre_seg_set_is_closed() {
         let bfs = SegmentTypeBFS::run(spectre_tileset(), 500_000, 500_000).unwrap();
-        assert_seg_set_closed(&bfs);
+        assert_seg_set_closed(&bfs, "spectre", 1_000);
     }
 }
