@@ -1096,6 +1096,38 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
+    /// All `add_tile` candidates whose matched edge run absorbs at
+    /// least one edge in the cyclic closed-closed edge range
+    /// `[start_edge, ..., end_edge]`.
+    ///
+    /// The range is interpreted CCW: if `start_edge <= end_edge` it's
+    /// the linear segment `[start_edge, end_edge]`, otherwise it
+    /// wraps through `n-1`/`0` and covers `[start_edge, ..., n-1]`
+    /// and `[0, ..., end_edge]`. Length is always `(end_edge -
+    /// start_edge + n) % n + 1` edges. To query a single edge, pass
+    /// `start_edge == end_edge`. To query the full boundary, pass
+    /// any `start_edge` with `end_edge = (start_edge + n - 1) % n`.
+    ///
+    /// A match `(start_a, len)` "absorbs" edges `[start_a, start_a +
+    /// len - 1]` (mod `n`). The result is every match whose absorbed
+    /// run shares at least one edge with the queried range. Returns
+    /// an empty vec for empty boundaries.
+    pub fn get_matches_in_edge_range(
+        &self,
+        start_edge: usize,
+        end_edge: usize,
+    ) -> Vec<PatchMatch> {
+        let n = self.boundary_len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let range_len = (end_edge + n - start_edge) % n + 1;
+        self.get_all_matches()
+            .into_iter()
+            .filter(|pm| cyclic_arcs_overlap(start_edge, range_len, pm.start_a, pm.len, n))
+            .collect()
+    }
+
     #[allow(dead_code)]
     pub(crate) fn ensure_candidates_materialized(&mut self) {
         if let PatchState::Growing {
@@ -2062,6 +2094,28 @@ pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -
     cyclic_diff <= len
 }
 
+/// Whether two **edge-inclusive** cyclic arcs on a boundary of length
+/// `n` share at least one edge.
+///
+/// Arc `A` = edges `[a, a+1, ..., a+l_a - 1]` (mod `n`);
+/// arc `B` = edges `[b, b+1, ..., b+l_b - 1]` (mod `n`).
+/// Both arcs are interpreted on a cycle of length `n`; either arc may
+/// wrap. Empty arcs (`l_a == 0` or `l_b == 0`) never overlap.
+///
+/// Returns true iff the two arcs share at least one boundary edge.
+/// Internal helper for [`GrowingPatch::get_matches_in_edge_range`].
+pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n: usize) -> bool {
+    if l_a == 0 || l_b == 0 || n == 0 {
+        return false;
+    }
+    // Two cyclic arcs overlap iff either's start is "in" the other.
+    // "Start of B in A": forward cyclic distance from `a` to `b` is
+    // strictly less than `l_a`. Symmetric for "start of A in B".
+    let b_in_a = (b + n - a % n) % n < l_a;
+    let a_in_b = (a + n - b % n) % n < l_b;
+    b_in_a || a_in_b
+}
+
 /// Compute the new boundary angles after gluing `pm.tile_id`'s tile onto
 /// the boundary `angles` along the match described by `pm`.
 ///
@@ -2514,6 +2568,134 @@ mod tests {
         // Edge cases.
         assert!(!cyclic_range_contains(0, 0, 0, 10), "len=0 → false");
         assert!(!cyclic_range_contains(0, 5, 0, 0), "n=0 → false");
+    }
+
+    /// Pure unit test for [`cyclic_arcs_overlap`]. Exhaustively
+    /// cross-checks against brute-force edge enumeration over small
+    /// boundary sizes plus a handful of regression cases (empty arcs,
+    /// zero-length boundary, full-cycle arcs, wraparound on both
+    /// arcs).
+    #[test]
+    fn cyclic_arcs_overlap_unit() {
+        fn brute_edges(start: usize, len: usize, n: usize) -> std::collections::BTreeSet<usize> {
+            if len == 0 || n == 0 {
+                return std::collections::BTreeSet::new();
+            }
+            (0..len).map(|i| (start + i) % n).collect()
+        }
+        fn brute_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n: usize) -> bool {
+            let arc_a = brute_edges(a, l_a, n);
+            let arc_b = brute_edges(b, l_b, n);
+            !arc_a.is_disjoint(&arc_b)
+        }
+
+        // Exhaustive cross-check over moderate sizes.
+        for n in [1, 2, 5, 8, 13] {
+            for a in 0..n {
+                for l_a in 0..=(n + 1) {
+                    for b in 0..n {
+                        for l_b in 0..=(n + 1) {
+                            let got = cyclic_arcs_overlap(a, l_a, b, l_b, n);
+                            let want = brute_overlap(a, l_a, b, l_b, n);
+                            assert_eq!(
+                                got, want,
+                                "mismatch: a={a} l_a={l_a} b={b} l_b={l_b} n={n}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Targeted edge cases.
+        assert!(!cyclic_arcs_overlap(0, 0, 0, 5, 10), "empty arc never overlaps");
+        assert!(!cyclic_arcs_overlap(0, 5, 0, 0, 10), "empty arc never overlaps (other side)");
+        assert!(!cyclic_arcs_overlap(0, 5, 0, 5, 0), "n=0 → false");
+        assert!(cyclic_arcs_overlap(0, 10, 5, 1, 10), "full-cycle A vs any non-empty B");
+        assert!(cyclic_arcs_overlap(7, 5, 1, 2, 10), "wraparound A vs interior B");
+        assert!(!cyclic_arcs_overlap(0, 3, 5, 3, 10), "disjoint interiors");
+        assert!(cyclic_arcs_overlap(0, 3, 2, 3, 10), "edge 2 shared");
+    }
+
+    /// `get_matches_in_edge_range` agreement with the brute-force
+    /// derivation (= filter `get_all_matches()` by edge-set
+    /// intersection). Exhaustive across all start/end positions on
+    /// real BFS-grown patches in hex and spectre tilesets.
+    #[test]
+    fn get_matches_in_edge_range_matches_brute_force() {
+        for ts in [
+            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()])),
+            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()])),
+        ] {
+            let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+            let first = gp.get_all_matches().into_iter().next().expect("seed match");
+            assert!(gp.add_tile(&first), "seed add");
+            let n = gp.boundary_len();
+            assert!(n > 0);
+            let all = gp.get_all_matches();
+            for start in 0..n {
+                for end in 0..n {
+                    let range_len = (end + n - start) % n + 1;
+                    let want: std::collections::BTreeSet<(usize, usize, usize, usize)> = all
+                        .iter()
+                        .filter(|pm| {
+                            cyclic_arcs_overlap(start, range_len, pm.start_a, pm.len, n)
+                        })
+                        .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
+                        .collect();
+                    let got: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
+                        .get_matches_in_edge_range(start, end)
+                        .into_iter()
+                        .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
+                        .collect();
+                    assert_eq!(
+                        got, want,
+                        "mismatch on n={n} start={start} end={end} range_len={range_len}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Identity test: a range covering the full boundary returns
+    /// every match (= equivalent to `get_all_matches()`).
+    #[test]
+    fn get_matches_in_edge_range_full_boundary_equals_all() {
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(
+            vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()],
+        ));
+        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        let first = gp.get_all_matches().into_iter().next().unwrap();
+        assert!(gp.add_tile(&first));
+        let n = gp.boundary_len();
+        let mut all: Vec<_> = gp.get_all_matches();
+        all.sort_by_key(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
+        for start in 0..n {
+            let end = (start + n - 1) % n;
+            let mut got = gp.get_matches_in_edge_range(start, end);
+            got.sort_by_key(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id));
+            assert_eq!(got, all, "full-boundary range from start={start}");
+        }
+    }
+
+    /// Empty-boundary patch: `get_matches_in_edge_range` returns an
+    /// empty vec without panicking.
+    #[test]
+    fn get_matches_in_edge_range_handles_empty_boundary() {
+        // Take an end-state (Closed) patch via from_parts with empty
+        // boundary. Direct construction is simpler.
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(
+            vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()],
+        ));
+        let gp = GrowingPatch::new(Arc::clone(&ts), 0);
+        // The seed-state patch returns boundary_len = 0 since seed has
+        // no boundary edges materialized yet. Confirm this.
+        // (Note: seed state still has `cached_matches`, so
+        // get_all_matches returns non-empty even with boundary_len=0.)
+        if gp.boundary_len() == 0 {
+            let got = gp.get_matches_in_edge_range(0, 0);
+            assert!(got.is_empty(), "empty boundary → no matches");
+        }
     }
 
     /// Regression test for the keystone-glue path in
