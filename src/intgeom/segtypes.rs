@@ -701,6 +701,134 @@ mod tests {
     /// only captures phase-1 → phase-1 transitions. A full mapping
     /// requires phase-1 → phase-2 transitions too; that work is on
     /// hold pending a design rethink.
+    /// Closure check: does the combined seg set from phase-1 (ctx +
+    /// aug) and phase-2 boundaries cover every seg that arises from
+    /// one further glue on any of those patches?
+    ///
+    /// If yes → the BFS catalog is seg-complete and we don't need a
+    /// new algorithm. If no → the gap is real and a different
+    /// enumeration is needed.
+    #[test]
+    #[ignore]
+    fn neighborhood_bfs_seg_closure_check() {
+        for (name, idx) in [("hex", hex_idx()), ("spectre", spectre_idx())] {
+            let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
+
+            // Step 1: build S = union of all junction pairs visible
+            // on phase-1 ctx, phase-1 aug, and phase-2 patch boundaries.
+            let mut s: FxHashSet<SegmentTypePair> = FxHashSet::default();
+            let mut all_patches: Vec<GrowingPatch<ZZ12>> = Vec::new();
+
+            for entry in idx.entries() {
+                match entry {
+                    NtEntry::Phase1(nt) => {
+                        let Some((ctx, junc_positions)) =
+                            GrowingPatch::construct_witness_from_vt_sequence(
+                                &nt.vt_seq,
+                                Arc::clone(&mi),
+                            )
+                        else {
+                            continue;
+                        };
+                        record_cyclic_pairs(&ctx, &mut s);
+                        let ctx_n = ctx.boundary_len();
+                        if ctx_n == 0 || junc_positions.is_empty() {
+                            continue;
+                        }
+                        let first_junc = junc_positions[0];
+                        let cw_frontier =
+                            (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
+                        let central_n = mi.tileset().rat(nt.central_tile_id).seq().len();
+                        let match_len = (nt.cw_anchor_on_central + central_n
+                            - nt.ccw_anchor_on_central)
+                            % central_n;
+                        if match_len == 0 || match_len >= central_n {
+                            continue;
+                        }
+                        let central_pm = PatchMatch {
+                            start_a: cw_frontier,
+                            len: match_len,
+                            start_b: nt.cw_anchor_on_central,
+                            tile_id: nt.central_tile_id,
+                        };
+                        let mut aug = ctx.clone();
+                        if !aug.add_tile(&central_pm) {
+                            continue;
+                        }
+                        record_cyclic_pairs(&aug, &mut s);
+                        all_patches.push(aug);
+                    }
+                    NtEntry::Phase2(st) => {
+                        let Some(patch) = st.to_patch(Arc::clone(&mi)) else {
+                            continue;
+                        };
+                        record_cyclic_pairs(&patch, &mut s);
+                        all_patches.push(patch);
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: phase-1+phase-2 union seg set |S| = {}, patches collected = {}",
+                s.len(),
+                all_patches.len()
+            );
+
+            // Step 2: for each collected patch, try every legal glue
+            // and check if any boundary seg of the result isn't in S.
+            let mut new_segs: FxHashSet<SegmentTypePair> = FxHashSet::default();
+            let mut glues_tried = 0usize;
+            let mut glues_succeeded = 0usize;
+            for patch in &all_patches {
+                let matches = patch.get_all_matches();
+                for pm in matches {
+                    glues_tried += 1;
+                    let mut trial = patch.clone();
+                    if !trial.add_tile(&pm) {
+                        continue;
+                    }
+                    glues_succeeded += 1;
+                    let n = trial.boundary_len();
+                    let juncs: Vec<OpenVertexType> = (0..n)
+                        .filter_map(|i| trial.junction_vertex_type_at(i))
+                        .collect();
+                    let k = juncs.len();
+                    if k < 2 {
+                        continue;
+                    }
+                    for j in 0..k {
+                        let pair = (juncs[j].clone(), juncs[(j + 1) % k].clone());
+                        if !s.contains(&pair) {
+                            new_segs.insert(pair);
+                        }
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: glues tried = {}, succeeded = {}, NEW segs not in S = {}",
+                glues_tried,
+                glues_succeeded,
+                new_segs.len()
+            );
+        }
+    }
+
+    fn record_cyclic_pairs<T: IsComplex + IsRingOrField + Units>(
+        patch: &GrowingPatch<T>,
+        out: &mut FxHashSet<SegmentTypePair>,
+    ) {
+        let n = patch.boundary_len();
+        let juncs: Vec<OpenVertexType> = (0..n)
+            .filter_map(|i| patch.junction_vertex_type_at(i))
+            .collect();
+        let k = juncs.len();
+        if k < 2 {
+            return;
+        }
+        for j in 0..k {
+            out.insert((juncs[j].clone(), juncs[(j + 1) % k].clone()));
+        }
+    }
+
     #[test]
     fn classify_segments_diagnostic() {
         for (name, idx) in [("hex", hex_idx()), ("spectre", spectre_idx())] {
