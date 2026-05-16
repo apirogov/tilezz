@@ -278,6 +278,19 @@ mod tests {
         ]))
     }
 
+    fn square_tileset() -> Arc<TileSet<ZZ12>> {
+        Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::square::<ZZ12>()).unwrap(),
+        ]))
+    }
+
+    fn mixed_tileset() -> Arc<TileSet<ZZ12>> {
+        Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::square::<ZZ12>()).unwrap(),
+            Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap(),
+        ]))
+    }
+
     #[test]
     fn hex_segs_enumerated() {
         let bfs = SegmentTypeBFS::run(hex_tileset(), 100_000, 100_000)
@@ -288,6 +301,40 @@ mod tests {
             bfs.num_patches()
         );
         assert!(bfs.num_segs() > 0);
+    }
+
+    #[test]
+    fn square_segs_enumerated() {
+        let bfs = SegmentTypeBFS::run(square_tileset(), 100_000, 100_000)
+            .expect("square BFS terminates within caps");
+        eprintln!("square: segs={} patches={}", bfs.num_segs(), bfs.num_patches());
+        assert!(bfs.num_segs() > 0);
+    }
+
+    #[test]
+    fn square_seg_set_is_closed() {
+        let bfs = SegmentTypeBFS::run(square_tileset(), 100_000, 100_000).unwrap();
+        assert_seg_set_closed(&bfs, "square", 0);
+    }
+
+    #[test]
+    fn mixed_segs_enumerated() {
+        let bfs = SegmentTypeBFS::run(mixed_tileset(), 200_000, 200_000)
+            .expect("mixed BFS terminates within caps");
+        eprintln!(
+            "mixed (square+hex): segs={} patches={}",
+            bfs.num_segs(),
+            bfs.num_patches()
+        );
+        assert!(bfs.num_segs() > 0);
+    }
+
+    /// Mixed closure check — gated since runtime can be sizeable.
+    #[test]
+    #[ignore]
+    fn mixed_seg_set_is_closed() {
+        let bfs = SegmentTypeBFS::run(mixed_tileset(), 200_000, 200_000).unwrap();
+        assert_seg_set_closed(&bfs, "mixed", 1_000);
     }
 
     /// Spectre is much larger than hex; gated for cost.
