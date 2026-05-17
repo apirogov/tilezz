@@ -237,35 +237,120 @@ impl RuleAnalysis {
             covering_lhses(&trial_sids, rhs_idx, &mut alive_by_rule[rule_id]);
         }
 
-        // Per-rule fixed-point iteration:
-        //   - A rule R is "stuck" iff R's own trial has no non-cursed
-        //     LHS covering R.rhs (= every covering LHS on T_R is
-        //     cursed). This captures "applying R lands us where we
-        //     can't continue with a non-cursed rewrite".
-        //   - R is cursed iff R.rhs contains a terminal OR R is stuck.
-        //   - LHS is cursed iff every rule with that LHS is cursed.
-        //   - Iterate until stable.
-        // Initial: cursed = rules containing terminal in RHS.
+        // Step A: compute nonlocal_rules FIRST (over all rules), so
+        // the fixed-point can exclude nonlocal rules from "alive
+        // evidence" — a nonlocal rule is unreliable, applying it can
+        // fail on the very patch we'd want it on, so we shouldn't
+        // count it as a continuation guarantee.
+        let known_lhses_ref: FxHashSet<&Vec<usize>> =
+            table.rules_by_lhs.keys().collect();
+        let mut lhs_occurrences: FxHashMap<Vec<usize>, Vec<(usize, usize)>> =
+            FxHashMap::default();
+        for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
+            let n = patch.boundary_len();
+            if n == 0 {
+                continue;
+            }
+            let juncs: Vec<usize> =
+                (0..n).filter(|&i| patch.is_junction(i)).collect();
+            let k = juncs.len();
+            if k < 2 {
+                continue;
+            }
+            let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
+            for j in 0..k {
+                let cw_cj = patch
+                    .coarse_junction_at(juncs[j])
+                    .expect("known junction");
+                let ccw_cj = patch
+                    .coarse_junction_at(juncs[(j + 1) % k])
+                    .expect("known junction");
+                let id = seq_bfs
+                    .seg_bfs()
+                    .lookup_seg(&cw_cj, &ccw_cj)
+                    .expect("seg in DB");
+                seg_ids.push(id);
+            }
+            let max_len = max_lhs_len.min(k);
+            for start in 0..k {
+                let mut subseq: Vec<usize> = Vec::with_capacity(max_len);
+                for off in 0..max_len {
+                    subseq.push(seg_ids[(start + off) % k]);
+                    if known_lhses_ref.contains(&subseq) {
+                        lhs_occurrences
+                            .entry(subseq.clone())
+                            .or_default()
+                            .push((patch_id, juncs[start]));
+                    }
+                }
+            }
+        }
+
+        let mut nonlocal_rules: FxHashSet<usize> = FxHashSet::default();
+        for (rule_id, r) in rules.iter().enumerate() {
+            let r_patch = &seq_bfs.patches()[r.witness_patch_id];
+            let r_n = r_patch.boundary_len();
+            let r_juncs: Vec<usize> =
+                (0..r_n).filter(|&i| r_patch.is_junction(i)).collect();
+            let (r_start_seg, _) = lhs_seg_range(&r_juncs, r_n, &r.witness_pm);
+            let r_canonical = (r.witness_patch_id, r_juncs[r_start_seg]);
+
+            let occurrences = match lhs_occurrences.get(&r.lhs) {
+                Some(v) => v,
+                None => continue,
+            };
+            for &(patch_id, j_cw) in occurrences {
+                if (patch_id, j_cw) == r_canonical {
+                    continue;
+                }
+                let w_patch = &seq_bfs.patches()[patch_id];
+                let n_w = w_patch.boundary_len();
+                let start_a = (j_cw + r.meta.start_edge_in_lhs) % n_w;
+                let pm = PatchMatch {
+                    start_a,
+                    len: r.meta.match_len,
+                    start_b: r.meta.tile_offset,
+                    tile_id: r.meta.tile_id,
+                };
+                let mut trial = w_patch.clone();
+                if !trial.add_tile(&pm) {
+                    nonlocal_rules.insert(rule_id);
+                    break;
+                }
+            }
+        }
+
+        // Step B: per-rule fixed-point iteration.
+        //   - A rule R is "unusable" iff cursed OR nonlocal — we
+        //     can't rely on it for continuation.
+        //   - An LHS is "usable" iff some rule for it is non-unusable.
+        //   - A rule R is cursed iff R.rhs contains a terminal OR
+        //     every covering LHS in alive_by_rule[R] is non-usable.
+        //   - Iterate until stable. (`nonlocal_rules` is fixed.)
         let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
             if r.rhs.iter().any(|s| terminals.contains(s)) {
                 cursed_rules.insert(rule_id);
             }
         }
-        let mut cursed_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+        let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
         let mut iterations = 0usize;
         loop {
             iterations += 1;
-            // Recompute cursed_lhs_ids.
-            cursed_lhs_ids.clear();
+            // Recompute usable_lhs_ids: LHS usable iff some rule for
+            // it is neither cursed nor nonlocal.
+            usable_lhs_ids.clear();
             for (lhs, ids) in &table.rules_by_lhs {
-                if ids.iter().all(|id| cursed_rules.contains(id)) {
+                let any_usable = ids.iter().any(|id| {
+                    !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
+                });
+                if any_usable {
                     if let Some(&lid) = lhs_index.get(lhs) {
-                        cursed_lhs_ids.insert(lid);
+                        usable_lhs_ids.insert(lid);
                     }
                 }
             }
-            // Recompute cursed_rules: rule stuck on its own trial.
+            // Recompute cursed_rules.
             let mut new_cursed_rules: FxHashSet<usize> = FxHashSet::default();
             for (rule_id, r) in rules.iter().enumerate() {
                 if r.rhs.iter().any(|s| terminals.contains(s)) {
@@ -274,7 +359,7 @@ impl RuleAnalysis {
                 }
                 let any_alive = alive_by_rule[rule_id]
                     .iter()
-                    .any(|id| !cursed_lhs_ids.contains(id));
+                    .any(|id| usable_lhs_ids.contains(id));
                 if !any_alive {
                     new_cursed_rules.insert(rule_id);
                 }
@@ -283,6 +368,18 @@ impl RuleAnalysis {
                 break;
             }
             cursed_rules = new_cursed_rules;
+        }
+
+        // For output `cursed_lhs`, use the stricter "all rules cursed"
+        // definition (not "all rules unusable") — nonlocal is reported
+        // separately.
+        let mut cursed_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+        for (lhs, ids) in &table.rules_by_lhs {
+            if ids.iter().all(|id| cursed_rules.contains(id)) {
+                if let Some(&lid) = lhs_index.get(lhs) {
+                    cursed_lhs_ids.insert(lid);
+                }
+            }
         }
 
         // Final dead_rhs: an RHS is dead iff every rule with that
@@ -324,109 +421,19 @@ impl RuleAnalysis {
         eprintln!("cursed-set fixed-point converged in {} iterations", iterations);
 
         // Sanity: by construction, every non-cursed rule's trial has
-        // at least one non-cursed covering LHS. Assert this.
+        // at least one USABLE covering LHS.
         for (rule_id, _) in rules.iter().enumerate() {
             if cursed_rules.contains(&rule_id) {
                 continue;
             }
             let any_alive = alive_by_rule[rule_id]
                 .iter()
-                .any(|id| !cursed_lhs_ids.contains(id));
+                .any(|id| usable_lhs_ids.contains(id));
             assert!(
                 any_alive,
-                "non-cursed rule {} has no non-cursed covering LHS on its trial",
+                "non-cursed rule {} has no usable covering LHS on its trial",
                 rule_id,
             );
-        }
-
-        // Nonlocal rules: a rule R with LHS L is nonlocal iff there
-        // exists ANY patch in the BFS whose boundary contains L at
-        // some position where R's match fails `add_tile` — not just
-        // canonical witnesses for rules with L. We build an inverted
-        // index `lhs_occurrences: L -> [(patch_id, j_outer_cw_pos)]`
-        // by scanning every witness patch's cyclic seg sequence for
-        // every contiguous subsequence that matches a known LHS.
-        let known_lhses: FxHashSet<&Vec<usize>> = table.rules_by_lhs.keys().collect();
-        let max_lhs_len = table.rules_by_lhs.keys().map(|l| l.len()).max().unwrap_or(0);
-        let mut lhs_occurrences: FxHashMap<Vec<usize>, Vec<(usize, usize)>> =
-            FxHashMap::default();
-        for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
-            let n = patch.boundary_len();
-            if n == 0 {
-                continue;
-            }
-            let juncs: Vec<usize> =
-                (0..n).filter(|&i| patch.is_junction(i)).collect();
-            let k = juncs.len();
-            if k < 2 {
-                continue;
-            }
-            let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
-            for j in 0..k {
-                let cw_cj = patch.coarse_junction_at(juncs[j]).expect("known junction");
-                let ccw_cj = patch.coarse_junction_at(juncs[(j + 1) % k]).expect("known junction");
-                let id = seq_bfs
-                    .seg_bfs()
-                    .lookup_seg(&cw_cj, &ccw_cj)
-                    .expect("seg in DB");
-                seg_ids.push(id);
-            }
-            // Enumerate cyclic subsequences of length 1..=min(max_lhs_len, k)
-            // starting at each segment index.
-            let max_len = max_lhs_len.min(k);
-            for start in 0..k {
-                let mut subseq: Vec<usize> = Vec::with_capacity(max_len);
-                for off in 0..max_len {
-                    subseq.push(seg_ids[(start + off) % k]);
-                    if known_lhses.contains(&subseq) {
-                        lhs_occurrences
-                            .entry(subseq.clone())
-                            .or_default()
-                            .push((patch_id, juncs[start]));
-                    }
-                }
-            }
-        }
-
-        let mut nonlocal_rules: FxHashSet<usize> = FxHashSet::default();
-        for (rule_id, r) in rules.iter().enumerate() {
-            // Cursed rules are already known unusable (= they inject a
-            // terminal). Don't bother testing locality for them.
-            if cursed_rules.contains(&rule_id) {
-                continue;
-            }
-            // Compute R's own canonical L-position to skip it.
-            let r_patch = &seq_bfs.patches()[r.witness_patch_id];
-            let r_n = r_patch.boundary_len();
-            let r_juncs: Vec<usize> =
-                (0..r_n).filter(|&i| r_patch.is_junction(i)).collect();
-            let (r_start_seg, _) = lhs_seg_range(&r_juncs, r_n, &r.witness_pm);
-            let r_canonical = (r.witness_patch_id, r_juncs[r_start_seg]);
-
-            let occurrences = match lhs_occurrences.get(&r.lhs) {
-                Some(v) => v,
-                None => continue,
-            };
-
-            for &(patch_id, j_cw) in occurrences {
-                if (patch_id, j_cw) == r_canonical {
-                    continue;
-                }
-                let w_patch = &seq_bfs.patches()[patch_id];
-                let n_w = w_patch.boundary_len();
-                let start_a = (j_cw + r.meta.start_edge_in_lhs) % n_w;
-                let pm = PatchMatch {
-                    start_a,
-                    len: r.meta.match_len,
-                    start_b: r.meta.tile_offset,
-                    tile_id: r.meta.tile_id,
-                };
-                let mut trial = w_patch.clone();
-                if !trial.add_tile(&pm) {
-                    nonlocal_rules.insert(rule_id);
-                    break;
-                }
-            }
         }
 
         RuleAnalysis {
