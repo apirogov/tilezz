@@ -42,6 +42,15 @@ pub struct SeqWitness {
     pub pm: PatchMatch,
 }
 
+/// One rewriting transition: a `(witness, match)` pair where applying
+/// `pm` to `patches[patch_id]` produces the LHS sequence associated
+/// with this transition's seq slot.
+#[derive(Clone, Debug)]
+pub struct SeqTransition {
+    pub patch_id: usize,
+    pub pm: PatchMatch,
+}
+
 #[derive(Debug)]
 pub enum SeqBfsError {
     SeqCapExceeded { cap: usize },
@@ -52,12 +61,16 @@ pub struct SegSeqBFS<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     seg_bfs: SegmentTypeBFS<T>,
 
-    // Witness patches only. patch_lookup maps canonical keys to
-    // witness slot ids. Patches that don't contribute new sequences
-    // are never interned; they're explored from the queue and
-    // dropped on the spot.
+    // Every explored patch that has at least one successful match
+    // is interned here as a witness — its `patch_id` is used as the
+    // anchor for transitions out of any seq the patch can apply.
     patches: Vec<GrowingPatch<T>>,
     patch_lookup: FxHashMap<PatchKey, usize>,
+    // Parallel to `patches`: whether this witness registered any
+    // globally-new seq at the time it was processed. Lets us
+    // distinguish "contributing" patches (= classical BFS witnesses)
+    // from "redundant" ones that only re-affirm known seqs.
+    patch_contributed: Vec<bool>,
 
     // Dedup for the BFS: every key we've ever enqueued (= prevents
     // re-processing the same patch). Includes witnesses' keys.
@@ -67,6 +80,11 @@ pub struct SegSeqBFS<T: IsComplex> {
     sequences: Vec<Vec<usize>>,
     seq_lookup: FxHashMap<Vec<usize>, usize>,
     seq_witnesses: Vec<SeqWitness>,
+
+    // Per-seq list of every `(witness, match)` pair that produces the
+    // seq — i.e. the rewriting transitions out of this LHS, indexed
+    // by seq_id. `seq_transitions[i]` and `sequences[i]` line up.
+    seq_transitions: Vec<Vec<SeqTransition>>,
 
     // BFS frontier: patches awaiting exploration. Owned by value,
     // since we may discard them entirely on exploration.
@@ -94,10 +112,12 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_bfs,
             patches: Vec::new(),
             patch_lookup: FxHashMap::default(),
+            patch_contributed: Vec::new(),
             seen_keys: FxHashSet::default(),
             sequences: Vec::new(),
             seq_lookup: FxHashMap::default(),
             seq_witnesses: Vec::new(),
+            seq_transitions: Vec::new(),
             queue: VecDeque::new(),
             seq_cap,
             patch_cap,
@@ -109,6 +129,20 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
 
     pub fn num_sequences(&self) -> usize {
         self.sequences.len()
+    }
+
+    /// Total rewriting transitions across all seqs (= sum of
+    /// `seq_transitions[i].len()` for all `i`). One transition per
+    /// successful `(witness, match)` pair. Should equal
+    /// `rules + collisions` from the extracted [`SegRewriteTable`].
+    pub fn num_transitions(&self) -> usize {
+        self.seq_transitions.iter().map(|v| v.len()).sum()
+    }
+
+    /// Per-seq list of all `(witness, match)` pairs that produce that
+    /// LHS. Aligned with [`Self::sequences`].
+    pub fn seq_transitions(&self, seq_id: usize) -> Option<&[SeqTransition]> {
+        self.seq_transitions.get(seq_id).map(|v| v.as_slice())
     }
 
     /// Number of distinct patches ever enqueued (= seen_keys size).
@@ -135,6 +169,14 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
 
     pub fn patch(&self, patch_id: usize) -> Option<&GrowingPatch<T>> {
         self.patches.get(patch_id)
+    }
+
+    /// Whether `patches[patch_id]` registered any new seq at the time
+    /// it was processed. True for "contributing" witnesses (= the
+    /// classical BFS witness set); false for patches that only
+    /// re-affirmed seqs already in `seq_lookup`.
+    pub fn patch_contributed(&self, patch_id: usize) -> bool {
+        self.patch_contributed[patch_id]
     }
 
     pub fn seg_bfs(&self) -> &SegmentTypeBFS<T> {
@@ -232,31 +274,30 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_ids.push(id);
         }
 
-        // Enumerate matches. Each match producing a (globally-)new
-        // sequence: enqueue its trial eagerly and note (seq, pm) for
-        // later registration. Duplicates within this source — same
-        // seq from different matches — still enqueue distinct
-        // trials (they may be different patches under normalize),
-        // but the seq is only noted once.
-        let mut local_new_seqs: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
+        // Enumerate matches. For every match where `add_tile`
+        // succeeds we record one transition. The match's seq is
+        // *new* (= the LHS hasn't been seen globally before) iff
+        // we also enqueue the normalized trial for future
+        // exploration. Subsequent matches producing the same new
+        // seq on this witness don't re-enqueue the trial (one is
+        // enough), but they DO contribute a transition.
+        let mut transitions_local: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
+        let mut new_seq_order: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
         let mut local_seen: FxHashSet<Vec<usize>> = FxHashSet::default();
         for pm in patch.get_all_matches() {
             if pm.len == 0 {
                 continue;
             }
-            let start_edge = pm.start_a;
-            let end_edge = (pm.start_a + pm.len - 1) % n;
-            let start_seg = seg_containing_edge(&juncs, start_edge, n);
-            let end_seg = seg_containing_edge(&juncs, end_edge, n);
+            let (start_seg, end_seg) = lhs_seg_range(&juncs, n, &pm);
 
             // Build the LHS sequence: [start_seg, internal..., end_seg].
-            // Both endpoint segs are partially absorbed by the match —
-            // the match's CW anchor is inside start_seg, CCW anchor
-            // inside end_seg. Internal segs (= strictly between
-            // start_seg and end_seg cyclically) are fully absorbed.
-            // The OUTER junctions of this sequence (= start_seg's CW
-            // endpoint, end_seg's CCW endpoint) are preserved by the
-            // rewrite.
+            // Internal segs (= strictly between start_seg and end_seg
+            // cyclically) are fully absorbed; the endpoint segs are
+            // partially absorbed *or* extended past an anchor that
+            // landed on a junction (see `lhs_seg_range`). The OUTER
+            // junctions of this sequence (= start_seg's CW endpoint,
+            // end_seg's CCW endpoint) are preserved by the rewrite —
+            // they are strictly outside the match's anchor closure.
             let mut seq = Vec::with_capacity(k);
             let mut idx = start_seg;
             loop {
@@ -265,45 +306,60 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
                     break;
                 }
                 idx = (idx + 1) % k;
-                debug_assert!(seq.len() <= k, "infinite loop in seq build");
+                debug_assert!(seq.len() <= k + 1, "infinite loop in seq build");
             }
 
-            if self.seq_lookup.contains_key(&seq) {
-                continue;
-            }
-            if !local_seen.insert(seq.clone()) {
-                // Duplicate seq within this source — skip both the
-                // registration and the trial enqueue (= match the
-                // original BFS behavior where seq_lookup was updated
-                // inline).
-                continue;
-            }
-
-            // Trial.
+            // Validate the match by trying `add_tile` on a clone.
+            // Failed matches are not transitions.
             let mut trial = patch.clone();
             if !trial.add_tile(&pm) {
                 continue;
             }
+
+            // Record the transition unconditionally.
+            transitions_local.push((seq.clone(), pm.clone()));
+
+            // First time we see this seq on this witness *and* it's
+            // globally new → enqueue its trial and remember to
+            // register the seq.
+            if !local_seen.insert(seq.clone()) {
+                continue;
+            }
+            if self.seq_lookup.contains_key(&seq) {
+                continue;
+            }
             trial.normalize();
             self.enqueue_if_unseen(trial)?;
-            local_new_seqs.push((seq, pm.clone()));
+            new_seq_order.push((seq, pm.clone()));
         }
 
-        if local_new_seqs.is_empty() {
+        if transitions_local.is_empty() {
+            // No valid matches at all — nothing to anchor a witness on.
             return Ok(());
         }
 
-        // Source contributed — register it as a witness and claim
-        // the noted sequences.
+        // Register this patch as a witness (every patch with at least
+        // one successful match anchors transitions for its LHS keys).
+        let contributed = !new_seq_order.is_empty();
         let patch_id = self.register_witness(patch);
-        for (seq, pm) in local_new_seqs {
+        self.patch_contributed.push(contributed);
+
+        // Allocate new seq slots in discovery order.
+        for (seq, pm) in new_seq_order {
             let seq_id = self.sequences.len();
             self.seq_lookup.insert(seq.clone(), seq_id);
             self.sequences.push(seq);
             self.seq_witnesses.push(SeqWitness { patch_id, pm });
+            self.seq_transitions.push(Vec::new());
             if self.sequences.len() > self.seq_cap {
                 return Err(SeqBfsError::SeqCapExceeded { cap: self.seq_cap });
             }
+        }
+
+        // Push every recorded transition into its seq's bucket.
+        for (seq, pm) in transitions_local {
+            let seq_id = self.seq_lookup[&seq];
+            self.seq_transitions[seq_id].push(SeqTransition { patch_id, pm });
         }
         Ok(())
     }
@@ -318,11 +374,65 @@ fn patch_key<T: IsComplex + IsRingOrField + Units>(patch: &GrowingPatch<T>) -> P
     )
 }
 
+/// Compute the LHS segment range `(start_seg, end_seg)` for a match.
+///
+/// The match touches edges `[start_a, start_a + len)`. Its anchors are
+/// the vertices `cw_anchor = start_a` and `ccw_anchor = start_a + len`.
+/// The LHS is the CCW arc of segs from `start_seg` to `end_seg`.
+///
+/// If an anchor is strictly inside a segment, that segment is partially
+/// absorbed by the match (= the anchor becomes a new junction). If an
+/// anchor lands **on** an existing source junction, the *neighbor*
+/// seg on that side is pulled into the LHS instead — because the
+/// junction's CJ is modified by the glue and is no longer a "preserved
+/// outer junction". The extension keeps the anchor strictly interior
+/// to the LHS sweep so the trial walk always finds 4 junctions on the
+/// rewrite side (= 3 RHS segs).
+pub(crate) fn lhs_seg_range(
+    juncs: &[usize],
+    n: usize,
+    pm: &PatchMatch,
+) -> (usize, usize) {
+    let k = juncs.len();
+    let cw_anchor = pm.start_a;
+    let ccw_anchor = (pm.start_a + pm.len) % n;
+    let end_edge = (pm.start_a + pm.len - 1) % n;
+    let mut start_seg = seg_containing_edge(juncs, pm.start_a, n);
+    let mut end_seg = seg_containing_edge(juncs, end_edge, n);
+    if juncs[start_seg] == cw_anchor {
+        start_seg = (start_seg + k - 1) % k;
+    }
+    if juncs[(end_seg + 1) % k] == ccw_anchor {
+        end_seg = (end_seg + 1) % k;
+    }
+    // PADDING INVARIANT: the outer junctions of the LHS sweep must be
+    // untouched by the match (= not coincide with either anchor). If
+    // either outer lands on an anchor, the "preserved outer" promise
+    // is broken and the rewrite is meaningless. This can only happen
+    // if BOTH anchors land on existing junctions in a patch with too
+    // few junctions to extend past them on both sides (e.g. k=2 with
+    // a match exactly between the two junctions — geometrically
+    // impossible for spectre, per construction).
+    let cw_outer = juncs[start_seg];
+    let ccw_outer = juncs[(end_seg + 1) % k];
+    assert!(
+        cw_outer != cw_anchor
+            && cw_outer != ccw_anchor
+            && ccw_outer != cw_anchor
+            && ccw_outer != ccw_anchor,
+        "padding invariant violated: outer junctions coincide with a \
+         match anchor (juncs={:?}, n={}, pm={:?}, start_seg={}, end_seg={}, \
+         cw_outer={}, ccw_outer={}, cw_anchor={}, ccw_anchor={})",
+        juncs, n, pm, start_seg, end_seg, cw_outer, ccw_outer, cw_anchor, ccw_anchor,
+    );
+    (start_seg, end_seg)
+}
+
 /// Given the cyclic-CCW-sorted junction vertex positions `juncs` on
 /// a boundary of length `n`, find the index `i` of the segment that
 /// owns the edge at position `e`. The segment with index `i` covers
 /// edges `[juncs[i], juncs[(i+1) % k])` (mod n).
-fn seg_containing_edge(juncs: &[usize], e: usize, n: usize) -> usize {
+pub(crate) fn seg_containing_edge(juncs: &[usize], e: usize, n: usize) -> usize {
     let k = juncs.len();
     for i in 0..k {
         let start = juncs[i];
