@@ -141,44 +141,33 @@ impl RuleAnalysis {
         let terminals: FxHashSet<usize> =
             rhs_segs.difference(&lhs_segs).copied().collect();
 
-        // Dead RHS detection (probe-based, following the user's
-        // description literally).
-        //
-        // For each RHS r, for each witness W with r appearing in W's
-        // boundary at position p:
-        //   - Build a "probe" = the boundary cyclic substring of
-        //     length up to (2*(l-1) + 3), centered around r with up
-        //     to l-1 segs of left and right context (clipped at the
-        //     point where the extension would wrap past r from the
-        //     other side, on small patches).
-        //   - Search the probe for an LHS substring at position
-        //     [q, q+L) with q ≤ p_in_probe AND q + L > p_in_probe —
-        //     i.e. the LHS starts at or before r and would rewrite
-        //     at least r's first segment.
-        //   - If any such LHS exists in any probe → r is alive.
-        let known_lhses: FxHashSet<&Vec<usize>> =
-            table.rules_by_lhs.keys().collect();
-        let max_lhs_len = table
+        // For each RHS, collect the SET of distinct LHSes that cover
+        // it from the left on at least one patch (= the rule's own
+        // trial, or any registered witness whose boundary contains
+        // the RHS as a cyclic 3-substring). This is the "alive
+        // evidence": an RHS is alive iff at least one of its covering
+        // LHSes is *non-cursed*. We compute the evidence once, then
+        // iterate the cursed set to a fixed point.
+        let lhs_index: FxHashMap<Vec<usize>, usize> = table
             .rules_by_lhs
             .keys()
-            .map(|l| l.len())
-            .max()
-            .unwrap_or(0);
-
-        // For each RHS, track two flags: has_alive (seen on some
-        // patch at a left-coverable position) and has_dead (seen on
-        // some patch at a position not left-coverable).
-        let r_len = 3usize;
-        let probe_pad = max_lhs_len.saturating_sub(1);
+            .enumerate()
+            .map(|(i, k)| (k.clone(), i))
+            .collect();
+        let n_lhses = lhs_index.len();
+        let max_lhs_len = lhs_index.keys().map(|l| l.len()).max().unwrap_or(0);
         let known_rhses: FxHashSet<[usize; 3]> =
             rules.iter().map(|r| r.rhs).collect();
 
-        // Closure: given a patch's seg_ids and a probe center index,
-        // build the probe and check whether the center is alive.
-        let probe_is_alive = |seg_ids: &[usize], center: usize| -> bool {
+        // Closure: gather all LHS-ids in our set that cover `center`
+        // (= satisfy q ≤ center AND q+L > center) within the cyclic
+        // probe window around `center` of length up to 2*(l-1)+3.
+        let r_len = 3usize;
+        let probe_pad = max_lhs_len.saturating_sub(1);
+        let covering_lhses = |seg_ids: &[usize], center: usize, out: &mut FxHashSet<usize>| {
             let k = seg_ids.len();
             if k < r_len {
-                return false;
+                return;
             }
             let max_total_pad = k.saturating_sub(r_len);
             let pad_left = probe_pad.min(max_total_pad);
@@ -197,19 +186,17 @@ impl RuleAnalysis {
                         continue;
                     }
                     let sub: Vec<usize> = probe[q..q + len].to_vec();
-                    if known_lhses.contains(&sub) {
-                        return true;
+                    if let Some(&id) = lhs_index.get(&sub) {
+                        out.insert(id);
                     }
                 }
             }
-            false
         };
 
-        let mut rhs_flags: FxHashMap<[usize; 3], (bool, bool)> =
-            FxHashMap::default(); // (has_alive, has_dead)
+        let mut alive_by_lhs: FxHashMap<[usize; 3], FxHashSet<usize>> =
+            FxHashMap::default();
 
-        // Pass 1: each rule's trial — RHS at known position on the
-        // un-normalized trial.
+        // Pass 1: each rule's trial.
         for rule in rules {
             let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
             let src_n = src_patch.boundary_len();
@@ -256,18 +243,11 @@ impl RuleAnalysis {
                 None => continue,
             };
             debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
-
-            let alive = probe_is_alive(&trial_sids, rhs_idx);
-            let entry = rhs_flags.entry(rule.rhs).or_insert((false, false));
-            if alive {
-                entry.0 = true;
-            } else {
-                entry.1 = true;
-            }
+            let entry = alive_by_lhs.entry(rule.rhs).or_default();
+            covering_lhses(&trial_sids, rhs_idx, entry);
         }
 
-        // Pass 2: every registered witness — scan its boundary for
-        // length-3 substrings that match a known RHS, check each.
+        // Pass 2: every registered witness.
         for patch in seq_bfs.patches() {
             let n = patch.boundary_len();
             if n == 0 {
@@ -298,48 +278,83 @@ impl RuleAnalysis {
                 if !known_rhses.contains(&triple) {
                     continue;
                 }
-                let alive = probe_is_alive(&sids, s);
-                let entry = rhs_flags.entry(triple).or_insert((false, false));
-                if alive {
-                    entry.0 = true;
-                } else {
-                    entry.1 = true;
-                }
+                let entry = alive_by_lhs.entry(triple).or_default();
+                covering_lhses(&sids, s, entry);
             }
         }
 
-        // Classify each known RHS.
-        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
-        let mut context_sensitive_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
-        for rhs in &known_rhses {
-            match rhs_flags.get(rhs).copied().unwrap_or((false, false)) {
-                (false, _) => {
-                    dead_rhs.insert(*rhs);
-                }
-                (true, true) => {
-                    context_sensitive_rhs.insert(*rhs);
-                }
-                (true, false) => {}
-            }
-        }
-
-        // Cursed rule = RHS contains terminal OR RHS is dead.
+        // Fixed-point iteration: a rule is cursed if its RHS contains
+        // a terminal OR its RHS is dead. An RHS is dead if every LHS
+        // in its covering-evidence set is cursed. An LHS is cursed if
+        // all rules with that LHS are cursed. Iterate until stable.
         let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
-            if r.rhs.iter().any(|s| terminals.contains(s))
-                || dead_rhs.contains(&r.rhs)
-            {
+            if r.rhs.iter().any(|s| terminals.contains(s)) {
                 cursed_rules.insert(rule_id);
             }
         }
-
-        // Cursed LHS: every rule with that LHS is cursed.
-        let mut cursed_lhs: FxHashSet<Vec<usize>> = FxHashSet::default();
-        for (lhs, ids) in &table.rules_by_lhs {
-            if ids.iter().all(|id| cursed_rules.contains(id)) {
-                cursed_lhs.insert(lhs.clone());
+        let mut cursed_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+        let mut iterations = 0usize;
+        loop {
+            iterations += 1;
+            // Recompute cursed_lhs_ids.
+            cursed_lhs_ids.clear();
+            for (lhs, ids) in &table.rules_by_lhs {
+                if ids.iter().all(|id| cursed_rules.contains(id)) {
+                    if let Some(&lid) = lhs_index.get(lhs) {
+                        cursed_lhs_ids.insert(lid);
+                    }
+                }
             }
+            // Recompute dead_rhs: covering set must contain a
+            // non-cursed LHS to be alive.
+            let mut new_dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+            for rhs in &known_rhses {
+                let evidence = alive_by_lhs
+                    .get(rhs)
+                    .map(|s| s.iter().any(|id| !cursed_lhs_ids.contains(id)))
+                    .unwrap_or(false);
+                if !evidence {
+                    new_dead_rhs.insert(*rhs);
+                }
+            }
+            // Recompute cursed_rules.
+            let mut new_cursed_rules: FxHashSet<usize> = FxHashSet::default();
+            for (rule_id, r) in rules.iter().enumerate() {
+                if r.rhs.iter().any(|s| terminals.contains(s))
+                    || new_dead_rhs.contains(&r.rhs)
+                {
+                    new_cursed_rules.insert(rule_id);
+                }
+            }
+            if new_cursed_rules == cursed_rules && new_dead_rhs == dead_rhs {
+                break;
+            }
+            cursed_rules = new_cursed_rules;
+            dead_rhs = new_dead_rhs;
         }
+
+        // Reify final cursed_lhs as Vec<usize> keys.
+        let id_to_lhs: Vec<Vec<usize>> = {
+            let mut v = vec![Vec::new(); n_lhses];
+            for (lhs, &id) in &lhs_index {
+                v[id] = lhs.clone();
+            }
+            v
+        };
+        let cursed_lhs: FxHashSet<Vec<usize>> = cursed_lhs_ids
+            .iter()
+            .map(|&id| id_to_lhs[id].clone())
+            .collect();
+
+        // context_sensitive_rhs is harder to define cleanly under
+        // the fixed-point definition (since "alive" now means
+        // "some non-cursed LHS covers it"); leave as an empty set
+        // for now.
+        let context_sensitive_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+
+        eprintln!("dead-rhs fixed-point converged in {} iterations", iterations);
 
         // Nonlocal rules: a rule R with LHS L is nonlocal iff there
         // exists ANY patch in the BFS whose boundary contains L at
