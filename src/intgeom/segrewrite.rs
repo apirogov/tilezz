@@ -179,6 +179,11 @@ impl RuleAnalysis {
 
         let mut nonlocal_rules: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
+            // Cursed rules are already known unusable (= they inject a
+            // terminal). Don't bother testing locality for them.
+            if cursed_rules.contains(&rule_id) {
+                continue;
+            }
             // Compute R's own canonical L-position to skip it.
             let r_patch = &seq_bfs.patches()[r.witness_patch_id];
             let r_n = r_patch.boundary_len();
