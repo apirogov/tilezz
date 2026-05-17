@@ -420,6 +420,71 @@ mod tests {
         assert_seg_set_closed(&bfs, "hex", 0);
     }
 
+    /// Print spectre seg-type stats:
+    /// - distribution of seg lengths (= edge count between the two
+    ///   bounding junctions);
+    /// - bucket counts under two angle-sequence groupings:
+    ///   (1) interior-only (= angles at vertices STRICTLY between
+    ///       cw_junc and ccw_junc, excluding both endpoints);
+    ///   (2) extended (= one edge past each junction, vertices
+    ///       cw_junc-1, cw_junc, ..., ccw_junc, ccw_junc+1).
+    #[test]
+    #[ignore]
+    fn spectre_seg_stats() {
+        let bfs = SegmentTypeBFS::run(spectre_tileset(), 500_000, 500_000).unwrap();
+        let mut length_hist: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        let mut interior_buckets: FxHashMap<Vec<i8>, usize> = FxHashMap::default();
+        let mut extended_buckets: FxHashMap<Vec<i8>, usize> = FxHashMap::default();
+        for seg_id in 0..bfs.num_segs() {
+            let w = bfs.witness_of(seg_id).unwrap();
+            let patch = &bfs.patches()[w.patch_id];
+            let n = patch.boundary_len();
+            let cw = w.cw_junc_pos;
+            let ccw = w.ccw_junc_pos;
+            let seg_edge_len = (ccw + n - cw) % n;
+            *length_hist.entry(seg_edge_len).or_insert(0) += 1;
+            let angles = patch.angles();
+
+            // (1) Interior-only: angles at vertices (cw, ccw) — strict.
+            // For seg_edge_len = k edges, k+1 vertices total, interior
+            // count = k-1 (= 0 when k <= 1).
+            let mut interior = Vec::new();
+            if seg_edge_len >= 2 {
+                for i in 1..seg_edge_len {
+                    interior.push(angles[(cw + i) % n]);
+                }
+            }
+            *interior_buckets.entry(interior).or_insert(0) += 1;
+
+            // (2) Extended: from vertex cw-1 to vertex ccw+1
+            // inclusive. seg_edge_len + 3 angles (= seg_edge_len + 2
+            // edges).
+            let mut extended = Vec::with_capacity(seg_edge_len + 3);
+            let start = (cw + n - 1) % n;
+            for i in 0..=(seg_edge_len + 2) {
+                extended.push(angles[(start + i) % n]);
+            }
+            *extended_buckets.entry(extended).or_insert(0) += 1;
+        }
+        let n_segs = bfs.num_segs();
+        eprintln!("spectre: {} segs", n_segs);
+        eprintln!(
+            "  (1) interior-only (angles strictly between junctions): {} buckets ({:.2}× compression)",
+            interior_buckets.len(),
+            n_segs as f64 / interior_buckets.len() as f64
+        );
+        eprintln!(
+            "  (2) extended by one edge on each side: {} buckets ({:.2}× compression)",
+            extended_buckets.len(),
+            n_segs as f64 / extended_buckets.len() as f64
+        );
+        eprintln!("seg length distribution (edge count → seg count):");
+        for (len, count) in &length_hist {
+            eprintln!("  {:3}  {}", len, count);
+        }
+    }
+
     /// Trace through one missing seg on spectre: find a witness patch
     /// P and a glue M that produces a `CoarseJunction` pair NOT in
     /// the BFS's seg index, then report the geometric details for
