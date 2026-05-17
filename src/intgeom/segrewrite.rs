@@ -70,23 +70,52 @@ impl SegRewriteTable {
 
 /// Classification analysis over the rule set.
 ///
-/// - **Terminals** = segment ids that appear in some rule's RHS but
-///   never in any rule's LHS. By definition there's no rewrite that
-///   replaces them; once present they stay.
-/// - **Cursed rule** = a rule whose RHS contains a terminal segment.
-///   Applying it injects a terminal that cannot be eliminated later.
-/// - **Cursed LHS** = an LHS for which *every* applicable rule is
-///   cursed. From such an LHS there's no escape that avoids inserting
-///   a terminal.
-/// - **Nonlocal rule** = a rule that succeeds on its own canonical
-///   witness but fails (`add_tile` returns false) on at least one
-///   *other* witness with the same LHS. The LHS alone is not
-///   sufficient to know whether the rule is applicable — context
-///   beyond L matters. Strictly weaker than "cursed" (= just
-///   unreliable).
+/// Three escalating "blocked" categories at the segment / RHS / rule
+/// / LHS levels:
+///
+/// 1. **Terminal segment**: a seg id that appears in some rule's RHS
+///    but never in any rule's LHS. Once introduced, it cannot be
+///    rewritten away — there is no rule that pattern-matches it.
+///
+/// 2. **Dead RHS**: the 3-seg RHS, considered as a substring of the
+///    boundary of any patch where it appears (= the rule's own trial
+///    *and* any registered witness whose boundary happens to contain
+///    it), cannot be acted on by any rule. Concretely: on every such
+///    patch, no LHS substring of the boundary at some position
+///    `[q, q+L)` satisfies `q ≤ p` AND `q + L > p`, where `p` is the
+///    RHS's start position. (= no LHS "begins at or before the RHS
+///    and rewrites at least the RHS's first segment".)
+///
+///    Containing a terminal seg trivially implies dead — but the
+///    converse is not always true. In principle a tileset could have
+///    non-terminal-containing RHSes that are still dead: every
+///    individual seg is in some LHS, but no length-`L'` LHS covers
+///    this specific 3-seg combination from the left. For both
+///    spectre and hex, no such cases occur (dead_rhs ⊆ rhs-with-
+///    terminal), but the check is kept for tilesets where it might.
+///
+/// 3. **Context-sensitive RHS**: alive on some patches that contain
+///    it but dead on others. Tells us aliveness depends on the
+///    surrounding context, not just on the RHS itself.
+///
+/// 4. **Cursed rule**: RHS contains a terminal OR RHS is dead. Rule
+///    is a one-way trip into something we can't undo.
+///
+/// 5. **Cursed LHS**: every rule with this LHS is cursed. From this
+///    LHS there is no escape that avoids inserting irreducibility.
+///
+/// Independent of cursedness:
+///
+/// 6. **Nonlocal rule**: rule succeeds on its canonical witness but
+///    `add_tile` fails on at least one other patch that contains the
+///    same LHS. The LHS alone doesn't determine the rule's
+///    applicability — context beyond L matters. Computed only over
+///    non-cursed rules.
 #[derive(Debug)]
 pub struct RuleAnalysis {
     pub terminals: FxHashSet<usize>,
+    pub dead_rhs: FxHashSet<[usize; 3]>,
+    pub context_sensitive_rhs: FxHashSet<[usize; 3]>,
     pub cursed_rules: FxHashSet<usize>,
     pub cursed_lhs: FxHashSet<Vec<usize>>,
     pub nonlocal_rules: FxHashSet<usize>,
@@ -112,10 +141,194 @@ impl RuleAnalysis {
         let terminals: FxHashSet<usize> =
             rhs_segs.difference(&lhs_segs).copied().collect();
 
-        // Cursed rules: any RHS seg is a terminal.
+        // Dead RHS detection (probe-based, following the user's
+        // description literally).
+        //
+        // For each RHS r, for each witness W with r appearing in W's
+        // boundary at position p:
+        //   - Build a "probe" = the boundary cyclic substring of
+        //     length up to (2*(l-1) + 3), centered around r with up
+        //     to l-1 segs of left and right context (clipped at the
+        //     point where the extension would wrap past r from the
+        //     other side, on small patches).
+        //   - Search the probe for an LHS substring at position
+        //     [q, q+L) with q ≤ p_in_probe AND q + L > p_in_probe —
+        //     i.e. the LHS starts at or before r and would rewrite
+        //     at least r's first segment.
+        //   - If any such LHS exists in any probe → r is alive.
+        let known_lhses: FxHashSet<&Vec<usize>> =
+            table.rules_by_lhs.keys().collect();
+        let max_lhs_len = table
+            .rules_by_lhs
+            .keys()
+            .map(|l| l.len())
+            .max()
+            .unwrap_or(0);
+
+        // For each RHS, track two flags: has_alive (seen on some
+        // patch at a left-coverable position) and has_dead (seen on
+        // some patch at a position not left-coverable).
+        let r_len = 3usize;
+        let probe_pad = max_lhs_len.saturating_sub(1);
+        let known_rhses: FxHashSet<[usize; 3]> =
+            rules.iter().map(|r| r.rhs).collect();
+
+        // Closure: given a patch's seg_ids and a probe center index,
+        // build the probe and check whether the center is alive.
+        let probe_is_alive = |seg_ids: &[usize], center: usize| -> bool {
+            let k = seg_ids.len();
+            if k < r_len {
+                return false;
+            }
+            let max_total_pad = k.saturating_sub(r_len);
+            let pad_left = probe_pad.min(max_total_pad);
+            let pad_right =
+                probe_pad.min(max_total_pad.saturating_sub(pad_left));
+            let probe_len = pad_left + r_len + pad_right;
+            let probe_start = (center + k - pad_left) % k;
+            let probe: Vec<usize> = (0..probe_len)
+                .map(|i| seg_ids[(probe_start + i) % k])
+                .collect();
+            let p_in_probe = pad_left;
+            for q in 0..=p_in_probe {
+                let max_len = (probe_len - q).min(max_lhs_len);
+                for len in 1..=max_len {
+                    if q + len <= p_in_probe {
+                        continue;
+                    }
+                    let sub: Vec<usize> = probe[q..q + len].to_vec();
+                    if known_lhses.contains(&sub) {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+
+        let mut rhs_flags: FxHashMap<[usize; 3], (bool, bool)> =
+            FxHashMap::default(); // (has_alive, has_dead)
+
+        // Pass 1: each rule's trial — RHS at known position on the
+        // un-normalized trial.
+        for rule in rules {
+            let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
+            let src_n = src_patch.boundary_len();
+            let src_juncs: Vec<usize> =
+                (0..src_n).filter(|&i| src_patch.is_junction(i)).collect();
+            let (start_seg, _) =
+                lhs_seg_range(&src_juncs, src_n, &rule.witness_pm);
+            let j_outer_cw_src = src_juncs[start_seg];
+            let ccw_anchor_src =
+                (rule.witness_pm.start_a + rule.witness_pm.len) % src_n;
+            let j_outer_cw_trial =
+                (j_outer_cw_src + src_n - ccw_anchor_src) % src_n;
+
+            let mut trial = src_patch.clone();
+            if !trial.add_tile(&rule.witness_pm) {
+                continue;
+            }
+            let trial_n = trial.boundary_len();
+            let trial_juncs: Vec<usize> =
+                (0..trial_n).filter(|&i| trial.is_junction(i)).collect();
+            let trial_k = trial_juncs.len();
+            if trial_k < 3 {
+                continue;
+            }
+            let mut trial_sids: Vec<usize> = Vec::with_capacity(trial_k);
+            for j in 0..trial_k {
+                let cw_cj = trial
+                    .coarse_junction_at(trial_juncs[j])
+                    .expect("known junction");
+                let ccw_cj = trial
+                    .coarse_junction_at(trial_juncs[(j + 1) % trial_k])
+                    .expect("known junction");
+                let id = seq_bfs
+                    .seg_bfs()
+                    .lookup_seg(&cw_cj, &ccw_cj)
+                    .expect("seg in DB");
+                trial_sids.push(id);
+            }
+            let rhs_idx = match trial_juncs
+                .iter()
+                .position(|&p| p == j_outer_cw_trial)
+            {
+                Some(i) => i,
+                None => continue,
+            };
+            debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
+
+            let alive = probe_is_alive(&trial_sids, rhs_idx);
+            let entry = rhs_flags.entry(rule.rhs).or_insert((false, false));
+            if alive {
+                entry.0 = true;
+            } else {
+                entry.1 = true;
+            }
+        }
+
+        // Pass 2: every registered witness — scan its boundary for
+        // length-3 substrings that match a known RHS, check each.
+        for patch in seq_bfs.patches() {
+            let n = patch.boundary_len();
+            if n == 0 {
+                continue;
+            }
+            let juncs: Vec<usize> =
+                (0..n).filter(|&i| patch.is_junction(i)).collect();
+            let k = juncs.len();
+            if k < 3 {
+                continue;
+            }
+            let mut sids: Vec<usize> = Vec::with_capacity(k);
+            for j in 0..k {
+                let cw_cj = patch
+                    .coarse_junction_at(juncs[j])
+                    .expect("known junction");
+                let ccw_cj = patch
+                    .coarse_junction_at(juncs[(j + 1) % k])
+                    .expect("known junction");
+                let id = seq_bfs
+                    .seg_bfs()
+                    .lookup_seg(&cw_cj, &ccw_cj)
+                    .expect("seg in DB");
+                sids.push(id);
+            }
+            for s in 0..k {
+                let triple = [sids[s], sids[(s + 1) % k], sids[(s + 2) % k]];
+                if !known_rhses.contains(&triple) {
+                    continue;
+                }
+                let alive = probe_is_alive(&sids, s);
+                let entry = rhs_flags.entry(triple).or_insert((false, false));
+                if alive {
+                    entry.0 = true;
+                } else {
+                    entry.1 = true;
+                }
+            }
+        }
+
+        // Classify each known RHS.
+        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+        let mut context_sensitive_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+        for rhs in &known_rhses {
+            match rhs_flags.get(rhs).copied().unwrap_or((false, false)) {
+                (false, _) => {
+                    dead_rhs.insert(*rhs);
+                }
+                (true, true) => {
+                    context_sensitive_rhs.insert(*rhs);
+                }
+                (true, false) => {}
+            }
+        }
+
+        // Cursed rule = RHS contains terminal OR RHS is dead.
         let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
-            if r.rhs.iter().any(|s| terminals.contains(s)) {
+            if r.rhs.iter().any(|s| terminals.contains(s))
+                || dead_rhs.contains(&r.rhs)
+            {
                 cursed_rules.insert(rule_id);
             }
         }
@@ -220,6 +433,8 @@ impl RuleAnalysis {
 
         RuleAnalysis {
             terminals,
+            dead_rhs,
+            context_sensitive_rhs,
             cursed_rules,
             cursed_lhs,
             nonlocal_rules,
@@ -345,8 +560,10 @@ mod tests {
         let table = SegRewriteTable::build_with_stats(seq_bfs);
         let analysis = RuleAnalysis::build(seq_bfs, &table);
         eprintln!(
-            "hex: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
+            "hex: terminals={}, dead_rhs={}, ctx_sens_rhs={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
+            analysis.dead_rhs.len(),
+            analysis.context_sensitive_rhs.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),
@@ -364,12 +581,13 @@ mod tests {
                 );
             }
         }
-        // Every cursed rule's RHS contains some terminal.
+        // Every cursed rule's RHS contains a terminal OR is dead.
         for &id in &analysis.cursed_rules {
             let rule = &seq_bfs.rules()[id];
             assert!(
-                rule.rhs.iter().any(|s| analysis.terminals.contains(s)),
-                "cursed rule has no terminal in RHS"
+                rule.rhs.iter().any(|s| analysis.terminals.contains(s))
+                    || analysis.dead_rhs.contains(&rule.rhs),
+                "cursed rule has non-terminal non-dead RHS"
             );
         }
         // No terminal appears in any LHS.
@@ -398,8 +616,10 @@ mod tests {
             seq_bfs.num_rules()
         );
         eprintln!(
-            "spectre: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
+            "spectre: terminals={}, dead_rhs={}, ctx_sens_rhs={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
+            analysis.dead_rhs.len(),
+            analysis.context_sensitive_rhs.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),
@@ -432,8 +652,10 @@ mod tests {
             seq_bfs.num_rules()
         );
         eprintln!(
-            "mixed: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
+            "mixed: terminals={}, dead_rhs={}, ctx_sens_rhs={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
+            analysis.dead_rhs.len(),
+            analysis.context_sensitive_rhs.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),

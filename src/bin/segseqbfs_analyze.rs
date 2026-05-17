@@ -80,6 +80,27 @@ fn analyze<T: IsComplex + IsRingOrField + Units>(
         analysis.terminals.len()
     );
     eprintln!(
+        "  dead_rhs      = {}",
+        analysis.dead_rhs.len()
+    );
+    eprintln!(
+        "  ctx_sens_rhs  = {}",
+        analysis.context_sensitive_rhs.len()
+    );
+    // Diagnostic: how many dead RHSes also contain a terminal? If all
+    // of them do, the dead-rhs check is subsumed by terminal-detection
+    // for this tileset.
+    let dead_with_terminal = analysis
+        .dead_rhs
+        .iter()
+        .filter(|rhs| rhs.iter().any(|s| analysis.terminals.contains(s)))
+        .count();
+    eprintln!(
+        "  dead_rhs containing a terminal seg: {}/{}",
+        dead_with_terminal,
+        analysis.dead_rhs.len()
+    );
+    eprintln!(
         "  cursed_rules  = {}/{} ({:.1}%)",
         analysis.cursed_rules.len(),
         table.num_rules(),
