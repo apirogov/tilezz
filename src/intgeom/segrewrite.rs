@@ -440,9 +440,16 @@ fn compute_nonlocal_rules<T: IsComplex + IsRingOrField + Units>(
 
 /// Iterate the per-rule cursed fixed point:
 ///
-///   R cursed iff R.rhs contains a terminal OR every covering LHS
-///                in `alive_by_rule[R]` is non-usable,
-///   LHS usable iff some rule for it is non-cursed AND non-nonlocal.
+///   R cursed iff R.rhs contains a terminal OR every covering LHS in
+///                `alive_by_rule[R]` is non-usable,
+///   LHS usable iff some rule R' for it is non-cursed AND non-nonlocal
+///                  AND R'.rhs (qua length-3 LHS) is not in `cursed_lhs`,
+///   LHS cursed iff every rule for it is cursed.
+///
+/// The extra "R'.rhs not in cursed_lhs" condition strengthens the
+/// guarantee: applying a usable continuation produces an RHS that
+/// isn't a known-cursed LHS pattern. (R'.rhs being in `dead_rhs` is
+/// already excluded by R' being non-cursed.)
 ///
 /// Returns the cursed-rule set at the least fixed point. Monotone,
 /// always terminates.
@@ -461,11 +468,37 @@ fn propagate_cursed_fp(
         }
     }
     let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+    let mut cursed_lhs_seqs: FxHashSet<Vec<usize>> = FxHashSet::default();
+    let mut cursed_lhs_substrings_len3: FxHashSet<[usize; 3]> = FxHashSet::default();
     loop {
+        // Compute cursed LHSes (= all rules for it cursed) and their
+        // length-3 contiguous substrings (since RHS is always length 3,
+        // R'.rhs counts as "risky" iff it appears as a length-3
+        // substring of any cursed LHS, not just iff it equals one).
+        cursed_lhs_seqs.clear();
+        cursed_lhs_substrings_len3.clear();
+        for (lhs, ids) in rules_by_lhs {
+            if ids.iter().all(|id| cursed_rules.contains(id)) {
+                cursed_lhs_seqs.insert(lhs.clone());
+                if lhs.len() >= 3 {
+                    for i in 0..=lhs.len() - 3 {
+                        cursed_lhs_substrings_len3
+                            .insert([lhs[i], lhs[i + 1], lhs[i + 2]]);
+                    }
+                }
+            }
+        }
+        // Compute usable LHSes. An LHS is usable iff some rule R' is
+        // non-cursed AND non-nonlocal AND R'.rhs (as a length-3
+        // sequence) is not a contiguous substring of any cursed LHS.
         usable_lhs_ids.clear();
         for (lhs, ids) in rules_by_lhs {
             let any_usable = ids.iter().any(|id| {
-                !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
+                if cursed_rules.contains(id) || nonlocal_rules.contains(id) {
+                    return false;
+                }
+                let r = &rules[*id];
+                !cursed_lhs_substrings_len3.contains(&r.rhs)
             });
             if any_usable {
                 if let Some(&lid) = lhs_index.get(lhs) {
@@ -473,6 +506,7 @@ fn propagate_cursed_fp(
                 }
             }
         }
+        // Recompute cursed_rules.
         let mut new_cursed: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
             if r.rhs.iter().any(|s| terminals.contains(s)) {
