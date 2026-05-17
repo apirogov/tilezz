@@ -22,18 +22,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{CoarseJunction, GrowingPatch, PatchMatch};
-use crate::intgeom::segseqbfs::{lhs_seg_range, SegSeqBFS};
-
-/// The witness-independent metadata for one rewrite: which tile is
-/// added, at what edge offset on that tile, how many edges it
-/// absorbs, and where in the LHS its CW anchor sits.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct MatchMeta {
-    pub tile_id: usize,
-    pub tile_offset: usize,
-    pub match_len: usize,
-    pub start_edge_in_lhs: usize,
-}
+use crate::intgeom::segseqbfs::{lhs_seg_range, MatchMeta, SegSeqBFS};
 
 #[derive(Debug)]
 pub struct SegRewriteTable {
@@ -52,8 +41,7 @@ impl SegRewriteTable {
     pub fn build_from<T: IsComplex + IsRingOrField + Units>(
         seq_bfs: &SegSeqBFS<T>,
     ) -> Self {
-        let (table, _collisions) = Self::build_with_stats(seq_bfs);
-        table
+        Self::build_with_stats(seq_bfs)
     }
 
     /// Same as `build_from` but also returns the collision count
@@ -61,36 +49,19 @@ impl SegRewriteTable {
     /// a different witness).
     pub fn build_with_stats<T: IsComplex + IsRingOrField + Units>(
         seq_bfs: &SegSeqBFS<T>,
-    ) -> (Self, usize) {
-        Self::build_filtered(seq_bfs, |_| true)
-    }
-
-    /// Build the table from only the witnesses that pass `keep`.
-    /// Used for diagnostics (= compare "contributing-only" vs "all").
-    pub fn build_filtered<T: IsComplex + IsRingOrField + Units>(
-        seq_bfs: &SegSeqBFS<T>,
-        keep: impl Fn(usize) -> bool,
-    ) -> (Self, usize) {
+    ) -> Self {
         let mut by_lhs: FxHashMap<Vec<usize>, FxHashMap<MatchMeta, [usize; 3]>> =
             FxHashMap::default();
-        let mut collisions = 0usize;
         let seg_bfs = seq_bfs.seg_bfs();
-        for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
-            if !keep(patch_id) {
-                continue;
-            }
+        for rule in seq_bfs.rules() {
+            let patch = &seq_bfs.patches()[rule.witness_patch_id];
             let n = patch.boundary_len();
-            if n == 0 {
-                continue;
-            }
             let juncs: Vec<usize> =
                 (0..n).filter(|&i| patch.is_junction(i)).collect();
             let k = juncs.len();
             if k < 2 {
                 continue;
             }
-            // Cache seg ids for the patch's k segments (one per
-            // consecutive junction pair, CCW).
             let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
             for j in 0..k {
                 let cw_cj = patch
@@ -104,31 +75,23 @@ impl SegRewriteTable {
                     .expect("seg must be in DB");
                 seg_ids.push(id);
             }
-            for pm in patch.get_all_matches() {
-                if pm.len == 0 {
-                    continue;
-                }
-                let (lhs, meta, rhs) = match extract_rule(
-                    patch, n, &juncs, &seg_ids, &pm, seg_bfs,
-                ) {
-                    Some(triple) => triple,
-                    None => continue,
-                };
-                let entries = by_lhs.entry(lhs).or_default();
-                if let Some(prev) = entries.insert(meta, rhs) {
-                    // Witness-independence: the same (LHS, MatchMeta)
-                    // must produce the same RHS regardless of which
-                    // witness we extracted from.
-                    assert_eq!(
-                        prev, rhs,
-                        "witness-independence violated for meta {:?}",
-                        meta
-                    );
-                    collisions += 1;
-                }
-            }
+            let triple = extract_rule(
+                patch,
+                n,
+                &juncs,
+                &seg_ids,
+                &rule.witness_pm,
+                seg_bfs,
+            );
+            let (lhs, meta, rhs) = match triple {
+                Some(t) => t,
+                None => continue,
+            };
+            assert_eq!(lhs, rule.lhs, "extracted LHS doesn't match rule");
+            assert_eq!(meta, rule.meta, "extracted MatchMeta doesn't match rule");
+            by_lhs.entry(lhs).or_default().insert(meta, rhs);
         }
-        (SegRewriteTable { by_lhs }, collisions)
+        SegRewriteTable { by_lhs }
     }
 
     /// Distinct LHS sequences.
@@ -314,19 +277,18 @@ mod tests {
     #[test]
     fn hex_rewrite_rules_extracted() {
         let seq_bfs = hex_seq_bfs();
-        let (table, collisions) = SegRewriteTable::build_with_stats(seq_bfs);
+        let table = SegRewriteTable::build_with_stats(seq_bfs);
         eprintln!(
-            "hex rewrites: distinct_lhs={}, total_rules={}, collisions={}, bfs_transitions={}",
+            "hex rewrites: distinct_lhs={}, total_rules={}, bfs_rules={}",
             table.num_lhs(),
             table.num_rules(),
-            collisions,
-            seq_bfs.num_transitions()
+            seq_bfs.num_rules()
         );
         assert!(table.num_rules() > 0);
         assert_eq!(
-            seq_bfs.num_transitions(),
-            table.num_rules() + collisions,
-            "BFS transitions must equal rules + collisions"
+            seq_bfs.num_rules(),
+            table.num_rules(),
+            "table rules must equal BFS rules — one canonical witness per rule"
         );
         // Sanity: RHS is always 3.
         for metas in table.by_lhs.values() {
@@ -336,170 +298,22 @@ mod tests {
         }
     }
 
-    /// Witness-independence is verified inside `build_with_stats` via
-    /// an `assert_eq` on every (LHS, MatchMeta) collision. The
-    /// collision count being >0 confirms the test actually
-    /// exercises that path (= multiple witnesses extract the same
-    /// rule and agree on the RHS).
-    #[test]
-    fn hex_witness_independence_exercised() {
-        let (_table, collisions) = SegRewriteTable::build_with_stats(hex_seq_bfs());
-        assert!(
-            collisions > 0,
-            "expected at least one (LHS, MatchMeta) collision \
-             to exercise witness-independence; got {}",
-            collisions
-        );
-        eprintln!("hex witness-independence collisions: {}", collisions);
-    }
-
-    /// Verifies that rules emerging from non-contributing witnesses
-    /// are genuinely new `(LHS, MatchMeta)` pairs not present on any
-    /// contributing witness — i.e. same LHS reached, but with a
-    /// MatchMeta that no contributing witness's match enumerated.
-    /// Also confirms witness-independence still holds (= when a
-    /// contributing witness also has the rule, the RHS agrees).
-    #[test]
-    fn hex_extra_rules_are_genuine() {
-        let seq_bfs = hex_seq_bfs();
-        let (full, _) = SegRewriteTable::build_with_stats(seq_bfs);
-        let (contrib_only, _) = SegRewriteTable::build_filtered(seq_bfs, |id| {
-            seq_bfs.patch_contributed(id)
-        });
-        let mut extra: Vec<(&Vec<usize>, &MatchMeta, &[usize; 3])> = Vec::new();
-        for (lhs, metas) in &full.by_lhs {
-            let contrib_metas = contrib_only.by_lhs.get(lhs);
-            for (meta, rhs) in metas {
-                let already = contrib_metas
-                    .map(|m| m.contains_key(meta))
-                    .unwrap_or(false);
-                if !already {
-                    extra.push((lhs, meta, rhs));
-                }
-            }
-        }
-        eprintln!(
-            "hex: full_rules={}, contrib_rules={}, extra={}",
-            full.num_rules(),
-            contrib_only.num_rules(),
-            extra.len()
-        );
-        // Every extra rule's LHS must already exist in BFS sequences
-        // (= same LHS, new MatchMeta, not a new LHS).
-        let bfs_set: rustc_hash::FxHashSet<&Vec<usize>> =
-            seq_bfs.sequences().iter().collect();
-        for (lhs, _, _) in &extra {
-            assert!(
-                bfs_set.contains(*lhs),
-                "extra rule has LHS not in BFS sequences: {:?}",
-                lhs
-            );
-        }
-        assert_eq!(
-            full.num_rules() - contrib_only.num_rules(),
-            extra.len(),
-            "rule-count delta should equal the set of extra (LHS, MatchMeta) tuples"
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn spectre_extra_rules_are_genuine() {
-        let seq_bfs = SegSeqBFS::run(spectre_tileset(), 10_000_000, 10_000_000).unwrap();
-        let (full, _) = SegRewriteTable::build_with_stats(&seq_bfs);
-        let (contrib_only, _) = SegRewriteTable::build_filtered(&seq_bfs, |id| {
-            seq_bfs.patch_contributed(id)
-        });
-        let mut extra: Vec<(&Vec<usize>, &MatchMeta, &[usize; 3])> = Vec::new();
-        for (lhs, metas) in &full.by_lhs {
-            let contrib_metas = contrib_only.by_lhs.get(lhs);
-            for (meta, rhs) in metas {
-                let already = contrib_metas
-                    .map(|m| m.contains_key(meta))
-                    .unwrap_or(false);
-                if !already {
-                    extra.push((lhs, meta, rhs));
-                }
-            }
-        }
-        eprintln!(
-            "spectre: full_rules={}, contrib_rules={}, extra={}",
-            full.num_rules(),
-            contrib_only.num_rules(),
-            extra.len()
-        );
-        extra.sort_by_key(|(lhs, _, _)| lhs.clone());
-        eprintln!("first 5 extra (lhs, meta) tuples:");
-        for (lhs, meta, _) in extra.iter().take(5) {
-            eprintln!("  lhs={:?} meta={:?}", lhs, meta);
-        }
-        let bfs_set: rustc_hash::FxHashSet<&Vec<usize>> =
-            seq_bfs.sequences().iter().collect();
-        for (lhs, _, _) in &extra {
-            assert!(
-                bfs_set.contains(*lhs),
-                "extra rule has LHS not in BFS sequences: {:?}",
-                lhs
-            );
-        }
-        assert_eq!(
-            full.num_rules() - contrib_only.num_rules(),
-            extra.len(),
-            "rule-count delta should equal the set of extra (LHS, MatchMeta) tuples"
-        );
-    }
-
     #[test]
     #[ignore]
     fn spectre_rewrite_rules_extracted() {
         let seq_bfs = SegSeqBFS::run(spectre_tileset(), 10_000_000, 10_000_000).unwrap();
-        let (table, collisions) = SegRewriteTable::build_with_stats(&seq_bfs);
+        let table = SegRewriteTable::build_with_stats(&seq_bfs);
         eprintln!(
-            "spectre: sequences(bfs)={}, distinct_lhs(rules)={}, total_rules={}, collisions={}, bfs_transitions={}",
+            "spectre: sequences(bfs)={}, distinct_lhs(rules)={}, total_rules={}, bfs_rules={}",
             seq_bfs.num_sequences(),
             table.num_lhs(),
             table.num_rules(),
-            collisions,
-            seq_bfs.num_transitions()
+            seq_bfs.num_rules()
         );
-        assert_eq!(
-            seq_bfs.num_transitions(),
-            table.num_rules() + collisions,
-            "BFS transitions must equal rules + collisions"
-        );
-        if seq_bfs.num_sequences() != table.num_lhs() {
-            let bfs_set: rustc_hash::FxHashSet<&Vec<usize>> =
-                seq_bfs.sequences().iter().collect();
-            let mut missing_from_bfs: Vec<&Vec<usize>> = table
-                .by_lhs
-                .keys()
-                .filter(|k| !bfs_set.contains(k))
-                .collect();
-            missing_from_bfs.sort();
-            eprintln!(
-                "table has {} LHS not in BFS sequences. First 5:",
-                missing_from_bfs.len()
-            );
-            for lhs in missing_from_bfs.iter().take(5) {
-                eprintln!("  {:?}", lhs);
-            }
-            let table_set: rustc_hash::FxHashSet<&Vec<usize>> =
-                table.by_lhs.keys().collect();
-            let mut missing_from_table: Vec<&Vec<usize>> = seq_bfs
-                .sequences()
-                .iter()
-                .filter(|s| !table_set.contains(s))
-                .collect();
-            missing_from_table.sort();
-            eprintln!(
-                "BFS has {} sequences not in table LHS. First 5:",
-                missing_from_table.len()
-            );
-            for seq in missing_from_table.iter().take(5) {
-                eprintln!("  {:?}", seq);
-            }
-            panic!("BFS sequences must match table LHS count");
-        }
+        assert_eq!(seq_bfs.num_rules(), table.num_rules(),
+            "table rules must equal BFS rules");
+        assert_eq!(seq_bfs.num_sequences(), table.num_lhs(),
+            "BFS sequences must match table LHS count");
         for metas in table.by_lhs.values() {
             for rhs in metas.values() {
                 assert_eq!(rhs.len(), 3);
@@ -511,22 +325,18 @@ mod tests {
     #[ignore]
     fn mixed_rewrite_rules_extracted() {
         let seq_bfs = SegSeqBFS::run(mixed_tileset(), 20_000_000, 20_000_000).unwrap();
-        let (table, collisions) = SegRewriteTable::build_with_stats(&seq_bfs);
+        let table = SegRewriteTable::build_with_stats(&seq_bfs);
         eprintln!(
-            "mixed: sequences(bfs)={}, distinct_lhs(rules)={}, total_rules={}, collisions={}, bfs_transitions={}",
+            "mixed: sequences(bfs)={}, distinct_lhs(rules)={}, total_rules={}, bfs_rules={}",
             seq_bfs.num_sequences(),
             table.num_lhs(),
             table.num_rules(),
-            collisions,
-            seq_bfs.num_transitions()
+            seq_bfs.num_rules()
         );
+        assert_eq!(seq_bfs.num_rules(), table.num_rules(),
+            "table rules must equal BFS rules");
         assert_eq!(seq_bfs.num_sequences(), table.num_lhs(),
             "BFS sequences must match table LHS count");
-        assert_eq!(
-            seq_bfs.num_transitions(),
-            table.num_rules() + collisions,
-            "BFS transitions must equal rules + collisions"
-        );
         for metas in table.by_lhs.values() {
             for rhs in metas.values() {
                 assert_eq!(rhs.len(), 3);
