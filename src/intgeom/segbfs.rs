@@ -111,6 +111,31 @@ impl<T: IsComplex + IsRingOrField + Units> SegmentTypeBFS<T> {
         &self.seg_pairs
     }
 
+    /// Reconstruct a minimal `SegmentTypeBFS` from saved seg_pairs.
+    /// The result supports `lookup_seg`, `seg_pairs`, `num_segs`, but
+    /// has no `patches` or `seg_witnesses` (= load-only constructor
+    /// for analysis use; not runnable).
+    pub fn from_loaded(
+        tileset: Arc<TileSet<T>>,
+        seg_pairs: Vec<SegPair>,
+    ) -> Self {
+        let mut seg_lookup: FxHashMap<SegPair, usize> = FxHashMap::default();
+        for (id, pair) in seg_pairs.iter().enumerate() {
+            seg_lookup.insert(*pair, id);
+        }
+        Self {
+            tileset,
+            patches: Vec::new(),
+            patch_lookup: FxHashMap::default(),
+            seg_lookup,
+            seg_pairs,
+            seg_witnesses: Vec::new(),
+            queue: VecDeque::new(),
+            seg_cap: 0,
+            patch_cap: 0,
+        }
+    }
+
     pub fn lookup_seg(&self, cw: &CoarseJunction, ccw: &CoarseJunction) -> Option<usize> {
         self.seg_lookup.get(&(*cw, *ccw)).copied()
     }
