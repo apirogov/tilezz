@@ -119,327 +119,79 @@ impl RuleAnalysis {
         table: &SegRewriteTable,
     ) -> Self {
         let rules: &[RuleRecord] = seq_bfs.rules();
-        // Collect seg ids that appear in any LHS and any RHS.
-        let mut lhs_segs: FxHashSet<usize> = FxHashSet::default();
-        let mut rhs_segs: FxHashSet<usize> = FxHashSet::default();
-        for r in rules {
-            for &s in &r.lhs {
-                lhs_segs.insert(s);
-            }
-            for &s in &r.rhs {
-                rhs_segs.insert(s);
-            }
-        }
-        let terminals: FxHashSet<usize> =
-            rhs_segs.difference(&lhs_segs).copied().collect();
+        let terminals = compute_terminals(rules);
 
-        // For each rule, collect the set of LHS-ids that cover its
-        // RHS from the left on the rule's own trial. This is the
-        // per-rule "alive evidence": a rule is alive iff at least one
-        // of its covering LHSes is *non-cursed*. We compute the
-        // evidence once, then iterate the cursed set to a fixed point.
+        // Build the LHS index (= LHS sequence -> id) and reverse.
         let lhs_index: FxHashMap<Vec<usize>, usize> = table
             .rules_by_lhs
             .keys()
             .enumerate()
             .map(|(i, k)| (k.clone(), i))
             .collect();
-        let n_lhses = lhs_index.len();
         let max_lhs_len = lhs_index.keys().map(|l| l.len()).max().unwrap_or(0);
 
-        // Closure: gather all LHS-ids in our set that cover `center`
-        // (= satisfy q ≤ center AND q+L > center) within the cyclic
-        // probe window around `center` of length up to 2*(l-1)+3.
-        let r_len = 3usize;
-        let probe_pad = max_lhs_len.saturating_sub(1);
-        let covering_lhses = |seg_ids: &[usize], center: usize, out: &mut FxHashSet<usize>| {
-            let k = seg_ids.len();
-            if k < r_len {
-                return;
-            }
-            let max_total_pad = k.saturating_sub(r_len);
-            let pad_left = probe_pad.min(max_total_pad);
-            let pad_right =
-                probe_pad.min(max_total_pad.saturating_sub(pad_left));
-            let probe_len = pad_left + r_len + pad_right;
-            let probe_start = (center + k - pad_left) % k;
-            let probe: Vec<usize> = (0..probe_len)
-                .map(|i| seg_ids[(probe_start + i) % k])
-                .collect();
-            let p_in_probe = pad_left;
-            for q in 0..=p_in_probe {
-                let max_len = (probe_len - q).min(max_lhs_len);
-                for len in 1..=max_len {
-                    if q + len <= p_in_probe {
-                        continue;
-                    }
-                    let sub: Vec<usize> = probe[q..q + len].to_vec();
-                    if let Some(&id) = lhs_index.get(&sub) {
-                        out.insert(id);
-                    }
-                }
-            }
-        };
+        // Per-rule trial-based "alive evidence": which LHSes cover
+        // the RHS from the left on the rule's own un-normalized trial.
+        let alive_by_rule =
+            compute_alive_by_rule(seq_bfs, rules, &lhs_index, max_lhs_len);
 
-        // Per-rule alive evidence: for each rule, the set of LHS-ids
-        // covering its RHS on its own trial.
-        let mut alive_by_rule: Vec<FxHashSet<usize>> = (0..rules.len())
-            .map(|_| FxHashSet::default())
-            .collect();
+        // Stage 1: propagate cursedness from terminals alone. This is
+        // a strictly cheaper FP (no nonlocal info) that gives a
+        // *lower bound* of cursedness. Many rules are killed here on
+        // the basis of pure seg-level analysis.
+        let stage1_cursed = propagate_cursed_fp(
+            rules,
+            &table.rules_by_lhs,
+            &alive_by_rule,
+            &lhs_index,
+            &terminals,
+            &FxHashSet::default(),
+        );
 
-        // For each rule, build the trial and collect covering LHSes.
-        for (rule_id, rule) in rules.iter().enumerate() {
-            let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
-            let src_n = src_patch.boundary_len();
-            let src_juncs: Vec<usize> =
-                (0..src_n).filter(|&i| src_patch.is_junction(i)).collect();
-            let (start_seg, _) =
-                lhs_seg_range(&src_juncs, src_n, &rule.witness_pm);
-            let j_outer_cw_src = src_juncs[start_seg];
-            let ccw_anchor_src =
-                (rule.witness_pm.start_a + rule.witness_pm.len) % src_n;
-            let j_outer_cw_trial =
-                (j_outer_cw_src + src_n - ccw_anchor_src) % src_n;
+        // Stage 2: compute nonlocal_rules, but only test the rules
+        // that survived stage 1 (skip already-cursed rules). This is
+        // the expensive step — we save proportionally to stage 1's
+        // kill rate.
+        let lhs_occurrences =
+            compute_lhs_occurrences(seq_bfs, &lhs_index, max_lhs_len);
+        let nonlocal_rules = compute_nonlocal_rules(
+            seq_bfs,
+            rules,
+            &lhs_occurrences,
+            &stage1_cursed,
+        );
 
-            let mut trial = src_patch.clone();
-            if !trial.add_tile(&rule.witness_pm) {
-                continue;
-            }
-            let trial_n = trial.boundary_len();
-            let trial_juncs: Vec<usize> =
-                (0..trial_n).filter(|&i| trial.is_junction(i)).collect();
-            let trial_k = trial_juncs.len();
-            if trial_k < 3 {
-                continue;
-            }
-            let mut trial_sids: Vec<usize> = Vec::with_capacity(trial_k);
-            for j in 0..trial_k {
-                let cw_cj = trial
-                    .coarse_junction_at(trial_juncs[j])
-                    .expect("known junction");
-                let ccw_cj = trial
-                    .coarse_junction_at(trial_juncs[(j + 1) % trial_k])
-                    .expect("known junction");
-                let id = seq_bfs
-                    .seg_bfs()
-                    .lookup_seg(&cw_cj, &ccw_cj)
-                    .expect("seg in DB");
-                trial_sids.push(id);
-            }
-            let rhs_idx = match trial_juncs
-                .iter()
-                .position(|&p| p == j_outer_cw_trial)
-            {
-                Some(i) => i,
-                None => continue,
-            };
-            debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
-            covering_lhses(&trial_sids, rhs_idx, &mut alive_by_rule[rule_id]);
-        }
+        // Stage 3: continue the FP starting from stage 1's cursed
+        // set, now also treating nonlocal rules as unusable for
+        // evidence purposes. Only adds further cursedness.
+        let mut cursed_rules = propagate_cursed_fp(
+            rules,
+            &table.rules_by_lhs,
+            &alive_by_rule,
+            &lhs_index,
+            &terminals,
+            &nonlocal_rules,
+        );
+        // Stage 3's result must contain stage 1's result. (FP is
+        // monotone, and the only difference is the extra "unusable"
+        // set; nothing in stage 1 should become non-cursed.)
+        debug_assert!(stage1_cursed.is_subset(&cursed_rules));
 
-        // Step A: compute nonlocal_rules FIRST (over all rules), so
-        // the fixed-point can exclude nonlocal rules from "alive
-        // evidence" — a nonlocal rule is unreliable, applying it can
-        // fail on the very patch we'd want it on, so we shouldn't
-        // count it as a continuation guarantee.
-        let known_lhses_ref: FxHashSet<&Vec<usize>> =
-            table.rules_by_lhs.keys().collect();
-        let mut lhs_occurrences: FxHashMap<Vec<usize>, Vec<(usize, usize)>> =
-            FxHashMap::default();
-        for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
-            let n = patch.boundary_len();
-            if n == 0 {
-                continue;
-            }
-            let juncs: Vec<usize> =
-                (0..n).filter(|&i| patch.is_junction(i)).collect();
-            let k = juncs.len();
-            if k < 2 {
-                continue;
-            }
-            let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
-            for j in 0..k {
-                let cw_cj = patch
-                    .coarse_junction_at(juncs[j])
-                    .expect("known junction");
-                let ccw_cj = patch
-                    .coarse_junction_at(juncs[(j + 1) % k])
-                    .expect("known junction");
-                let id = seq_bfs
-                    .seg_bfs()
-                    .lookup_seg(&cw_cj, &ccw_cj)
-                    .expect("seg in DB");
-                seg_ids.push(id);
-            }
-            let max_len = max_lhs_len.min(k);
-            for start in 0..k {
-                let mut subseq: Vec<usize> = Vec::with_capacity(max_len);
-                for off in 0..max_len {
-                    subseq.push(seg_ids[(start + off) % k]);
-                    if known_lhses_ref.contains(&subseq) {
-                        lhs_occurrences
-                            .entry(subseq.clone())
-                            .or_default()
-                            .push((patch_id, juncs[start]));
-                    }
-                }
-            }
-        }
+        // Derived: cursed_lhs (strict — every rule cursed), dead_rhs
+        // (every rule producing it is cursed), and the verification
+        // assertion that every non-cursed rule's trial has a usable
+        // covering LHS.
+        let cursed_lhs = derive_cursed_lhs(&table.rules_by_lhs, &cursed_rules);
+        let dead_rhs = derive_dead_rhs(rules, &cursed_rules);
+        verify_property(rules, &alive_by_rule, &cursed_rules, &nonlocal_rules, &lhs_index, &table.rules_by_lhs);
 
-        let mut nonlocal_rules: FxHashSet<usize> = FxHashSet::default();
-        for (rule_id, r) in rules.iter().enumerate() {
-            let r_patch = &seq_bfs.patches()[r.witness_patch_id];
-            let r_n = r_patch.boundary_len();
-            let r_juncs: Vec<usize> =
-                (0..r_n).filter(|&i| r_patch.is_junction(i)).collect();
-            let (r_start_seg, _) = lhs_seg_range(&r_juncs, r_n, &r.witness_pm);
-            let r_canonical = (r.witness_patch_id, r_juncs[r_start_seg]);
-
-            let occurrences = match lhs_occurrences.get(&r.lhs) {
-                Some(v) => v,
-                None => continue,
-            };
-            for &(patch_id, j_cw) in occurrences {
-                if (patch_id, j_cw) == r_canonical {
-                    continue;
-                }
-                let w_patch = &seq_bfs.patches()[patch_id];
-                let n_w = w_patch.boundary_len();
-                let start_a = (j_cw + r.meta.start_edge_in_lhs) % n_w;
-                let pm = PatchMatch {
-                    start_a,
-                    len: r.meta.match_len,
-                    start_b: r.meta.tile_offset,
-                    tile_id: r.meta.tile_id,
-                };
-                let mut trial = w_patch.clone();
-                if !trial.add_tile(&pm) {
-                    nonlocal_rules.insert(rule_id);
-                    break;
-                }
-            }
-        }
-
-        // Step B: per-rule fixed-point iteration.
-        //   - A rule R is "unusable" iff cursed OR nonlocal — we
-        //     can't rely on it for continuation.
-        //   - An LHS is "usable" iff some rule for it is non-unusable.
-        //   - A rule R is cursed iff R.rhs contains a terminal OR
-        //     every covering LHS in alive_by_rule[R] is non-usable.
-        //   - Iterate until stable. (`nonlocal_rules` is fixed.)
-        let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
-        for (rule_id, r) in rules.iter().enumerate() {
-            if r.rhs.iter().any(|s| terminals.contains(s)) {
-                cursed_rules.insert(rule_id);
-            }
-        }
-        let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
-        let mut iterations = 0usize;
-        loop {
-            iterations += 1;
-            // Recompute usable_lhs_ids: LHS usable iff some rule for
-            // it is neither cursed nor nonlocal.
-            usable_lhs_ids.clear();
-            for (lhs, ids) in &table.rules_by_lhs {
-                let any_usable = ids.iter().any(|id| {
-                    !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
-                });
-                if any_usable {
-                    if let Some(&lid) = lhs_index.get(lhs) {
-                        usable_lhs_ids.insert(lid);
-                    }
-                }
-            }
-            // Recompute cursed_rules.
-            let mut new_cursed_rules: FxHashSet<usize> = FxHashSet::default();
-            for (rule_id, r) in rules.iter().enumerate() {
-                if r.rhs.iter().any(|s| terminals.contains(s)) {
-                    new_cursed_rules.insert(rule_id);
-                    continue;
-                }
-                let any_alive = alive_by_rule[rule_id]
-                    .iter()
-                    .any(|id| usable_lhs_ids.contains(id));
-                if !any_alive {
-                    new_cursed_rules.insert(rule_id);
-                }
-            }
-            if new_cursed_rules == cursed_rules {
-                break;
-            }
-            cursed_rules = new_cursed_rules;
-        }
-
-        // For output `cursed_lhs`, use the stricter "all rules cursed"
-        // definition (not "all rules unusable") — nonlocal is reported
-        // separately.
-        let mut cursed_lhs_ids: FxHashSet<usize> = FxHashSet::default();
-        for (lhs, ids) in &table.rules_by_lhs {
-            if ids.iter().all(|id| cursed_rules.contains(id)) {
-                if let Some(&lid) = lhs_index.get(lhs) {
-                    cursed_lhs_ids.insert(lid);
-                }
-            }
-        }
-
-        // Final dead_rhs: an RHS is dead iff every rule with that
-        // RHS is cursed (= no non-cursed rule produces it).
-        let mut rhs_has_noncursed_rule: FxHashMap<[usize; 3], bool> =
-            FxHashMap::default();
-        for (rule_id, r) in rules.iter().enumerate() {
-            let entry = rhs_has_noncursed_rule.entry(r.rhs).or_insert(false);
-            if !cursed_rules.contains(&rule_id) {
-                *entry = true;
-            }
-        }
-        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
-        for (rhs, has_noncursed) in &rhs_has_noncursed_rule {
-            if !*has_noncursed {
-                dead_rhs.insert(*rhs);
-            }
-        }
-
-        // Reify final cursed_lhs as Vec<usize> keys.
-        let id_to_lhs: Vec<Vec<usize>> = {
-            let mut v = vec![Vec::new(); n_lhses];
-            for (lhs, &id) in &lhs_index {
-                v[id] = lhs.clone();
-            }
-            v
-        };
-        let cursed_lhs: FxHashSet<Vec<usize>> = cursed_lhs_ids
-            .iter()
-            .map(|&id| id_to_lhs[id].clone())
-            .collect();
-
-        // context_sensitive_rhs is harder to define cleanly under
-        // the fixed-point definition (since "alive" now means
-        // "some non-cursed LHS covers it"); leave as an empty set
-        // for now.
-        let context_sensitive_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
-
-        eprintln!("cursed-set fixed-point converged in {} iterations", iterations);
-
-        // Sanity: by construction, every non-cursed rule's trial has
-        // at least one USABLE covering LHS.
-        for (rule_id, _) in rules.iter().enumerate() {
-            if cursed_rules.contains(&rule_id) {
-                continue;
-            }
-            let any_alive = alive_by_rule[rule_id]
-                .iter()
-                .any(|id| usable_lhs_ids.contains(id));
-            assert!(
-                any_alive,
-                "non-cursed rule {} has no usable covering LHS on its trial",
-                rule_id,
-            );
-        }
+        // Avoid unused-mut warning on first FP write into cursed_rules
+        let _ = &mut cursed_rules;
 
         RuleAnalysis {
             terminals,
             dead_rhs,
-            context_sensitive_rhs,
+            context_sensitive_rhs: FxHashSet::default(),
             cursed_rules,
             cursed_lhs,
             nonlocal_rules,
@@ -460,6 +212,355 @@ impl RuleAnalysis {
 
     pub fn is_nonlocal_rule(&self, rule_id: usize) -> bool {
         self.nonlocal_rules.contains(&rule_id)
+    }
+}
+
+/// Seg ids that appear in some rule's RHS but never in any rule's LHS.
+fn compute_terminals(rules: &[RuleRecord]) -> FxHashSet<usize> {
+    let mut lhs_segs: FxHashSet<usize> = FxHashSet::default();
+    let mut rhs_segs: FxHashSet<usize> = FxHashSet::default();
+    for r in rules {
+        for &s in &r.lhs {
+            lhs_segs.insert(s);
+        }
+        for &s in &r.rhs {
+            rhs_segs.insert(s);
+        }
+    }
+    rhs_segs.difference(&lhs_segs).copied().collect()
+}
+
+/// For each rule, gather the set of LHS-ids (into `lhs_index`) that
+/// cover the rule's RHS *from the left* on the rule's own
+/// un-normalized trial (= start at or before `rhs_idx` AND extend
+/// past it). This is the per-rule evidence used by the cursed FP.
+fn compute_alive_by_rule<T: IsComplex + IsRingOrField + Units>(
+    seq_bfs: &SegSeqBFS<T>,
+    rules: &[RuleRecord],
+    lhs_index: &FxHashMap<Vec<usize>, usize>,
+    max_lhs_len: usize,
+) -> Vec<FxHashSet<usize>> {
+    let mut out: Vec<FxHashSet<usize>> = (0..rules.len())
+        .map(|_| FxHashSet::default())
+        .collect();
+    for (rule_id, rule) in rules.iter().enumerate() {
+        let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
+        let src_n = src_patch.boundary_len();
+        let src_juncs: Vec<usize> =
+            (0..src_n).filter(|&i| src_patch.is_junction(i)).collect();
+        let (start_seg, _) =
+            lhs_seg_range(&src_juncs, src_n, &rule.witness_pm);
+        let j_outer_cw_src = src_juncs[start_seg];
+        let ccw_anchor_src =
+            (rule.witness_pm.start_a + rule.witness_pm.len) % src_n;
+        let j_outer_cw_trial =
+            (j_outer_cw_src + src_n - ccw_anchor_src) % src_n;
+
+        let mut trial = src_patch.clone();
+        if !trial.add_tile(&rule.witness_pm) {
+            continue;
+        }
+        let trial_n = trial.boundary_len();
+        let trial_juncs: Vec<usize> =
+            (0..trial_n).filter(|&i| trial.is_junction(i)).collect();
+        let trial_k = trial_juncs.len();
+        if trial_k < 3 {
+            continue;
+        }
+        let mut trial_sids: Vec<usize> = Vec::with_capacity(trial_k);
+        for j in 0..trial_k {
+            let cw_cj = trial
+                .coarse_junction_at(trial_juncs[j])
+                .expect("known junction");
+            let ccw_cj = trial
+                .coarse_junction_at(trial_juncs[(j + 1) % trial_k])
+                .expect("known junction");
+            let id = seq_bfs
+                .seg_bfs()
+                .lookup_seg(&cw_cj, &ccw_cj)
+                .expect("seg in DB");
+            trial_sids.push(id);
+        }
+        let rhs_idx = match trial_juncs.iter().position(|&p| p == j_outer_cw_trial) {
+            Some(i) => i,
+            None => continue,
+        };
+        debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
+        collect_covering_lhses(
+            &trial_sids,
+            rhs_idx,
+            lhs_index,
+            max_lhs_len,
+            &mut out[rule_id],
+        );
+    }
+    out
+}
+
+/// Find every LHS-id (in `lhs_index`) that appears as a substring of
+/// `seg_ids` (cyclic) at some position `[q, q+L)` satisfying
+/// `q ≤ center` AND `q + L > center` — i.e. starts at or before
+/// `center` and would rewrite at least position `center`.
+fn collect_covering_lhses(
+    seg_ids: &[usize],
+    center: usize,
+    lhs_index: &FxHashMap<Vec<usize>, usize>,
+    max_lhs_len: usize,
+    out: &mut FxHashSet<usize>,
+) {
+    let r_len = 3usize;
+    let k = seg_ids.len();
+    if k < r_len {
+        return;
+    }
+    let probe_pad = max_lhs_len.saturating_sub(1);
+    let max_total_pad = k.saturating_sub(r_len);
+    let pad_left = probe_pad.min(max_total_pad);
+    let pad_right = probe_pad.min(max_total_pad.saturating_sub(pad_left));
+    let probe_len = pad_left + r_len + pad_right;
+    let probe_start = (center + k - pad_left) % k;
+    let probe: Vec<usize> = (0..probe_len)
+        .map(|i| seg_ids[(probe_start + i) % k])
+        .collect();
+    let p_in_probe = pad_left;
+    for q in 0..=p_in_probe {
+        let max_len = (probe_len - q).min(max_lhs_len);
+        for len in 1..=max_len {
+            if q + len <= p_in_probe {
+                continue;
+            }
+            let sub: Vec<usize> = probe[q..q + len].to_vec();
+            if let Some(&id) = lhs_index.get(&sub) {
+                out.insert(id);
+            }
+        }
+    }
+}
+
+/// For each known LHS, the list of `(patch_id, j_outer_cw_pos)`
+/// occurrences across all witness patches' cyclic boundaries.
+fn compute_lhs_occurrences<T: IsComplex + IsRingOrField + Units>(
+    seq_bfs: &SegSeqBFS<T>,
+    lhs_index: &FxHashMap<Vec<usize>, usize>,
+    max_lhs_len: usize,
+) -> FxHashMap<Vec<usize>, Vec<(usize, usize)>> {
+    let mut occurrences: FxHashMap<Vec<usize>, Vec<(usize, usize)>> =
+        FxHashMap::default();
+    for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
+        let n = patch.boundary_len();
+        if n == 0 {
+            continue;
+        }
+        let juncs: Vec<usize> =
+            (0..n).filter(|&i| patch.is_junction(i)).collect();
+        let k = juncs.len();
+        if k < 2 {
+            continue;
+        }
+        let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
+        for j in 0..k {
+            let cw_cj = patch
+                .coarse_junction_at(juncs[j])
+                .expect("known junction");
+            let ccw_cj = patch
+                .coarse_junction_at(juncs[(j + 1) % k])
+                .expect("known junction");
+            let id = seq_bfs
+                .seg_bfs()
+                .lookup_seg(&cw_cj, &ccw_cj)
+                .expect("seg in DB");
+            seg_ids.push(id);
+        }
+        let max_len = max_lhs_len.min(k);
+        for start in 0..k {
+            let mut subseq: Vec<usize> = Vec::with_capacity(max_len);
+            for off in 0..max_len {
+                subseq.push(seg_ids[(start + off) % k]);
+                if lhs_index.contains_key(&subseq) {
+                    occurrences
+                        .entry(subseq.clone())
+                        .or_default()
+                        .push((patch_id, juncs[start]));
+                }
+            }
+        }
+    }
+    occurrences
+}
+
+/// Determine which rules are non-local: their match (at the LHS-
+/// equivalent position) fails `add_tile` on at least one *other*
+/// patch whose boundary also contains the same LHS. Rules whose ids
+/// are in `skip` are not tested (= they're already cursed and the
+/// answer is moot).
+fn compute_nonlocal_rules<T: IsComplex + IsRingOrField + Units>(
+    seq_bfs: &SegSeqBFS<T>,
+    rules: &[RuleRecord],
+    lhs_occurrences: &FxHashMap<Vec<usize>, Vec<(usize, usize)>>,
+    skip: &FxHashSet<usize>,
+) -> FxHashSet<usize> {
+    let mut nonlocal: FxHashSet<usize> = FxHashSet::default();
+    for (rule_id, r) in rules.iter().enumerate() {
+        if skip.contains(&rule_id) {
+            continue;
+        }
+        let r_patch = &seq_bfs.patches()[r.witness_patch_id];
+        let r_n = r_patch.boundary_len();
+        let r_juncs: Vec<usize> =
+            (0..r_n).filter(|&i| r_patch.is_junction(i)).collect();
+        let (r_start_seg, _) = lhs_seg_range(&r_juncs, r_n, &r.witness_pm);
+        let r_canonical = (r.witness_patch_id, r_juncs[r_start_seg]);
+
+        let occurrences = match lhs_occurrences.get(&r.lhs) {
+            Some(v) => v,
+            None => continue,
+        };
+        for &(patch_id, j_cw) in occurrences {
+            if (patch_id, j_cw) == r_canonical {
+                continue;
+            }
+            let w_patch = &seq_bfs.patches()[patch_id];
+            let n_w = w_patch.boundary_len();
+            let start_a = (j_cw + r.meta.start_edge_in_lhs) % n_w;
+            let pm = PatchMatch {
+                start_a,
+                len: r.meta.match_len,
+                start_b: r.meta.tile_offset,
+                tile_id: r.meta.tile_id,
+            };
+            let mut trial = w_patch.clone();
+            if !trial.add_tile(&pm) {
+                nonlocal.insert(rule_id);
+                break;
+            }
+        }
+    }
+    nonlocal
+}
+
+/// Iterate the per-rule cursed fixed point:
+///
+///   R cursed iff R.rhs contains a terminal OR every covering LHS
+///                in `alive_by_rule[R]` is non-usable,
+///   LHS usable iff some rule for it is non-cursed AND non-nonlocal.
+///
+/// Returns the cursed-rule set at the least fixed point. Monotone,
+/// always terminates.
+fn propagate_cursed_fp(
+    rules: &[RuleRecord],
+    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+    alive_by_rule: &[FxHashSet<usize>],
+    lhs_index: &FxHashMap<Vec<usize>, usize>,
+    terminals: &FxHashSet<usize>,
+    nonlocal_rules: &FxHashSet<usize>,
+) -> FxHashSet<usize> {
+    let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
+    for (rule_id, r) in rules.iter().enumerate() {
+        if r.rhs.iter().any(|s| terminals.contains(s)) {
+            cursed_rules.insert(rule_id);
+        }
+    }
+    let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+    loop {
+        usable_lhs_ids.clear();
+        for (lhs, ids) in rules_by_lhs {
+            let any_usable = ids.iter().any(|id| {
+                !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
+            });
+            if any_usable {
+                if let Some(&lid) = lhs_index.get(lhs) {
+                    usable_lhs_ids.insert(lid);
+                }
+            }
+        }
+        let mut new_cursed: FxHashSet<usize> = FxHashSet::default();
+        for (rule_id, r) in rules.iter().enumerate() {
+            if r.rhs.iter().any(|s| terminals.contains(s)) {
+                new_cursed.insert(rule_id);
+                continue;
+            }
+            let any_alive = alive_by_rule[rule_id]
+                .iter()
+                .any(|id| usable_lhs_ids.contains(id));
+            if !any_alive {
+                new_cursed.insert(rule_id);
+            }
+        }
+        if new_cursed == cursed_rules {
+            return cursed_rules;
+        }
+        cursed_rules = new_cursed;
+    }
+}
+
+fn derive_cursed_lhs(
+    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+    cursed_rules: &FxHashSet<usize>,
+) -> FxHashSet<Vec<usize>> {
+    rules_by_lhs
+        .iter()
+        .filter_map(|(lhs, ids)| {
+            if ids.iter().all(|id| cursed_rules.contains(id)) {
+                Some(lhs.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn derive_dead_rhs(
+    rules: &[RuleRecord],
+    cursed_rules: &FxHashSet<usize>,
+) -> FxHashSet<[usize; 3]> {
+    let mut rhs_has_noncursed: FxHashMap<[usize; 3], bool> = FxHashMap::default();
+    for (rule_id, r) in rules.iter().enumerate() {
+        let entry = rhs_has_noncursed.entry(r.rhs).or_insert(false);
+        if !cursed_rules.contains(&rule_id) {
+            *entry = true;
+        }
+    }
+    rhs_has_noncursed
+        .into_iter()
+        .filter_map(|(rhs, has_noncursed)| if has_noncursed { None } else { Some(rhs) })
+        .collect()
+}
+
+/// Sanity: every non-cursed rule's trial has at least one usable
+/// (non-cursed AND non-nonlocal) covering LHS. By construction of
+/// the FP this should always hold.
+fn verify_property(
+    rules: &[RuleRecord],
+    alive_by_rule: &[FxHashSet<usize>],
+    cursed_rules: &FxHashSet<usize>,
+    nonlocal_rules: &FxHashSet<usize>,
+    lhs_index: &FxHashMap<Vec<usize>, usize>,
+    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+) {
+    // Recompute usable_lhs_ids at the fixed point.
+    let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+    for (lhs, ids) in rules_by_lhs {
+        let any_usable = ids
+            .iter()
+            .any(|id| !cursed_rules.contains(id) && !nonlocal_rules.contains(id));
+        if any_usable {
+            if let Some(&lid) = lhs_index.get(lhs) {
+                usable_lhs_ids.insert(lid);
+            }
+        }
+    }
+    for (rule_id, _) in rules.iter().enumerate() {
+        if cursed_rules.contains(&rule_id) {
+            continue;
+        }
+        let any_alive = alive_by_rule[rule_id]
+            .iter()
+            .any(|id| usable_lhs_ids.contains(id));
+        assert!(
+            any_alive,
+            "non-cursed rule {} has no usable covering LHS on its trial",
+            rule_id,
+        );
     }
 }
 
