@@ -25,8 +25,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Serialize};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{CoarseJunction, EdgeInfo, GrowingPatch, PatchMatch};
 use crate::intgeom::segbfs::SegmentTypeBFS;
 use crate::intgeom::tileset::TileSet;
@@ -36,7 +38,7 @@ type PatchKey = (Vec<i8>, Vec<EdgeInfo>, Vec<Vec<EdgeInfo>>, Vec<usize>);
 
 /// Witness for one discovered sequence: the patch on which it was
 /// first observed plus the match that produced it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SeqWitness {
     pub patch_id: usize,
     pub pm: PatchMatch,
@@ -45,7 +47,7 @@ pub struct SeqWitness {
 /// The witness-independent metadata for one rewrite: which tile is
 /// added, at what edge offset on that tile, how many edges it
 /// absorbs, and where in the LHS its CW anchor sits.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MatchMeta {
     pub tile_id: usize,
     pub tile_offset: usize,
@@ -56,13 +58,46 @@ pub struct MatchMeta {
 /// One rewriting rule: an LHS seg sequence + MatchMeta + RHS, with
 /// the canonical `(witness_patch_id, witness_pm)` that produced it.
 /// Exactly one record per distinct `(LHS, MatchMeta)` pair.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct RuleRecord {
     pub lhs: Vec<usize>,
     pub meta: MatchMeta,
     pub rhs: [usize; 3],
     pub witness_patch_id: usize,
     pub witness_pm: PatchMatch,
+}
+
+/// All the information needed to reconstruct a `GrowingPatch` via
+/// `from_parts`, in a serializable form (no generic `T`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SerializedPatch {
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    inner_chains: Vec<Vec<EdgeInfo>>,
+    patch_tile_ids: Vec<usize>,
+    next_tile_id: usize,
+}
+
+impl<T: IsComplex + IsRingOrField + Units> From<&GrowingPatch<T>> for SerializedPatch {
+    fn from(p: &GrowingPatch<T>) -> Self {
+        SerializedPatch {
+            angles: p.angles().to_vec(),
+            edges: p.edges().to_vec(),
+            inner_chains: p.inner_chains().to_vec(),
+            patch_tile_ids: p.patch_tile_ids().to_vec(),
+            next_tile_id: p.next_tile_id(),
+        }
+    }
+}
+
+/// On-disk format for `SegSeqBFS::save_to` / `load_from`.
+#[derive(Serialize, Deserialize)]
+struct Snapshot {
+    patches: Vec<SerializedPatch>,
+    seg_pairs: Vec<(CoarseJunction, CoarseJunction)>,
+    sequences: Vec<Vec<usize>>,
+    seq_witnesses: Vec<SeqWitness>,
+    rules: Vec<RuleRecord>,
 }
 
 #[derive(Debug)]
@@ -181,6 +216,111 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
 
     pub fn seg_bfs(&self) -> &SegmentTypeBFS<T> {
         &self.seg_bfs
+    }
+
+    /// Serialize the BFS to a binary file using bincode. Saves
+    /// everything an analysis needs: rules, sequences, seq witnesses,
+    /// patches (in `from_parts`-compatible form), and the seg DB
+    /// (= seg_pairs only — patches of the inner SegmentTypeBFS are
+    /// not saved). The tileset is the user's responsibility to
+    /// provide on load (same tileset, same tile order).
+    pub fn save_to(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        let snapshot = Snapshot {
+            patches: self
+                .patches
+                .iter()
+                .map(SerializedPatch::from)
+                .collect(),
+            seg_pairs: self.seg_bfs.seg_pairs().to_vec(),
+            sequences: self.sequences.clone(),
+            seq_witnesses: self.seq_witnesses.clone(),
+            rules: self.rules.clone(),
+        };
+        let f = std::fs::File::create(path)?;
+        let mut w = std::io::BufWriter::new(f);
+        bincode::serialize_into(&mut w, &snapshot)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        Ok(())
+    }
+
+    /// Reconstruct a `SegSeqBFS` from a saved snapshot. The user must
+    /// provide the same tileset that was used to build the BFS.
+    /// Internal lookup maps (`patch_lookup`, `seq_lookup`, `rule_lookup`,
+    /// `seen_keys`) are rebuilt from the loaded data. The result has
+    /// an empty queue and is not runnable; use it for analysis only.
+    pub fn load_from(
+        tileset: Arc<TileSet<T>>,
+        path: impl AsRef<std::path::Path>,
+    ) -> std::io::Result<Self> {
+        let f = std::fs::File::open(path)?;
+        let r = std::io::BufReader::new(f);
+        let snapshot: Snapshot = bincode::deserialize_from(r)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        // Reconstruct the inner SegmentTypeBFS from the saved seg_pairs.
+        let seg_bfs = SegmentTypeBFS::from_loaded(
+            Arc::clone(&tileset),
+            snapshot.seg_pairs,
+        );
+
+        // Reconstruct patches via from_parts using a shared match_index.
+        let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
+        let mut patches: Vec<GrowingPatch<T>> = Vec::with_capacity(snapshot.patches.len());
+        for sp in snapshot.patches {
+            let patch = GrowingPatch::from_parts(
+                Arc::clone(&match_index),
+                sp.angles,
+                sp.edges,
+                sp.inner_chains,
+                sp.patch_tile_ids,
+                sp.next_tile_id,
+            )
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "patch from_parts failed",
+                )
+            })?;
+            patches.push(patch);
+        }
+
+        // Rebuild patch_lookup and seen_keys from the loaded patches.
+        let mut patch_lookup: FxHashMap<PatchKey, usize> = FxHashMap::default();
+        let mut seen_keys: FxHashSet<PatchKey> = FxHashSet::default();
+        for (id, p) in patches.iter().enumerate() {
+            let key = patch_key(p);
+            patch_lookup.insert(key.clone(), id);
+            seen_keys.insert(key);
+        }
+
+        // Rebuild seq_lookup.
+        let mut seq_lookup: FxHashMap<Vec<usize>, usize> = FxHashMap::default();
+        for (id, seq) in snapshot.sequences.iter().enumerate() {
+            seq_lookup.insert(seq.clone(), id);
+        }
+
+        // Rebuild rule_lookup.
+        let mut rule_lookup: FxHashMap<(Vec<usize>, MatchMeta), usize> =
+            FxHashMap::default();
+        for (id, r) in snapshot.rules.iter().enumerate() {
+            rule_lookup.insert((r.lhs.clone(), r.meta), id);
+        }
+
+        Ok(Self {
+            tileset,
+            seg_bfs,
+            patches,
+            patch_lookup,
+            seen_keys,
+            sequences: snapshot.sequences,
+            seq_lookup,
+            seq_witnesses: snapshot.seq_witnesses,
+            rules: snapshot.rules,
+            rule_lookup,
+            queue: VecDeque::new(),
+            seq_cap: 0,
+            patch_cap: 0,
+        })
     }
 
     fn seed(&mut self) -> Result<(), SeqBfsError> {

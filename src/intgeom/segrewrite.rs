@@ -198,6 +198,41 @@ mod tests {
     }
 
     #[test]
+    fn hex_save_load_roundtrip() {
+        let bfs = hex_seq_bfs();
+        let tmp = std::env::temp_dir().join(format!(
+            "tilezz_hex_seq_bfs_{}.bin",
+            std::process::id()
+        ));
+        bfs.save_to(&tmp).expect("save");
+        let bytes = std::fs::metadata(&tmp).expect("metadata").len();
+        eprintln!("hex snapshot size: {} bytes ({:.1} MB)", bytes, bytes as f64 / 1_048_576.0);
+        let loaded = SegSeqBFS::<ZZ12>::load_from(hex_tileset(), &tmp).expect("load");
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(loaded.num_sequences(), bfs.num_sequences());
+        assert_eq!(loaded.num_rules(), bfs.num_rules());
+        assert_eq!(loaded.num_witness_patches(), bfs.num_witness_patches());
+        // Spot-check: same rules in same order, same canonical witness.
+        for (a, b) in loaded.rules().iter().zip(bfs.rules().iter()) {
+            assert_eq!(a.lhs, b.lhs);
+            assert_eq!(a.meta, b.meta);
+            assert_eq!(a.rhs, b.rhs);
+            assert_eq!(a.witness_patch_id, b.witness_patch_id);
+            assert_eq!(a.witness_pm, b.witness_pm);
+        }
+        // Analysis on loaded should match analysis on original.
+        let t1 = SegRewriteTable::build_with_stats(bfs);
+        let a1 = RuleAnalysis::build(bfs, &t1);
+        let t2 = SegRewriteTable::build_with_stats(&loaded);
+        let a2 = RuleAnalysis::build(&loaded, &t2);
+        assert_eq!(t1.num_lhs(), t2.num_lhs());
+        assert_eq!(t1.num_rules(), t2.num_rules());
+        assert_eq!(a1.terminals, a2.terminals);
+        assert_eq!(a1.cursed_rules, a2.cursed_rules);
+        assert_eq!(a1.cursed_lhs, a2.cursed_lhs);
+    }
+
+    #[test]
     fn hex_rule_analysis() {
         let seq_bfs = hex_seq_bfs();
         let table = SegRewriteTable::build_with_stats(seq_bfs);

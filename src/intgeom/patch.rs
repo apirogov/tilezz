@@ -23,7 +23,7 @@ use crate::intgeom::tileset::TileSet;
 /// the same `EdgeInfo` if the same tile shape appears multiple times
 /// in the patch (each tile *instance* gets a separate `patch_tile_id`,
 /// tracked elsewhere in `GrowingPatch`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct EdgeInfo {
     pub tile_id: usize,
     pub tile_offset: usize,
@@ -86,7 +86,7 @@ pub(crate) struct TileSegment {
 ///   the new tile.
 ///
 /// (Same convention as the lower-level [`MatchType`](crate::intgeom::matchtypes::MatchType).)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PatchMatch {
     pub start_a: usize,
     pub len: usize,
@@ -134,7 +134,7 @@ pub struct OpenVertexType {
 /// differ. This makes `CoarseJunction` the right equivalence for seg
 /// enumeration: it conflates configurations whose only difference is
 /// invisible from outside the boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct CoarseJunction {
     pub cw_edge: EdgeInfo,
     pub ccw_edge: EdgeInfo,
@@ -1250,8 +1250,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn next_tile_id(&self) -> usize {
+    pub fn next_tile_id(&self) -> usize {
         match &self.state {
             PatchState::Growing { next_tile_id, .. } => *next_tile_id,
             _ => 0,
