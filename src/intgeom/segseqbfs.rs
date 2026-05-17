@@ -27,7 +27,7 @@ use std::sync::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch, PatchMatch};
+use crate::intgeom::patch::{CoarseJunction, EdgeInfo, GrowingPatch, PatchMatch};
 use crate::intgeom::segbfs::SegmentTypeBFS;
 use crate::intgeom::tileset::TileSet;
 
@@ -53,13 +53,14 @@ pub struct MatchMeta {
     pub start_edge_in_lhs: usize,
 }
 
-/// One rewriting rule: an LHS seg sequence + MatchMeta + the
-/// canonical `(witness_patch_id, witness_pm)` that produced it.
+/// One rewriting rule: an LHS seg sequence + MatchMeta + RHS, with
+/// the canonical `(witness_patch_id, witness_pm)` that produced it.
 /// Exactly one record per distinct `(LHS, MatchMeta)` pair.
 #[derive(Clone, Debug)]
 pub struct RuleRecord {
     pub lhs: Vec<usize>,
     pub meta: MatchMeta,
+    pub rhs: [usize; 3],
     pub witness_patch_id: usize,
     pub witness_pm: PatchMatch,
 }
@@ -278,9 +279,9 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
         // occurrence pins the rule's canonical witness. Subsequent
         // matches producing the same (LHS, MatchMeta) — whether on
         // this witness or any future one — are silently discarded.
-        // (LHS, MatchMeta, pm) entries to commit if this patch turns
-        // out to be a canonical witness.
-        let mut new_rules_local: Vec<(Vec<usize>, MatchMeta, PatchMatch)> =
+        // (LHS, MatchMeta, RHS, pm) entries to commit if this patch
+        // turns out to be a canonical witness.
+        let mut new_rules_local: Vec<(Vec<usize>, MatchMeta, [usize; 3], PatchMatch)> =
             Vec::new();
         let mut new_seqs_local: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
         let mut new_seqs_seen: FxHashSet<Vec<usize>> = FxHashSet::default();
@@ -329,9 +330,21 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             if !trial.add_tile(&pm) {
                 continue;
             }
+
+            // Compute the RHS by walking the un-normalized trial
+            // between the preserved outer junctions. Must happen
+            // BEFORE normalize because the position arithmetic
+            // depends on the add_tile layout.
+            let rhs = match compute_rhs(
+                &trial, &juncs, n, &pm, start_seg, end_seg, &self.seg_bfs,
+            ) {
+                Some(r) => r,
+                None => continue,
+            };
+
             trial.normalize();
             self.enqueue_if_unseen(trial)?;
-            new_rules_local.push((seq.clone(), meta, pm.clone()));
+            new_rules_local.push((seq.clone(), meta, rhs, pm.clone()));
             if new_seqs_seen.insert(seq.clone())
                 && !self.seq_lookup.contains_key(&seq)
             {
@@ -363,12 +376,13 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
         }
 
         // Register new rules with their canonical witness.
-        for (lhs, meta, pm) in new_rules_local {
+        for (lhs, meta, rhs, pm) in new_rules_local {
             let rule_id = self.rules.len();
             self.rule_lookup.insert((lhs.clone(), meta), rule_id);
             self.rules.push(RuleRecord {
                 lhs,
                 meta,
+                rhs,
                 witness_patch_id: patch_id,
                 witness_pm: pm,
             });
@@ -384,6 +398,65 @@ fn patch_key<T: IsComplex + IsRingOrField + Units>(patch: &GrowingPatch<T>) -> P
         patch.inner_chains().to_vec(),
         patch.patch_tile_ids().to_vec(),
     )
+}
+
+/// Compute the RHS of a rewrite by walking the un-normalized trial
+/// from the CW preserved-outer junction CCW to the CCW one. Returns
+/// the 3 seg ids `[pad_cw', central, pad_ccw']` or `None` if the
+/// walk fails / a seg isn't in the seg DB.
+pub(crate) fn compute_rhs<T: IsComplex + IsRingOrField + Units>(
+    trial: &GrowingPatch<T>,
+    src_juncs: &[usize],
+    src_n: usize,
+    pm: &PatchMatch,
+    start_seg: usize,
+    end_seg: usize,
+    seg_bfs: &SegmentTypeBFS<T>,
+) -> Option<[usize; 3]> {
+    let k = src_juncs.len();
+    let j_outer_cw_src = src_juncs[start_seg];
+    let j_outer_ccw_src = src_juncs[(end_seg + 1) % k];
+    let aug_n = trial.boundary_len();
+    let gap_start = src_n - pm.len;
+
+    // After add_tile, the survivor strip on the trial occupies
+    // positions [0, gap_start] with CCW anchor at 0 and CW anchor at
+    // gap_start. Source survivor vertex `v` lives on the trial at
+    // `(v - (start_a + match_len) + n) % n`.
+    let ccw_anchor_src = (pm.start_a + pm.len) % src_n;
+    let j_outer_cw_trial = (j_outer_cw_src + src_n - ccw_anchor_src) % src_n;
+    let j_outer_ccw_trial = (j_outer_ccw_src + src_n - ccw_anchor_src) % src_n;
+    debug_assert!(j_outer_cw_trial <= gap_start);
+    debug_assert!(j_outer_ccw_trial <= gap_start);
+
+    let mut walk: Vec<CoarseJunction> = Vec::with_capacity(4);
+    let mut pos = j_outer_cw_trial;
+    for _ in 0..=aug_n {
+        if let Some(cj) = trial.coarse_junction_at(pos) {
+            walk.push(cj);
+            if pos == j_outer_ccw_trial && walk.len() >= 2 {
+                break;
+            }
+        }
+        pos = (pos + 1) % aug_n;
+        if walk.len() > aug_n {
+            return None;
+        }
+    }
+    if walk.len() != 4 {
+        panic!(
+            "expected 4 junctions in RHS walk, got {}: pm={:?}, src_n={}, aug_n={}, gap_start={}, src_juncs={:?}, start_seg={}, end_seg={}, walk={:?}",
+            walk.len(),
+            pm, src_n, aug_n, gap_start,
+            src_juncs, start_seg, end_seg,
+            walk,
+        );
+    }
+    Some([
+        seg_bfs.lookup_seg(&walk[0], &walk[1])?,
+        seg_bfs.lookup_seg(&walk[1], &walk[2])?,
+        seg_bfs.lookup_seg(&walk[2], &walk[3])?,
+    ])
 }
 
 /// Compute the LHS segment range `(start_seg, end_seg)` for a match.
