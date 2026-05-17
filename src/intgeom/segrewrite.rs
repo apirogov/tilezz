@@ -70,46 +70,98 @@ impl SegRewriteTable {
 
 /// Classification analysis over the rule set.
 ///
-/// The "cursed" concept is defined as a *per-rule* least fixed
-/// point. Intuitively: applying a non-cursed rule must land you in a
-/// state where you can keep rewriting non-cursedly.
+/// # What is computed
 ///
-/// 1. **Terminal segment**: a seg id that appears in some rule's RHS
-///    but never in any rule's LHS. Once introduced, it cannot be
-///    rewritten away.
+/// A least fixed point of the "cursed" predicate over rules, derived
+/// from three independent signals:
 ///
-/// 2. **Cursed rule** (least fixed point):
-///    - Base case: any rule whose RHS contains a terminal segment.
-///    - Inductive case: a rule R is cursed iff its own trial T_R
-///      (= the un-normalized patch you get by applying R to its
-///      canonical witness) has NO non-cursed LHS covering R.rhs at
-///      the RHS position. Concretely: every LHS substring of T_R's
-///      boundary that satisfies `q ≤ rhs_idx` AND `q + L > rhs_idx`
-///      (= would rewrite at least r's first segment) is itself
-///      cursed.
-///    - This is checked iteratively until the cursed set stabilizes.
+/// 1. **Terminal segments** — segs that appear in some rule's RHS
+///    but never in any rule's LHS. No rule pattern-matches them, so
+///    once introduced they stay forever. Any rule whose RHS contains
+///    a terminal seg is cursed at the base case.
 ///
-/// 3. **Cursed LHS**: every rule with this LHS is cursed.
+/// 2. **Nonlocal rules** — rules that succeed on their canonical
+///    witness but fail `add_tile` on at least one other patch that
+///    contains the same LHS as a substring. Applicability depends on
+///    context beyond the LHS pattern; we cannot rely on them as
+///    continuations and treat them as unusable for the FP.
+///    Computed once over all rules (skipping the rules cursed by
+///    terminal-propagation alone), then held fixed for the rest of
+///    the analysis.
 ///
-/// 4. **Dead RHS**: every rule producing this RHS is cursed (= no
-///    non-cursed rule can produce it). Derived as a final pass over
-///    `rules.rhs` partition by cursed-status.
+/// 3. **Splice-result aliveness** (recomputed each FP iteration) —
+///    for each rule R, scan candidate continuations `(R, R')` where
+///    `L' = R'.lhs` covers `R.rhs` from the left on R's own trial
+///    `T_R` at position `q`. Construct the *symbolic* rewritten
+///    boundary
+///        T'' = T_R[..q] ++ R'.rhs ++ T_R[q+|L'|..]    (cyclic)
+///    and check whether T'' contains at least one **usable** LHS as
+///    a substring *anywhere*. A "usable LHS" is one with at least
+///    one non-cursed AND non-nonlocal rule under the current cursed
+///    set. If yes, `(R, R')` is an *alive-result continuation*. If
+///    no `(R, R')` for R is alive-result, R becomes cursed.
 ///
-/// 5. **Nonlocal rule** (independent of cursedness): rule succeeds on
-///    its canonical witness but `add_tile` fails on at least one
-///    other patch containing the same LHS. Context beyond L matters
-///    for applicability. Computed only over non-cursed rules.
+/// The FP iterates until the cursed set is stable. By construction
+/// every non-cursed rule has at least one continuation whose
+/// symbolic result contains a usable LHS somewhere.
 ///
-/// `context_sensitive_rhs` is left empty under the per-rule definition
-/// (it's not a natural derived concept) and may be reintroduced later
-/// if the use case clarifies.
+/// # Derived sets
+///
+/// - **Dead RHS** = RHSes where every producing rule is cursed.
+/// - **Cursed LHS** = LHSes where every rule is cursed.
+///
+/// # Necessary, not sufficient
+///
+/// The splice-result check is **existential** ("does some usable LHS
+/// match somewhere in T''?"), not **universal** ("is every position
+/// of T'' covered by some usable LHS?"). This is deliberate:
+///
+/// - Existential is a *necessary* condition for the rule to support
+///   continued rewriting. If T'' has no usable LHS anywhere, there
+///   is genuinely no next move at all from the result of applying R.
+///
+/// - Universal would over-claim cursedness: a position not being
+///   immediately covered does NOT preclude reaching it via a
+///   multi-step rewrite strategy that first rewrites elsewhere and
+///   shifts the boundary.
+///
+/// So `cursed_rules` is a **lower bound** on rules that definitely
+/// fail. Rules outside it pass the necessary 1-step existence test
+/// but are not guaranteed to support an infinite rewrite chain — to
+/// prove that, you would need an obligation-style analysis that
+/// follows multi-step derivations on freshly produced (non-witness)
+/// boundaries, which we do not implement.
+///
+/// # Symbolic splice caveat
+///
+/// The splice is computed *symbolically* (= simple substring
+/// substitution). The actual `add_tile` result on `T_R` could differ
+/// from this at the splice junctions if a junction appears or
+/// disappears there. Because nonlocal rules are excluded as
+/// continuations the symbolic splice is faithful at the level of
+/// "this match is locally valid", but the precise seg sequence near
+/// the splice may differ slightly from the geometric T'', possibly
+/// over- or under-counting near-splice usable-LHS matches. Empirically
+/// for our tilesets this has not been a source of error.
 #[derive(Debug)]
 pub struct RuleAnalysis {
+    /// Seg ids that never appear in any LHS but appear in some RHS.
     pub terminals: FxHashSet<usize>,
+    /// RHSes where every rule producing them is cursed.
     pub dead_rhs: FxHashSet<[usize; 3]>,
+    /// Reserved for future use; currently unused under the per-rule FP.
     pub context_sensitive_rhs: FxHashSet<[usize; 3]>,
+    /// Rules in the least fixed point of the cursed predicate. Lower
+    /// bound on rules that definitely fail to support continued
+    /// rewriting; see the type-level docs for the precise definition
+    /// and what it does NOT guarantee.
     pub cursed_rules: FxHashSet<usize>,
+    /// LHSes where every rule is cursed (= no usable rule for this
+    /// pattern at the fixed point).
     pub cursed_lhs: FxHashSet<Vec<usize>>,
+    /// Rules whose match fails `add_tile` on at least one other patch
+    /// containing the same LHS. Held fixed; excluded from "usable"
+    /// in the splice-result check.
     pub nonlocal_rules: FxHashSet<usize>,
 }
 
