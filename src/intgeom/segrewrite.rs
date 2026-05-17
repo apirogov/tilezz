@@ -9,7 +9,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::segseqbfs::{MatchMeta, RuleRecord, SegSeqBFS};
+use crate::intgeom::patch::PatchMatch;
+use crate::intgeom::segseqbfs::{lhs_seg_range, MatchMeta, RuleRecord, SegSeqBFS};
 
 #[derive(Debug)]
 pub struct SegRewriteTable {
@@ -77,11 +78,18 @@ impl SegRewriteTable {
 /// - **Cursed LHS** = an LHS for which *every* applicable rule is
 ///   cursed. From such an LHS there's no escape that avoids inserting
 ///   a terminal.
+/// - **Nonlocal rule** = a rule that succeeds on its own canonical
+///   witness but fails (`add_tile` returns false) on at least one
+///   *other* witness with the same LHS. The LHS alone is not
+///   sufficient to know whether the rule is applicable — context
+///   beyond L matters. Strictly weaker than "cursed" (= just
+///   unreliable).
 #[derive(Debug)]
 pub struct RuleAnalysis {
     pub terminals: FxHashSet<usize>,
     pub cursed_rules: FxHashSet<usize>,
     pub cursed_lhs: FxHashSet<Vec<usize>>,
+    pub nonlocal_rules: FxHashSet<usize>,
 }
 
 impl RuleAnalysis {
@@ -120,7 +128,97 @@ impl RuleAnalysis {
             }
         }
 
-        RuleAnalysis { terminals, cursed_rules, cursed_lhs }
+        // Nonlocal rules: a rule R with LHS L is nonlocal iff there
+        // exists ANY patch in the BFS whose boundary contains L at
+        // some position where R's match fails `add_tile` — not just
+        // canonical witnesses for rules with L. We build an inverted
+        // index `lhs_occurrences: L -> [(patch_id, j_outer_cw_pos)]`
+        // by scanning every witness patch's cyclic seg sequence for
+        // every contiguous subsequence that matches a known LHS.
+        let known_lhses: FxHashSet<&Vec<usize>> = table.rules_by_lhs.keys().collect();
+        let max_lhs_len = table.rules_by_lhs.keys().map(|l| l.len()).max().unwrap_or(0);
+        let mut lhs_occurrences: FxHashMap<Vec<usize>, Vec<(usize, usize)>> =
+            FxHashMap::default();
+        for (patch_id, patch) in seq_bfs.patches().iter().enumerate() {
+            let n = patch.boundary_len();
+            if n == 0 {
+                continue;
+            }
+            let juncs: Vec<usize> =
+                (0..n).filter(|&i| patch.is_junction(i)).collect();
+            let k = juncs.len();
+            if k < 2 {
+                continue;
+            }
+            let mut seg_ids: Vec<usize> = Vec::with_capacity(k);
+            for j in 0..k {
+                let cw_cj = patch.coarse_junction_at(juncs[j]).expect("known junction");
+                let ccw_cj = patch.coarse_junction_at(juncs[(j + 1) % k]).expect("known junction");
+                let id = seq_bfs
+                    .seg_bfs()
+                    .lookup_seg(&cw_cj, &ccw_cj)
+                    .expect("seg in DB");
+                seg_ids.push(id);
+            }
+            // Enumerate cyclic subsequences of length 1..=min(max_lhs_len, k)
+            // starting at each segment index.
+            let max_len = max_lhs_len.min(k);
+            for start in 0..k {
+                let mut subseq: Vec<usize> = Vec::with_capacity(max_len);
+                for off in 0..max_len {
+                    subseq.push(seg_ids[(start + off) % k]);
+                    if known_lhses.contains(&subseq) {
+                        lhs_occurrences
+                            .entry(subseq.clone())
+                            .or_default()
+                            .push((patch_id, juncs[start]));
+                    }
+                }
+            }
+        }
+
+        let mut nonlocal_rules: FxHashSet<usize> = FxHashSet::default();
+        for (rule_id, r) in rules.iter().enumerate() {
+            // Compute R's own canonical L-position to skip it.
+            let r_patch = &seq_bfs.patches()[r.witness_patch_id];
+            let r_n = r_patch.boundary_len();
+            let r_juncs: Vec<usize> =
+                (0..r_n).filter(|&i| r_patch.is_junction(i)).collect();
+            let (r_start_seg, _) = lhs_seg_range(&r_juncs, r_n, &r.witness_pm);
+            let r_canonical = (r.witness_patch_id, r_juncs[r_start_seg]);
+
+            let occurrences = match lhs_occurrences.get(&r.lhs) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            for &(patch_id, j_cw) in occurrences {
+                if (patch_id, j_cw) == r_canonical {
+                    continue;
+                }
+                let w_patch = &seq_bfs.patches()[patch_id];
+                let n_w = w_patch.boundary_len();
+                let start_a = (j_cw + r.meta.start_edge_in_lhs) % n_w;
+                let pm = PatchMatch {
+                    start_a,
+                    len: r.meta.match_len,
+                    start_b: r.meta.tile_offset,
+                    tile_id: r.meta.tile_id,
+                };
+                let mut trial = w_patch.clone();
+                if !trial.add_tile(&pm) {
+                    nonlocal_rules.insert(rule_id);
+                    break;
+                }
+            }
+        }
+
+        RuleAnalysis {
+            terminals,
+            cursed_rules,
+            cursed_lhs,
+            nonlocal_rules,
+        }
     }
 
     pub fn is_terminal(&self, seg: usize) -> bool {
@@ -133,6 +231,10 @@ impl RuleAnalysis {
 
     pub fn is_cursed_lhs(&self, lhs: &[usize]) -> bool {
         self.cursed_lhs.contains(lhs)
+    }
+
+    pub fn is_nonlocal_rule(&self, rule_id: usize) -> bool {
+        self.nonlocal_rules.contains(&rule_id)
     }
 }
 
@@ -238,12 +340,14 @@ mod tests {
         let table = SegRewriteTable::build_with_stats(seq_bfs);
         let analysis = RuleAnalysis::build(seq_bfs, &table);
         eprintln!(
-            "hex: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}",
+            "hex: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),
             table.num_lhs(),
+            analysis.nonlocal_rules.len(),
+            table.num_rules(),
         );
         // Every cursed LHS has only cursed rules.
         for lhs in &analysis.cursed_lhs {
@@ -289,12 +393,14 @@ mod tests {
             seq_bfs.num_rules()
         );
         eprintln!(
-            "spectre: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}",
+            "spectre: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),
             table.num_lhs(),
+            analysis.nonlocal_rules.len(),
+            table.num_rules(),
         );
         assert_eq!(seq_bfs.num_rules(), table.num_rules(),
             "table rules must equal BFS rules");
@@ -321,12 +427,14 @@ mod tests {
             seq_bfs.num_rules()
         );
         eprintln!(
-            "mixed: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}",
+            "mixed: terminals={}, cursed_rules={}/{}, cursed_lhs={}/{}, nonlocal_rules={}/{}",
             analysis.terminals.len(),
             analysis.cursed_rules.len(),
             table.num_rules(),
             analysis.cursed_lhs.len(),
             table.num_lhs(),
+            analysis.nonlocal_rules.len(),
+            table.num_rules(),
         );
         assert_eq!(seq_bfs.num_rules(), table.num_rules(),
             "table rules must equal BFS rules");
