@@ -70,47 +70,39 @@ impl SegRewriteTable {
 
 /// Classification analysis over the rule set.
 ///
-/// Three escalating "blocked" categories at the segment / RHS / rule
-/// / LHS levels:
+/// The "cursed" concept is defined as a *per-rule* least fixed
+/// point. Intuitively: applying a non-cursed rule must land you in a
+/// state where you can keep rewriting non-cursedly.
 ///
 /// 1. **Terminal segment**: a seg id that appears in some rule's RHS
 ///    but never in any rule's LHS. Once introduced, it cannot be
-///    rewritten away — there is no rule that pattern-matches it.
+///    rewritten away.
 ///
-/// 2. **Dead RHS**: the 3-seg RHS, considered as a substring of the
-///    boundary of any patch where it appears (= the rule's own trial
-///    *and* any registered witness whose boundary happens to contain
-///    it), cannot be acted on by any rule. Concretely: on every such
-///    patch, no LHS substring of the boundary at some position
-///    `[q, q+L)` satisfies `q ≤ p` AND `q + L > p`, where `p` is the
-///    RHS's start position. (= no LHS "begins at or before the RHS
-///    and rewrites at least the RHS's first segment".)
+/// 2. **Cursed rule** (least fixed point):
+///    - Base case: any rule whose RHS contains a terminal segment.
+///    - Inductive case: a rule R is cursed iff its own trial T_R
+///      (= the un-normalized patch you get by applying R to its
+///      canonical witness) has NO non-cursed LHS covering R.rhs at
+///      the RHS position. Concretely: every LHS substring of T_R's
+///      boundary that satisfies `q ≤ rhs_idx` AND `q + L > rhs_idx`
+///      (= would rewrite at least r's first segment) is itself
+///      cursed.
+///    - This is checked iteratively until the cursed set stabilizes.
 ///
-///    Containing a terminal seg trivially implies dead — but the
-///    converse is not always true. In principle a tileset could have
-///    non-terminal-containing RHSes that are still dead: every
-///    individual seg is in some LHS, but no length-`L'` LHS covers
-///    this specific 3-seg combination from the left. For both
-///    spectre and hex, no such cases occur (dead_rhs ⊆ rhs-with-
-///    terminal), but the check is kept for tilesets where it might.
+/// 3. **Cursed LHS**: every rule with this LHS is cursed.
 ///
-/// 3. **Context-sensitive RHS**: alive on some patches that contain
-///    it but dead on others. Tells us aliveness depends on the
-///    surrounding context, not just on the RHS itself.
+/// 4. **Dead RHS**: every rule producing this RHS is cursed (= no
+///    non-cursed rule can produce it). Derived as a final pass over
+///    `rules.rhs` partition by cursed-status.
 ///
-/// 4. **Cursed rule**: RHS contains a terminal OR RHS is dead. Rule
-///    is a one-way trip into something we can't undo.
+/// 5. **Nonlocal rule** (independent of cursedness): rule succeeds on
+///    its canonical witness but `add_tile` fails on at least one
+///    other patch containing the same LHS. Context beyond L matters
+///    for applicability. Computed only over non-cursed rules.
 ///
-/// 5. **Cursed LHS**: every rule with this LHS is cursed. From this
-///    LHS there is no escape that avoids inserting irreducibility.
-///
-/// Independent of cursedness:
-///
-/// 6. **Nonlocal rule**: rule succeeds on its canonical witness but
-///    `add_tile` fails on at least one other patch that contains the
-///    same LHS. The LHS alone doesn't determine the rule's
-///    applicability — context beyond L matters. Computed only over
-///    non-cursed rules.
+/// `context_sensitive_rhs` is left empty under the per-rule definition
+/// (it's not a natural derived concept) and may be reintroduced later
+/// if the use case clarifies.
 #[derive(Debug)]
 pub struct RuleAnalysis {
     pub terminals: FxHashSet<usize>,
@@ -141,13 +133,11 @@ impl RuleAnalysis {
         let terminals: FxHashSet<usize> =
             rhs_segs.difference(&lhs_segs).copied().collect();
 
-        // For each RHS, collect the SET of distinct LHSes that cover
-        // it from the left on at least one patch (= the rule's own
-        // trial, or any registered witness whose boundary contains
-        // the RHS as a cyclic 3-substring). This is the "alive
-        // evidence": an RHS is alive iff at least one of its covering
-        // LHSes is *non-cursed*. We compute the evidence once, then
-        // iterate the cursed set to a fixed point.
+        // For each rule, collect the set of LHS-ids that cover its
+        // RHS from the left on the rule's own trial. This is the
+        // per-rule "alive evidence": a rule is alive iff at least one
+        // of its covering LHSes is *non-cursed*. We compute the
+        // evidence once, then iterate the cursed set to a fixed point.
         let lhs_index: FxHashMap<Vec<usize>, usize> = table
             .rules_by_lhs
             .keys()
@@ -156,8 +146,6 @@ impl RuleAnalysis {
             .collect();
         let n_lhses = lhs_index.len();
         let max_lhs_len = lhs_index.keys().map(|l| l.len()).max().unwrap_or(0);
-        let known_rhses: FxHashSet<[usize; 3]> =
-            rules.iter().map(|r| r.rhs).collect();
 
         // Closure: gather all LHS-ids in our set that cover `center`
         // (= satisfy q ≤ center AND q+L > center) within the cyclic
@@ -193,11 +181,14 @@ impl RuleAnalysis {
             }
         };
 
-        let mut alive_by_lhs: FxHashMap<[usize; 3], FxHashSet<usize>> =
-            FxHashMap::default();
+        // Per-rule alive evidence: for each rule, the set of LHS-ids
+        // covering its RHS on its own trial.
+        let mut alive_by_rule: Vec<FxHashSet<usize>> = (0..rules.len())
+            .map(|_| FxHashSet::default())
+            .collect();
 
-        // Pass 1: each rule's trial.
-        for rule in rules {
+        // For each rule, build the trial and collect covering LHSes.
+        for (rule_id, rule) in rules.iter().enumerate() {
             let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
             let src_n = src_patch.boundary_len();
             let src_juncs: Vec<usize> =
@@ -243,50 +234,18 @@ impl RuleAnalysis {
                 None => continue,
             };
             debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
-            let entry = alive_by_lhs.entry(rule.rhs).or_default();
-            covering_lhses(&trial_sids, rhs_idx, entry);
+            covering_lhses(&trial_sids, rhs_idx, &mut alive_by_rule[rule_id]);
         }
 
-        // Pass 2: every registered witness.
-        for patch in seq_bfs.patches() {
-            let n = patch.boundary_len();
-            if n == 0 {
-                continue;
-            }
-            let juncs: Vec<usize> =
-                (0..n).filter(|&i| patch.is_junction(i)).collect();
-            let k = juncs.len();
-            if k < 3 {
-                continue;
-            }
-            let mut sids: Vec<usize> = Vec::with_capacity(k);
-            for j in 0..k {
-                let cw_cj = patch
-                    .coarse_junction_at(juncs[j])
-                    .expect("known junction");
-                let ccw_cj = patch
-                    .coarse_junction_at(juncs[(j + 1) % k])
-                    .expect("known junction");
-                let id = seq_bfs
-                    .seg_bfs()
-                    .lookup_seg(&cw_cj, &ccw_cj)
-                    .expect("seg in DB");
-                sids.push(id);
-            }
-            for s in 0..k {
-                let triple = [sids[s], sids[(s + 1) % k], sids[(s + 2) % k]];
-                if !known_rhses.contains(&triple) {
-                    continue;
-                }
-                let entry = alive_by_lhs.entry(triple).or_default();
-                covering_lhses(&sids, s, entry);
-            }
-        }
-
-        // Fixed-point iteration: a rule is cursed if its RHS contains
-        // a terminal OR its RHS is dead. An RHS is dead if every LHS
-        // in its covering-evidence set is cursed. An LHS is cursed if
-        // all rules with that LHS are cursed. Iterate until stable.
+        // Per-rule fixed-point iteration:
+        //   - A rule R is "stuck" iff R's own trial has no non-cursed
+        //     LHS covering R.rhs (= every covering LHS on T_R is
+        //     cursed). This captures "applying R lands us where we
+        //     can't continue with a non-cursed rewrite".
+        //   - R is cursed iff R.rhs contains a terminal OR R is stuck.
+        //   - LHS is cursed iff every rule with that LHS is cursed.
+        //   - Iterate until stable.
+        // Initial: cursed = rules containing terminal in RHS.
         let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
             if r.rhs.iter().any(|s| terminals.contains(s)) {
@@ -294,7 +253,6 @@ impl RuleAnalysis {
             }
         }
         let mut cursed_lhs_ids: FxHashSet<usize> = FxHashSet::default();
-        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
         let mut iterations = 0usize;
         loop {
             iterations += 1;
@@ -307,32 +265,41 @@ impl RuleAnalysis {
                     }
                 }
             }
-            // Recompute dead_rhs: covering set must contain a
-            // non-cursed LHS to be alive.
-            let mut new_dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
-            for rhs in &known_rhses {
-                let evidence = alive_by_lhs
-                    .get(rhs)
-                    .map(|s| s.iter().any(|id| !cursed_lhs_ids.contains(id)))
-                    .unwrap_or(false);
-                if !evidence {
-                    new_dead_rhs.insert(*rhs);
-                }
-            }
-            // Recompute cursed_rules.
+            // Recompute cursed_rules: rule stuck on its own trial.
             let mut new_cursed_rules: FxHashSet<usize> = FxHashSet::default();
             for (rule_id, r) in rules.iter().enumerate() {
-                if r.rhs.iter().any(|s| terminals.contains(s))
-                    || new_dead_rhs.contains(&r.rhs)
-                {
+                if r.rhs.iter().any(|s| terminals.contains(s)) {
+                    new_cursed_rules.insert(rule_id);
+                    continue;
+                }
+                let any_alive = alive_by_rule[rule_id]
+                    .iter()
+                    .any(|id| !cursed_lhs_ids.contains(id));
+                if !any_alive {
                     new_cursed_rules.insert(rule_id);
                 }
             }
-            if new_cursed_rules == cursed_rules && new_dead_rhs == dead_rhs {
+            if new_cursed_rules == cursed_rules {
                 break;
             }
             cursed_rules = new_cursed_rules;
-            dead_rhs = new_dead_rhs;
+        }
+
+        // Final dead_rhs: an RHS is dead iff every rule with that
+        // RHS is cursed (= no non-cursed rule produces it).
+        let mut rhs_has_noncursed_rule: FxHashMap<[usize; 3], bool> =
+            FxHashMap::default();
+        for (rule_id, r) in rules.iter().enumerate() {
+            let entry = rhs_has_noncursed_rule.entry(r.rhs).or_insert(false);
+            if !cursed_rules.contains(&rule_id) {
+                *entry = true;
+            }
+        }
+        let mut dead_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
+        for (rhs, has_noncursed) in &rhs_has_noncursed_rule {
+            if !*has_noncursed {
+                dead_rhs.insert(*rhs);
+            }
         }
 
         // Reify final cursed_lhs as Vec<usize> keys.
@@ -354,7 +321,23 @@ impl RuleAnalysis {
         // for now.
         let context_sensitive_rhs: FxHashSet<[usize; 3]> = FxHashSet::default();
 
-        eprintln!("dead-rhs fixed-point converged in {} iterations", iterations);
+        eprintln!("cursed-set fixed-point converged in {} iterations", iterations);
+
+        // Sanity: by construction, every non-cursed rule's trial has
+        // at least one non-cursed covering LHS. Assert this.
+        for (rule_id, _) in rules.iter().enumerate() {
+            if cursed_rules.contains(&rule_id) {
+                continue;
+            }
+            let any_alive = alive_by_rule[rule_id]
+                .iter()
+                .any(|id| !cursed_lhs_ids.contains(id));
+            assert!(
+                any_alive,
+                "non-cursed rule {} has no non-cursed covering LHS on its trial",
+                rule_id,
+            );
+        }
 
         // Nonlocal rules: a rule R with LHS L is nonlocal iff there
         // exists ANY patch in the BFS whose boundary contains L at
