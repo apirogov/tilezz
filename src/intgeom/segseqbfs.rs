@@ -42,13 +42,26 @@ pub struct SeqWitness {
     pub pm: PatchMatch,
 }
 
-/// One rewriting transition: a `(witness, match)` pair where applying
-/// `pm` to `patches[patch_id]` produces the LHS sequence associated
-/// with this transition's seq slot.
+/// The witness-independent metadata for one rewrite: which tile is
+/// added, at what edge offset on that tile, how many edges it
+/// absorbs, and where in the LHS its CW anchor sits.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct MatchMeta {
+    pub tile_id: usize,
+    pub tile_offset: usize,
+    pub match_len: usize,
+    pub start_edge_in_lhs: usize,
+}
+
+/// One rewriting rule: an LHS seg sequence + MatchMeta + the
+/// canonical `(witness_patch_id, witness_pm)` that produced it.
+/// Exactly one record per distinct `(LHS, MatchMeta)` pair.
 #[derive(Clone, Debug)]
-pub struct SeqTransition {
-    pub patch_id: usize,
-    pub pm: PatchMatch,
+pub struct RuleRecord {
+    pub lhs: Vec<usize>,
+    pub meta: MatchMeta,
+    pub witness_patch_id: usize,
+    pub witness_pm: PatchMatch,
 }
 
 #[derive(Debug)]
@@ -61,30 +74,26 @@ pub struct SegSeqBFS<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     seg_bfs: SegmentTypeBFS<T>,
 
-    // Every explored patch that has at least one successful match
-    // is interned here as a witness — its `patch_id` is used as the
-    // anchor for transitions out of any seq the patch can apply.
+    // Witness patches: a patch is interned here iff it is the
+    // canonical witness for at least one new rule. `patch_id` indexes
+    // both `patches` and `patch_lookup`.
     patches: Vec<GrowingPatch<T>>,
     patch_lookup: FxHashMap<PatchKey, usize>,
-    // Parallel to `patches`: whether this witness registered any
-    // globally-new seq at the time it was processed. Lets us
-    // distinguish "contributing" patches (= classical BFS witnesses)
-    // from "redundant" ones that only re-affirm known seqs.
-    patch_contributed: Vec<bool>,
 
     // Dedup for the BFS: every key we've ever enqueued (= prevents
     // re-processing the same patch). Includes witnesses' keys.
     seen_keys: FxHashSet<PatchKey>,
 
-    // Discovered sequences with witnesses (= patch_id + applied match).
+    // Discovered sequences. Each LHS appears exactly once. `seq_witnesses`
+    // points to the first patch+match that produced it.
     sequences: Vec<Vec<usize>>,
     seq_lookup: FxHashMap<Vec<usize>, usize>,
     seq_witnesses: Vec<SeqWitness>,
 
-    // Per-seq list of every `(witness, match)` pair that produces the
-    // seq — i.e. the rewriting transitions out of this LHS, indexed
-    // by seq_id. `seq_transitions[i]` and `sequences[i]` line up.
-    seq_transitions: Vec<Vec<SeqTransition>>,
+    // Discovered rules. One record per distinct `(LHS, MatchMeta)`
+    // pair, with its canonical witness.
+    rules: Vec<RuleRecord>,
+    rule_lookup: FxHashMap<(Vec<usize>, MatchMeta), usize>,
 
     // BFS frontier: patches awaiting exploration. Owned by value,
     // since we may discard them entirely on exploration.
@@ -112,12 +121,12 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_bfs,
             patches: Vec::new(),
             patch_lookup: FxHashMap::default(),
-            patch_contributed: Vec::new(),
             seen_keys: FxHashSet::default(),
             sequences: Vec::new(),
             seq_lookup: FxHashMap::default(),
             seq_witnesses: Vec::new(),
-            seq_transitions: Vec::new(),
+            rules: Vec::new(),
+            rule_lookup: FxHashMap::default(),
             queue: VecDeque::new(),
             seq_cap,
             patch_cap,
@@ -131,18 +140,16 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
         self.sequences.len()
     }
 
-    /// Total rewriting transitions across all seqs (= sum of
-    /// `seq_transitions[i].len()` for all `i`). One transition per
-    /// successful `(witness, match)` pair. Should equal
-    /// `rules + collisions` from the extracted [`SegRewriteTable`].
-    pub fn num_transitions(&self) -> usize {
-        self.seq_transitions.iter().map(|v| v.len()).sum()
+    /// Distinct `(LHS, MatchMeta)` rules observed. Each is backed by
+    /// exactly one canonical witness pair `(witness_patch_id, witness_pm)`
+    /// stored in `rules[rule_id]`.
+    pub fn num_rules(&self) -> usize {
+        self.rules.len()
     }
 
-    /// Per-seq list of all `(witness, match)` pairs that produce that
-    /// LHS. Aligned with [`Self::sequences`].
-    pub fn seq_transitions(&self, seq_id: usize) -> Option<&[SeqTransition]> {
-        self.seq_transitions.get(seq_id).map(|v| v.as_slice())
+    /// All discovered rules, each with its canonical witness.
+    pub fn rules(&self) -> &[RuleRecord] {
+        &self.rules
     }
 
     /// Number of distinct patches ever enqueued (= seen_keys size).
@@ -169,14 +176,6 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
 
     pub fn patch(&self, patch_id: usize) -> Option<&GrowingPatch<T>> {
         self.patches.get(patch_id)
-    }
-
-    /// Whether `patches[patch_id]` registered any new seq at the time
-    /// it was processed. True for "contributing" witnesses (= the
-    /// classical BFS witness set); false for patches that only
-    /// re-affirmed seqs already in `seq_lookup`.
-    pub fn patch_contributed(&self, patch_id: usize) -> bool {
-        self.patch_contributed[patch_id]
     }
 
     pub fn seg_bfs(&self) -> &SegmentTypeBFS<T> {
@@ -274,16 +273,19 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             seg_ids.push(id);
         }
 
-        // Enumerate matches. For every match where `add_tile`
-        // succeeds we record one transition. The match's seq is
-        // *new* (= the LHS hasn't been seen globally before) iff
-        // we also enqueue the normalized trial for future
-        // exploration. Subsequent matches producing the same new
-        // seq on this witness don't re-enqueue the trial (one is
-        // enough), but they DO contribute a transition.
-        let mut transitions_local: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
-        let mut new_seq_order: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
-        let mut local_seen: FxHashSet<Vec<usize>> = FxHashSet::default();
+        // Enumerate matches. A trial is enqueued the first time its
+        // (LHS, MatchMeta) is observed globally; that same first
+        // occurrence pins the rule's canonical witness. Subsequent
+        // matches producing the same (LHS, MatchMeta) — whether on
+        // this witness or any future one — are silently discarded.
+        // (LHS, MatchMeta, pm) entries to commit if this patch turns
+        // out to be a canonical witness.
+        let mut new_rules_local: Vec<(Vec<usize>, MatchMeta, PatchMatch)> =
+            Vec::new();
+        let mut new_seqs_local: Vec<(Vec<usize>, PatchMatch)> = Vec::new();
+        let mut new_seqs_seen: FxHashSet<Vec<usize>> = FxHashSet::default();
+        let mut new_rules_seen: FxHashSet<(Vec<usize>, MatchMeta)> =
+            FxHashSet::default();
         for pm in patch.get_all_matches() {
             if pm.len == 0 {
                 continue;
@@ -291,13 +293,6 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
             let (start_seg, end_seg) = lhs_seg_range(&juncs, n, &pm);
 
             // Build the LHS sequence: [start_seg, internal..., end_seg].
-            // Internal segs (= strictly between start_seg and end_seg
-            // cyclically) are fully absorbed; the endpoint segs are
-            // partially absorbed *or* extended past an anchor that
-            // landed on a junction (see `lhs_seg_range`). The OUTER
-            // junctions of this sequence (= start_seg's CW endpoint,
-            // end_seg's CCW endpoint) are preserved by the rewrite —
-            // they are strictly outside the match's anchor closure.
             let mut seq = Vec::with_capacity(k);
             let mut idx = start_seg;
             loop {
@@ -309,57 +304,74 @@ impl<T: IsComplex + IsRingOrField + Units> SegSeqBFS<T> {
                 debug_assert!(seq.len() <= k + 1, "infinite loop in seq build");
             }
 
-            // Validate the match by trying `add_tile` on a clone.
-            // Failed matches are not transitions.
+            // Compute MatchMeta from the same LHS bracketing.
+            let j_outer_cw_src = juncs[start_seg];
+            let meta = MatchMeta {
+                tile_id: pm.tile_id,
+                tile_offset: pm.start_b,
+                match_len: pm.len,
+                start_edge_in_lhs: (pm.start_a + n - j_outer_cw_src) % n,
+            };
+
+            // Rule-based dedup: only do anything if the rule is new.
+            let rule_key = (seq.clone(), meta);
+            if !new_rules_seen.insert(rule_key.clone()) {
+                continue;
+            }
+            if self.rule_lookup.contains_key(&rule_key) {
+                continue;
+            }
+
+            // Validate the match — fail means this `(LHS, MatchMeta)`
+            // is not realizable on this witness, but might still arise
+            // on a later one. Don't insert into rule_lookup yet.
             let mut trial = patch.clone();
             if !trial.add_tile(&pm) {
                 continue;
             }
-
-            // Record the transition unconditionally.
-            transitions_local.push((seq.clone(), pm.clone()));
-
-            // First time we see this seq on this witness *and* it's
-            // globally new → enqueue its trial and remember to
-            // register the seq.
-            if !local_seen.insert(seq.clone()) {
-                continue;
-            }
-            if self.seq_lookup.contains_key(&seq) {
-                continue;
-            }
             trial.normalize();
             self.enqueue_if_unseen(trial)?;
-            new_seq_order.push((seq, pm.clone()));
+            new_rules_local.push((seq.clone(), meta, pm.clone()));
+            if new_seqs_seen.insert(seq.clone())
+                && !self.seq_lookup.contains_key(&seq)
+            {
+                new_seqs_local.push((seq, pm.clone()));
+            }
         }
 
-        if transitions_local.is_empty() {
-            // No valid matches at all — nothing to anchor a witness on.
+        if new_rules_local.is_empty() {
+            // No new rules — this patch contributes nothing canonical
+            // and is not retained.
             return Ok(());
         }
 
-        // Register this patch as a witness (every patch with at least
-        // one successful match anchors transitions for its LHS keys).
-        let contributed = !new_seq_order.is_empty();
+        // Register this patch as a canonical witness.
         let patch_id = self.register_witness(patch);
-        self.patch_contributed.push(contributed);
 
         // Allocate new seq slots in discovery order.
-        for (seq, pm) in new_seq_order {
+        for (seq, primary_pm) in new_seqs_local {
             let seq_id = self.sequences.len();
             self.seq_lookup.insert(seq.clone(), seq_id);
             self.sequences.push(seq);
-            self.seq_witnesses.push(SeqWitness { patch_id, pm });
-            self.seq_transitions.push(Vec::new());
+            self.seq_witnesses.push(SeqWitness {
+                patch_id,
+                pm: primary_pm,
+            });
             if self.sequences.len() > self.seq_cap {
                 return Err(SeqBfsError::SeqCapExceeded { cap: self.seq_cap });
             }
         }
 
-        // Push every recorded transition into its seq's bucket.
-        for (seq, pm) in transitions_local {
-            let seq_id = self.seq_lookup[&seq];
-            self.seq_transitions[seq_id].push(SeqTransition { patch_id, pm });
+        // Register new rules with their canonical witness.
+        for (lhs, meta, pm) in new_rules_local {
+            let rule_id = self.rules.len();
+            self.rule_lookup.insert((lhs.clone(), meta), rule_id);
+            self.rules.push(RuleRecord {
+                lhs,
+                meta,
+                witness_patch_id: patch_id,
+                witness_pm: pm,
+            });
         }
         Ok(())
     }
