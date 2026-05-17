@@ -131,27 +131,36 @@ impl RuleAnalysis {
         let max_lhs_len = lhs_index.keys().map(|l| l.len()).max().unwrap_or(0);
 
         // Per-rule trial-based "alive evidence": which LHSes cover
-        // the RHS from the left on the rule's own un-normalized trial.
-        let alive_by_rule =
+        // the RHS from the left on the rule's own un-normalized
+        // trial, with positions. Also caches the trial's seg-id
+        // sequence for the splice check.
+        let (alive_by_rule, trial_cache) =
             compute_alive_by_rule(seq_bfs, rules, &lhs_index, max_lhs_len);
+        // Inverse of lhs_index for quick id → Vec<usize> lookup.
+        let id_to_lhs: Vec<Vec<usize>> = {
+            let n = lhs_index.len();
+            let mut v: Vec<Vec<usize>> = vec![Vec::new(); n];
+            for (lhs, &id) in &lhs_index {
+                v[id] = lhs.clone();
+            }
+            v
+        };
 
-        // Stage 1: propagate cursedness from terminals alone. This is
-        // a strictly cheaper FP (no nonlocal info) that gives a
-        // *lower bound* of cursedness. Many rules are killed here on
-        // the basis of pure seg-level analysis.
+        // Stage 1: propagate cursedness from terminals alone (no
+        // nonlocal info).
         let stage1_cursed = propagate_cursed_fp(
             rules,
             &table.rules_by_lhs,
             &alive_by_rule,
+            &trial_cache,
+            &id_to_lhs,
             &lhs_index,
             &terminals,
             &FxHashSet::default(),
+            max_lhs_len,
         );
 
-        // Stage 2: compute nonlocal_rules, but only test the rules
-        // that survived stage 1 (skip already-cursed rules). This is
-        // the expensive step — we save proportionally to stage 1's
-        // kill rate.
+        // Stage 2: compute nonlocal_rules on rules surviving stage 1.
         let lhs_occurrences =
             compute_lhs_occurrences(seq_bfs, &lhs_index, max_lhs_len);
         let nonlocal_rules = compute_nonlocal_rules(
@@ -161,20 +170,18 @@ impl RuleAnalysis {
             &stage1_cursed,
         );
 
-        // Stage 3: continue the FP starting from stage 1's cursed
-        // set, now also treating nonlocal rules as unusable for
-        // evidence purposes. Only adds further cursedness.
-        let mut cursed_rules = propagate_cursed_fp(
+        // Stage 3: full FP with both terminal AND nonlocal info.
+        let cursed_rules = propagate_cursed_fp(
             rules,
             &table.rules_by_lhs,
             &alive_by_rule,
+            &trial_cache,
+            &id_to_lhs,
             &lhs_index,
             &terminals,
             &nonlocal_rules,
+            max_lhs_len,
         );
-        // Stage 3's result must contain stage 1's result. (FP is
-        // monotone, and the only difference is the extra "unusable"
-        // set; nothing in stage 1 should become non-cursed.)
         debug_assert!(stage1_cursed.is_subset(&cursed_rules));
 
         // Derived: cursed_lhs (strict — every rule cursed), dead_rhs
@@ -183,10 +190,16 @@ impl RuleAnalysis {
         // covering LHS.
         let cursed_lhs = derive_cursed_lhs(&table.rules_by_lhs, &cursed_rules);
         let dead_rhs = derive_dead_rhs(rules, &cursed_rules);
-        verify_property(rules, &alive_by_rule, &cursed_rules, &nonlocal_rules, &lhs_index, &table.rules_by_lhs);
-
-        // Avoid unused-mut warning on first FP write into cursed_rules
-        let _ = &mut cursed_rules;
+        verify_property(
+            rules,
+            &table.rules_by_lhs,
+            &alive_by_rule,
+            &trial_cache,
+            &id_to_lhs,
+            &cursed_rules,
+            &nonlocal_rules,
+            max_lhs_len,
+        );
 
         RuleAnalysis {
             terminals,
@@ -230,19 +243,30 @@ fn compute_terminals(rules: &[RuleRecord]) -> FxHashSet<usize> {
     rhs_segs.difference(&lhs_segs).copied().collect()
 }
 
-/// For each rule, gather the set of LHS-ids (into `lhs_index`) that
-/// cover the rule's RHS *from the left* on the rule's own
-/// un-normalized trial (= start at or before `rhs_idx` AND extend
-/// past it). This is the per-rule evidence used by the cursed FP.
+/// Cache of per-rule trial info: the un-normalized trial's cyclic
+/// seg-id sequence (`sids`) and the index of `rule.rhs[0]` in `sids`
+/// (`rhs_idx`). Used both for per-rule "alive evidence" and for the
+/// splice check.
+#[derive(Default, Clone)]
+struct TrialCache {
+    sids: Vec<usize>,
+    rhs_idx: usize,
+}
+
+/// For each rule, gather the LHSes (with their positions on the
+/// trial's seg sequence) that cover the rule's RHS *from the left*
+/// on the rule's own un-normalized trial. Also caches the trial's
+/// seg sequence for later use.
 fn compute_alive_by_rule<T: IsComplex + IsRingOrField + Units>(
     seq_bfs: &SegSeqBFS<T>,
     rules: &[RuleRecord],
     lhs_index: &FxHashMap<Vec<usize>, usize>,
     max_lhs_len: usize,
-) -> Vec<FxHashSet<usize>> {
-    let mut out: Vec<FxHashSet<usize>> = (0..rules.len())
-        .map(|_| FxHashSet::default())
-        .collect();
+) -> (Vec<Vec<(usize, usize)>>, Vec<TrialCache>) {
+    let mut alive: Vec<Vec<(usize, usize)>> =
+        (0..rules.len()).map(|_| Vec::new()).collect();
+    let mut trials: Vec<TrialCache> =
+        (0..rules.len()).map(|_| TrialCache::default()).collect();
     for (rule_id, rule) in rules.iter().enumerate() {
         let src_patch = &seq_bfs.patches()[rule.witness_patch_id];
         let src_n = src_patch.boundary_len();
@@ -286,27 +310,33 @@ fn compute_alive_by_rule<T: IsComplex + IsRingOrField + Units>(
             None => continue,
         };
         debug_assert_eq!(trial_sids[rhs_idx], rule.rhs[0]);
-        collect_covering_lhses(
+        collect_covering_lhses_with_pos(
             &trial_sids,
             rhs_idx,
             lhs_index,
             max_lhs_len,
-            &mut out[rule_id],
+            &mut alive[rule_id],
         );
+        trials[rule_id] = TrialCache {
+            sids: trial_sids,
+            rhs_idx,
+        };
     }
-    out
+    (alive, trials)
 }
 
 /// Find every LHS-id (in `lhs_index`) that appears as a substring of
 /// `seg_ids` (cyclic) at some position `[q, q+L)` satisfying
 /// `q ≤ center` AND `q + L > center` — i.e. starts at or before
-/// `center` and would rewrite at least position `center`.
-fn collect_covering_lhses(
+/// `center` and would rewrite at least position `center`. Outputs
+/// `(lhs_id, q)` pairs where `q` is the absolute (= cyclic) position
+/// in `seg_ids`.
+fn collect_covering_lhses_with_pos(
     seg_ids: &[usize],
     center: usize,
     lhs_index: &FxHashMap<Vec<usize>, usize>,
     max_lhs_len: usize,
-    out: &mut FxHashSet<usize>,
+    out: &mut Vec<(usize, usize)>,
 ) {
     let r_len = 3usize;
     let k = seg_ids.len();
@@ -331,7 +361,8 @@ fn collect_covering_lhses(
             }
             let sub: Vec<usize> = probe[q..q + len].to_vec();
             if let Some(&id) = lhs_index.get(&sub) {
-                out.insert(id);
+                let q_abs = (probe_start + q) % k;
+                out.push((id, q_abs));
             }
         }
     }
@@ -438,28 +469,33 @@ fn compute_nonlocal_rules<T: IsComplex + IsRingOrField + Units>(
     nonlocal
 }
 
-/// Iterate the per-rule cursed fixed point:
+/// Iterate the per-rule cursed fixed point with a "result must have
+/// an alive continuation" check:
 ///
-///   R cursed iff R.rhs contains a terminal OR every covering LHS in
-///                `alive_by_rule[R]` is non-usable,
-///   LHS usable iff some rule R' for it is non-cursed AND non-nonlocal
-///                  AND R'.rhs (qua length-3 LHS) is not in `cursed_lhs`,
-///   LHS cursed iff every rule for it is cursed.
-///
-/// The extra "R'.rhs not in cursed_lhs" condition strengthens the
-/// guarantee: applying a usable continuation produces an RHS that
-/// isn't a known-cursed LHS pattern. (R'.rhs being in `dead_rhs` is
-/// already excluded by R' being non-cursed.)
+///   R cursed iff R.rhs contains a terminal OR no `(L', R')` candidate
+///                yields a rewritten result T'' with at least one alive
+///                LHS substring.
+///   `(R, L', R')` is alive-result iff:
+///                 - L' ∈ alive_by_rule[R] (= L' covers R.rhs on T_R),
+///                 - R' has LHS = L', R' is non-cursed AND non-nonlocal,
+///                 - the symbolic result T'' = T_R.sids[..q] ++ R'.rhs
+///                   ++ T_R.sids[q+|L'|..] (cyclic) contains at least
+///                   one substring (length 1..max_lhs_len) equal to a
+///                   "usable" LHS (= LHS with at least one
+///                   non-cursed AND non-nonlocal rule).
 ///
 /// Returns the cursed-rule set at the least fixed point. Monotone,
 /// always terminates.
 fn propagate_cursed_fp(
     rules: &[RuleRecord],
     rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
-    alive_by_rule: &[FxHashSet<usize>],
+    alive_by_rule: &[Vec<(usize, usize)>],
+    trial_cache: &[TrialCache],
+    id_to_lhs: &[Vec<usize>],
     lhs_index: &FxHashMap<Vec<usize>, usize>,
     terminals: &FxHashSet<usize>,
     nonlocal_rules: &FxHashSet<usize>,
+    max_lhs_len: usize,
 ) -> FxHashSet<usize> {
     let mut cursed_rules: FxHashSet<usize> = FxHashSet::default();
     for (rule_id, r) in rules.iter().enumerate() {
@@ -467,56 +503,39 @@ fn propagate_cursed_fp(
             cursed_rules.insert(rule_id);
         }
     }
-    let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
-    let mut cursed_lhs_seqs: FxHashSet<Vec<usize>> = FxHashSet::default();
-    let mut cursed_lhs_substrings_len3: FxHashSet<[usize; 3]> = FxHashSet::default();
+    let mut usable_lhs_seqs: FxHashSet<Vec<usize>> = FxHashSet::default();
     loop {
-        // Compute cursed LHSes (= all rules for it cursed) and their
-        // length-3 contiguous substrings (since RHS is always length 3,
-        // R'.rhs counts as "risky" iff it appears as a length-3
-        // substring of any cursed LHS, not just iff it equals one).
-        cursed_lhs_seqs.clear();
-        cursed_lhs_substrings_len3.clear();
+        // Step 1: derive usable LHSes (= LHSes with at least one
+        // non-cursed AND non-nonlocal rule). The result must contain
+        // at least one of these as a substring for the rule's
+        // (L', R') candidate to be deemed alive.
+        usable_lhs_seqs.clear();
         for (lhs, ids) in rules_by_lhs {
-            if ids.iter().all(|id| cursed_rules.contains(id)) {
-                cursed_lhs_seqs.insert(lhs.clone());
-                if lhs.len() >= 3 {
-                    for i in 0..=lhs.len() - 3 {
-                        cursed_lhs_substrings_len3
-                            .insert([lhs[i], lhs[i + 1], lhs[i + 2]]);
-                    }
-                }
+            if ids.iter().any(|id| {
+                !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
+            }) {
+                usable_lhs_seqs.insert(lhs.clone());
             }
         }
-        // Compute usable LHSes. An LHS is usable iff some rule R' is
-        // non-cursed AND non-nonlocal AND R'.rhs (as a length-3
-        // sequence) is not a contiguous substring of any cursed LHS.
-        usable_lhs_ids.clear();
-        for (lhs, ids) in rules_by_lhs {
-            let any_usable = ids.iter().any(|id| {
-                if cursed_rules.contains(id) || nonlocal_rules.contains(id) {
-                    return false;
-                }
-                let r = &rules[*id];
-                !cursed_lhs_substrings_len3.contains(&r.rhs)
-            });
-            if any_usable {
-                if let Some(&lid) = lhs_index.get(lhs) {
-                    usable_lhs_ids.insert(lid);
-                }
-            }
-        }
-        // Recompute cursed_rules.
+        // Step 2: for each rule, find a splice-safe continuation.
         let mut new_cursed: FxHashSet<usize> = FxHashSet::default();
         for (rule_id, r) in rules.iter().enumerate() {
             if r.rhs.iter().any(|s| terminals.contains(s)) {
                 new_cursed.insert(rule_id);
                 continue;
             }
-            let any_alive = alive_by_rule[rule_id]
-                .iter()
-                .any(|id| usable_lhs_ids.contains(id));
-            if !any_alive {
+            if !find_alive_result_continuation(
+                rule_id,
+                rules,
+                rules_by_lhs,
+                alive_by_rule,
+                trial_cache,
+                id_to_lhs,
+                &cursed_rules,
+                nonlocal_rules,
+                &usable_lhs_seqs,
+                max_lhs_len,
+            ) {
                 new_cursed.insert(rule_id);
             }
         }
@@ -525,6 +544,92 @@ fn propagate_cursed_fp(
         }
         cursed_rules = new_cursed;
     }
+}
+
+/// For rule `rule_id`, search for at least one `(L', R')` candidate
+/// such that the rewritten result T'' has an alive LHS as a substring.
+/// Returns true iff such a continuation exists.
+fn find_alive_result_continuation(
+    rule_id: usize,
+    rules: &[RuleRecord],
+    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+    alive_by_rule: &[Vec<(usize, usize)>],
+    trial_cache: &[TrialCache],
+    id_to_lhs: &[Vec<usize>],
+    cursed_rules: &FxHashSet<usize>,
+    nonlocal_rules: &FxHashSet<usize>,
+    usable_lhs_seqs: &FxHashSet<Vec<usize>>,
+    max_lhs_len: usize,
+) -> bool {
+    let trial = &trial_cache[rule_id];
+    if trial.sids.is_empty() {
+        return false;
+    }
+    for &(lhs_id, q) in &alive_by_rule[rule_id] {
+        let l_prime = &id_to_lhs[lhs_id];
+        let candidates = match rules_by_lhs.get(l_prime) {
+            Some(v) => v,
+            None => continue,
+        };
+        for &r_prime_id in candidates {
+            if cursed_rules.contains(&r_prime_id)
+                || nonlocal_rules.contains(&r_prime_id)
+            {
+                continue;
+            }
+            let r_prime = &rules[r_prime_id];
+            // Symbolic splice: T_R.sids[..q] ++ R'.rhs ++ T_R.sids[q+|L'|..].
+            // Check whether T'' has at least one substring of length
+            // 1..max_lhs_len that equals a usable LHS.
+            if result_has_alive_match(
+                &trial.sids,
+                q,
+                l_prime.len(),
+                &r_prime.rhs,
+                usable_lhs_seqs,
+                max_lhs_len,
+            ) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Build the symbolic rewritten boundary T'' = `sids[..q] ++ rhs ++
+/// sids[q+l_len..]` (cyclic), then check whether any substring of
+/// length `1..=max_lhs_len` (across all cyclic starting positions)
+/// is in `usable_lhs_seqs`. Returns true on the first match.
+fn result_has_alive_match(
+    sids: &[usize],
+    q: usize,
+    l_len: usize,
+    rhs: &[usize; 3],
+    usable_lhs_seqs: &FxHashSet<Vec<usize>>,
+    max_lhs_len: usize,
+) -> bool {
+    let k = sids.len();
+    // Build T'' explicitly.
+    let mut t2: Vec<usize> = Vec::with_capacity(k - l_len + 3);
+    for i in 0..q {
+        t2.push(sids[i]);
+    }
+    t2.extend_from_slice(rhs);
+    for i in (q + l_len)..k {
+        t2.push(sids[i]);
+    }
+    let t2_len = t2.len();
+    let scan_len = max_lhs_len.min(t2_len);
+    for start in 0..t2_len {
+        let mut subseq: Vec<usize> = Vec::with_capacity(scan_len);
+        for off in 0..scan_len {
+            subseq.push(t2[(start + off) % t2_len]);
+            if usable_lhs_seqs.contains(&subseq) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn derive_cursed_lhs(
@@ -560,39 +665,47 @@ fn derive_dead_rhs(
         .collect()
 }
 
-/// Sanity: every non-cursed rule's trial has at least one usable
-/// (non-cursed AND non-nonlocal) covering LHS. By construction of
-/// the FP this should always hold.
+/// Sanity: every non-cursed rule has at least one splice-safe
+/// continuation. By construction of the FP this should always hold
+/// at the fixed point.
 fn verify_property(
     rules: &[RuleRecord],
-    alive_by_rule: &[FxHashSet<usize>],
+    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+    alive_by_rule: &[Vec<(usize, usize)>],
+    trial_cache: &[TrialCache],
+    id_to_lhs: &[Vec<usize>],
     cursed_rules: &FxHashSet<usize>,
     nonlocal_rules: &FxHashSet<usize>,
-    lhs_index: &FxHashMap<Vec<usize>, usize>,
-    rules_by_lhs: &FxHashMap<Vec<usize>, Vec<usize>>,
+    max_lhs_len: usize,
 ) {
-    // Recompute usable_lhs_ids at the fixed point.
-    let mut usable_lhs_ids: FxHashSet<usize> = FxHashSet::default();
+    // Rebuild usable_lhs_seqs at the fixed point.
+    let mut usable_lhs_seqs: FxHashSet<Vec<usize>> = FxHashSet::default();
     for (lhs, ids) in rules_by_lhs {
-        let any_usable = ids
-            .iter()
-            .any(|id| !cursed_rules.contains(id) && !nonlocal_rules.contains(id));
-        if any_usable {
-            if let Some(&lid) = lhs_index.get(lhs) {
-                usable_lhs_ids.insert(lid);
-            }
+        if ids.iter().any(|id| {
+            !cursed_rules.contains(id) && !nonlocal_rules.contains(id)
+        }) {
+            usable_lhs_seqs.insert(lhs.clone());
         }
     }
     for (rule_id, _) in rules.iter().enumerate() {
         if cursed_rules.contains(&rule_id) {
             continue;
         }
-        let any_alive = alive_by_rule[rule_id]
-            .iter()
-            .any(|id| usable_lhs_ids.contains(id));
+        let ok = find_alive_result_continuation(
+            rule_id,
+            rules,
+            rules_by_lhs,
+            alive_by_rule,
+            trial_cache,
+            id_to_lhs,
+            cursed_rules,
+            nonlocal_rules,
+            &usable_lhs_seqs,
+            max_lhs_len,
+        );
         assert!(
-            any_alive,
-            "non-cursed rule {} has no usable covering LHS on its trial",
+            ok,
+            "non-cursed rule {} has no alive-result continuation",
             rule_id,
         );
     }
