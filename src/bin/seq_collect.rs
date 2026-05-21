@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{ZZ10, ZZ12};
-use tilezz::intgeom::matchtypes::MatchFinder;
+use tilezz::intgeom::matchtypes::{BpSeed, MatchFinder};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::seq_explorer::{replay_glue, Provenance, SeqExplorer};
 use tilezz::intgeom::tiles;
@@ -318,9 +318,13 @@ fn validate_common<
     let mut total_matches = 0usize;
     let num_batches = witness_rats.len().div_ceil(batch_size);
 
+    // `tile_ts` is fixed across all batches; build its bit-parallel
+    // mask state once and share it via Arc.
+    let bp_seed = BpSeed::new(Arc::clone(tile_ts));
+
     for (batch_num, chunk) in witness_rats.chunks(batch_size).enumerate() {
         let chunk_ts = Arc::new(TileSet::new(chunk.to_vec()));
-        let mf = MatchFinder::crossing(Arc::clone(&chunk_ts), Arc::clone(tile_ts));
+        let mf = MatchFinder::crossing_with_seed(Arc::clone(&chunk_ts), bp_seed.clone());
 
         for rat_idx in 0..chunk_ts.num_tiles() {
             for tile_idx in 0..tile_ts.num_tiles() {

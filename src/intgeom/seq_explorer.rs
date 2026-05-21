@@ -5,7 +5,7 @@ use std::time::Instant;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::matchtypes::MatchFinder;
+use crate::intgeom::matchtypes::{BpSeed, MatchFinder};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
@@ -248,6 +248,11 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
         let mut total_skipped = 0usize;
         let mut total_considered = 0usize;
 
+        // The B-side (`tileset`) is fixed across all layers, so its
+        // bit-parallel masks can be precomputed once and reused for
+        // every batch. The A-side (`batch_ts`) changes per layer.
+        let bp_seed = BpSeed::new(Arc::clone(&tileset));
+
         while !pending.is_empty() {
             layer += 1;
             let batch_ids: Vec<usize> = pending.into_iter().collect();
@@ -274,7 +279,7 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
                 })
                 .collect();
 
-            let mf = MatchFinder::crossing(Arc::clone(&batch_ts), Arc::clone(&tileset));
+            let mf = MatchFinder::crossing_with_seed(Arc::clone(&batch_ts), bp_seed.clone());
 
             let mut new_rat_entries: Vec<(Rat<T>, Provenance)> = Vec::new();
             let mut seen_new: FxHashSet<Rat<T>> = FxHashSet::default();
