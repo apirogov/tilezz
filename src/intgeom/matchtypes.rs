@@ -23,7 +23,90 @@ use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
-use crate::stringmatch::CyclicMatchIndex;
+use crate::stringmatch::{BitParallelMatcher, CyclicMatch};
+
+/// Bit-parallel engine state. The B-side masks live in a shared
+/// `BitParallelMatcher`; the A-side angle sequences are kept raw and
+/// streamed against `b_matcher` per query. The shared masks let the
+/// seed-side precompute be built once and shared via `Arc` across
+/// many short-lived `MatchFinder`s with varying A-side tilesets —
+/// see [`BpSeed`] and [`MatchFinder::crossing_bp_with_seed`].
+struct CyclicEngine {
+    a_sequences: Vec<Vec<i8>>,
+    b_matcher: Arc<BitParallelMatcher>,
+    offset_b: usize,
+}
+
+impl CyclicEngine {
+    fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<CyclicMatch> {
+        let b_idx = j - self.offset_b;
+        let mut matches = self.b_matcher.stream_boundary(&self.a_sequences[i], b_idx);
+        for m in &mut matches {
+            m.tile_a = i;
+        }
+        matches
+    }
+
+    fn maximal_rc_matches_at_positions(
+        &self,
+        i: usize,
+        j: usize,
+        positions: &[usize],
+    ) -> Vec<CyclicMatch> {
+        if positions.is_empty() {
+            return vec![];
+        }
+        let b_idx = j - self.offset_b;
+        let boundary = &self.a_sequences[i];
+        let n_a = boundary.len();
+        let mut keep = vec![false; n_a];
+        for &p in positions {
+            if p < n_a {
+                keep[p] = true;
+            }
+        }
+        let mut matches = self.b_matcher.stream_boundary(boundary, b_idx);
+        matches.retain(|m| keep[m.pos_a]);
+        for m in &mut matches {
+            m.tile_a = i;
+        }
+        matches
+    }
+}
+
+/// Pre-built bit-parallel state for a fixed "seed" (B-side) tileset.
+///
+/// Construct once, then pass to [`MatchFinder::crossing_bp_with_seed`]
+/// for each varying A-side tileset (the typical pattern in
+/// `seq_collect` / `seq_explorer` / `redelmeier` where many patch
+/// chunks are matched against a fixed tile alphabet). Cheap to clone
+/// (`Arc` internals).
+pub struct BpSeed<T: IsComplex> {
+    tileset: Arc<TileSet<T>>,
+    matcher: Arc<BitParallelMatcher>,
+}
+
+impl<T: IsComplex> Clone for BpSeed<T> {
+    fn clone(&self) -> Self {
+        BpSeed {
+            tileset: Arc::clone(&self.tileset),
+            matcher: Arc::clone(&self.matcher),
+        }
+    }
+}
+
+impl<T: IsComplex + IsRingOrField + Units> BpSeed<T> {
+    /// Pre-compute the bit-parallel state for the given seed tileset.
+    pub fn new(tileset: Arc<TileSet<T>>) -> Self {
+        let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
+        let matcher = Arc::new(BitParallelMatcher::new(&sequences));
+        BpSeed { tileset, matcher }
+    }
+
+    pub fn tileset(&self) -> &Arc<TileSet<T>> {
+        &self.tileset
+    }
+}
 
 /// A description of a single legal glue match between two tile boundaries.
 ///
@@ -103,13 +186,16 @@ struct TypeEntry {
 ///   when one tileset represents already-placed boundaries and the
 ///   other represents candidates to glue.
 ///
-/// Internally backed by a [`CyclicMatchIndex`] over the concatenated
-/// tile angle sequences, so match queries are fast.
+/// Internally backed by a [`BitParallelMatcher`] over the B-side
+/// tileset; the A-side angle sequences are streamed against it per
+/// query. Build cost is proportional to the B-side only; consider
+/// [`Self::crossing_with_seed`] when the B-side is fixed across many
+/// `MatchFinder` builds.
 pub struct MatchFinder<T: IsComplex> {
     set_a: Arc<TileSet<T>>,
     set_b: Arc<TileSet<T>>,
     offset_b: usize,
-    cmi: CyclicMatchIndex,
+    engine: CyclicEngine,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
@@ -117,33 +203,49 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     /// single tileset (`set_a == set_b == tileset`).
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
-        let cmi = CyclicMatchIndex::new(&sequences);
+        let b_matcher = Arc::new(BitParallelMatcher::new(&sequences));
+        let engine = CyclicEngine {
+            a_sequences: sequences,
+            b_matcher,
+            offset_b: 0,
+        };
         MatchFinder {
             set_a: Arc::clone(&tileset),
             set_b: tileset,
             offset_b: 0,
-            cmi,
+            engine,
         }
     }
 
     /// Build a `MatchFinder` that enumerates matches between two
     /// distinct tilesets `a` and `b`. The returned `MatchType` values
     /// have `tile_a` indexed into `a.rats()` and `tile_b` indexed into
-    /// `b.rats()`.
+    /// `b.rats()`. The B-side BP state is built fresh here — use
+    /// [`Self::crossing_with_seed`] to amortise across many builds
+    /// with the same B-side.
     pub fn crossing(a: Arc<TileSet<T>>, b: Arc<TileSet<T>>) -> Self {
-        let sequences: Vec<Vec<i8>> = a
-            .rats()
-            .iter()
-            .chain(b.rats().iter())
-            .map(|r| r.seq().to_vec())
-            .collect();
-        let cmi = CyclicMatchIndex::new(&sequences);
+        let seed = BpSeed::new(b);
+        Self::crossing_with_seed(a, seed)
+    }
+
+    /// Build a crossing `MatchFinder` reusing a pre-built [`BpSeed`]
+    /// for the B-side. Per-call cost is proportional to the A-side
+    /// tileset only (cloning the angle sequences); the B-side masks
+    /// are shared by `Arc`.
+    pub fn crossing_with_seed(a: Arc<TileSet<T>>, seed: BpSeed<T>) -> Self {
+        let a_sequences: Vec<Vec<i8>> =
+            a.rats().iter().map(|r| r.seq().to_vec()).collect();
         let offset_b = a.num_tiles();
+        let engine = CyclicEngine {
+            a_sequences,
+            b_matcher: seed.matcher,
+            offset_b,
+        };
         MatchFinder {
             set_a: a,
-            set_b: b,
+            set_b: seed.tileset,
             offset_b,
-            cmi,
+            engine,
         }
     }
 
@@ -188,7 +290,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     /// Includes raw matches that haven't yet been validated as legal
     /// glues (e.g. they might cause self-intersection).
     pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<crate::stringmatch::CyclicMatch> {
-        self.cmi.maximal_rc_matches(i, self.offset_b + j)
+        self.engine.maximal_rc_matches(i, self.offset_b + j)
     }
 
     /// Enumerate the legal glue matches between tile `i` (A-side) and
@@ -250,7 +352,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
         let mut raw: Vec<(Rat<T>, MatchType)> = Vec::new();
 
         let cmi_matches = self
-            .cmi
+            .engine
             .maximal_rc_matches_at_positions(i, cmi_j, &scan_positions);
         for m in &cmi_matches {
             let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
@@ -349,7 +451,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
             return groups;
         }
 
-        let cmi_matches = self.cmi.maximal_rc_matches(i, cmi_j);
+        let cmi_matches = self.engine.maximal_rc_matches(i, cmi_j);
         for m in &cmi_matches {
             let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
             if len <= 1 {
@@ -1801,4 +1903,5 @@ mod tests {
             }
         }
     }
+
 }
