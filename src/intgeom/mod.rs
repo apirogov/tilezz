@@ -26,6 +26,8 @@ pub mod redelmeier;
 
 pub mod neighborhood;
 
+pub mod segment_vertex_types;
+
 pub mod segtypes;
 
 pub mod segbfs;

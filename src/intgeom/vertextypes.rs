@@ -2,7 +2,9 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
-use crate::intgeom::patch::{GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
+use crate::intgeom::patch::{
+    ClosedVertexType, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
+};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
 
@@ -192,11 +194,41 @@ pub struct TransitionInfo {
     /// Offset within `tile_id` of the canonical-CW anchor of the
     /// matched edge (see [`TransitionSide`] doc for the anchor rule).
     pub tile_offset: usize,
+    /// For closing transitions (`dst_id == CLOSED_ID`), the 1-based id
+    /// of the [`ClosedVertexType`] realised by the closure.
+    /// `None` for non-closing transitions.
+    pub closed_vt_id: Option<usize>,
 }
 
 impl TransitionInfo {
     pub fn is_closed(&self) -> bool {
         self.dst_id == CLOSED_ID
+    }
+}
+
+/// Metadata for a discovered closed vertex type.
+pub struct ClosedVertexTypeInfo {
+    vtype: ClosedVertexType,
+    /// 1-based id assigned to this closed VT.
+    id: usize,
+    /// Number of distinct closing transitions in the catalog that
+    /// realise this closed VT.
+    transition_count: usize,
+}
+
+impl ClosedVertexTypeInfo {
+    pub fn vtype(&self) -> &ClosedVertexType {
+        &self.vtype
+    }
+
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// How many closing transitions in the parent
+    /// [`OpenVertexTypeIndex`] produce this closed VT.
+    pub fn transition_count(&self) -> usize {
+        self.transition_count
     }
 }
 
@@ -213,6 +245,8 @@ pub struct OpenVertexTypeIndex<T: IsComplex> {
     entries: Vec<OpenVertexTypeInfo<T>>,
     transitions: Vec<TransitionInfo>,
     reverse: HashMap<OpenVertexType, usize>,
+    closed_entries: Vec<ClosedVertexTypeInfo>,
+    closed_reverse: HashMap<ClosedVertexType, usize>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
@@ -271,7 +305,13 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
         } = state;
 
         let (vt_list, reverse) = build_id_map(all_types);
-        let (succ_sets, transition_infos) = build_transition_arrays(&reverse, &raw_transitions);
+        let (closed_list, closed_reverse) = build_closed_id_map(&raw_transitions);
+        let (succ_sets, transition_infos, closed_counts) = build_transition_arrays(
+            &reverse,
+            &closed_reverse,
+            closed_list.len(),
+            &raw_transitions,
+        );
         let has_any_realized = compute_has_any_realized(vt_list.len(), &transition_infos);
         let has_closing = compute_has_closing(vt_list.len(), &transition_infos);
 
@@ -287,11 +327,23 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
             &is_blessed,
         );
 
+        let closed_entries: Vec<ClosedVertexTypeInfo> = closed_list
+            .into_iter()
+            .enumerate()
+            .map(|(i, cvt)| ClosedVertexTypeInfo {
+                vtype: cvt,
+                id: i + 1,
+                transition_count: closed_counts[i],
+            })
+            .collect();
+
         OpenVertexTypeIndex {
             tileset,
             entries: info_entries,
             transitions: transition_infos,
             reverse,
+            closed_entries,
+            closed_reverse,
         }
     }
 
@@ -362,19 +414,61 @@ impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
+
+    /// Number of distinct closed VTs discovered during the BFS — i.e.
+    /// the number of distinct fully-surrounded interior-vertex
+    /// configurations realisable from this tileset's first glues.
+    /// Ids run `1..=num_closed_types()`.
+    pub fn num_closed_types(&self) -> usize {
+        self.closed_entries.len()
+    }
+
+    /// All [`ClosedVertexTypeInfo`] entries in canonical (sorted)
+    /// order. Entry at index `id - 1` has id `id`.
+    pub fn closed_entries(&self) -> &[ClosedVertexTypeInfo] {
+        &self.closed_entries
+    }
+
+    /// 1-based id of `cvt` in this catalog, or `None` if absent.
+    pub fn get_closed_id(&self, cvt: &ClosedVertexType) -> Option<usize> {
+        self.closed_reverse.get(cvt).copied()
+    }
+
+    /// Return the closed VT for id `id`. Panics if `id` is out of
+    /// range or `0` (the open-side `CLOSED_ID` sentinel).
+    pub fn get_closed_type(&self, id: usize) -> &ClosedVertexType {
+        assert!(
+            id >= 1 && id <= self.closed_entries.len(),
+            "closed vertex type id out of range"
+        );
+        &self.closed_entries[id - 1].vtype
+    }
+
+    /// Return the [`ClosedVertexTypeInfo`] for id `id`. Panics if
+    /// out of range.
+    pub fn get_closed_info(&self, id: usize) -> &ClosedVertexTypeInfo {
+        assert!(
+            id >= 1 && id <= self.closed_entries.len(),
+            "closed vertex type id out of range"
+        );
+        &self.closed_entries[id - 1]
+    }
+}
+
+/// The destination of a raw BFS transition: either another open VT
+/// (still on the boundary after the glue) or a specific closed VT
+/// (focus sealed by a `TransitionSide::Both` match).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RawDst {
+    Open(OpenVertexType),
+    Closed(ClosedVertexType),
 }
 
 /// A single raw transition tuple, accumulated by the BFS before id
 /// assignment turns it into a [`TransitionInfo`].
 ///
-/// Layout: `(src_vt, dst_vt_or_None_for_closing, side, tile_id, tile_offset)`.
-type RawTransition = (
-    OpenVertexType,
-    Option<OpenVertexType>,
-    TransitionSide,
-    usize,
-    usize,
-);
+/// Layout: `(src_vt, dst, side, tile_id, tile_offset)`.
+type RawTransition = (OpenVertexType, RawDst, TransitionSide, usize, usize);
 
 /// Mutable state shared across the seed and BFS phases of
 /// [`OpenVertexTypeIndex::new`].
@@ -541,13 +635,22 @@ fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
             let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
 
             if matches!(side, TransitionSide::Both) {
-                state
-                    .raw_transitions
-                    .insert((vt.clone(), None, side, pm.tile_id, tile_offset));
+                // Compute the closed VT realised at the focus. The
+                // cyclic petal ring around the now-interior vertex
+                // is `[cw, inner..., ccw]` (CCW order); the new tile
+                // sits implicitly between `ccw` and `cw` cyclically.
+                let closed = ClosedVertexType::from_open_via_closure(&vt);
+                state.raw_transitions.insert((
+                    vt.clone(),
+                    RawDst::Closed(closed),
+                    side,
+                    pm.tile_id,
+                    tile_offset,
+                ));
             } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
                 state.raw_transitions.insert((
                     vt.clone(),
-                    Some(new_vt),
+                    RawDst::Open(new_vt),
                     side,
                     pm.tile_id,
                     tile_offset,
@@ -594,23 +697,48 @@ fn build_id_map(
     (vt_list, reverse)
 }
 
+/// Phase 3.5: gather all distinct closed VTs from the raw closing
+/// transitions and assign 1-based ids. Returns the sorted catalog
+/// plus the `closed_vt -> id` reverse map.
+fn build_closed_id_map(
+    raw_transitions: &BTreeSet<RawTransition>,
+) -> (Vec<ClosedVertexType>, HashMap<ClosedVertexType, usize>) {
+    let mut all_closed: BTreeSet<ClosedVertexType> = BTreeSet::new();
+    for (_src, dst, _side, _tid, _toff) in raw_transitions {
+        if let RawDst::Closed(c) = dst {
+            all_closed.insert(c.clone());
+        }
+    }
+    let closed_list: Vec<ClosedVertexType> = all_closed.into_iter().collect();
+    let closed_reverse: HashMap<ClosedVertexType, usize> = closed_list
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.clone(), i + 1))
+        .collect();
+    (closed_list, closed_reverse)
+}
+
 /// Phase 4: turn the raw `(src, dst, side, tile_id, tile_offset)`
-/// tuples into `TransitionInfo` records using the id map; build the
-/// successor sets used by the cursed / blessed fixpoints.
+/// tuples into `TransitionInfo` records using the open- and closed-VT
+/// id maps; build the successor sets used by the cursed / blessed
+/// fixpoints and tally per-closed-VT transition counts.
 fn build_transition_arrays(
     reverse: &HashMap<OpenVertexType, usize>,
+    closed_reverse: &HashMap<ClosedVertexType, usize>,
+    num_closed: usize,
     raw_transitions: &BTreeSet<RawTransition>,
-) -> (Vec<BTreeSet<usize>>, Vec<TransitionInfo>) {
+) -> (Vec<BTreeSet<usize>>, Vec<TransitionInfo>, Vec<usize>) {
     let n = reverse.len();
     let mut succ_sets: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
     let mut transition_infos: Vec<TransitionInfo> = Vec::new();
+    let mut closed_transition_counts: Vec<usize> = vec![0; num_closed];
 
     for (src, dst, side, tid, toff) in raw_transitions {
         let Some(&src_id) = reverse.get(src) else {
             continue;
         };
         match dst {
-            Some(dst_vt) => {
+            RawDst::Open(dst_vt) => {
                 if let Some(&dst_id) = reverse.get(dst_vt) {
                     succ_sets[src_id - 1].insert(dst_id);
                     transition_infos.push(TransitionInfo {
@@ -619,22 +747,28 @@ fn build_transition_arrays(
                         side: *side,
                         tile_id: *tid,
                         tile_offset: *toff,
+                        closed_vt_id: None,
                     });
                 }
             }
-            None => {
+            RawDst::Closed(cvt) => {
+                let cvt_id = closed_reverse.get(cvt).copied();
+                if let Some(id) = cvt_id {
+                    closed_transition_counts[id - 1] += 1;
+                }
                 transition_infos.push(TransitionInfo {
                     src_id,
                     dst_id: CLOSED_ID,
                     side: *side,
                     tile_id: *tid,
                     tile_offset: *toff,
+                    closed_vt_id: cvt_id,
                 });
             }
         }
     }
 
-    (succ_sets, transition_infos)
+    (succ_sets, transition_infos, closed_transition_counts)
 }
 
 /// Phase 5: assemble per-VT [`OpenVertexTypeInfo`] records, classifying
@@ -1681,5 +1815,109 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
         eprintln!("hex: {} vertex types", idx.num_types());
+    }
+
+    /// Sanity check on hex closed VTs: at least one is discovered,
+    /// every petal references the lone hex tile (tile_id == 0), every
+    /// transition_count is positive, and the sum across all closed
+    /// VTs equals the total number of closing transitions in the
+    /// catalog.
+    #[test]
+    fn hexagon_closed_vertex_types_are_discovered() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(ts);
+
+        assert!(idx.num_closed_types() >= 1, "hex has at least one closed VT");
+        for cvt in idx.closed_entries() {
+            assert!(cvt.vtype().len() >= 1);
+            assert!(cvt.transition_count() >= 1);
+            for e in cvt.vtype().edges() {
+                assert_eq!(e.tile_id, 0, "only one tile in this tileset");
+                assert!(e.tile_offset < 6);
+            }
+        }
+
+        let n_closing: usize = idx.transitions().iter().filter(|t| t.is_closed()).count();
+        assert!(n_closing > 0, "hex has at least one closing transition");
+        let total_per_vt: usize = idx
+            .closed_entries()
+            .iter()
+            .map(|c| c.transition_count())
+            .sum();
+        assert_eq!(
+            total_per_vt, n_closing,
+            "sum of per-closed-VT transition counts equals total closings"
+        );
+    }
+
+    /// Same surface for squares.
+    #[test]
+    fn square_closed_vertex_types_are_discovered() {
+        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let rat = Rat::try_from(&sq).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(ts);
+
+        assert!(
+            idx.num_closed_types() >= 1,
+            "square has at least one closed VT"
+        );
+        for cvt in idx.closed_entries() {
+            assert!(cvt.vtype().len() >= 1);
+            assert!(cvt.transition_count() >= 1);
+            for e in cvt.vtype().edges() {
+                assert_eq!(e.tile_id, 0);
+                assert!(e.tile_offset < 4);
+            }
+        }
+    }
+
+    /// The closed VT catalog is canonical: every ring is stored in
+    /// its lex-min cyclic rotation. Verify directly.
+    #[test]
+    fn closed_vts_are_lex_min_canonical() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(ts);
+
+        for cvt in idx.closed_entries() {
+            let canonical = ClosedVertexType::from_cyclic(cvt.vtype().edges());
+            assert_eq!(cvt.vtype(), &canonical, "closed VT not in canonical form");
+        }
+    }
+
+    /// For every closing transition in the catalog, its
+    /// `closed_vt_id` must point at a valid 1-based id and the
+    /// referenced closed VT must equal what we'd derive from the
+    /// source open VT's petal ring (the BFS contract).
+    #[test]
+    fn closing_transitions_resolve_to_canonical_closed_vts() {
+        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&hex).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(ts);
+
+        for t in idx.transitions() {
+            if t.is_closed() {
+                let cvt_id = t.closed_vt_id.expect("closing transition has closed_vt_id");
+                assert!(cvt_id >= 1 && cvt_id <= idx.num_closed_types());
+                let cvt = idx.get_closed_type(cvt_id);
+                let src_open = idx.get_type(t.src_id);
+                let expected = ClosedVertexType::from_open_via_closure(src_open);
+                assert_eq!(
+                    cvt, &expected,
+                    "closed VT for transition {:?} differs from its derived form",
+                    (t.src_id, t.tile_id)
+                );
+            } else {
+                assert!(
+                    t.closed_vt_id.is_none(),
+                    "non-closing transition has unexpected closed_vt_id"
+                );
+            }
+        }
     }
 }
