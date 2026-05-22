@@ -109,14 +109,117 @@ pub struct PatchMatch {
 /// would mean the boundary doubles back on itself (a degenerate pinched
 /// vertex), which is excluded by construction.
 ///
-/// In contrast, a *closed* vertex type (not represented by this struct)
-/// would describe a fully-surrounded interior vertex, where the petals
-/// cover the entire turn and the vertex no longer lies on any boundary.
+/// In contrast, a [`ClosedVertexType`] describes a fully-surrounded
+/// interior vertex, where the petals cover the entire turn and the
+/// vertex no longer lies on any boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OpenVertexType {
     pub cw: EdgeInfo,
     pub inner: Vec<EdgeInfo>,
     pub ccw: EdgeInfo,
+}
+
+/// A **closed** junction vertex: a fully-surrounded interior vertex
+/// whose petals cover the entire turn (no boundary gap).
+///
+/// Stored as the cyclic CCW sequence of [`EdgeInfo`]s around the
+/// vertex, canonicalised to its lex-min cyclic rotation so two
+/// configurations that differ only by which petal is listed first
+/// compare equal. Two consecutive entries (cyclically) flank a single
+/// incident tile-instance at the vertex.
+///
+/// # Construction
+///
+/// Built from the petal sequence of an [`OpenVertexType`] at the
+/// moment a closing glue (`TransitionSide::Both` — both incident
+/// boundary edges consumed by the same match) seals the focus
+/// vertex: the closed petal ring is `[cw, inner[0], ..., inner[m-1],
+/// ccw]`, with the new tile contributing implicitly between `ccw`
+/// and `cw` cyclically. See [`Self::from_open_via_closure`].
+///
+/// # Identity caveat
+///
+/// Two distinct *new tiles* that close the same `OpenVertexType` and
+/// produce the same cyclic edge ring compare equal under this type —
+/// the new tile's identity is implicit in the `(ccw, cw)` cyclic
+/// adjacency. If the call site cares about which closing tile was
+/// used, it must track that separately (the transition that produced
+/// the closure already records `tile_id` and `tile_offset`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ClosedVertexType {
+    edges: Vec<EdgeInfo>,
+}
+
+impl ClosedVertexType {
+    /// Build from an already-canonical petal sequence. Use
+    /// [`Self::from_cyclic`] or [`Self::from_open_via_closure`] for
+    /// raw input that needs canonicalisation.
+    #[cfg(test)]
+    pub(crate) fn from_canonical_unchecked(edges: Vec<EdgeInfo>) -> Self {
+        ClosedVertexType { edges }
+    }
+
+    /// Build from a raw cyclic edge sequence; the result is stored in
+    /// lex-min cyclic rotation.
+    pub fn from_cyclic(petals: &[EdgeInfo]) -> Self {
+        ClosedVertexType {
+            edges: canonical_cyclic_rotation(petals),
+        }
+    }
+
+    /// Build the closed VT realised when the given open VT is sealed
+    /// by a closing glue. The petal ring is `[cw, inner..., ccw]`
+    /// (CCW around the focus); the new tile sits implicitly between
+    /// `ccw` and `cw` cyclically.
+    pub fn from_open_via_closure(open: &OpenVertexType) -> Self {
+        let mut petals = Vec::with_capacity(open.inner.len() + 2);
+        petals.push(open.cw);
+        petals.extend(open.inner.iter().copied());
+        petals.push(open.ccw);
+        Self::from_cyclic(&petals)
+    }
+
+    /// The petals, in CCW order, starting at the lex-min rotation.
+    pub fn edges(&self) -> &[EdgeInfo] {
+        &self.edges
+    }
+
+    /// Number of petals (= number of incident tile-instances at the
+    /// vertex, since each pair of consecutive petals cyclically
+    /// flanks one tile).
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+}
+
+/// Return the lex-min cyclic rotation of `seq`. Compares rotations
+/// lexicographically by their full `n`-element unrolling.
+pub(crate) fn canonical_cyclic_rotation<T: Ord + Clone>(seq: &[T]) -> Vec<T> {
+    let n = seq.len();
+    if n <= 1 {
+        return seq.to_vec();
+    }
+    let mut best = 0usize;
+    for start in 1..n {
+        // Compare rotation `start` vs current best.
+        let mut cmp = std::cmp::Ordering::Equal;
+        for i in 0..n {
+            let a = &seq[(start + i) % n];
+            let b = &seq[(best + i) % n];
+            cmp = a.cmp(b);
+            if cmp != std::cmp::Ordering::Equal {
+                break;
+            }
+        }
+        if cmp == std::cmp::Ordering::Less {
+            best = start;
+        }
+    }
+    (0..n).map(|i| seq[(best + i) % n].clone()).collect()
 }
 
 /// A coarser variant of [`OpenVertexType`] that ignores the interior
@@ -2338,6 +2441,59 @@ mod tests {
     use crate::intgeom::snake::Snake;
     use crate::intgeom::tiles;
     use std::collections::BTreeMap;
+
+    fn ei(tile_id: usize, tile_offset: usize) -> EdgeInfo {
+        EdgeInfo {
+            tile_id,
+            tile_offset,
+        }
+    }
+
+    #[test]
+    fn closed_vertex_type_canonicalises_to_lex_min_rotation() {
+        // Four distinct rotations of the same ring should canonicalise
+        // identically.
+        let petals = [ei(2, 0), ei(0, 1), ei(1, 2), ei(0, 3)];
+        let canonical = ClosedVertexType::from_cyclic(&petals);
+        for shift in 0..petals.len() {
+            let rotated: Vec<EdgeInfo> =
+                (0..petals.len()).map(|i| petals[(shift + i) % petals.len()]).collect();
+            assert_eq!(
+                ClosedVertexType::from_cyclic(&rotated),
+                canonical,
+                "rotation by {shift} should canonicalise to the same VT"
+            );
+        }
+
+        // The canonical form must start at the lex-min entry.
+        let edges = canonical.edges();
+        for k in 1..edges.len() {
+            assert!(edges[0] <= edges[k]);
+        }
+    }
+
+    #[test]
+    fn closed_vertex_type_distinguishes_non_rotation_orderings() {
+        let a = ClosedVertexType::from_cyclic(&[ei(0, 0), ei(0, 1), ei(0, 2)]);
+        let b = ClosedVertexType::from_cyclic(&[ei(0, 0), ei(0, 2), ei(0, 1)]);
+        assert_ne!(a, b, "different cyclic orderings must be distinct");
+    }
+
+    #[test]
+    fn closed_vertex_type_from_open_via_closure() {
+        let open = OpenVertexType {
+            cw: ei(1, 5),
+            inner: vec![ei(0, 0), ei(2, 3)],
+            ccw: ei(1, 4),
+        };
+        let closed = ClosedVertexType::from_open_via_closure(&open);
+        // Underlying raw ring is [cw, inner..., ccw] = [(1,5),(0,0),(2,3),(1,4)],
+        // canonicalised to start at the lex-min entry (0,0).
+        let expected =
+            ClosedVertexType::from_cyclic(&[ei(0, 0), ei(2, 3), ei(1, 4), ei(1, 5)]);
+        assert_eq!(closed, expected);
+        assert_eq!(closed.len(), 4);
+    }
 
     fn square_patch() -> GrowingPatch<ZZ4> {
         let sq: Snake<ZZ4> = tiles::square();
