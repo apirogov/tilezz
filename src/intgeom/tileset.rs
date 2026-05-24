@@ -84,12 +84,16 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
 
 /// Singleton hexagon tileset over a ZZ6-compatible ring.
 pub fn hex<T: IsComplex + IsRingOrField + Units + HasZZ6>() -> Arc<TileSet<T>> {
-    Arc::new(TileSet::new(vec![Rat::from_unchecked(&tiles::hexagon::<T>())]))
+    Arc::new(TileSet::new(vec![Rat::from_unchecked(
+        &tiles::hexagon::<T>(),
+    )]))
 }
 
 /// Singleton square tileset over a ZZ4-compatible ring.
 pub fn square<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>> {
-    Arc::new(TileSet::new(vec![Rat::from_unchecked(&tiles::square::<T>())]))
+    Arc::new(TileSet::new(vec![Rat::from_unchecked(
+        &tiles::square::<T>(),
+    )]))
 }
 
 /// Square + hexagon tileset over a ring supporting both ZZ4 and ZZ6
@@ -117,7 +121,9 @@ pub fn tetrominoes<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileS
 
 /// Singleton spectre tileset over a ZZ12-compatible ring.
 pub fn spectre<T: IsComplex + IsRingOrField + Units + HasZZ12>() -> Arc<TileSet<T>> {
-    Arc::new(TileSet::new(vec![Rat::from_unchecked(&tiles::spectre::<T>())]))
+    Arc::new(TileSet::new(vec![Rat::from_unchecked(
+        &tiles::spectre::<T>(),
+    )]))
 }
 
 /// Penrose P3 (narrow + wide rhomb) tileset over a ZZ10-compatible

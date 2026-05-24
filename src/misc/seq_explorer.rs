@@ -147,12 +147,7 @@ impl SeqTrie {
     /// The `active` mask is the input to [`glue_active_mask`], which
     /// uses it to compute the per-rat active-edge filter for the
     /// next BFS layer.
-    fn insert_cyclic_subseqs(
-        &mut self,
-        seq: &[i8],
-        k: usize,
-        rat_id: usize,
-    ) -> (usize, Vec<bool>) {
+    fn insert_cyclic_subseqs(&mut self, seq: &[i8], k: usize, rat_id: usize) -> (usize, Vec<bool>) {
         let n = seq.len();
         if n == 0 {
             return (0, Vec::new());
@@ -238,7 +233,12 @@ impl SeqTrie {
 ///
 /// For seed rats, callers use `vec![true; perimeter]` directly — every
 /// position is fully active.
-fn glue_active_mask(raw_active: &[bool], k: usize, match_len: usize, source_len: usize) -> Vec<bool> {
+fn glue_active_mask(
+    raw_active: &[bool],
+    k: usize,
+    match_len: usize,
+    source_len: usize,
+) -> Vec<bool> {
     let n = raw_active.len();
     let cw_j = source_len - match_len;
     let ccw_j = 0usize;
@@ -784,8 +784,7 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
         &mut self,
         batch_ids: &[usize],
     ) -> (Arc<TileSet<T>>, Vec<usize>, Vec<Vec<bool>>) {
-        let batch_rats: Vec<Rat<T>> =
-            batch_ids.iter().map(|&id| self.rats[id].clone()).collect();
+        let batch_rats: Vec<Rat<T>> = batch_ids.iter().map(|&id| self.rats[id].clone()).collect();
         let batch_ts = Arc::new(TileSet::new(batch_rats));
         assert_eq!(batch_ts.num_tiles(), batch_ids.len());
 
@@ -1033,7 +1032,10 @@ mod tests {
         let mut total_seqs = 0usize;
         for (&rat_id, seqs) in &by_rat {
             assert!(rat_id < n_rats);
-            assert!(!seqs.is_empty(), "{label}: contributor entry must be non-empty");
+            assert!(
+                !seqs.is_empty(),
+                "{label}: contributor entry must be non-empty"
+            );
             let host = explorer.rat(rat_id).seq();
             for seq in seqs {
                 assert!(!seq.is_empty(), "{label}: empty subseq emitted");

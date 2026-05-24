@@ -477,7 +477,12 @@ impl Scene {
 
 fn emit_item(out: &mut String, item: &Item, t: &PixelTransform) {
     match item {
-        Item::Segment { a, b, stroke, arrow } => {
+        Item::Segment {
+            a,
+            b,
+            stroke,
+            arrow,
+        } => {
             let (x1, y1) = t.point(*a);
             let (x2, y2) = t.point(*b);
             out.push_str(&format!(
@@ -492,7 +497,11 @@ fn emit_item(out: &mut String, item: &Item, t: &PixelTransform) {
                 emit_segment_arrows(out, *a, *b, stroke, arrow, t);
             }
         }
-        Item::Polyline { points, stroke, arrow } => {
+        Item::Polyline {
+            points,
+            stroke,
+            arrow,
+        } => {
             if points.is_empty() {
                 return;
             }
@@ -730,7 +739,10 @@ fn emit_edge_arrow(
 
     let (tip_x, tip_y) = if mid {
         // Centered on midpoint, tip half a size forward.
-        ((fx + tx) * 0.5 + ux * size * 0.5, (fy + ty) * 0.5 + uy * size * 0.5)
+        (
+            (fx + tx) * 0.5 + ux * size * 0.5,
+            (fy + ty) * 0.5 + uy * size * 0.5,
+        )
     } else {
         // Tip at the endpoint.
         (tx, ty)
@@ -1057,7 +1069,10 @@ mod tests {
         // Coordinates should land near the center of the canvas
         // (math x=1.2 → pixel x ≈ 120 for a 200px canvas spanning
         // x∈[0,2]).
-        assert!(svg.contains("120"), "expected mid-tip near px 120, svg: {svg}");
+        assert!(
+            svg.contains("120"),
+            "expected mid-tip near px 120, svg: {svg}"
+        );
     }
 
     #[test]

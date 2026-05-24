@@ -19,10 +19,7 @@ pub enum RasterError {
     SvgParse(String),
     /// `tiny_skia::Pixmap::new` returned `None` (zero / overflowed
     /// dimensions).
-    PixmapAlloc {
-        width: u32,
-        height: u32,
-    },
+    PixmapAlloc { width: u32, height: u32 },
     /// `tiny_skia::Pixmap::encode_png` failed.
     PngEncode(String),
 }
@@ -31,10 +28,9 @@ impl std::fmt::Display for RasterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RasterError::SvgParse(msg) => write!(f, "SVG parse error: {msg}"),
-            RasterError::PixmapAlloc { width, height } => write!(
-                f,
-                "pixmap allocation failed for {width}×{height} pixels"
-            ),
+            RasterError::PixmapAlloc { width, height } => {
+                write!(f, "pixmap allocation failed for {width}×{height} pixels")
+            }
             RasterError::PngEncode(msg) => write!(f, "PNG encode error: {msg}"),
         }
     }
@@ -67,10 +63,11 @@ fn configure_generic_families(db: &mut resvg::usvg::fontdb::Database) {
     // Find an available family whose name matches any of `candidates`.
     let pick = |db: &resvg::usvg::fontdb::Database, candidates: &[&str]| -> Option<String> {
         for c in candidates {
-            if db
-                .faces()
-                .any(|f| f.families.iter().any(|(fam, _)| fam.eq_ignore_ascii_case(c)))
-            {
+            if db.faces().any(|f| {
+                f.families
+                    .iter()
+                    .any(|(fam, _)| fam.eq_ignore_ascii_case(c))
+            }) {
                 return Some((*c).to_string());
             }
         }
@@ -140,15 +137,14 @@ pub fn render_with_options(
     opt: &resvg::usvg::Options<'_>,
 ) -> Result<Vec<u8>, RasterError> {
     let svg = scene.to_svg(vp);
-    let tree = resvg::usvg::Tree::from_str(&svg, opt)
-        .map_err(|e| RasterError::SvgParse(e.to_string()))?;
+    let tree =
+        resvg::usvg::Tree::from_str(&svg, opt).map_err(|e| RasterError::SvgParse(e.to_string()))?;
 
-    let mut pixmap = tiny_skia::Pixmap::new(vp.width_px, vp.height_px).ok_or(
-        RasterError::PixmapAlloc {
+    let mut pixmap =
+        tiny_skia::Pixmap::new(vp.width_px, vp.height_px).ok_or(RasterError::PixmapAlloc {
             width: vp.width_px,
             height: vp.height_px,
-        },
-    )?;
+        })?;
 
     resvg::render(
         &tree,
@@ -234,12 +230,9 @@ mod tests {
         // different arrow placement (none / per-edge-end / per-edge-mid).
         let positions = [(0.0_f64, 0.0_f64), (3.5, 0.0), (8.0, 0.0)];
         let snakes: [Vec<(f64, f64)>; 3] = [
-            Rat::from_unchecked(&tiles::hexagon::<ZZ12>())
-                .to_polyline_f64(Turtle::default()),
-            Rat::from_unchecked(&tiles::square::<ZZ12>())
-                .to_polyline_f64(Turtle::default()),
-            Rat::from_unchecked(&tiles::spectre::<ZZ12>())
-                .to_polyline_f64(Turtle::default()),
+            Rat::from_unchecked(&tiles::hexagon::<ZZ12>()).to_polyline_f64(Turtle::default()),
+            Rat::from_unchecked(&tiles::square::<ZZ12>()).to_polyline_f64(Turtle::default()),
+            Rat::from_unchecked(&tiles::spectre::<ZZ12>()).to_polyline_f64(Turtle::default()),
         ];
         let names = ["hex", "square↗", "spectre▶"];
         let palette = rainbow(3, 0.7, 0.55);
@@ -252,8 +245,7 @@ mod tests {
             .zip(names.iter().zip(palette.iter()))
             .enumerate()
         {
-            let shifted: Vec<(f64, f64)> =
-                shape.iter().map(|(x, y)| (x + dx, y + dy)).collect();
+            let shifted: Vec<(f64, f64)> = shape.iter().map(|(x, y)| (x + dx, y + dy)).collect();
             let mut style = TileStyle::filled(
                 Fill::solid(fill_color.with_alpha(96)),
                 Stroke::solid(Color::BLACK, 0.06),
@@ -317,11 +309,7 @@ mod tests {
     fn full_scene_renders_to_png() {
         // Exercise every primitive we have, end-to-end.
         let mut scene = Scene::new().with_background(Color::WHITE);
-        scene.draw_segment(
-            (0.0, 0.0),
-            (1.0, 1.0),
-            Stroke::solid(Color::BLACK, 0.02),
-        );
+        scene.draw_segment((0.0, 0.0), (1.0, 1.0), Stroke::solid(Color::BLACK, 0.02));
         scene.draw_polyline(
             &[(0.0, 0.5), (0.3, 0.7), (0.6, 0.2)],
             Stroke::dashed(Color::BLUE, 0.02, vec![0.05, 0.05]),
@@ -340,6 +328,10 @@ mod tests {
         let png = scene.to_png(&vp).expect("PNG render");
         assert_eq!(parse_png_dims(&png), (256, 256));
         // Sanity: non-blank canvas, more than a tiny header.
-        assert!(png.len() > 200, "PNG suspiciously small ({} bytes)", png.len());
+        assert!(
+            png.len() > 200,
+            "PNG suspiciously small ({} bytes)",
+            png.len()
+        );
     }
 }

@@ -233,8 +233,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
     /// tileset only (cloning the angle sequences); the B-side masks
     /// are shared by `Arc`.
     pub fn crossing_with_seed(a: Arc<TileSet<T>>, seed: BpSeed<T>) -> Self {
-        let a_sequences: Vec<Vec<i8>> =
-            a.rats().iter().map(|r| r.seq().to_vec()).collect();
+        let a_sequences: Vec<Vec<i8>> = a.rats().iter().map(|r| r.seq().to_vec()).collect();
         let offset_b = a.num_tiles();
         let engine = CyclicEngine {
             a_sequences,
@@ -1929,5 +1928,4 @@ mod tests {
             }
         }
     }
-
 }
