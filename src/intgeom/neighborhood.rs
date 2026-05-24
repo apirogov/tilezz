@@ -1721,20 +1721,15 @@ mod tests {
     use crate::cyclotomic::ZZ12;
     use crate::intgeom::matchtypes::MatchTypeIndex;
     use crate::intgeom::patch::GrowingPatch;
-    use crate::intgeom::rat::Rat;
-    use crate::intgeom::tiles;
+    use crate::intgeom::tileset;
     use std::sync::OnceLock;
 
     fn square_tileset() -> Arc<TileSet<ZZ12>> {
-        let sq = tiles::square::<ZZ12>();
-        let rat = Rat::try_from(&sq).unwrap();
-        Arc::new(TileSet::new(vec![rat]))
+        tileset::square::<ZZ12>()
     }
 
     fn hex_tileset() -> Arc<TileSet<ZZ12>> {
-        let hex = tiles::hexagon::<ZZ12>();
-        let rat = Rat::try_from(&hex).unwrap();
-        Arc::new(TileSet::new(vec![rat]))
+        tileset::hex::<ZZ12>()
     }
 
     /// Shared, lazy-initialized neighborhood indices. Tests should call
@@ -2019,9 +2014,7 @@ mod tests {
     }
 
     fn spectre_tileset() -> Arc<TileSet<ZZ12>> {
-        let sp = tiles::spectre::<ZZ12>();
-        let rat = Rat::try_from(&sp).unwrap();
-        Arc::new(TileSet::new(vec![rat]))
+        tileset::spectre::<ZZ12>()
     }
 
     #[test]

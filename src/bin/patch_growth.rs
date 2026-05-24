@@ -1,48 +1,42 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
+use rustc_hash::FxHashSet;
 
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ12, ZZ4};
-use tilezz::intgeom::matchtypes::MatchFinder;
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::snake::Snake;
-use tilezz::intgeom::tiles;
-use tilezz::intgeom::tileset::TileSet;
+use tilezz::intgeom::tileset::{self, TileSet};
+use tilezz::misc::patch_grow::grow_patches;
 
 #[derive(Parser)]
-#[command(
-    name = "patch_growth",
-    about = "Enumerate tile patches by incremental growth"
-)]
+#[command(name = "patch_growth", about = "Enumerate tile patches by incremental growth")]
 struct Args {
-    /// Seed tile shape
-    #[arg(long, value_enum, default_value = "hexagon")]
-    tile: TileShape,
+    /// Tileset to grow patches from.
+    #[arg(long, value_enum, default_value = "hex")]
+    tile: TileSetKind,
 
-    /// Maximum patch size (number of tiles)
+    /// Maximum patch size (number of tile copies).
     #[arg(long, default_value_t = 6)]
     max_size: usize,
 
-    /// Cyclotomic ring (ZZ4 only supports square tiles)
+    /// Cyclotomic ring. `zz4` only supports square / tetrominoes.
     #[arg(long, value_enum, default_value = "zz12")]
     ring: RingChoice,
 
-    /// Print per-pair glue statistics
-    #[arg(long)]
-    verbose: bool,
-
-    /// Validate results against brute force (caps max_size at 4)
+    /// Cross-check against a brute-force `try_glue` enumeration.
+    /// Slow for `max_size > 4`.
     #[arg(long)]
     validate: bool,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
-enum TileShape {
-    Hexagon,
+enum TileSetKind {
+    Hex,
     Square,
-    Triangle,
+    Mixed,
+    Tetris,
     Spectre,
 }
 
@@ -52,192 +46,133 @@ enum RingChoice {
     ZZ12,
 }
 
-fn seed_tile_zz4(shape: &TileShape) -> Rat<ZZ4> {
-    match shape {
-        TileShape::Square => Rat::from_unchecked(&tiles::square::<ZZ4>()),
-        _ => {
-            eprintln!(
-                "error: {:?} tile not supported with --ring zz4 (only square)",
-                shape
-            );
+fn ts_zz4(kind: &TileSetKind) -> Arc<TileSet<ZZ4>> {
+    match kind {
+        TileSetKind::Square => tileset::square::<ZZ4>(),
+        TileSetKind::Tetris => tileset::tetrominoes::<ZZ4>(),
+        other => {
+            eprintln!("error: {other:?} not supported with --ring zz4 (need ring with ZZ4 only)");
             std::process::exit(1);
         }
     }
 }
 
-fn seed_tile_zz12(shape: &TileShape) -> Rat<ZZ12> {
-    let snake: Snake<ZZ12> = match shape {
-        TileShape::Hexagon => tiles::hexagon(),
-        TileShape::Square => tiles::square(),
-        TileShape::Triangle => tiles::triangle(),
-        TileShape::Spectre => tiles::spectre(),
-    };
-    Rat::from_unchecked(&snake)
+fn ts_zz12(kind: &TileSetKind) -> Arc<TileSet<ZZ12>> {
+    match kind {
+        TileSetKind::Hex => tileset::hex::<ZZ12>(),
+        TileSetKind::Square => tileset::square::<ZZ12>(),
+        TileSetKind::Mixed => tileset::mixed::<ZZ12>(),
+        TileSetKind::Tetris => tileset::tetrominoes::<ZZ12>(),
+        TileSetKind::Spectre => tileset::spectre::<ZZ12>(),
+    }
 }
 
-fn tileset_match<T: IsComplex + IsRingOrField + Units>(
-    patches: &[Rat<T>],
-    seed: &[Rat<T>],
-    verbose: bool,
-    validate: bool,
-) -> BTreeSet<Rat<T>> {
-    if patches.is_empty() || seed.is_empty() {
-        return BTreeSet::new();
+/// Brute-force reference enumeration: glue every
+/// `(patch, tile, ia, ib)` combination via `try_glue`. No
+/// canonicalisation shortcuts, just the most direct path possible.
+fn brute_force_grow<T>(
+    tileset: &Arc<TileSet<T>>,
+    max_size: usize,
+) -> BTreeMap<usize, FxHashSet<Rat<T>>>
+where
+    T: IsComplex + IsRingOrField + Units,
+{
+    let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
+    if max_size == 0 || tileset.num_tiles() == 0 {
+        return results;
     }
-
-    let patch_ts = Arc::new(TileSet::new(patches.to_vec()));
-    let seed_ts = Arc::new(TileSet::new(seed.to_vec()));
-    let mf = MatchFinder::crossing(patch_ts, seed_ts);
-
-    let pairs: Vec<(usize, usize)> = (0..mf.num_tiles_a())
-        .flat_map(|i| (0..mf.num_tiles_b()).map(move |j| (i, j)))
-        .collect();
-
-    if validate {
-        let t_fast = Instant::now();
-        let fast = mf.valid_results_for_pairs(&pairs);
-        let dt_fast = t_fast.elapsed();
-
-        let mut bf_results = BTreeSet::new();
-        let mut bf_ops = 0;
-        let t_bf = Instant::now();
-        for a in patches {
-            for b in seed {
-                for ia in 0..a.len() {
-                    for ib in 0..b.len() {
-                        bf_ops += 1;
-                        if let Ok(glued) = a.try_glue((ia as i64, ib as i64), b) {
-                            bf_results.insert(glued);
+    results.insert(1, tileset.rats().iter().cloned().collect());
+    for k in 2..=max_size {
+        let prev: Vec<Rat<T>> = results[&(k - 1)].iter().cloned().collect();
+        let mut next: FxHashSet<Rat<T>> = FxHashSet::default();
+        for patch in &prev {
+            for tile_idx in 0..tileset.num_tiles() {
+                let tile = tileset.rat(tile_idx);
+                for ia in 0..patch.len() {
+                    for ib in 0..tile.len() {
+                        if let Ok(glued) = patch.try_glue((ia as i64, ib as i64), tile) {
+                            next.insert(glued);
                         }
                     }
                 }
             }
         }
-        let dt_bf = t_bf.elapsed();
-
-        if fast != bf_results {
-            eprintln!("MISMATCH!");
-            for r in fast.difference(&bf_results).take(5) {
-                eprintln!("  tileset extra: {:?}", r.seq());
-            }
-            for r in bf_results.difference(&fast).take(5) {
-                eprintln!("  brute force extra: {:?}", r.seq());
-            }
-            std::process::exit(1);
-        }
-        let speedup = dt_bf.as_secs_f64() / dt_fast.as_secs_f64().max(1e-9);
-        eprintln!(
-            "    validate: OK | indexed: {:.2?} | brute_force: {:.2?} ({} ops) | {:.1}x speedup",
-            dt_fast, dt_bf, bf_ops, speedup,
-        );
-
-        if verbose {
-            eprintln!(
-                "    indexed: {} x {} tiles, {} distinct",
-                mf.num_tiles_a(),
-                mf.num_tiles_b(),
-                fast.len(),
-            );
-        }
-
-        fast
-    } else {
-        let results = mf.valid_results_for_pairs(&pairs);
-        if verbose {
-            eprintln!(
-                "    indexed: {} x {} tiles, {} distinct",
-                mf.num_tiles_a(),
-                mf.num_tiles_b(),
-                results.len(),
-            );
-        }
-        results
+        results.insert(k, next);
     }
+    results
 }
 
-fn run<T: IsComplex + IsRingOrField + Units>(
-    seed: Rat<T>,
-    max_size: usize,
-    verbose: bool,
-    validate: bool,
-    ring_label: &str,
-    tile_label: &str,
-) {
+fn run<T>(tileset: Arc<TileSet<T>>, max_size: usize, validate: bool, label: &str)
+where
+    T: IsComplex + IsRingOrField + Units,
+{
     eprintln!(
-        "Seed: {}, edges: {}, ring: {}, max_size: {}, validate: {}",
-        tile_label,
-        seed.len(),
-        ring_label,
-        max_size,
-        validate,
+        "tileset: {label} ({} tile{}), max_size: {max_size}, validate: {validate}",
+        tileset.num_tiles(),
+        if tileset.num_tiles() == 1 { "" } else { "s" },
     );
 
-    let mut patches: BTreeMap<usize, Vec<Rat<T>>> = BTreeMap::new();
-    let seed_vec = vec![seed];
-    patches.insert(1, seed_vec.clone());
+    let t0 = Instant::now();
+    let patches = grow_patches(Arc::clone(&tileset), max_size);
+    let elapsed = t0.elapsed();
 
-    for k in 2..=max_size {
-        let t0 = Instant::now();
-        let results = tileset_match::<T>(&patches[&(k - 1)], &seed_vec, verbose, validate);
-        let elapsed = t0.elapsed();
-
+    if validate {
+        let t_bf = Instant::now();
+        let bf = brute_force_grow(&tileset, max_size);
+        let dt_bf = t_bf.elapsed();
+        let mut ok = true;
+        for k in 1..=max_size {
+            let fast = patches.get(&k).cloned().unwrap_or_default();
+            let brute = bf.get(&k).cloned().unwrap_or_default();
+            if fast != brute {
+                eprintln!(
+                    "  size {k}: MISMATCH (grow_patches={}, brute_force={})",
+                    fast.len(),
+                    brute.len()
+                );
+                for r in fast.difference(&brute).take(5) {
+                    eprintln!("    only in grow_patches: {:?}", r.seq());
+                }
+                for r in brute.difference(&fast).take(5) {
+                    eprintln!("    only in brute force: {:?}", r.seq());
+                }
+                ok = false;
+            }
+        }
+        if !ok {
+            std::process::exit(1);
+        }
+        let speedup = dt_bf.as_secs_f64() / elapsed.as_secs_f64().max(1e-9);
         eprintln!(
-            "  size {:>3} = {:>3} + {:>3}: {} distinct patches [{:.2?}]",
-            k,
-            k - 1,
-            1,
-            results.len(),
-            elapsed,
+            "  validate: OK | grow_patches: {elapsed:.2?} | brute_force: {dt_bf:.2?} | {speedup:.1}x speedup"
         );
-
-        patches.insert(k, results.into_iter().collect());
+    } else {
+        eprintln!("  grow_patches: {elapsed:.2?}");
     }
 
     eprintln!("\n--- Summary ---");
-    let mut total = 0usize;
-    for (&size, pats) in &patches {
-        eprintln!("  size {:>3}: {:>6} patches", size, pats.len());
-        total += pats.len();
+    let mut total = 0;
+    for k in 1..=max_size {
+        let count = patches.get(&k).map(|s| s.len()).unwrap_or(0);
+        eprintln!("  size {k:>3}: {count:>7} patches");
+        total += count;
     }
-    eprintln!("  total:   {total:>6} patches");
+    eprintln!("  total:    {total:>7} patches");
 }
 
 fn main() {
     let args = Args::parse();
-
     if args.max_size < 1 {
         eprintln!("max_size must be at least 1");
         std::process::exit(1);
     }
     if args.validate && args.max_size > 4 {
-        eprintln!("note: --validate with max_size > 4 may be slow (brute force scales poorly)");
+        eprintln!("note: --validate with max_size > 4 may be very slow");
     }
 
-    let tile_label = format!("{:?}", args.tile);
-    let ring_label = format!("{:?}", args.ring).to_lowercase();
-
+    let label = format!("{:?}", args.tile);
     match args.ring {
-        RingChoice::ZZ4 => {
-            let seed = seed_tile_zz4(&args.tile);
-            run::<ZZ4>(
-                seed,
-                args.max_size,
-                args.verbose,
-                args.validate,
-                &ring_label,
-                &tile_label,
-            );
-        }
-        RingChoice::ZZ12 => {
-            let seed = seed_tile_zz12(&args.tile);
-            run::<ZZ12>(
-                seed,
-                args.max_size,
-                args.verbose,
-                args.validate,
-                &ring_label,
-                &tile_label,
-            );
-        }
+        RingChoice::ZZ4 => run(ts_zz4(&args.tile), args.max_size, args.validate, &label),
+        RingChoice::ZZ12 => run(ts_zz12(&args.tile), args.max_size, args.validate, &label),
     }
 }

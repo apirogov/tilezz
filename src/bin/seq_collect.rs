@@ -4,8 +4,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{ZZ10, ZZ12};
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::tiles;
-use tilezz::intgeom::tileset::TileSet;
+use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::misc::seq_explorer::{check_fixed_point, Collection, SeqExplorer};
 
 #[derive(Parser)]
@@ -34,37 +33,24 @@ enum TileSetKind {
     Hex,
     Square,
     Mixed,
+    Tetris,
     Spectre,
     Penrose,
 }
 
 fn make_ts_12(kind: &TileSetKind) -> Arc<TileSet<ZZ12>> {
     match kind {
-        TileSetKind::Hex => {
-            let rat = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Square => {
-            let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Mixed => {
-            let sq = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            let hex = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![sq, hex]))
-        }
-        TileSetKind::Spectre => {
-            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
+        TileSetKind::Hex => tileset::hex::<ZZ12>(),
+        TileSetKind::Square => tileset::square::<ZZ12>(),
+        TileSetKind::Mixed => tileset::mixed::<ZZ12>(),
+        TileSetKind::Tetris => tileset::tetrominoes::<ZZ12>(),
+        TileSetKind::Spectre => tileset::spectre::<ZZ12>(),
         TileSetKind::Penrose => panic!("penrose requires ZZ10"),
     }
 }
 
 fn make_ts_10() -> Arc<TileSet<ZZ10>> {
-    let n = Rat::try_from(&tiles::penrose_p3_narrow()).unwrap();
-    let w = Rat::try_from(&tiles::penrose_p3_wide()).unwrap();
-    Arc::new(TileSet::new(vec![n, w]))
+    tileset::penrose::<ZZ10>()
 }
 
 /// Rebuild a typed `TileSet<T>` from a `Collection`'s raw tile angle
@@ -174,10 +160,9 @@ fn main() {
                     let explorer = SeqExplorer::new(ts);
                     let elapsed = t0.elapsed();
                     eprintln!(
-                        "[penrose] subseqs={} witnesses={} rats={} k={} time={:.2?}",
+                        "[penrose] subseqs={} rats={} k={} time={:.2?}",
                         explorer.num_subseqs(),
-                        explorer.num_contributing_rats(),
-                        explorer.num_known_rats(),
+                        explorer.num_rats(),
                         explorer.max_subseq_len(),
                         elapsed,
                     );
@@ -189,11 +174,10 @@ fn main() {
                     let explorer = SeqExplorer::new(ts);
                     let elapsed = t0.elapsed();
                     eprintln!(
-                        "[{:?}] subseqs={} witnesses={} rats={} k={} time={:.2?}",
+                        "[{:?}] subseqs={} rats={} k={} time={:.2?}",
                         tile,
                         explorer.num_subseqs(),
-                        explorer.num_contributing_rats(),
-                        explorer.num_known_rats(),
+                        explorer.num_rats(),
                         explorer.max_subseq_len(),
                         elapsed,
                     );

@@ -4,10 +4,7 @@ use std::time::Instant;
 use clap::Parser;
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::neighborhood::{NeighborhoodIndex, NtEntry, NtKind};
-use tilezz::intgeom::rat::Rat;
-
-use tilezz::intgeom::tiles;
-use tilezz::intgeom::tileset::TileSet;
+use tilezz::intgeom::tileset::{self, TileSet};
 
 #[cfg(feature = "pprof")]
 use pprof::ProfilerGuardBuilder;
@@ -27,6 +24,7 @@ enum TileSetKind {
     Square,
     Hex,
     Mixed,
+    Tetris,
     Spectre,
     Penrose,
 }
@@ -95,27 +93,11 @@ fn main() {
     let args = Args::parse();
 
     match args.tile {
-        TileSetKind::Square => {
-            let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            run_bench("Square", Arc::new(TileSet::new(vec![rat])));
-        }
-        TileSetKind::Hex => {
-            let rat = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            run_bench("Hex", Arc::new(TileSet::new(vec![rat])));
-        }
-        TileSetKind::Mixed => {
-            let sq = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            let hex = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            run_bench("Mixed", Arc::new(TileSet::new(vec![sq, hex])));
-        }
-        TileSetKind::Spectre => {
-            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
-            run_bench("Spectre", Arc::new(TileSet::new(vec![rat])));
-        }
-        TileSetKind::Penrose => {
-            let n = Rat::try_from(&tiles::penrose_p3_narrow::<ZZ10>()).unwrap();
-            let w = Rat::try_from(&tiles::penrose_p3_wide::<ZZ10>()).unwrap();
-            run_bench("Penrose", Arc::new(TileSet::new(vec![n, w])));
-        }
+        TileSetKind::Square => run_bench("Square", tileset::square::<ZZ12>()),
+        TileSetKind::Hex => run_bench("Hex", tileset::hex::<ZZ12>()),
+        TileSetKind::Mixed => run_bench("Mixed", tileset::mixed::<ZZ12>()),
+        TileSetKind::Tetris => run_bench("Tetris", tileset::tetrominoes::<ZZ12>()),
+        TileSetKind::Spectre => run_bench("Spectre", tileset::spectre::<ZZ12>()),
+        TileSetKind::Penrose => run_bench("Penrose", tileset::penrose::<ZZ10>()),
     }
 }

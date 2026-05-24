@@ -76,9 +76,9 @@ impl CyclicEngine {
 
 /// Pre-built bit-parallel state for a fixed "seed" (B-side) tileset.
 ///
-/// Construct once, then pass to [`MatchFinder::crossing_bp_with_seed`]
+/// Construct once, then pass to [`MatchFinder::crossing_with_seed`]
 /// for each varying A-side tileset (the typical pattern in
-/// `seq_collect` / `seq_explorer` / `redelmeier` where many patch
+/// `seq_collect` / `seq_explorer` / `patch_grow` where many patch
 /// chunks are matched against a fixed tile alphabet). Cheap to clone
 /// (`Arc` internals).
 pub struct BpSeed<T: IsComplex> {

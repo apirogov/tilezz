@@ -9,8 +9,7 @@ use tilezz::intgeom::patch::{
     cyclic_range_contains, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch,
 };
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::tiles;
-use tilezz::intgeom::tileset::TileSet;
+use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::intgeom::vertextypes::OpenVertexTypeIndex;
 
 #[cfg(feature = "pprof")]
@@ -45,37 +44,24 @@ enum TileSetKind {
     Hex,
     Square,
     Mixed,
+    Tetris,
     Spectre,
     Penrose,
 }
 
 fn make_ts_12(kind: &TileSetKind) -> Arc<TileSet<ZZ12>> {
     match kind {
-        TileSetKind::Hex => {
-            let rat = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Square => {
-            let rat = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Spectre => {
-            let rat = Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![rat]))
-        }
-        TileSetKind::Mixed => {
-            let sq = Rat::try_from(&tiles::square::<ZZ12>()).unwrap();
-            let hex = Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap();
-            Arc::new(TileSet::new(vec![sq, hex]))
-        }
+        TileSetKind::Hex => tileset::hex::<ZZ12>(),
+        TileSetKind::Square => tileset::square::<ZZ12>(),
+        TileSetKind::Spectre => tileset::spectre::<ZZ12>(),
+        TileSetKind::Mixed => tileset::mixed::<ZZ12>(),
+        TileSetKind::Tetris => tileset::tetrominoes::<ZZ12>(),
         TileSetKind::Penrose => panic!("penrose requires ZZ10"),
     }
 }
 
 fn make_ts_10() -> Arc<TileSet<ZZ10>> {
-    let n = Rat::try_from(&tiles::penrose_p3_narrow()).unwrap();
-    let w = Rat::try_from(&tiles::penrose_p3_wide()).unwrap();
-    Arc::new(TileSet::new(vec![n, w]))
+    tileset::penrose::<ZZ10>()
 }
 
 #[expect(dead_code)]

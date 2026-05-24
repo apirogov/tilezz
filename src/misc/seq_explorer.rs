@@ -516,16 +516,17 @@ pub struct SeqExplorer<T: IsComplex> {
     /// node tagged by the `rat_id` of the rat that *first* deposited
     /// that substring.
     trie: SeqTrie,
-    /// Every rat ever inserted into the catalog, indexed by `rat_id`.
+    /// Every **contributing** rat (witness) the BFS catalogued,
+    /// indexed by `rat_id`. Non-contributing rats (whose cyclic
+    /// substrings were all already in the trie when first seen) are
+    /// not kept here — they were discarded after dedup, since
+    /// [`Provenance::Glue::source_rat_id`] only ever references a
+    /// witness.
     rats: Vec<Rat<T>>,
     /// `provenances[rat_id]` records how `rats[rat_id]` was produced.
     provenances: Vec<Provenance>,
-    /// Reverse map from canonical [`Rat`] to `rat_id`.
+    /// Reverse map from a witness's canonical [`Rat`] to its `rat_id`.
     rat_to_id: FxHashMap<Rat<T>, usize>,
-    /// Count of distinct rats that contributed at least one new
-    /// substring when first inserted. Equals
-    /// `sequences_by_rat_id().len()`.
-    num_contributing_rats: usize,
     /// `k = max(tile.len() for tile in tileset)`. The trie collects
     /// cyclic substrings of length up to `k`.
     max_subseq_len: usize,
@@ -564,17 +565,12 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
         self.trie.len()
     }
 
-    /// Number of rats that contributed at least one new substring
-    /// when first inserted — i.e. those rats whose discovery
-    /// expanded the trie. Always `<= num_known_rats()`. Equal to
-    /// the number of distinct keys in [`Self::sequences_by_rat_id`].
-    pub fn num_contributing_rats(&self) -> usize {
-        self.num_contributing_rats
-    }
-
-    /// Total number of distinct rats ever inserted into the catalog,
-    /// including those that contributed nothing new to the trie.
-    pub fn num_known_rats(&self) -> usize {
+    /// Number of catalogued rats (witnesses): every rat the BFS kept
+    /// because it contributed at least one new cyclic substring on
+    /// first insertion. Equals `rats().len()` and equals the number
+    /// of keys in [`Self::sequences_by_rat_id`]. Non-contributing
+    /// rats are not retained.
+    pub fn num_rats(&self) -> usize {
         self.rats.len()
     }
 
@@ -584,7 +580,7 @@ impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
         self.max_subseq_len
     }
 
-    /// All discovered rats, indexed by `rat_id`.
+    /// All catalogued witness rats, indexed by `rat_id`.
     pub fn rats(&self) -> &[Rat<T>] {
         &self.rats
     }
@@ -648,10 +644,10 @@ struct LayerStats {
 struct Builder<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     trie: SeqTrie,
+    /// Witness rats only (those that contributed when first inserted).
     rats: Vec<Rat<T>>,
     provenances: Vec<Provenance>,
     rat_to_id: FxHashMap<Rat<T>, usize>,
-    num_contributing_rats: usize,
     max_subseq_len: usize,
 
     /// Rats queued for the next BFS layer (contributing on their last
@@ -660,6 +656,14 @@ struct Builder<T: IsComplex> {
     /// Active-edge mask for each pending rat, drained as the rat is
     /// processed in a layer.
     active_map: HashMap<usize, Vec<bool>>,
+    /// Canonical forms of non-contributing rats — kept solely so we
+    /// don't re-process the same dead-end via another glue path.
+    /// Dropped at `into_explorer` time; never exposed on the
+    /// finished `SeqExplorer`.
+    seen_dead: FxHashSet<Rat<T>>,
+    /// Stat: total non-contributing rats encountered. Reported in
+    /// verbose mode to surface how much pruning saves.
+    dead_count: usize,
     /// Precomputed bit-parallel B-side state for the fixed tileset.
     /// Shared across every layer's MatchFinder.
     bp_seed: BpSeed<T>,
@@ -681,10 +685,11 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
             rats: Vec::new(),
             provenances: Vec::new(),
             rat_to_id: FxHashMap::default(),
-            num_contributing_rats: 0,
             max_subseq_len,
             pending: BTreeSet::new(),
             active_map: HashMap::new(),
+            seen_dead: FxHashSet::default(),
+            dead_count: 0,
             bp_seed,
             verbose,
             layer: 0,
@@ -694,34 +699,46 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
 
     /// Insert every tile of `tileset` as a seed rat. Tiles whose
     /// cyclic substrings expand the trie become pending for the first
-    /// BFS layer with a fully-active edge mask.
+    /// BFS layer with a fully-active edge mask; non-contributing
+    /// seeds (whose substrings were all already in the trie from an
+    /// earlier seed) are remembered for dedup only.
     fn seed_phase(&mut self) {
         for tile_idx in 0..self.tileset.num_tiles() {
             let rat = self.tileset.rat(tile_idx).clone();
-            if self.rat_to_id.contains_key(&rat) {
+            if self.rat_to_id.contains_key(&rat) || self.seen_dead.contains(&rat) {
                 continue;
             }
-            let rat_id = self.rats.len();
-            self.rat_to_id.insert(rat.clone(), rat_id);
-            self.rats.push(rat.clone());
-            self.provenances.push(Provenance::Seed { tile_idx });
 
+            // Speculate rat_id = next contributing index. If this rat
+            // doesn't contribute, no trie node will be tagged with it
+            // (insert_cyclic_subseqs only tags nodes it *creates*),
+            // so the speculative id is safe to discard.
+            let tentative_rat_id = self.rats.len();
             let (new_count, _raw) =
                 self.trie
-                    .insert_cyclic_subseqs(rat.seq(), self.max_subseq_len, rat_id);
-            if new_count > 0 {
-                // Seed rats: no prior neighbourhood to restrict
-                // against, so every boundary position is active.
-                self.active_map.insert(rat_id, vec![true; rat.seq().len()]);
-                self.num_contributing_rats += 1;
-                self.pending.insert(rat_id);
+                    .insert_cyclic_subseqs(rat.seq(), self.max_subseq_len, tentative_rat_id);
+            if new_count == 0 {
+                self.seen_dead.insert(rat);
+                self.dead_count += 1;
+                continue;
             }
+
+            // Contributing: commit.
+            let rat_id = tentative_rat_id;
+            self.rat_to_id.insert(rat.clone(), rat_id);
+            // Seed rats: no prior neighbourhood to restrict against,
+            // so every boundary position is active.
+            self.active_map.insert(rat_id, vec![true; rat.seq().len()]);
+            self.pending.insert(rat_id);
+            self.rats.push(rat);
+            self.provenances.push(Provenance::Seed { tile_idx });
         }
 
         if self.verbose {
             eprintln!(
-                "  Seeds: {} rats, {} subseqs, {} pending",
+                "  Seeds: {} witnesses, {} dead, {} subseqs, {} pending",
                 self.rats.len(),
+                self.dead_count,
                 self.trie.len(),
                 self.pending.len(),
             );
@@ -822,6 +839,7 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
             for tile_idx in 0..self.tileset.num_tiles() {
                 for (glued, mt) in mf.valid_matches_filtered(batch_idx, tile_idx, active) {
                     if self.rat_to_id.contains_key(&glued)
+                        || self.seen_dead.contains(&glued)
                         || seen_new.contains(&glued)
                         || seen_invalid.contains(&glued)
                     {
@@ -848,9 +866,10 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
         new_entries
     }
 
-    /// Register each new rat in the catalog, insert its cyclic
-    /// substrings into the trie, compute its active-edge mask, and
-    /// queue it for the next layer if it contributed.
+    /// Insert each candidate rat's cyclic substrings into the trie;
+    /// commit witnesses (new_count > 0) to the catalog and queue them
+    /// for the next layer; remember non-contributing rats in
+    /// `seen_dead` so we don't re-process them via another path.
     fn integrate_new_rats(&mut self, new_entries: Vec<(Rat<T>, Provenance)>) -> LayerStats {
         let mut stats = LayerStats {
             total: new_entries.len(),
@@ -875,36 +894,45 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
             };
             let source_len = self.rats[source_rat_id].len();
 
-            let rat_id = self.rats.len();
-            self.rat_to_id.insert(rat.clone(), rat_id);
-            self.rats.push(rat.clone());
-            self.provenances.push(prov);
-
+            // Speculate the next contributing rat_id; if this rat
+            // turns out non-contributing, nothing in the trie gets
+            // tagged with it (no new nodes were created), so the
+            // tentative id is safe to discard.
+            let tentative_rat_id = self.rats.len();
             let (new_count, raw_active) =
                 self.trie
-                    .insert_cyclic_subseqs(rat.seq(), self.max_subseq_len, rat_id);
-            if new_count > 0 {
-                let mask =
-                    glue_active_mask(&raw_active, self.max_subseq_len, match_len, source_len);
-                self.active_map.insert(rat_id, mask);
-                self.num_contributing_rats += 1;
-                self.pending.insert(rat_id);
-                stats.contributing += 1;
+                    .insert_cyclic_subseqs(rat.seq(), self.max_subseq_len, tentative_rat_id);
+            if new_count == 0 {
+                self.seen_dead.insert(rat);
+                self.dead_count += 1;
+                continue;
             }
+
+            // Contributing: commit.
+            let rat_id = tentative_rat_id;
+            let mask = glue_active_mask(&raw_active, self.max_subseq_len, match_len, source_len);
+            self.active_map.insert(rat_id, mask);
+            self.pending.insert(rat_id);
+            self.rat_to_id.insert(rat.clone(), rat_id);
+            self.rats.push(rat);
+            self.provenances.push(prov);
+            stats.contributing += 1;
         }
 
         stats
     }
 
     /// Consume the builder and assemble the immutable `SeqExplorer`.
+    /// `seen_dead` is dropped here — it served only as in-flight
+    /// dedup state.
     fn into_explorer(self) -> SeqExplorer<T> {
         if self.verbose {
             eprintln!(
-                "  Done: {} layers, {} rats, {} subseqs, {} contributing, time={:.2?}",
+                "  Done: {} layers, {} witnesses, {} dead, {} subseqs, time={:.2?}",
                 self.layer,
                 self.rats.len(),
+                self.dead_count,
                 self.trie.len(),
-                self.num_contributing_rats,
                 self.started.elapsed(),
             );
         }
@@ -915,7 +943,6 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
             rats: self.rats,
             provenances: self.provenances,
             rat_to_id: self.rat_to_id,
-            num_contributing_rats: self.num_contributing_rats,
             max_subseq_len: self.max_subseq_len,
         }
     }
@@ -925,35 +952,26 @@ impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tiles;
-
-    fn ts_of(rat: Rat<ZZ12>) -> Arc<TileSet<ZZ12>> {
-        Arc::new(TileSet::new(vec![rat]))
-    }
+    use crate::intgeom::tileset;
 
     fn hex_ts() -> Arc<TileSet<ZZ12>> {
-        ts_of(Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap())
+        tileset::hex::<ZZ12>()
     }
 
     fn sq_ts() -> Arc<TileSet<ZZ12>> {
-        ts_of(Rat::try_from(&tiles::square::<ZZ12>()).unwrap())
+        tileset::square::<ZZ12>()
     }
 
     /// Structural invariants every built `SeqExplorer` must satisfy,
     /// independent of the specific tileset.
     fn assert_invariants(label: &str, explorer: &SeqExplorer<ZZ12>) {
-        let n_rats = explorer.num_known_rats();
+        let n_rats = explorer.num_rats();
         let n_subseqs = explorer.num_subseqs();
-        let n_contrib = explorer.num_contributing_rats();
         let k = explorer.max_subseq_len();
 
         // Vec lengths agree with their accessor.
         assert_eq!(explorer.rats().len(), n_rats);
         assert_eq!(explorer.provenances().len(), n_rats);
-        assert!(
-            n_contrib <= n_rats,
-            "{label}: contributing ({n_contrib}) must not exceed known ({n_rats})"
-        );
 
         // `rat_to_id` is the exact inverse of `rats[]`.
         for rat_id in 0..n_rats {
@@ -1004,11 +1022,13 @@ mod tests {
         // Every subseq in `sequences_by_rat_id` really is a cyclic
         // substring of its host rat, within the length bound; the
         // grouping covers every trie entry and every key contributed.
+        // Every catalogued rat is a contributor, so the by-rat map's
+        // keys are exactly `0..n_rats`.
         let by_rat = explorer.sequences_by_rat_id();
         assert_eq!(
             by_rat.len(),
-            n_contrib,
-            "{label}: |sequences_by_rat_id| = num_contributing_rats"
+            n_rats,
+            "{label}: every catalogued rat must contribute"
         );
         let mut total_seqs = 0usize;
         for (&rat_id, seqs) in &by_rat {
@@ -1048,8 +1068,7 @@ mod tests {
         assert_invariants("hex", &explorer);
         assert_eq!(explorer.max_subseq_len(), 6);
         assert_eq!(explorer.num_subseqs(), 120);
-        assert_eq!(explorer.num_known_rats(), 133);
-        assert_eq!(explorer.num_contributing_rats(), 27);
+        assert_eq!(explorer.num_rats(), 27);
     }
 
     /// Same baked-in checks for square self-exploration.
@@ -1059,8 +1078,7 @@ mod tests {
         assert_invariants("square", &explorer);
         assert_eq!(explorer.max_subseq_len(), 4);
         assert_eq!(explorer.num_subseqs(), 110);
-        assert_eq!(explorer.num_known_rats(), 205);
-        assert_eq!(explorer.num_contributing_rats(), 43);
+        assert_eq!(explorer.num_rats(), 43);
     }
 
     /// Single-tile seeds must produce a single seed rat with all

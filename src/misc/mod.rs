@@ -9,8 +9,9 @@
 //!
 //! - [`seq_explorer`]: BFS over patches that enumerates every
 //!   cyclic boundary subsequence reachable from a tileset.
-//! - [`redelmeier`]: Redelmeier-style polyomino-like enumeration
-//!   over a single polygonal tile.
+//! - [`patch_grow`]: layer-BFS patch enumeration over an arbitrary
+//!   tileset (any combination of tile shapes), returning all
+//!   distinct patches up to a given size.
 
-pub mod redelmeier;
+pub mod patch_grow;
 pub mod seq_explorer;
