@@ -9,11 +9,8 @@
 //!
 //! - [`seq_explorer`]: BFS over patches that enumerates every
 //!   cyclic boundary subsequence reachable from a tileset.
-//! - [`vtseq_explorer`]: similar in spirit to `seq_explorer`, built
-//!   directly on `GrowingPatch` instead of `MatchFinder`.
 //! - [`redelmeier`]: Redelmeier-style polyomino-like enumeration
 //!   over a single polygonal tile.
 
 pub mod redelmeier;
 pub mod seq_explorer;
-pub mod vtseq_explorer;
