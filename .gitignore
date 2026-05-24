@@ -5,3 +5,7 @@ scratch*
 flamegraph*.svg
 perf.data
 /vis_demo.*
+literature/
+snapshots/
+.claude/*.local.json
+.claude/*.lock
