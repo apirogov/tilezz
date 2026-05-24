@@ -11,7 +11,10 @@ use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::misc::patch_grow::grow_patches;
 
 #[derive(Parser)]
-#[command(name = "patch_growth", about = "Enumerate tile patches by incremental growth")]
+#[command(
+    name = "patch_growth",
+    about = "Enumerate tile patches by incremental growth"
+)]
 struct Args {
     /// Tileset to grow patches from.
     #[arg(long, value_enum, default_value = "hex")]

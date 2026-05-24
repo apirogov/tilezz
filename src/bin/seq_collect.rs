@@ -57,20 +57,20 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
 /// sequences. The closure converts angle slices into the ring's `Rat`.
 fn typed_tileset<T, F>(collection: &Collection, make_rat: F) -> Arc<TileSet<T>>
 where
-    T: tilezz::cyclotomic::IsComplex + tilezz::cyclotomic::IsRingOrField + tilezz::cyclotomic::Units,
+    T: tilezz::cyclotomic::IsComplex
+        + tilezz::cyclotomic::IsRingOrField
+        + tilezz::cyclotomic::Units,
     F: Fn(&[i8]) -> Rat<T>,
 {
-    let rats: Vec<Rat<T>> = collection
-        .tile_angles
-        .iter()
-        .map(|s| make_rat(s))
-        .collect();
+    let rats: Vec<Rat<T>> = collection.tile_angles.iter().map(|s| make_rat(s)).collect();
     Arc::new(TileSet::new(rats))
 }
 
 fn validate_typed<T>(collection: &Collection, tile_ts: &Arc<TileSet<T>>) -> Result<(), String>
 where
-    T: tilezz::cyclotomic::IsComplex + tilezz::cyclotomic::IsRingOrField + tilezz::cyclotomic::Units,
+    T: tilezz::cyclotomic::IsComplex
+        + tilezz::cyclotomic::IsRingOrField
+        + tilezz::cyclotomic::Units,
 {
     let t0 = Instant::now();
     let k = tile_ts.rats().iter().map(|r| r.len()).max().unwrap_or(0);
@@ -186,8 +186,8 @@ fn main() {
             };
 
             let t_write = Instant::now();
-            let file = std::fs::File::create(output)
-                .unwrap_or_else(|e| panic!("create {output}: {e}"));
+            let file =
+                std::fs::File::create(output).unwrap_or_else(|e| panic!("create {output}: {e}"));
             serde_json::to_writer(std::io::BufWriter::new(file), &collection)
                 .unwrap_or_else(|e| panic!("serialize {output}: {e}"));
             eprintln!(
@@ -203,8 +203,8 @@ fn main() {
                 eprintln!("Open error: {}", e);
                 std::process::exit(1);
             });
-            let collection: Collection =
-                serde_json::from_reader(std::io::BufReader::new(file)).unwrap_or_else(|e| {
+            let collection: Collection = serde_json::from_reader(std::io::BufReader::new(file))
+                .unwrap_or_else(|e| {
                     eprintln!("Parse error: {}", e);
                     std::process::exit(1);
                 });
