@@ -19,13 +19,3 @@ pub mod vertextypes;
 pub mod patch;
 
 pub mod neighborhood;
-
-pub mod segment_vertex_types;
-
-pub mod segtypes;
-
-pub mod segbfs;
-
-pub mod segseqbfs;
-
-pub mod segrewrite;

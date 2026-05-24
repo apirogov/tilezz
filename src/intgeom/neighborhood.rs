@@ -325,13 +325,6 @@ pub struct NeighborhoodIndex<T: IsComplex> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<NtEntry>,
     transitions: Vec<NtTransition>,
-    /// For each catalog entry id (1-based) at position `id - 1`: any
-    /// one transition reaching that entry, stored as
-    /// `Some((src_id, transition_index))`. `None` for seed entries
-    /// (no predecessor). Populated post-BFS; lets callers walk back
-    /// to a seed for replay-style derivations without storing full
-    /// per-entry parent lists.
-    any_predecessor: Vec<Option<(usize, usize)>>,
 }
 
 impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
@@ -401,13 +394,10 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             ..
         } = state;
 
-        let any_predecessor = build_any_predecessor(entries.len(), &transitions);
-
         NeighborhoodIndex {
             tileset,
             entries,
             transitions,
-            any_predecessor,
         }
     }
 
@@ -448,56 +438,6 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     /// The tileset this catalog was built from.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
-    }
-
-    /// One transition reaching entry id `entry_id`, or `None` if this
-    /// is a seed entry. The choice of which transition is captured
-    /// at build time (the first transition with `dst_id == entry_id`
-    /// in BFS-emission order); for replay purposes any predecessor
-    /// suffices.
-    pub fn any_predecessor(&self, entry_id: usize) -> Option<(usize, usize)> {
-        let idx = entry_id.checked_sub(1)?;
-        self.any_predecessor.get(idx).copied().flatten()
-    }
-
-    /// Walk back from `entry_id` to a seed via `any_predecessor`,
-    /// returning the path as a vec of `(entry_id, transition_idx)`
-    /// pairs in **forward order** (seed first, target last).
-    ///
-    /// Each pair represents "the BFS transition `transition_idx`
-    /// produced `entry_id` from some predecessor". The seed entry's
-    /// pair has `transition_idx == usize::MAX` as a sentinel since no
-    /// transition produced it.
-    ///
-    /// Returns `None` if `entry_id` is not a valid entry id, or if
-    /// the predecessor chain loops (which would indicate a corrupted
-    /// `any_predecessor` table — should never happen for catalogs
-    /// built via `new` / load).
-    pub fn predecessor_path(&self, entry_id: usize) -> Option<Vec<(usize, usize)>> {
-        if entry_id == 0 || entry_id > self.entries.len() {
-            return None;
-        }
-        let mut path: Vec<(usize, usize)> = Vec::new();
-        let mut current = entry_id;
-        // A simple guard against pathological loops: the chain can be
-        // at most `num_entries` long.
-        let limit = self.entries.len();
-        for _ in 0..=limit {
-            match self.any_predecessor(current) {
-                Some((src_id, trans_idx)) => {
-                    path.push((current, trans_idx));
-                    current = src_id;
-                }
-                None => {
-                    // `current` is a seed.
-                    path.push((current, usize::MAX));
-                    path.reverse();
-                    return Some(path);
-                }
-            }
-        }
-        // Loop detected.
-        None
     }
 
     /// Classify every entry as Dead / Undead / Blessed / Free by
@@ -870,12 +810,10 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
                 }
             }
         }
-        let any_predecessor = build_any_predecessor(entries.len(), &transitions);
         let idx = NeighborhoodIndex {
             tileset,
             entries,
             transitions,
-            any_predecessor,
         };
         // Cross-check the recorded kinds against what classify_all
         // re-derives from the transitions. Catches stale serialized
@@ -1142,24 +1080,6 @@ impl Default for BfsState {
             queue: VecDeque::new(),
         }
     }
-}
-
-/// Post-BFS pass: for each entry id, record `Some((src_id,
-/// transition_idx))` of any one transition reaching it (the first
-/// encountered in the transitions vec). Seed entries — entries with
-/// no incoming transition — get `None`.
-fn build_any_predecessor(
-    num_entries: usize,
-    transitions: &[NtTransition],
-) -> Vec<Option<(usize, usize)>> {
-    let mut any_predecessor: Vec<Option<(usize, usize)>> = vec![None; num_entries];
-    for (idx, t) in transitions.iter().enumerate() {
-        let slot = t.dst_id - 1;
-        if slot < any_predecessor.len() && any_predecessor[slot].is_none() {
-            any_predecessor[slot] = Some((t.src_id, idx));
-        }
-    }
-    any_predecessor
 }
 
 /// Phase 1: enumerate every two-tile patch from `MatchTypeIndex`, try
@@ -3400,88 +3320,4 @@ mod tests {
         );
     }
 
-    /// `any_predecessor` should be `None` exactly for seed entries
-    /// (entries with no incoming transition in the BFS), and
-    /// `Some((src, idx))` otherwise where `transitions[idx].dst_id`
-    /// equals the entry id.
-    #[test]
-    fn any_predecessor_is_consistent_with_transitions() {
-        let idx = hex_idx();
-        for entry_id in 1..=idx.num_types() {
-            match idx.any_predecessor(entry_id) {
-                None => {
-                    let has_incoming = idx
-                        .transitions()
-                        .iter()
-                        .any(|t| t.dst_id == entry_id);
-                    assert!(
-                        !has_incoming,
-                        "entry {entry_id} has any_predecessor=None but has incoming transitions"
-                    );
-                }
-                Some((src_id, trans_idx)) => {
-                    let t = &idx.transitions()[trans_idx];
-                    assert_eq!(t.dst_id, entry_id, "predecessor transition's dst_id mismatch");
-                    assert_eq!(t.src_id, src_id, "predecessor src_id mismatch");
-                }
-            }
-        }
-    }
-
-    /// `predecessor_path(entry_id)` must produce a forward-order
-    /// chain ending at `entry_id`, starting at a seed (sentinel
-    /// `transition_idx == usize::MAX`), with each non-seed step
-    /// matching an actual transition reaching that entry.
-    #[test]
-    fn predecessor_path_walks_to_a_seed() {
-        let idx = hex_idx();
-        // Pick a closed phase-2 entry to walk back from — these are
-        // the canonical replay targets.
-        let closed_entry = idx
-            .entries()
-            .iter()
-            .enumerate()
-            .find_map(|(i, e)| match e {
-                NtEntry::Phase2(st) if st.is_closed => Some(i + 1),
-                _ => None,
-            });
-        let Some(target) = closed_entry else {
-            // Some tilesets have no closed corona — hex always does,
-            // so this would mean the catalog is broken.
-            panic!("hex catalog has no closed SurroundedTile entries");
-        };
-
-        let path = idx
-            .predecessor_path(target)
-            .expect("hex closed entry must have a predecessor path");
-        assert!(!path.is_empty());
-        assert_eq!(path.last().unwrap().0, target, "path must end at target");
-
-        // First entry is a seed: transition_idx sentinel + no incoming
-        // transition.
-        let (seed_id, seed_trans) = path[0];
-        assert_eq!(seed_trans, usize::MAX, "seed entry uses sentinel transition_idx");
-        assert!(
-            idx.any_predecessor(seed_id).is_none(),
-            "seed entry must have no predecessor"
-        );
-
-        // Every non-seed step: the recorded transition must actually
-        // reach that entry, and from the previous step's entry.
-        for w in path.windows(2) {
-            let (src_id, _) = w[0];
-            let (dst_id, trans_idx) = w[1];
-            assert_ne!(trans_idx, usize::MAX);
-            let t = &idx.transitions()[trans_idx];
-            assert_eq!(t.dst_id, dst_id, "transition's dst doesn't match path step");
-            assert_eq!(t.src_id, src_id, "transition's src doesn't match prior path step");
-        }
-    }
-
-    #[test]
-    fn predecessor_path_rejects_out_of_range_entry_id() {
-        let idx = hex_idx();
-        assert!(idx.predecessor_path(0).is_none());
-        assert!(idx.predecessor_path(idx.num_types() + 1).is_none());
-    }
 }
