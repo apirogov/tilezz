@@ -12,7 +12,7 @@ pub fn repetition_factor<T: Eq>(s: &[T]) -> usize {
     }
 }
 
-fn prefix_function<T: Eq>(s: &[T]) -> Vec<usize> {
+pub(crate) fn prefix_function<T: Eq>(s: &[T]) -> Vec<usize> {
     let n = s.len();
     let mut pi = vec![0usize; n];
     for i in 1..n {
