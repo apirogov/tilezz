@@ -157,26 +157,6 @@ fn junction_active_mask(
     }
 }
 
-pub(crate) fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) -> bool {
-    if mlen == 0 || n == 0 {
-        return false;
-    }
-    let before = (start_a + n - 1) % n;
-    if active[before] {
-        return true;
-    }
-    let after = (start_a + mlen) % n;
-    if active[after] {
-        return true;
-    }
-    for i in 0..mlen {
-        if active[(start_a + i) % n] {
-            return true;
-        }
-    }
-    false
-}
-
 #[derive(Debug, Clone)]
 pub enum Provenance {
     Seed {

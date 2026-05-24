@@ -6,7 +6,7 @@ use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
-use tilezz::intgeom::vtseq_explorer::PatchSeqExplorer;
+use tilezz::misc::vtseq_explorer::PatchSeqExplorer;
 
 #[derive(Parser)]
 #[command(name = "patch_seq_bench", about = "Benchmark PatchSeqExplorer")]
