@@ -182,11 +182,8 @@ impl BitParallelMatcher {
         }
         alpha.sort();
         alpha.dedup();
-        let sym_to_idx: HashMap<i8, usize> = alpha
-            .iter()
-            .enumerate()
-            .map(|(i, &c)| (c, i))
-            .collect();
+        let sym_to_idx: HashMap<i8, usize> =
+            alpha.iter().enumerate().map(|(i, &c)| (c, i)).collect();
         let num_syms = sym_to_idx.len();
 
         let masks: Vec<Vec<CyclicBitset>> = tiles
@@ -602,11 +599,9 @@ mod tests {
             let pa = (pos_a + k) % n_a;
             let pb = (n_b + pos_b - k) % n_b;
             assert_eq!(
-                a[pa],
-                -b[pb],
+                a[pa], -b[pb],
                 "RC content mismatch at offset {k}: a[{pa}]={} vs -b[{pb}]={}",
-                a[pa],
-                -b[pb],
+                a[pa], -b[pb],
             );
         }
     }
@@ -754,8 +749,7 @@ mod tests {
 
     #[test]
     fn three_tiles_pairwise() {
-        let tiles: Vec<Vec<i8>> =
-            vec![vec![1i8, 2, 3], vec![2i8, 3, 4], vec![-3i8, -2, 5]];
+        let tiles: Vec<Vec<i8>> = vec![vec![1i8, 2, 3], vec![2i8, 3, 4], vec![-3i8, -2, 5]];
         for i in 0..tiles.len() {
             for j in 0..tiles.len() {
                 check(&tiles, i, j);
@@ -872,8 +866,9 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             ((seed % 7) as i8) - 3
         };
-        let tiles: Vec<Vec<i8>> =
-            (0..8).map(|_| (0..10).map(|_| next_angle()).collect()).collect();
+        let tiles: Vec<Vec<i8>> = (0..8)
+            .map(|_| (0..10).map(|_| next_angle()).collect())
+            .collect();
         for i in 0..tiles.len() {
             for j in 0..tiles.len() {
                 check(&tiles, i, j);
@@ -908,7 +903,8 @@ mod tests {
         // `stream_boundary_all_tiles` yields the same CyclicMatch set
         // (modulo tile_a labelling) as calling `stream_boundary` per
         // tile and unioning.
-        let fixtures: Vec<(&str, Vec<Vec<i8>>, Vec<Vec<i8>>)> = vec![
+        type Fixture = (&'static str, Vec<Vec<i8>>, Vec<Vec<i8>>);
+        let fixtures: Vec<Fixture> = vec![
             (
                 "spectre tile against itself",
                 vec![vec![3i8, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]],
@@ -935,22 +931,22 @@ mod tests {
                 "penrose pair",
                 vec![
                     vec![
-                        2i8, 0, -1, 2, -1, 0, 0, 3, 0, 0, 1, -2, 1, 0, 0, 2, 0, 0, -1, 2, -1, 0,
-                        0, 3, 0, 1, -2, 1, 0,
+                        2i8, 0, -1, 2, -1, 0, 0, 3, 0, 0, 1, -2, 1, 0, 0, 2, 0, 0, -1, 2, -1, 0, 0,
+                        3, 0, 1, -2, 1, 0,
                     ],
                     vec![
-                        1i8, 0, -1, 2, -1, 0, 0, 4, 0, 0, -1, 2, -1, 0, 0, 1, 0, 1, -2, 1, 0, 0,
-                        4, 0, 0, 1, -2, 1, 0,
+                        1i8, 0, -1, 2, -1, 0, 0, 4, 0, 0, -1, 2, -1, 0, 0, 1, 0, 1, -2, 1, 0, 0, 4,
+                        0, 0, 1, -2, 1, 0,
                     ],
                 ],
                 vec![
                     vec![
-                        2i8, 0, -1, 2, -1, 0, 0, 3, 0, 0, 1, -2, 1, 0, 0, 2, 0, 0, -1, 2, -1, 0,
-                        0, 3, 0, 1, -2, 1, 0,
+                        2i8, 0, -1, 2, -1, 0, 0, 3, 0, 0, 1, -2, 1, 0, 0, 2, 0, 0, -1, 2, -1, 0, 0,
+                        3, 0, 1, -2, 1, 0,
                     ],
                     vec![
-                        1i8, 0, -1, 2, -1, 0, 0, 4, 0, 0, -1, 2, -1, 0, 0, 1, 0, 1, -2, 1, 0, 0,
-                        4, 0, 0, 1, -2, 1, 0,
+                        1i8, 0, -1, 2, -1, 0, 0, 4, 0, 0, -1, 2, -1, 0, 0, 1, 0, 1, -2, 1, 0, 0, 4,
+                        0, 0, 1, -2, 1, 0,
                     ],
                 ],
             ),
@@ -1003,10 +999,14 @@ mod tests {
             let bp_full = BitParallelMatcher::new(&with_boundary);
             let from_pair = bp_full.maximal_rc_matches(0, j + 1);
 
-            let mut a: Vec<(usize, usize, usize)> =
-                from_stream.iter().map(|m| (m.pos_a, m.pos_b, m.len)).collect();
-            let mut b: Vec<(usize, usize, usize)> =
-                from_pair.iter().map(|m| (m.pos_a, m.pos_b, m.len)).collect();
+            let mut a: Vec<(usize, usize, usize)> = from_stream
+                .iter()
+                .map(|m| (m.pos_a, m.pos_b, m.len))
+                .collect();
+            let mut b: Vec<(usize, usize, usize)> = from_pair
+                .iter()
+                .map(|m| (m.pos_a, m.pos_b, m.len))
+                .collect();
             a.sort();
             a.dedup();
             b.sort();

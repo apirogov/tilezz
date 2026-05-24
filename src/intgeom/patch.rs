@@ -23,7 +23,9 @@ use crate::intgeom::tileset::TileSet;
 /// the same `EdgeInfo` if the same tile shape appears multiple times
 /// in the patch (each tile *instance* gets a separate `patch_tile_id`,
 /// tracked elsewhere in `GrowingPatch`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct EdgeInfo {
     pub tile_id: usize,
     pub tile_offset: usize,
@@ -112,7 +114,9 @@ pub struct PatchMatch {
 /// In contrast, a [`ClosedVertexType`] describes a fully-surrounded
 /// interior vertex, where the petals cover the entire turn and the
 /// vertex no longer lies on any boundary.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct OpenVertexType {
     pub cw: EdgeInfo,
     pub inner: Vec<EdgeInfo>,
@@ -151,14 +155,6 @@ pub struct ClosedVertexType {
 }
 
 impl ClosedVertexType {
-    /// Build from an already-canonical petal sequence. Use
-    /// [`Self::from_cyclic`] or [`Self::from_open_via_closure`] for
-    /// raw input that needs canonicalisation.
-    #[cfg(test)]
-    pub(crate) fn from_canonical_unchecked(edges: Vec<EdgeInfo>) -> Self {
-        ClosedVertexType { edges }
-    }
-
     /// Build from a raw cyclic edge sequence; the result is stored in
     /// lex-min cyclic rotation.
     pub fn from_cyclic(petals: &[EdgeInfo]) -> Self {
@@ -237,7 +233,9 @@ pub(crate) fn canonical_cyclic_rotation<T: Ord + Clone>(seq: &[T]) -> Vec<T> {
 /// differ. This makes `CoarseJunction` the right equivalence for seg
 /// enumeration: it conflates configurations whose only difference is
 /// invisible from outside the boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct CoarseJunction {
     pub cw_edge: EdgeInfo,
     pub ccw_edge: EdgeInfo,
@@ -263,7 +261,9 @@ pub struct CoarseJunction {
 /// For NT transitions (in `neighborhood`), only `Cw` and `Ccw` arise
 /// — NT enumeration steps the central tile along one direction at a
 /// time and never produces a `Both` step.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum TransitionSide {
     /// The glue consumed only the CW edge of the focus vertex.
     Cw,
@@ -1237,11 +1237,7 @@ impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
     /// len - 1]` (mod `n`). The result is every match whose absorbed
     /// run shares at least one edge with the queried range. Returns
     /// an empty vec for empty boundaries.
-    pub fn get_matches_in_edge_range(
-        &self,
-        start_edge: usize,
-        end_edge: usize,
-    ) -> Vec<PatchMatch> {
+    pub fn get_matches_in_edge_range(&self, start_edge: usize, end_edge: usize) -> Vec<PatchMatch> {
         let n = self.boundary_len();
         if n == 0 {
             return Vec::new();
@@ -2456,8 +2452,9 @@ mod tests {
         let petals = [ei(2, 0), ei(0, 1), ei(1, 2), ei(0, 3)];
         let canonical = ClosedVertexType::from_cyclic(&petals);
         for shift in 0..petals.len() {
-            let rotated: Vec<EdgeInfo> =
-                (0..petals.len()).map(|i| petals[(shift + i) % petals.len()]).collect();
+            let rotated: Vec<EdgeInfo> = (0..petals.len())
+                .map(|i| petals[(shift + i) % petals.len()])
+                .collect();
             assert_eq!(
                 ClosedVertexType::from_cyclic(&rotated),
                 canonical,
@@ -2489,8 +2486,7 @@ mod tests {
         let closed = ClosedVertexType::from_open_via_closure(&open);
         // Underlying raw ring is [cw, inner..., ccw] = [(1,5),(0,0),(2,3),(1,4)],
         // canonicalised to start at the lex-min entry (0,0).
-        let expected =
-            ClosedVertexType::from_cyclic(&[ei(0, 0), ei(2, 3), ei(1, 4), ei(1, 5)]);
+        let expected = ClosedVertexType::from_cyclic(&[ei(0, 0), ei(2, 3), ei(1, 4), ei(1, 5)]);
         assert_eq!(closed, expected);
         assert_eq!(closed.len(), 4);
     }
@@ -2810,11 +2806,23 @@ mod tests {
         }
 
         // Targeted edge cases.
-        assert!(!cyclic_arcs_overlap(0, 0, 0, 5, 10), "empty arc never overlaps");
-        assert!(!cyclic_arcs_overlap(0, 5, 0, 0, 10), "empty arc never overlaps (other side)");
+        assert!(
+            !cyclic_arcs_overlap(0, 0, 0, 5, 10),
+            "empty arc never overlaps"
+        );
+        assert!(
+            !cyclic_arcs_overlap(0, 5, 0, 0, 10),
+            "empty arc never overlaps (other side)"
+        );
         assert!(!cyclic_arcs_overlap(0, 5, 0, 5, 0), "n=0 → false");
-        assert!(cyclic_arcs_overlap(0, 10, 5, 1, 10), "full-cycle A vs any non-empty B");
-        assert!(cyclic_arcs_overlap(7, 5, 1, 2, 10), "wraparound A vs interior B");
+        assert!(
+            cyclic_arcs_overlap(0, 10, 5, 1, 10),
+            "full-cycle A vs any non-empty B"
+        );
+        assert!(
+            cyclic_arcs_overlap(7, 5, 1, 2, 10),
+            "wraparound A vs interior B"
+        );
         assert!(!cyclic_arcs_overlap(0, 3, 5, 3, 10), "disjoint interiors");
         assert!(cyclic_arcs_overlap(0, 3, 2, 3, 10), "edge 2 shared");
     }
@@ -2826,8 +2834,12 @@ mod tests {
     #[test]
     fn get_matches_in_edge_range_matches_brute_force() {
         for ts in [
-            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()])),
-            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()])),
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
+            ])),
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
+            ])),
         ] {
             let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
             let first = gp.get_all_matches().into_iter().next().expect("seed match");
@@ -2840,9 +2852,7 @@ mod tests {
                     let range_len = (end + n - start) % n + 1;
                     let want: std::collections::BTreeSet<(usize, usize, usize, usize)> = all
                         .iter()
-                        .filter(|pm| {
-                            cyclic_arcs_overlap(start, range_len, pm.start_a, pm.len, n)
-                        })
+                        .filter(|pm| cyclic_arcs_overlap(start, range_len, pm.start_a, pm.len, n))
                         .map(|pm| (pm.start_a, pm.len, pm.start_b, pm.tile_id))
                         .collect();
                     let got: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
@@ -2863,9 +2873,10 @@ mod tests {
     /// every match (= equivalent to `get_all_matches()`).
     #[test]
     fn get_matches_in_edge_range_full_boundary_equals_all() {
-        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(
-            vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()],
-        ));
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
+            ]));
         let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
         let first = gp.get_all_matches().into_iter().next().unwrap();
         assert!(gp.add_tile(&first));
@@ -2894,8 +2905,12 @@ mod tests {
     #[test]
     fn junction_pair_set_is_normalize_invariant() {
         for ts in [
-            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()])),
-            Arc::new(TileSet::new(vec![Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()])),
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
+            ])),
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
+            ])),
         ] {
             // Grow a patch a few tiles deep and check at each step.
             let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
@@ -2946,9 +2961,10 @@ mod tests {
     fn get_matches_in_edge_range_handles_empty_boundary() {
         // Take an end-state (Closed) patch via from_parts with empty
         // boundary. Direct construction is simpler.
-        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(
-            vec![Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()],
-        ));
+        let ts: Arc<TileSet<ZZ12>> =
+            Arc::new(TileSet::new(vec![
+                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
+            ]));
         let gp = GrowingPatch::new(Arc::clone(&ts), 0);
         // The seed-state patch returns boundary_len = 0 since seed has
         // no boundary edges materialized yet. Confirm this.

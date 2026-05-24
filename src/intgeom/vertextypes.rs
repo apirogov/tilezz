@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::patch::{
-    ClosedVertexType, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
+    ClosedVertexType, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
 };
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
@@ -32,7 +32,9 @@ use crate::intgeom::tileset::TileSet;
 /// Free" = closable along at least one path. Computed by two monotone
 /// fixpoints in [`OpenVertexTypeIndex::new`]: see [`compute_cursed`]
 /// and [`compute_blessed`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum VTypeKind {
     /// No realized transitions — non-closable base case.
     Dead,
@@ -952,13 +954,494 @@ fn compute_has_closing(n: usize, transitions: &[TransitionInfo]) -> Vec<bool> {
     v
 }
 
+// =====================================================================
+// Serializable snapshot for `collect` / `validate` workflows.
+//
+// The library exposes a non-generic [`Collection`] type that snapshots
+// an [`OpenVertexTypeIndex`] for `serde_json` round-trip, plus the
+// validation primitives used by `vtype_enum` (witness reconstruction,
+// vertex-type cross-check, transition cross-check, completeness scan).
+// =====================================================================
+
+use crate::intgeom::matchtypes::MatchTypeIndex;
+use serde::{Deserialize, Serialize};
+
+/// Sentinel destination id for transitions that seal the focus vertex
+/// (`dst_id == CLOSED_ID`). Same convention as
+/// [`TransitionInfo::dst_id`]; preserved in the serialized form so a
+/// loader can distinguish "transition to closed" from "transition to
+/// open VT id N".
+///
+/// Recorded boundary state of a VT's canonical witness patch.
+///
+/// Always taken from a witness that has been
+/// [`GrowingPatch::normalize`]d, so the boundary is at its lex-min
+/// rotation and `patch_tile_ids` is in dense CCW-first-occurrence
+/// form. The ids could in principle be re-derived from the segment
+/// structure of `angles + edges`, but [`GrowingPatch::from_parts`]
+/// requires them as an argument and `update_inner_chains` reads them
+/// at glue time, so we serialize them directly rather than rebuild
+/// them on every load.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WitnessSnapshot {
+    /// Boundary position of the focus vertex in this witness.
+    pub pos: usize,
+    pub angles: Vec<i8>,
+    pub edges: Vec<EdgeInfo>,
+    pub inner_chains: Vec<Vec<EdgeInfo>>,
+    /// Per-boundary-position tile-instance id, dense `0..next_tile_id`
+    /// in CCW first-occurrence order (= the form
+    /// [`GrowingPatch::normalize`] produces).
+    pub patch_tile_ids: Vec<usize>,
+    /// `max(patch_tile_ids) + 1` (= `0` for an empty boundary).
+    pub next_tile_id: usize,
+}
+
+/// One VT record in a [`Collection`]: the canonical
+/// [`OpenVertexType`], its [`VTypeKind`] classification, the neighbor
+/// junction offsets in the witness, and the witness boundary itself.
+///
+/// Cross-checked on load: `vtype` must match
+/// `GrowingPatch::junction_vertex_type_at(witness.pos)` on the
+/// reconstructed witness; `(cw_neighbor_offset, ccw_neighbor_offset)`
+/// must match `neighbor_junction_offsets(witness.pos)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VtypeRecord {
+    /// 1-based VT id in the source [`OpenVertexTypeIndex`].
+    pub id: usize,
+    pub vtype: OpenVertexType,
+    pub kind: VTypeKind,
+    /// CW distance from the focus vertex to the next junction in the
+    /// witness.
+    pub cw_neighbor_offset: usize,
+    /// CCW distance from the focus vertex to the next junction in the
+    /// witness.
+    pub ccw_neighbor_offset: usize,
+    pub witness: WitnessSnapshot,
+}
+
+/// One transition record. Mirrors [`TransitionInfo`] one-to-one; the
+/// `closed_vt_id` index of the destination closed VT is not retained
+/// (a closing transition is identified by `dst_id == CLOSED_ID`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitionRecord {
+    pub src_id: usize,
+    /// Destination VT's 1-based id, or [`CLOSED_ID`] for a closing
+    /// transition that seals the focus vertex.
+    pub dst_id: usize,
+    pub side: TransitionSide,
+    pub tile_id: usize,
+    pub tile_offset: usize,
+}
+
+/// Serializable snapshot of an [`OpenVertexTypeIndex`]. Designed to
+/// round-trip via `serde_json` for the `vtype_enum`-style
+/// collect/validate workflow. Non-generic — the typed tileset is
+/// reconstructed by the caller from `tile_angles`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    /// Symbolic name of the cyclotomic ring (e.g. `"ZZ12"`, `"ZZ10"`).
+    pub ring: String,
+    /// Raw angle sequence of each tile, in `TileSet` order.
+    pub tile_angles: Vec<Vec<i8>>,
+    pub vtypes: Vec<VtypeRecord>,
+    pub transitions: Vec<TransitionRecord>,
+}
+
+/// Validation outcome of [`Collection::completeness_errors`].
+pub struct CompletenessReport {
+    /// Total candidate matches checked across all alive VTs.
+    pub matches_checked: usize,
+    /// VT ids whose witness produces a junction VT that the collection
+    /// doesn't contain. Empty ⇒ the collection is at its claimed fixed
+    /// point.
+    pub missing: std::collections::BTreeSet<usize>,
+}
+
+impl CompletenessReport {
+    pub fn is_complete(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
+impl Collection {
+    /// Snapshot a built [`OpenVertexTypeIndex`], tagged with `ring`.
+    pub fn from_index<T>(idx: &OpenVertexTypeIndex<T>, ring: impl Into<String>) -> Self
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let tile_angles = idx
+            .tileset()
+            .rats()
+            .iter()
+            .map(|r| r.seq().to_vec())
+            .collect();
+        let mut vtypes = Vec::with_capacity(idx.num_types());
+        for id in 1..=idx.num_types() {
+            let info = idx.get_info(id);
+            // Normalize the witness so its boundary is at lex-min
+            // rotation and `patch_tile_ids` is in canonical dense
+            // form. This makes the serialized snapshot canonical
+            // (two BFS runs that produce the same VT also produce
+            // the same snapshot).
+            let mut w = info.witness().clone();
+            let rot = w.normalize();
+            let n = w.boundary_len();
+            let pos = (info.witness_pos() + n - rot) % n;
+            vtypes.push(VtypeRecord {
+                id,
+                vtype: info.vtype().clone(),
+                kind: info.kind(),
+                cw_neighbor_offset: info.cw_neighbor_offset(),
+                ccw_neighbor_offset: info.ccw_neighbor_offset(),
+                witness: WitnessSnapshot {
+                    pos,
+                    angles: w.angles().to_vec(),
+                    edges: w.edges().to_vec(),
+                    inner_chains: w.inner_chains().to_vec(),
+                    patch_tile_ids: w.patch_tile_ids().to_vec(),
+                    next_tile_id: w.next_tile_id(),
+                },
+            });
+        }
+        let transitions = idx
+            .transitions()
+            .iter()
+            .map(|t| TransitionRecord {
+                src_id: t.src_id,
+                dst_id: t.dst_id,
+                side: t.side,
+                tile_id: t.tile_id,
+                tile_offset: t.tile_offset,
+            })
+            .collect();
+        Collection {
+            ring: ring.into(),
+            tile_angles,
+            vtypes,
+            transitions,
+        }
+    }
+
+    /// Reconstruct one [`GrowingPatch`] per VT witness, keyed by VT
+    /// id, using the recorded `patch_tile_ids` / `next_tile_id` so
+    /// that subsequent `add_tile` calls update inner chains the same
+    /// way the BFS did.
+    pub fn reconstruct_witnesses<T>(
+        &self,
+        tile_ts: &Arc<TileSet<T>>,
+    ) -> Result<HashMap<usize, GrowingPatch<T>>, String>
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
+        let mut out = HashMap::with_capacity(self.vtypes.len());
+        for v in &self.vtypes {
+            let n = v.witness.angles.len();
+            if v.witness.inner_chains.len() != n
+                || v.witness.edges.len() != n
+                || v.witness.patch_tile_ids.len() != n
+            {
+                return Err(format!(
+                    "VT {}: witness arrays length mismatch (n={}, edges={}, inner={}, ptids={})",
+                    v.id,
+                    n,
+                    v.witness.edges.len(),
+                    v.witness.inner_chains.len(),
+                    v.witness.patch_tile_ids.len(),
+                ));
+            }
+            let gp = GrowingPatch::from_parts(
+                Arc::clone(&mi),
+                v.witness.angles.clone(),
+                v.witness.edges.clone(),
+                v.witness.inner_chains.clone(),
+                v.witness.patch_tile_ids.clone(),
+                v.witness.next_tile_id,
+            )
+            .ok_or_else(|| format!("VT {}: from_parts failed", v.id))?;
+            out.insert(v.id, gp);
+        }
+        Ok(out)
+    }
+
+    /// Per-VT cross-check: verify each VT record's `vtype` and
+    /// `(cw_neighbor_offset, ccw_neighbor_offset)` against what the
+    /// reconstructed witness re-derives. Returns `(vt_id, message)`
+    /// pairs for each disagreement.
+    pub fn vtype_errors<T>(
+        &self,
+        witnesses: &HashMap<usize, GrowingPatch<T>>,
+    ) -> Vec<(usize, String)>
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let mut errors = Vec::new();
+        for v in &self.vtypes {
+            let Some(gp) = witnesses.get(&v.id) else {
+                errors.push((v.id, "no witness".to_string()));
+                continue;
+            };
+            let pos = v.witness.pos;
+            let (expected_cw, expected_ccw) = gp.neighbor_junction_offsets(pos).unwrap_or((0, 0));
+            if expected_cw != v.cw_neighbor_offset || expected_ccw != v.ccw_neighbor_offset {
+                errors.push((
+                    v.id,
+                    format!(
+                        "neighbor offsets: expected ({}, {}), recorded ({}, {})",
+                        expected_cw, expected_ccw, v.cw_neighbor_offset, v.ccw_neighbor_offset,
+                    ),
+                ));
+            }
+            match gp.junction_vertex_type_at(pos) {
+                Some(actual) if actual.cw == v.vtype.cw && actual.ccw == v.vtype.ccw => {}
+                Some(actual) => errors.push((
+                    v.id,
+                    format!(
+                        "vtype mismatch: recorded {:?}, witness {:?}",
+                        v.vtype, actual
+                    ),
+                )),
+                None => errors.push((v.id, "junction_vertex_type_at returned None".to_string())),
+            }
+        }
+        errors
+    }
+
+    /// Per-transition cross-check: verify each recorded transition is
+    /// realised by some glue on the source VT's witness. Returns
+    /// `((src, dst), message)` for unverifiable transitions.
+    pub fn transition_errors<T>(
+        &self,
+        tile_ts: &Arc<TileSet<T>>,
+        witnesses: &HashMap<usize, GrowingPatch<T>>,
+    ) -> Vec<((usize, usize), String)>
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let mut errors = Vec::new();
+        let known_ids: std::collections::BTreeSet<usize> =
+            self.vtypes.iter().map(|v| v.id).collect();
+        let witness_pos: HashMap<usize, usize> =
+            self.vtypes.iter().map(|v| (v.id, v.witness.pos)).collect();
+        for t in &self.transitions {
+            if !known_ids.contains(&t.src_id) {
+                errors.push(((t.src_id, t.dst_id), "unknown src id".to_string()));
+                continue;
+            }
+            if t.dst_id != CLOSED_ID && !known_ids.contains(&t.dst_id) {
+                errors.push(((t.src_id, t.dst_id), "unknown dst id".to_string()));
+                continue;
+            }
+            let Some(gp) = witnesses.get(&t.src_id) else {
+                errors.push(((t.src_id, t.dst_id), "no source witness".to_string()));
+                continue;
+            };
+            let pos = witness_pos[&t.src_id];
+            let n = gp.boundary_len();
+            // The BFS records `t.tile_offset` resolved against the
+            // canonical edge for the side (CW edge for Cw/Both, CCW
+            // edge for Ccw). Mirror that exactly so the inverse
+            // computation below recovers the same offset.
+            let edge_pos = match t.side {
+                TransitionSide::Cw | TransitionSide::Both => (pos + n - 1) % n,
+                TransitionSide::Ccw => pos,
+            };
+            let cw_edge = (pos + n - 1) % n;
+            let ccw_edge = pos;
+            // Edge-consumption predicate (half-open `[start_a,
+            // start_a + len)`). The BFS uses this same predicate to
+            // decide which side a match consumes; use it here too so
+            // we match its classification exactly. The vertex-touch
+            // semantics of `cyclic_range_contains` (closed `<= len`)
+            // would over-accept matches that only touch the focus
+            // vertex without consuming its incident edge — the bug
+            // the old binary's `validate_common` had.
+            let edge_consumed =
+                |pm: &PatchMatch, edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
+            let tile_len = tile_ts.rat(t.tile_id).len();
+            let mut found = false;
+            for pm in gp.get_all_matches() {
+                if pm.tile_id != t.tile_id {
+                    continue;
+                }
+                if !edge_consumed(&pm, edge_pos) {
+                    continue;
+                }
+                let offset_in_match =
+                    (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
+                let computed_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                    .rem_euclid(tile_len as i64) as usize;
+                if computed_offset != t.tile_offset {
+                    continue;
+                }
+                let consumes_cw = edge_consumed(&pm, cw_edge);
+                let consumes_ccw = edge_consumed(&pm, ccw_edge);
+                let actual_side = match (consumes_cw, consumes_ccw) {
+                    (true, true) => TransitionSide::Both,
+                    (true, false) => TransitionSide::Cw,
+                    (false, true) => TransitionSide::Ccw,
+                    (false, false) => continue,
+                };
+                if actual_side != t.side {
+                    continue;
+                }
+                let mut gp2 = gp.clone();
+                if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                    continue;
+                }
+                if t.dst_id == CLOSED_ID {
+                    // For a closing match the focus vertex is sealed.
+                    // No junction lookup is needed — the edge-side
+                    // and offset checks above already pin the glue.
+                    found = true;
+                    break;
+                }
+                let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+                if let Some(actual) = gp2.junction_vertex_type_at(junction_pos) {
+                    let Some(dst_gp) = witnesses.get(&t.dst_id) else {
+                        continue;
+                    };
+                    let Some(&dst_pos) = witness_pos.get(&t.dst_id) else {
+                        continue;
+                    };
+                    if let Some(expected) = dst_gp.junction_vertex_type_at(dst_pos) {
+                        if actual.cw == expected.cw && actual.ccw == expected.ccw {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !found {
+                errors.push(((t.src_id, t.dst_id), "no matching glue found".to_string()));
+            }
+        }
+        errors
+    }
+
+    /// Completeness scan: for every non-cursed VT, enumerate matches
+    /// touching its focus vertex on the witness; each glue's induced
+    /// junction VT must be present in the collection (compared by
+    /// `(cw, ccw)`). Returns the set of VT ids whose witness produces
+    /// an unknown junction VT, plus the total number of match checks.
+    pub fn completeness_errors<T>(
+        &self,
+        witnesses: &HashMap<usize, GrowingPatch<T>>,
+    ) -> CompletenessReport
+    where
+        T: IsComplex + IsRingOrField + Units,
+    {
+        let mut missing: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let mut matches_checked = 0usize;
+        for v in &self.vtypes {
+            if matches!(v.kind, VTypeKind::Dead | VTypeKind::Undead) {
+                continue;
+            }
+            let Some(gp) = witnesses.get(&v.id) else {
+                continue;
+            };
+            let pos = v.witness.pos;
+            let old_n = gp.boundary_len();
+            // Same edge-consumption predicate as `transition_errors`
+            // — vertex-touch semantics over-accept matches that don't
+            // actually consume the focus's incident edges.
+            let edge_consumed = |pm: &PatchMatch, edge: usize| -> bool {
+                (edge + old_n - pm.start_a) % old_n < pm.len
+            };
+            for pm in gp.get_matches_touching_vertex(pos) {
+                matches_checked += 1;
+                let mut gp2 = gp.clone();
+                if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                    continue;
+                }
+                let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
+                let consumes_ccw = edge_consumed(&pm, pos);
+                let consumes_cw = edge_consumed(&pm, (pos + old_n - 1) % old_n);
+                if consumes_cw && consumes_ccw {
+                    continue;
+                }
+                let Some(jvt) = gp2.junction_vertex_type_at(junction_pos) else {
+                    continue;
+                };
+                // Compare against the canonical recorded vtypes in
+                // the collection. (Comparing through each other VT's
+                // reconstructed witness would add a needless layer
+                // of indirection and is more sensitive to differences
+                // in patch_tile_ids / next_tile_id between the BFS
+                // and the reconstructed patch.)
+                let found = self.vtypes.iter().any(|other| other.vtype == jvt);
+                if !found {
+                    missing.insert(v.id);
+                }
+            }
+        }
+        CompletenessReport {
+            matches_checked,
+            missing,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::tiles;
-    use crate::intgeom::tileset::TileSet;
+    use crate::intgeom::tileset::{self, TileSet};
     use std::sync::Arc;
+
+    /// End-to-end regression: every recorded transition and the
+    /// completeness scan on every Free/Blessed VT's witness must
+    /// agree after a `Collection` round-trip via `serde_json`.
+    ///
+    /// The pre-cleanup `vtype_enum` validator used
+    /// `cyclic_range_contains` (vertex-touch, `<= len`) for both the
+    /// edge-position filter and the `covers_both` test. The
+    /// vertex-touch semantic over-accepted matches at the boundary
+    /// of the matched edge range, so the Cw-side check would mark
+    /// the real glue as "Both" and reject it, leaving the transition
+    /// unverifiable. Square exposed this on every Cw open transition
+    /// (64 failures); spectre also exposed completeness gaps. Both
+    /// the validator and the BFS now use the edge-consumption
+    /// predicate `(edge + n - start_a) % n < len`, matching the
+    /// `consumes_cw_edge` / `consumes_ccw_edge` check in
+    /// `OpenVertexTypeIndex::new`.
+    #[test]
+    fn collection_roundtrip_validates_square_and_spectre() {
+        let cases: [(&str, Arc<TileSet<ZZ12>>); 2] = [
+            ("square", tileset::square::<ZZ12>()),
+            ("spectre", tileset::spectre::<ZZ12>()),
+        ];
+        for (label, ts) in cases {
+            let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
+            let collection = Collection::from_index(&idx, "ZZ12");
+            let json = serde_json::to_string(&collection).expect("serialize");
+            let restored: Collection = serde_json::from_str(&json).expect("deserialize");
+            let witnesses = restored.reconstruct_witnesses(&ts).expect("reconstruct");
+
+            let vt_errs = restored.vtype_errors(&witnesses);
+            assert!(vt_errs.is_empty(), "{label}: vtype errors: {vt_errs:?}");
+
+            let tr_errs = restored.transition_errors(&ts, &witnesses);
+            assert!(
+                tr_errs.is_empty(),
+                "{}: {} transition errors (first: {:?})",
+                label,
+                tr_errs.len(),
+                tr_errs.first(),
+            );
+
+            let report = restored.completeness_errors(&witnesses);
+            assert!(
+                report.is_complete(),
+                "{}: {} VTs produce unknown junction types: {:?}",
+                label,
+                report.missing.len(),
+                report.missing.iter().take(10).collect::<Vec<_>>(),
+            );
+        }
+    }
 
     /// Bake in the known VT count + classification breakdown for hex.
     /// Any drift in the BFS or classification will fail loudly here.
@@ -1506,16 +1989,16 @@ mod tests {
             "  edges[25]: tile_id={} tile_offset={}",
             edges[25].tile_id, edges[25].tile_offset
         );
-        for i in (n - 3)..=(n - 1) {
+        for (i, e) in edges.iter().enumerate().skip(n - 3).take(3) {
             eprintln!(
                 "    edges[{i}]: tile_id={} tile_offset={}",
-                edges[i].tile_id, edges[i].tile_offset
+                e.tile_id, e.tile_offset
             );
         }
-        for i in 0..3 {
+        for (i, e) in edges.iter().enumerate().take(3) {
             eprintln!(
                 "    edges[{i}]: tile_id={} tile_offset={}",
-                edges[i].tile_id, edges[i].tile_offset
+                e.tile_id, e.tile_offset
             );
         }
 
@@ -1723,10 +2206,12 @@ mod tests {
 
     /// Re-derives the cursed predicate from scratch. A cursed VT must
     /// satisfy two invariants:
-    ///   1. It has no closing transitions (closing = escape to Closed,
-    ///      which is not cursed, so a closing transition would
-    ///      contradict "all successors cursed").
-    ///   2. Every open successor is itself cursed.
+    ///
+    /// 1. It has no closing transitions (closing = escape to Closed,
+    ///    which is not cursed, so a closing transition would
+    ///    contradict "all successors cursed").
+    /// 2. Every open successor is itself cursed.
+    ///
     /// Plus: every Dead VT has no realized transitions at all.
     #[test]
     fn spectre_cursed_invariant() {
@@ -1829,9 +2314,12 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
 
-        assert!(idx.num_closed_types() >= 1, "hex has at least one closed VT");
+        assert!(
+            idx.num_closed_types() >= 1,
+            "hex has at least one closed VT"
+        );
         for cvt in idx.closed_entries() {
-            assert!(cvt.vtype().len() >= 1);
+            assert!(!cvt.vtype().is_empty());
             assert!(cvt.transition_count() >= 1);
             for e in cvt.vtype().edges() {
                 assert_eq!(e.tile_id, 0, "only one tile in this tileset");
@@ -1865,7 +2353,7 @@ mod tests {
             "square has at least one closed VT"
         );
         for cvt in idx.closed_entries() {
-            assert!(cvt.vtype().len() >= 1);
+            assert!(!cvt.vtype().is_empty());
             assert!(cvt.transition_count() >= 1);
             for e in cvt.vtype().edges() {
                 assert_eq!(e.tile_id, 0);
@@ -1908,7 +2396,8 @@ mod tests {
                 let src_open = idx.get_type(t.src_id);
                 let expected = ClosedVertexType::from_open_via_closure(src_open);
                 assert_eq!(
-                    cvt, &expected,
+                    cvt,
+                    &expected,
                     "closed VT for transition {:?} differs from its derived form",
                     (t.src_id, t.tile_id)
                 );
