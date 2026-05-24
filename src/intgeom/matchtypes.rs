@@ -363,7 +363,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
                 continue;
             }
             let ns_u = ns.rem_euclid(n_a as i64) as usize;
-            if !super::seq_explorer::match_touches_active(ns_u, len, n_a, active) {
+            if !match_touches_active(ns_u, len, n_a, active) {
                 continue;
             }
             if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
@@ -392,7 +392,7 @@ impl<T: IsComplex + IsRingOrField + Units> MatchFinder<T> {
                     continue;
                 }
                 let ns_u = ns.rem_euclid(n_a as i64) as usize;
-                if !super::seq_explorer::match_touches_active(ns_u, len, n_a, active) {
+                if !match_touches_active(ns_u, len, n_a, active) {
                     continue;
                 }
                 if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
@@ -749,6 +749,32 @@ pub(crate) fn junction_gap_nonnegative(
     let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
     let right = a[ns] as i32 + b[ne] as i32;
     left >= 0 && right >= 0
+}
+
+/// True iff the cyclic edge range `[start_a, start_a + mlen)` of a
+/// length-`n` boundary touches any active position — either an active
+/// edge inside the range, or an active vertex immediately adjacent to
+/// either end of the range. Used by [`MatchFinder::valid_matches_filtered`]
+/// to restrict enumeration to matches incident with a caller-specified
+/// region of the boundary.
+fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) -> bool {
+    if mlen == 0 || n == 0 {
+        return false;
+    }
+    let before = (start_a + n - 1) % n;
+    if active[before] {
+        return true;
+    }
+    let after = (start_a + mlen) % n;
+    if active[after] {
+        return true;
+    }
+    for i in 0..mlen {
+        if active[(start_a + i) % n] {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

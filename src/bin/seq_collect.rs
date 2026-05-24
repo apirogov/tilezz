@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{ZZ10, ZZ12};
 use tilezz::intgeom::matchtypes::{BpSeed, MatchFinder};
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::seq_explorer::{replay_glue, Provenance, SeqExplorer};
+use tilezz::misc::seq_explorer::{replay_glue, Provenance, SeqExplorer};
 use tilezz::intgeom::tiles;
 use tilezz::intgeom::tileset::TileSet;
 

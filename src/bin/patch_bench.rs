@@ -5,7 +5,7 @@ use clap::Parser;
 use rustc_hash::FxHashSet;
 use tilezz::cyclotomic::ZZ12;
 use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::redelmeier::{grow_redelmeier, grow_redelmeier_free};
+use tilezz::misc::redelmeier::{grow_redelmeier, grow_redelmeier_free};
 use tilezz::intgeom::snake::Snake;
 use tilezz::intgeom::tiles;
 

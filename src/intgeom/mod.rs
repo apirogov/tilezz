@@ -16,13 +16,7 @@ pub mod matchtypes;
 
 pub mod vertextypes;
 
-pub mod seq_explorer;
-
 pub mod patch;
-
-pub mod vtseq_explorer;
-
-pub mod redelmeier;
 
 pub mod neighborhood;
 
