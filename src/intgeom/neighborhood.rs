@@ -167,7 +167,7 @@ use crate::intgeom::tileset::TileSet;
 /// invariant - "stored CCW fields equal what the geometry implies" -
 /// is checked by [`nt_is_valid`] and is part of `validate`'s
 /// contract.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct NeighborhoodType {
     pub central_tile_id: usize,
     pub cw_anchor_on_central: usize,
@@ -196,7 +196,7 @@ pub struct NeighborhoodType {
 /// in the normalized boundary (= where phase-2 BFS attaches petals).
 ///
 /// To reconstruct as a `GrowingPatch`, use [`SurroundedTile::to_patch`].
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SurroundedTile {
     pub central_tile_id: usize,
     pub is_closed: bool,
@@ -263,7 +263,7 @@ impl SurroundedTile {
 /// A catalog entry: either a phase-1 NT (central still on the
 /// patch boundary along a matched segment) or a phase-2 SurroundedTile
 /// (central fully edge-absorbed, possibly with an open vertex).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum NtEntry {
     Phase1(NeighborhoodType),
     Phase2(SurroundedTile),
@@ -304,7 +304,9 @@ impl NtEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum NtKind {
     Dead,
     Undead,
@@ -312,7 +314,7 @@ pub enum NtKind {
     Free,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NtTransition {
     pub src_id: usize,
     pub dst_id: usize,
@@ -368,6 +370,7 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     ///      entries are terminal Blessed states with no outgoing
     ///      transitions ([`Self::classify_all`] recognises them
     ///      directly as escape destinations).
+    ///
     ///    New entries are enqueued; transitions are recorded.
     ///    Every step adds exactly one tile to the underlying patch,
     ///    so the transition graph is a DAG.
@@ -596,235 +599,75 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
             .collect()
     }
 
-    /// Serialize the entries + transitions to a text format.
+    /// Snapshot the catalog as a [`Collection`] suitable for
+    /// `serde_json` round-trip. `ring` tags the cyclotomic ring so
+    /// deserializers can dispatch to the right `T`. The tileset is
+    /// stored as raw angle sequences in `tile_angles`; callers must
+    /// rebuild a typed [`TileSet<T>`] from those before calling
+    /// [`Self::from_collection`].
     ///
-    /// Format (one record per line, whitespace-separated tokens):
-    ///
-    /// ```text
-    /// NTYPE <id> <kind> <central_id> <cwc> <ccwc> <cwx> <ccwx> <nctx> <n_vts> <vt0> ...
-    /// STYPE <id> <kind> <central_id> <is_closed:0|1> <open_vertex_pos> <num_tile_instances> <n>
-    ///   <angle0> ... <angle_{n-1}>
-    ///   <edge0> ... <edge_{n-1}>
-    ///   <ptid0> ... <ptid_{n-1}>
-    ///   <ichain0> ... <ichain_{n-1}>
-    /// TRANS <src_id> <dst_id> <side> <tile_id> <tile_offset>
-    /// ```
-    ///
-    /// STYPE records use a multi-line format because the patch state
-    /// is dense; the inner-chain entries are encoded
-    /// `<count>:<edge0>,<edge1>,...` or just `-` for empty. Each edge is
-    /// `<tile_id>.<tile_offset>`.
-    ///
-    /// NTYPE: each `<vti>` encodes a single OpenVertexType as
-    /// `<cw_id>.<cw_off>|<inner_list>|<ccw_id>.<ccw_off>` where
-    /// `<inner_list>` is either `-` (empty) or a comma-separated list of
-    /// `<tile_id>.<tile_offset>` edges. `<kind>` is one of `dead`,
-    /// `undead`, `blessed`, `free`. The tileset is not serialized: callers
-    /// must pass a matching tileset to `parse_file`.
-    pub fn write_collection(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
-        let kinds = self.classify_all();
-        for (idx, entry) in self.entries.iter().enumerate() {
-            let id = idx + 1;
-            let kind = match kinds[idx] {
-                NtKind::Dead => "dead",
-                NtKind::Undead => "undead",
-                NtKind::Blessed => "blessed",
-                NtKind::Free => "free",
-            };
-            match entry {
-                NtEntry::Phase1(nt) => {
-                    write!(
-                        out,
-                        "NTYPE {} {} {} {} {} {} {} {} {}",
-                        id,
-                        kind,
-                        nt.central_tile_id,
-                        nt.cw_anchor_on_central,
-                        nt.ccw_anchor_on_central,
-                        nt.cw_anchor_on_context,
-                        nt.ccw_anchor_on_context,
-                        nt.num_ctx_tiles,
-                        nt.vt_seq.len(),
-                    )?;
-                    write_vt_seq(out, &nt.vt_seq)?;
-                    writeln!(out)?;
-                }
-                NtEntry::Phase2(st) => {
-                    let n = st.angles.len();
-                    write!(
-                        out,
-                        "STYPE {} {} {} {} {} {} {}",
-                        id,
-                        kind,
-                        st.central_tile_id,
-                        if st.is_closed { 1 } else { 0 },
-                        st.open_vertex_pos,
-                        st.num_tile_instances,
-                        n,
-                    )?;
-                    for &a in &st.angles {
-                        write!(out, " {}", a)?;
-                    }
-                    for e in &st.edges {
-                        write!(out, " {}.{}", e.tile_id, e.tile_offset)?;
-                    }
-                    for &p in &st.patch_tile_ids {
-                        write!(out, " {}", p)?;
-                    }
-                    for ic in &st.inner_chains {
-                        if ic.is_empty() {
-                            write!(out, " -")?;
-                        } else {
-                            write!(out, " {}", ic.len())?;
-                            for e in ic {
-                                write!(out, ",{}.{}", e.tile_id, e.tile_offset)?;
-                            }
-                        }
-                    }
-                    writeln!(out)?;
-                }
-            }
+    /// `kinds[i]` is the precomputed classification of entry `i + 1`
+    /// (= [`Self::classify_all`]); retained so `from_collection` can
+    /// cross-check it against a fresh re-derivation and reject stale
+    /// catalogs from before a classifier fix.
+    pub fn to_collection(&self, ring: impl Into<String>) -> Collection {
+        let tile_angles = self
+            .tileset
+            .rats()
+            .iter()
+            .map(|r| r.seq().to_vec())
+            .collect();
+        Collection {
+            ring: ring.into(),
+            tile_angles,
+            entries: self.entries.clone(),
+            transitions: self.transitions.clone(),
+            kinds: self.classify_all(),
         }
-        for t in &self.transitions {
-            let side = match t.side {
-                TransitionSide::Cw => "cw",
-                TransitionSide::Ccw => "ccw",
-                TransitionSide::Both => "both",
-            };
-            writeln!(
-                out,
-                "TRANS {} {} {} {} {}",
-                t.src_id, t.dst_id, side, t.tile_id, t.tile_offset,
-            )?;
-        }
-        Ok(())
     }
 
-    /// Parse a collection previously written by [`write_collection`]. The
-    /// tileset must match the one used to produce the file (we do not store
-    /// or verify it here).
+    /// Rebuild a catalog from a [`Collection`]. The caller supplies a
+    /// tileset matching `c.tile_angles` (the ring `T` is checked
+    /// against the angle sequences by [`crate::intgeom::rat::Rat`]'s
+    /// usual validity rules at tile-set construction time, not here).
     ///
-    /// Validation: NTYPE/STYPE ids are 1-based and dense (`1, 2, ...,
-    /// num_entries`), TRANS `src_id`/`dst_id` are in range, and the
-    /// recorded entry `kind` agrees with what [`Self::classify_all`]
-    /// re-derives from the parsed transitions. Mismatched kinds catch
-    /// stale serialized catalogs after a classification change.
-    pub fn parse_file(tileset: Arc<TileSet<T>>, input: &str) -> Result<Self, String> {
-        let mut entries: Vec<NtEntry> = Vec::new();
-        let mut transitions: Vec<NtTransition> = Vec::new();
-        let mut recorded_kinds: Vec<NtKind> = Vec::new();
-        for (lineno, line) in input.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
+    /// Validation: the recorded `c.kinds` must agree with what
+    /// [`Self::classify_all`] re-derives from the parsed transitions.
+    /// A mismatch returns `Err`, catching stale serialized catalogs.
+    pub fn from_collection(tileset: Arc<TileSet<T>>, c: Collection) -> Result<Self, String> {
+        if c.kinds.len() != c.entries.len() {
+            return Err(format!(
+                "kinds.len()={} doesn't match entries.len()={}",
+                c.kinds.len(),
+                c.entries.len()
+            ));
+        }
+        for t in &c.transitions {
+            if t.src_id < 1 || t.src_id > c.entries.len() {
+                return Err(format!(
+                    "TRANS src_id {} out of range (have {} entries)",
+                    t.src_id,
+                    c.entries.len()
+                ));
             }
-            let mut tok = line.split_whitespace();
-            let kw = tok
-                .next()
-                .ok_or_else(|| format!("line {}: empty record", lineno + 1))?;
-            match kw {
-                "NTYPE" => {
-                    let (parsed_id, parsed_kind, nt) = parse_ntype_line(&mut tok, lineno + 1)?;
-                    let expected_id = entries.len() + 1;
-                    if parsed_id != expected_id {
-                        return Err(format!(
-                            "line {}: NTYPE id sequence broken (expected {}, got {})",
-                            lineno + 1,
-                            expected_id,
-                            parsed_id
-                        ));
-                    }
-                    entries.push(NtEntry::Phase1(nt));
-                    recorded_kinds.push(parsed_kind);
-                }
-                "STYPE" => {
-                    let (parsed_id, parsed_kind, st) = parse_stype_line(&mut tok, lineno + 1)?;
-                    let expected_id = entries.len() + 1;
-                    if parsed_id != expected_id {
-                        return Err(format!(
-                            "line {}: STYPE id sequence broken (expected {}, got {})",
-                            lineno + 1,
-                            expected_id,
-                            parsed_id
-                        ));
-                    }
-                    entries.push(NtEntry::Phase2(st));
-                    recorded_kinds.push(parsed_kind);
-                }
-                "TRANS" => {
-                    let parse_usize = |s: Option<&str>, what: &str| -> Result<usize, String> {
-                        s.ok_or_else(|| format!("line {}: missing {}", lineno + 1, what))?
-                            .parse::<usize>()
-                            .map_err(|e| format!("line {}: bad {}: {}", lineno + 1, what, e))
-                    };
-                    let src_id = parse_usize(tok.next(), "src_id")?;
-                    let dst_id = parse_usize(tok.next(), "dst_id")?;
-                    let side_tok = tok
-                        .next()
-                        .ok_or_else(|| format!("line {}: missing side", lineno + 1))?;
-                    let side = match side_tok {
-                        "cw" => TransitionSide::Cw,
-                        "ccw" => TransitionSide::Ccw,
-                        "both" => TransitionSide::Both,
-                        other => {
-                            return Err(format!(
-                                "line {}: unknown transition side `{}`",
-                                lineno + 1,
-                                other
-                            ));
-                        }
-                    };
-                    let tile_id = parse_usize(tok.next(), "tile_id")?;
-                    let tile_offset = parse_usize(tok.next(), "tile_offset")?;
-                    if src_id < 1 || src_id > entries.len() {
-                        return Err(format!(
-                            "line {}: TRANS src_id {} out of range (have {} NTYPE entries)",
-                            lineno + 1,
-                            src_id,
-                            entries.len()
-                        ));
-                    }
-                    if dst_id < 1 || dst_id > entries.len() {
-                        return Err(format!(
-                            "line {}: TRANS dst_id {} out of range (have {} entries; \
-                             dst_id must be 1-based)",
-                            lineno + 1,
-                            dst_id,
-                            entries.len()
-                        ));
-                    }
-                    transitions.push(NtTransition {
-                        src_id,
-                        dst_id,
-                        side,
-                        tile_id,
-                        tile_offset,
-                    });
-                }
-                other => {
-                    return Err(format!(
-                        "line {}: unknown record kind `{}`",
-                        lineno + 1,
-                        other
-                    ));
-                }
+            if t.dst_id < 1 || t.dst_id > c.entries.len() {
+                return Err(format!(
+                    "TRANS dst_id {} out of range (have {} entries)",
+                    t.dst_id,
+                    c.entries.len()
+                ));
             }
         }
         let idx = NeighborhoodIndex {
             tileset,
-            entries,
-            transitions,
+            entries: c.entries,
+            transitions: c.transitions,
         };
-        // Cross-check the recorded kinds against what classify_all
-        // re-derives from the transitions. Catches stale serialized
-        // catalogs (e.g. written before a classifier fix).
         let computed_kinds = idx.classify_all();
-        for (i, (recorded, computed)) in
-            recorded_kinds.iter().zip(computed_kinds.iter()).enumerate()
-        {
+        for (i, (recorded, computed)) in c.kinds.iter().zip(computed_kinds.iter()).enumerate() {
             if recorded != computed {
                 return Err(format!(
-                    "NTYPE id {} kind mismatch: file says {:?}, classify_all derives {:?}",
+                    "entry id {} kind mismatch: file says {:?}, classify_all derives {:?}",
                     i + 1,
                     recorded,
                     computed
@@ -835,230 +678,32 @@ impl<T: IsComplex + IsRingOrField + Units> NeighborhoodIndex<T> {
     }
 }
 
-fn parse_edge_info(s: &str) -> Result<EdgeInfo, String> {
-    let (id, off) = s
-        .split_once('.')
-        .ok_or_else(|| format!("bad edge `{}`: expected `id.offset`", s))?;
-    let tile_id: usize = id
-        .parse()
-        .map_err(|e| format!("bad edge tile_id `{}`: {}", id, e))?;
-    let tile_offset: usize = off
-        .parse()
-        .map_err(|e| format!("bad edge tile_offset `{}`: {}", off, e))?;
-    Ok(EdgeInfo {
-        tile_id,
-        tile_offset,
-    })
-}
-
-fn parse_vt_token(tok: &str) -> Result<OpenVertexType, String> {
-    let parts: Vec<&str> = tok.split('|').collect();
-    if parts.len() != 3 {
-        return Err(format!(
-            "bad VT `{}`: expected `cw|inner|ccw`, got {} parts",
-            tok,
-            parts.len()
-        ));
-    }
-    let cw = parse_edge_info(parts[0])?;
-    let inner = if parts[1] == "-" {
-        Vec::new()
-    } else {
-        parts[1]
-            .split(',')
-            .map(parse_edge_info)
-            .collect::<Result<Vec<_>, _>>()?
-    };
-    let ccw = parse_edge_info(parts[2])?;
-    Ok(OpenVertexType { cw, inner, ccw })
-}
-
-/// Returns `(parsed_id, parsed_kind, parsed_nt)` so the caller can
-/// validate the id sequence is dense + 1-based and cross-check the
-/// recorded kind against `classify_all`.
-fn parse_ntype_line(
-    tok: &mut std::str::SplitWhitespace<'_>,
-    lineno: usize,
-) -> Result<(usize, NtKind, NeighborhoodType), String> {
-    let mut next = |what: &str| -> Result<String, String> {
-        tok.next()
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("line {}: missing {}", lineno, what))
-    };
-    let id_str = next("id")?;
-    let parsed_id: usize = id_str
-        .parse()
-        .map_err(|e| format!("line {}: bad id: {}", lineno, e))?;
-    let kind_str = next("kind")?;
-    let parsed_kind = match kind_str.as_str() {
-        "dead" => NtKind::Dead,
-        "undead" => NtKind::Undead,
-        "blessed" => NtKind::Blessed,
-        "free" => NtKind::Free,
-        other => {
-            return Err(format!("line {}: unknown kind `{}`", lineno, other));
-        }
-    };
-    let central_tile_id: usize = next("central_id")?
-        .parse()
-        .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
-    let cw_anchor_on_central: usize = next("cw_ac")?
-        .parse()
-        .map_err(|e| format!("line {}: bad cw_ac: {}", lineno, e))?;
-    let ccw_anchor_on_central: usize = next("ccw_ac")?
-        .parse()
-        .map_err(|e| format!("line {}: bad ccw_ac: {}", lineno, e))?;
-    let cw_anchor_on_context: usize = next("cw_ax")?
-        .parse()
-        .map_err(|e| format!("line {}: bad cw_ax: {}", lineno, e))?;
-    let ccw_anchor_on_context: usize = next("ccw_ax")?
-        .parse()
-        .map_err(|e| format!("line {}: bad ccw_ax: {}", lineno, e))?;
-    let num_ctx_tiles: usize = next("num_ctx_tiles")?
-        .parse()
-        .map_err(|e| format!("line {}: bad num_ctx_tiles: {}", lineno, e))?;
-    let n_vts: usize = next("n_vts")?
-        .parse()
-        .map_err(|e| format!("line {}: bad n_vts: {}", lineno, e))?;
-    let mut vt_seq = Vec::with_capacity(n_vts);
-    for i in 0..n_vts {
-        let s = next(&format!("vt[{}]", i))?;
-        vt_seq.push(parse_vt_token(&s).map_err(|e| format!("line {}: {}", lineno, e))?);
-    }
-    Ok((
-        parsed_id,
-        parsed_kind,
-        NeighborhoodType {
-            central_tile_id,
-            cw_anchor_on_central,
-            ccw_anchor_on_central,
-            cw_anchor_on_context,
-            ccw_anchor_on_context,
-            num_ctx_tiles,
-            vt_seq,
-        },
-    ))
-}
-
-fn parse_stype_line(
-    tok: &mut std::str::SplitWhitespace<'_>,
-    lineno: usize,
-) -> Result<(usize, NtKind, SurroundedTile), String> {
-    let mut next = |what: &str| -> Result<String, String> {
-        tok.next()
-            .map(|s| s.to_string())
-            .ok_or_else(|| format!("line {}: missing {}", lineno, what))
-    };
-    let parsed_id: usize = next("id")?
-        .parse()
-        .map_err(|e| format!("line {}: bad id: {}", lineno, e))?;
-    let parsed_kind = match next("kind")?.as_str() {
-        "dead" => NtKind::Dead,
-        "undead" => NtKind::Undead,
-        "blessed" => NtKind::Blessed,
-        "free" => NtKind::Free,
-        other => return Err(format!("line {}: unknown kind `{}`", lineno, other)),
-    };
-    let central_tile_id: usize = next("central_id")?
-        .parse()
-        .map_err(|e| format!("line {}: bad central_id: {}", lineno, e))?;
-    let is_closed_raw: u32 = next("is_closed")?
-        .parse()
-        .map_err(|e| format!("line {}: bad is_closed: {}", lineno, e))?;
-    let is_closed = is_closed_raw != 0;
-    let open_vertex_pos: usize = next("open_vertex_pos")?
-        .parse()
-        .map_err(|e| format!("line {}: bad open_vertex_pos: {}", lineno, e))?;
-    let num_tile_instances: usize = next("num_tile_instances")?
-        .parse()
-        .map_err(|e| format!("line {}: bad num_tile_instances: {}", lineno, e))?;
-    let n: usize = next("n")?
-        .parse()
-        .map_err(|e| format!("line {}: bad n: {}", lineno, e))?;
-    let mut angles = Vec::with_capacity(n);
-    for i in 0..n {
-        let s = next(&format!("angle[{}]", i))?;
-        angles.push(
-            s.parse::<i8>()
-                .map_err(|e| format!("line {}: bad angle[{}]: {}", lineno, i, e))?,
-        );
-    }
-    let mut edges = Vec::with_capacity(n);
-    for i in 0..n {
-        let s = next(&format!("edge[{}]", i))?;
-        edges.push(parse_edge_info(&s).map_err(|e| format!("line {}: {}", lineno, e))?);
-    }
-    let mut patch_tile_ids = Vec::with_capacity(n);
-    for i in 0..n {
-        let s = next(&format!("ptid[{}]", i))?;
-        patch_tile_ids.push(
-            s.parse::<usize>()
-                .map_err(|e| format!("line {}: bad ptid[{}]: {}", lineno, i, e))?,
-        );
-    }
-    let mut inner_chains = Vec::with_capacity(n);
-    for i in 0..n {
-        let s = next(&format!("ichain[{}]", i))?;
-        if s == "-" {
-            inner_chains.push(Vec::new());
-        } else {
-            let mut parts = s.splitn(2, ',');
-            let count_str = parts
-                .next()
-                .ok_or_else(|| format!("line {}: bad ichain[{}]: empty", lineno, i))?;
-            let _count: usize = count_str
-                .parse()
-                .map_err(|e| format!("line {}: bad ichain[{}] count: {}", lineno, i, e))?;
-            let rest = parts.next().unwrap_or("");
-            let chain: Vec<EdgeInfo> = if rest.is_empty() {
-                Vec::new()
-            } else {
-                rest.split(',')
-                    .map(parse_edge_info)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| format!("line {}: {}", lineno, e))?
-            };
-            inner_chains.push(chain);
-        }
-    }
-    Ok((
-        parsed_id,
-        parsed_kind,
-        SurroundedTile {
-            central_tile_id,
-            is_closed,
-            open_vertex_pos,
-            num_tile_instances,
-            angles,
-            edges,
-            inner_chains,
-            patch_tile_ids,
-        },
-    ))
-}
-
-fn write_vt_seq(out: &mut impl std::io::Write, vt_seq: &[OpenVertexType]) -> std::io::Result<()> {
-    for vt in vt_seq {
-        let inner = if vt.inner.is_empty() {
-            "-".to_string()
-        } else {
-            vt.inner
-                .iter()
-                .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
-                .collect::<Vec<_>>()
-                .join(",")
-        };
-        write!(
-            out,
-            " {}.{}|{}|{}.{}",
-            vt.cw.tile_id, vt.cw.tile_offset, inner, vt.ccw.tile_id, vt.ccw.tile_offset,
-        )?;
-    }
-    Ok(())
+/// Serializable snapshot of a [`NeighborhoodIndex`]: the catalog
+/// entries, transitions, and pre-computed kinds, plus the tileset as
+/// raw angle sequences. Designed to round-trip via `serde_json`.
+///
+/// Non-generic — the typed tileset is reconstructed from
+/// `tile_angles` by the consumer (see `ntype_bench`-style
+/// collect/validate workflows), then handed to
+/// [`NeighborhoodIndex::from_collection`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Collection {
+    /// Symbolic name of the cyclotomic ring (e.g. `"ZZ12"`, `"ZZ10"`).
+    pub ring: String,
+    /// Raw angle sequence of each tile, in `TileSet` order.
+    pub tile_angles: Vec<Vec<i8>>,
+    /// All catalog entries, in 1-based id order (= index `i` is id
+    /// `i + 1`).
+    pub entries: Vec<NtEntry>,
+    /// All recorded transitions.
+    pub transitions: Vec<NtTransition>,
+    /// Precomputed [`NtKind`] for each entry; cross-checked on load.
+    pub kinds: Vec<NtKind>,
 }
 
 /// Mutable state shared across the seed and BFS phases of
 /// [`NeighborhoodIndex::new`].
+#[derive(Default)]
 struct BfsState {
     /// All discovered entries in BFS order. `entries[i]` has 1-based id
     /// `i + 1`. Phase-1 and phase-2 entries share one id space.
@@ -1069,17 +714,6 @@ struct BfsState {
     seen: FxHashMap<NtEntry, usize>,
     /// BFS frontier of entry ids waiting to be explored.
     queue: VecDeque<usize>,
-}
-
-impl Default for BfsState {
-    fn default() -> Self {
-        BfsState {
-            entries: Vec::new(),
-            transitions: Vec::new(),
-            seen: FxHashMap::default(),
-            queue: VecDeque::new(),
-        }
-    }
 }
 
 /// Phase 1: enumerate every two-tile patch from `MatchTypeIndex`, try
@@ -1790,7 +1424,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_counts() {
         // Square tiles convexly; every continuation closes. All
         // 240 256 entries are Blessed: 109 184 phase-1 + 131 072
@@ -1823,7 +1460,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: iterates square_idx (~21s build in release)")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: iterates square_idx (~21s build in release)"
+    )]
     fn seeds_are_well_formed() {
         for idx in [
             square_idx() as &NeighborhoodIndex<ZZ12>,
@@ -1860,7 +1500,10 @@ mod tests {
     /// histories produce distinct entries with the same match-side
     /// interface); see the module doc on the interface-quotient view.
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: iterates square_idx (~21s build in release)")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: iterates square_idx (~21s build in release)"
+    )]
     fn entries_have_no_partial_eq_duplicates() {
         for (name, idx) in [
             ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
@@ -1881,10 +1524,11 @@ mod tests {
     }
 
     fn assert_roundtrip<T: IsComplex + IsRingOrField + Units>(idx: &NeighborhoodIndex<T>) {
-        let mut buf: Vec<u8> = Vec::new();
-        idx.write_collection(&mut buf).expect("write");
-        let text = std::str::from_utf8(&buf).expect("utf8");
-        let parsed = NeighborhoodIndex::parse_file(Arc::clone(idx.tileset()), text).expect("parse");
+        let collection = idx.to_collection("ZZ12");
+        let json = serde_json::to_string(&collection).expect("serialize");
+        let restored: Collection = serde_json::from_str(&json).expect("deserialize");
+        let parsed = NeighborhoodIndex::from_collection(Arc::clone(idx.tileset()), restored)
+            .expect("from_collection");
         assert_eq!(
             parsed.num_types(),
             idx.num_types(),
@@ -1917,7 +1561,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_roundtrip_collection() {
         let idx = square_idx();
         assert_roundtrip(idx);
@@ -1929,10 +1576,10 @@ mod tests {
         assert_roundtrip(idx);
     }
 
-    /// parse_file must reject a serialized catalog whose NTYPE kind
-    /// disagrees with what classify_all re-derives from the parsed
-    /// transitions. Catches stale catalogs from before a classifier
-    /// fix.
+    /// `from_collection` must reject a snapshot whose recorded
+    /// `kinds` disagree with what `classify_all` re-derives from the
+    /// parsed transitions. Catches stale catalogs from before a
+    /// classifier fix.
     /// Pure unit test for [`match_absorbs_edge`]. The function appears
     /// in both production (`explore_phase1` / `explore_phase2` filter)
     /// and in the brute side of `spectre_ccw_only_is_complete`, so a
@@ -1994,17 +1641,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_file_rejects_kind_mismatch() {
+    fn from_collection_rejects_kind_mismatch() {
         let idx = square_idx();
-        let mut buf: Vec<u8> = Vec::new();
-        idx.write_collection(&mut buf).expect("write");
-        let text = std::str::from_utf8(&buf).expect("utf8");
-        // Square's NTs are all Blessed; swap the first one's kind
-        // to "dead" - that must fail to parse.
-        let corrupted = text.replacen(" blessed ", " dead ", 1);
-        assert_ne!(corrupted, text, "test fixture did not introduce a swap");
-        let err = match NeighborhoodIndex::parse_file(Arc::clone(idx.tileset()), &corrupted) {
-            Ok(_) => panic!("parser should reject kind mismatch"),
+        let mut collection = idx.to_collection("ZZ12");
+        // Square's NTs are all Blessed; swap the first one's kind to
+        // Dead - that must fail to load.
+        let original = collection.kinds[0];
+        assert_eq!(original, NtKind::Blessed);
+        collection.kinds[0] = NtKind::Dead;
+        let err = match NeighborhoodIndex::from_collection(Arc::clone(idx.tileset()), collection) {
+            Ok(_) => panic!("from_collection should reject kind mismatch"),
             Err(e) => e,
         };
         assert!(
@@ -2018,7 +1664,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: validate() reconstructs all square phase-2 patches (~28s in release)")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: validate() reconstructs all square phase-2 patches (~28s in release)"
+    )]
     fn validate_returns_empty_for_all_tilesets() {
         for (name, idx) in [
             ("square", square_idx() as &NeighborhoodIndex<ZZ12>),
@@ -2217,18 +1866,12 @@ mod tests {
         let angles = aug.angles();
         let mut window: Vec<i8> = Vec::new();
         // j_cw..=gap_start (ctx CW extension into match start)
-        for i in j_cw..=gap_start {
-            window.push(angles[i]);
-        }
+        window.extend_from_slice(&angles[j_cw..=gap_start]);
         // (gap_start+1)..aug_n  (central's free edges minus the
         // gap_start vertex which is already pushed)
-        for i in (gap_start + 1)..aug_n {
-            window.push(angles[i]);
-        }
+        window.extend_from_slice(&angles[gap_start + 1..aug_n]);
         // 0..=j_ccw  (ctx CCW extension out of match end)
-        for i in 0..=j_ccw {
-            window.push(angles[i]);
-        }
+        window.extend_from_slice(&angles[0..=j_ccw]);
         let cw_anchor_in_window = gap_start - j_cw;
         Some((
             nt.central_tile_id,
@@ -2238,10 +1881,14 @@ mod tests {
         ))
     }
 
+    /// Canonical-class fingerprint of a phase-1 NT: `(central_tile_id,
+    /// cw_anchor_on_central, canonical_aug_angles, cw_anchor_in_canon)`.
+    type CanonicalClassFp = (usize, usize, Vec<i8>, usize);
+
     fn canonical_class_fingerprint<T: IsComplex + IsRingOrField + Units>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
-    ) -> Option<(usize, usize, Vec<i8>, usize)> {
+    ) -> Option<CanonicalClassFp> {
         let ac = build_attached_context(nt, mi)?;
         let aug_n = ac.aug_n;
         let angles = ac.aug.angles().to_vec();
@@ -2269,8 +1916,7 @@ mod tests {
     ) -> (usize, Option<String>, usize) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let kinds = idx.classify_all();
-        let mut fp_to_kind: FxHashMap<(usize, usize, Vec<i8>, usize), (NtKind, usize)> =
-            FxHashMap::default();
+        let mut fp_to_kind: FxHashMap<CanonicalClassFp, (NtKind, usize)> = FxHashMap::default();
         let mut violations = 0usize;
         let mut first_violation: Option<String> = None;
         for (i, entry) in idx.entries().iter().enumerate() {
@@ -2781,7 +2427,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_classify_invariants() {
         assert_classify_invariants(square_idx());
     }
@@ -2876,7 +2525,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_seeds_validate() {
         let idx = square_idx();
         let errors = validate_seeds(idx);
@@ -2933,7 +2585,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_seed_geometry() {
         assert_seed_geometry(square_idx());
     }
@@ -3110,7 +2765,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(debug_assertions, ignore = "release-only: square idx build ~21s in release, much slower in debug")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: square idx build ~21s in release, much slower in debug"
+    )]
     fn square_seeds_match_brute() {
         assert_seeds_match_brute(Arc::clone(square_idx().tileset()), square_idx());
     }
@@ -3312,5 +2970,4 @@ mod tests {
             errors[..errors.len().min(10)].join("; ")
         );
     }
-
 }

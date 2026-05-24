@@ -172,12 +172,13 @@ mod tests {
         grid.add((1, 0), 2);
         grid.add((1, 0), 0);
 
+        let empty: &[usize] = &[];
         assert_eq!(grid.get((0, 0)), &[0, 1]);
         assert_eq!(grid.get((1, 0)), &[2, 0]);
-        assert_eq!(grid.get((2, 0)), &[]);
+        assert_eq!(grid.get((2, 0)), empty);
         assert_eq!(grid.get_cells(&[(0, 0)]), &[0, 1]);
         assert_eq!(grid.get_cells(&[(1, 0)]), &[2, 0]);
-        assert_eq!(grid.get_cells(&[(2, 0)]), &[]);
+        assert_eq!(grid.get_cells(&[(2, 0)]), empty);
         assert_eq!(grid.get_cells(&[(2, 0), (1, 0), (0, 0)]), &[2, 0, 0, 1]);
     }
 
@@ -200,7 +201,8 @@ mod tests {
         assert_eq!(grid.len(), 2);
 
         grid.remove((0, 0), 30);
-        assert_eq!(grid.get((0, 0)), &[]);
+        let empty: &[usize] = &[];
+        assert_eq!(grid.get((0, 0)), empty);
         assert!(!grid.cells.contains_key(&(0, 0)));
         assert_eq!(grid.len(), 1);
 
@@ -277,9 +279,10 @@ mod tests {
         clone.remove((0, 0), 1);
         clone.add((2, 2), 3);
 
+        let empty: &[usize] = &[];
         assert_eq!(grid.get((0, 0)), &[1]);
-        assert_eq!(grid.get((2, 2)), &[]);
-        assert_eq!(clone.get((0, 0)), &[]);
+        assert_eq!(grid.get((2, 2)), empty);
+        assert_eq!(clone.get((0, 0)), empty);
         assert_eq!(clone.get((1, 1)), &[2]);
         assert_eq!(clone.get((2, 2)), &[3]);
     }

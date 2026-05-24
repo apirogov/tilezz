@@ -1,16 +1,11 @@
-use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
-use tilezz::intgeom::matchtypes::MatchTypeIndex;
-use tilezz::intgeom::patch::{
-    cyclic_range_contains, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch,
-};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tileset::{self, TileSet};
-use tilezz::intgeom::vertextypes::OpenVertexTypeIndex;
+use tilezz::intgeom::vertextypes::{Collection, OpenVertexTypeIndex};
 
 #[cfg(feature = "pprof")]
 use pprof::ProfilerGuardBuilder;
@@ -64,668 +59,6 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
     tileset::penrose::<ZZ10>()
 }
 
-#[expect(dead_code)]
-struct ParsedVtype {
-    id: usize,
-    angle: i8,
-    cw_tile_id: usize,
-    cw_offset: usize,
-    inner: Vec<EdgeInfo>,
-    ccw_tile_id: usize,
-    ccw_offset: usize,
-    cw_nbr: usize,
-    ccw_nbr: usize,
-    kind: String,
-    initial: bool,
-}
-
-#[expect(dead_code)]
-struct ParsedWitness {
-    vtype_id: usize,
-    pos: usize,
-    angles: Vec<i8>,
-    edges: Vec<EdgeInfo>,
-    candidates: Vec<PatchMatch>,
-    inner_chains: Vec<Vec<EdgeInfo>>,
-}
-
-struct ParsedTransition {
-    src_id: usize,
-    dst_id: usize,
-    side: String,
-    tile_id: usize,
-    tile_offset: usize,
-}
-
-struct ParsedFile {
-    ring_name: String,
-    tile_seqs: Vec<Vec<i8>>,
-    vtypes: Vec<ParsedVtype>,
-    witnesses: Vec<ParsedWitness>,
-    transitions: Vec<ParsedTransition>,
-}
-
-fn write_collection<T: IsComplex + IsRingOrField + Units>(
-    idx: &OpenVertexTypeIndex<T>,
-    ring_name: &str,
-    path: &str,
-) {
-    let t0 = Instant::now();
-    let mut out = String::new();
-    let mut witness_keys: BTreeSet<String> = BTreeSet::new();
-
-    out.push_str(&format!("TILESET {}\n", ring_name));
-    for i in 0..idx.tileset().num_tiles() {
-        let seq = idx.tileset().rat(i).seq();
-        let angles: Vec<String> = seq.iter().map(|a| a.to_string()).collect();
-        out.push_str(&format!("TILE {} {}\n", i, angles.join(" ")));
-    }
-
-    for id in 1..=idx.num_types() {
-        let info = idx.get_info(id);
-        let vt = info.vtype();
-        let kind_str = match info.kind() {
-            tilezz::intgeom::vertextypes::VTypeKind::Dead => "dead",
-            tilezz::intgeom::vertextypes::VTypeKind::Undead => "undead",
-            tilezz::intgeom::vertextypes::VTypeKind::Blessed => "blessed",
-            tilezz::intgeom::vertextypes::VTypeKind::Free => "free",
-        };
-        out.push_str(&format!(
-            "VTYPE {} {} {} {} {} {} {} {} {} {} {} {}\n",
-            id,
-            info.gap_angle(),
-            vt.cw.tile_id,
-            vt.cw.tile_offset,
-            vt.inner.len(),
-            vt.inner
-                .iter()
-                .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
-                .collect::<Vec<_>>()
-                .join(" "),
-            vt.ccw.tile_id,
-            vt.ccw.tile_offset,
-            info.cw_neighbor_offset(),
-            info.ccw_neighbor_offset(),
-            kind_str,
-            if info.is_initial() { 1 } else { 0 },
-        ));
-
-        let w = info.witness();
-        let angles = w.angles();
-        let edges = w.edges();
-        let n = angles.len();
-        let angle_strs: Vec<String> = angles.iter().map(|a| a.to_string()).collect();
-        let edge_strs: Vec<String> = edges
-            .iter()
-            .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
-            .collect();
-        let all_matches = w.get_all_matches();
-        let cand_strs: Vec<String> = all_matches
-            .iter()
-            .map(|m| format!("{}.{}.{}.{}", m.start_a, m.len, m.start_b, m.tile_id))
-            .collect();
-        let inner_strs: Vec<String> = w
-            .inner_chains()
-            .iter()
-            .map(|chain| {
-                if chain.is_empty() {
-                    "-".to_string()
-                } else {
-                    chain
-                        .iter()
-                        .map(|e| format!("{}.{}", e.tile_id, e.tile_offset))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                }
-            })
-            .collect();
-
-        let witness_key = format!(
-            "{}|{}|{}|{}",
-            angle_strs.join(" "),
-            edge_strs.join(" "),
-            cand_strs.join(" "),
-            inner_strs.join(" "),
-        );
-        witness_keys.insert(witness_key);
-
-        out.push_str(&format!(
-            "WITNESS {} {} {} {} {} {} {} {}\n",
-            id,
-            info.witness_pos(),
-            n,
-            angle_strs.join(" "),
-            edge_strs.join(" "),
-            all_matches.len(),
-            cand_strs.join(" "),
-            inner_strs.join(" "),
-        ));
-    }
-
-    for tr in idx.transitions() {
-        let side_str = match tr.side {
-            tilezz::intgeom::patch::TransitionSide::Cw => "cw",
-            tilezz::intgeom::patch::TransitionSide::Ccw => "ccw",
-            tilezz::intgeom::patch::TransitionSide::Both => "both",
-        };
-        out.push_str(&format!(
-            "TRANS {} {} {} {} {}\n",
-            tr.src_id, tr.dst_id, side_str, tr.tile_id, tr.tile_offset,
-        ));
-    }
-
-    std::fs::write(path, &out).unwrap();
-    let n_total = idx.num_types();
-    let n_initial = idx.entries().iter().filter(|e| e.is_initial()).count();
-    let n_free = idx.entries().iter().filter(|e| e.is_free()).count();
-    let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
-    let n_undead = idx.entries().iter().filter(|e| e.is_undead()).count();
-    let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
-    let n_closed = idx.transitions().iter().filter(|t| t.is_closed()).count();
-    let n_open = idx.transitions().len() - n_closed;
-    eprintln!(
-        "  Written {} bytes, {} types ({} initial, {} free, {} blessed, {} undead, {} dead), {} transitions ({} open, {} closed) in {:.2?}",
-        out.len(),
-        n_total,
-        n_initial,
-        n_free,
-        n_blessed,
-        n_undead,
-        n_dead,
-        idx.transitions().len(),
-        n_open,
-        n_closed,
-        t0.elapsed(),
-    );
-}
-
-fn parse_file(path: &str) -> Result<ParsedFile, String> {
-    let content = std::fs::read_to_string(path).map_err(|e| format!("read error: {}", e))?;
-    let mut ring_name = String::new();
-    let mut tile_seqs: Vec<Vec<i8>> = Vec::new();
-    let mut vtypes: Vec<ParsedVtype> = Vec::new();
-    let mut witnesses: Vec<ParsedWitness> = Vec::new();
-    let mut transitions: Vec<ParsedTransition> = Vec::new();
-
-    for line in content.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-        match parts[0] {
-            "TILESET" => {
-                ring_name = parts[1].to_string();
-            }
-            "TILE" => {
-                let angles: Vec<i8> = parts[2..].iter().map(|s| s.parse().unwrap()).collect();
-                tile_seqs.push(angles);
-            }
-            "VTYPE" => {
-                let id: usize = parts[1].parse().map_err(|e| format!("VTYPE id: {}", e))?;
-                let angle: i8 = parts[2]
-                    .parse()
-                    .map_err(|e| format!("VTYPE angle: {}", e))?;
-                let cw_tile_id: usize = parts[3]
-                    .parse()
-                    .map_err(|e| format!("VTYPE cw_tid: {}", e))?;
-                let cw_offset: usize = parts[4]
-                    .parse()
-                    .map_err(|e| format!("VTYPE cw_off: {}", e))?;
-                let inner_len: usize = parts[5]
-                    .parse()
-                    .map_err(|e| format!("VTYPE inner_len: {}", e))?;
-                let mut inner = Vec::with_capacity(inner_len);
-                for k in 0..inner_len {
-                    let entry = &parts[6 + k];
-                    let mut parts_inner = entry.split('.');
-                    let tid: usize = parts_inner
-                        .next()
-                        .unwrap()
-                        .parse()
-                        .map_err(|e| format!("VTYPE inner_tid: {}", e))?;
-                    let off: usize = parts_inner
-                        .next()
-                        .unwrap()
-                        .parse()
-                        .map_err(|e| format!("VTYPE inner_off: {}", e))?;
-                    inner.push(EdgeInfo {
-                        tile_id: tid,
-                        tile_offset: off,
-                    });
-                }
-                let base = 6 + inner_len;
-                let ccw_tile_id: usize = parts[base]
-                    .parse()
-                    .map_err(|e| format!("VTYPE ccw_tid: {}", e))?;
-                let ccw_offset: usize = parts[base + 1]
-                    .parse()
-                    .map_err(|e| format!("VTYPE ccw_off: {}", e))?;
-                let cw_nbr: usize = parts[base + 2]
-                    .parse()
-                    .map_err(|e| format!("VTYPE cw_nbr: {}", e))?;
-                let ccw_nbr: usize = parts[base + 3]
-                    .parse()
-                    .map_err(|e| format!("VTYPE ccw_nbr: {}", e))?;
-                let kind = parts[base + 4].to_string();
-                let initial: bool = if base + 5 < parts.len() {
-                    parts[base + 5] != "0"
-                } else {
-                    false
-                };
-                vtypes.push(ParsedVtype {
-                    id,
-                    angle,
-                    cw_tile_id,
-                    cw_offset,
-                    inner,
-                    ccw_tile_id,
-                    ccw_offset,
-                    cw_nbr,
-                    ccw_nbr,
-                    kind,
-                    initial,
-                });
-            }
-            "WITNESS" => {
-                let vtype_id: usize = parts[1].parse().map_err(|e| format!("WITNESS id: {}", e))?;
-                let pos: usize = parts[2]
-                    .parse()
-                    .map_err(|e| format!("WITNESS pos: {}", e))?;
-                let n: usize = parts[3].parse().map_err(|e| format!("WITNESS n: {}", e))?;
-                let angles: Vec<i8> = parts[4..4 + n]
-                    .iter()
-                    .map(|s| s.parse())
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| format!("WITNESS angles: {}", e))?;
-                let edges: Vec<EdgeInfo> = parts[4 + n..4 + 2 * n]
-                    .iter()
-                    .map(|s| {
-                        let mut sp = s.split('.');
-                        let tile_id: usize = sp.next().unwrap().parse().unwrap();
-                        let tile_offset: usize = sp.next().unwrap().parse().unwrap();
-                        EdgeInfo {
-                            tile_id,
-                            tile_offset,
-                        }
-                    })
-                    .collect();
-                let num_cands: usize = parts[4 + 2 * n]
-                    .parse()
-                    .map_err(|e| format!("WITNESS num_cands: {}", e))?;
-                let candidates: Vec<PatchMatch> = parts[4 + 2 * n + 1..4 + 2 * n + 1 + num_cands]
-                    .iter()
-                    .map(|s| {
-                        let mut sp = s.split('.');
-                        let start_a: usize = sp.next().unwrap().parse().unwrap();
-                        let len: usize = sp.next().unwrap().parse().unwrap();
-                        let start_b: usize = sp.next().unwrap().parse().unwrap();
-                        let tile_id: usize = sp.next().unwrap().parse().unwrap();
-                        PatchMatch {
-                            start_a,
-                            len,
-                            start_b,
-                            tile_id,
-                        }
-                    })
-                    .collect();
-                let inner_base = 4 + 2 * n + 1 + num_cands;
-                let inner_chains: Vec<Vec<EdgeInfo>> = if inner_base < parts.len() {
-                    parts[inner_base..]
-                        .iter()
-                        .map(|s| {
-                            if *s == "-" {
-                                vec![]
-                            } else {
-                                s.split(',')
-                                    .map(|e| {
-                                        let mut sp = e.split('.');
-                                        let tid: usize = sp.next().unwrap().parse().unwrap();
-                                        let off: usize = sp.next().unwrap().parse().unwrap();
-                                        EdgeInfo {
-                                            tile_id: tid,
-                                            tile_offset: off,
-                                        }
-                                    })
-                                    .collect()
-                            }
-                        })
-                        .collect()
-                } else {
-                    vec![vec![]; n]
-                };
-                witnesses.push(ParsedWitness {
-                    vtype_id,
-                    pos,
-                    angles,
-                    edges,
-                    candidates,
-                    inner_chains,
-                });
-            }
-            "TRANS" => {
-                let src_id: usize = parts[1].parse().unwrap();
-                let dst_id: usize = parts[2].parse().unwrap();
-                let side: String = parts[3].to_string();
-                let tile_id: usize = parts[4].parse().unwrap();
-                let tile_offset: usize = parts[5].parse().unwrap();
-                transitions.push(ParsedTransition {
-                    src_id,
-                    dst_id,
-                    side,
-                    tile_id,
-                    tile_offset,
-                });
-            }
-            _ => {}
-        }
-    }
-
-    Ok(ParsedFile {
-        ring_name,
-        tile_seqs,
-        vtypes,
-        witnesses,
-        transitions,
-    })
-}
-
-fn validate_common<T: IsComplex + IsRingOrField + Units>(
-    pf: &ParsedFile,
-    tile_ts: &Arc<TileSet<T>>,
-) -> Result<(), String> {
-    let t0 = Instant::now();
-
-    eprintln!(
-        "  Parsed: ring={}, tiles={}, vtypes={}, witnesses={}, transitions={}",
-        pf.ring_name,
-        pf.tile_seqs.len(),
-        pf.vtypes.len(),
-        pf.witnesses.len(),
-        pf.transitions.len(),
-    );
-
-    let _num_types = pf.vtypes.len();
-    let mut witnesses_by_id: HashMap<usize, &ParsedWitness> = HashMap::new();
-    for w in &pf.witnesses {
-        witnesses_by_id.insert(w.vtype_id, w);
-    }
-
-    eprintln!("  Phase 1: Reconstructing witnesses...");
-    let t1 = Instant::now();
-    let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
-    let mut reconstructed: HashMap<usize, GrowingPatch<T>> = HashMap::new();
-    for pw in &pf.witnesses {
-        let n = pw.angles.len();
-        let inner_chains = if pw.inner_chains.len() == n {
-            pw.inner_chains.clone()
-        } else {
-            vec![vec![]; n]
-        };
-        let gp = GrowingPatch::from_parts(
-            Arc::clone(&mi),
-            pw.angles.clone(),
-            pw.edges.clone(),
-            inner_chains,
-            vec![0; pw.angles.len()],
-            1,
-        )
-        .ok_or_else(|| format!("WITNESS {}: from_parts failed", pw.vtype_id))?;
-        reconstructed.insert(pw.vtype_id, gp);
-    }
-    eprintln!(
-        "  Reconstructed {} witnesses in {:.2?}",
-        reconstructed.len(),
-        t1.elapsed(),
-    );
-
-    eprintln!("  Phase 2: Verifying vertex types...");
-    let t2 = Instant::now();
-    let mut vtype_errors = 0usize;
-    for pv in &pf.vtypes {
-        let gp = reconstructed
-            .get(&pv.id)
-            .ok_or_else(|| format!("VTYPE {}: no witness found", pv.id))?;
-        let pos = witnesses_by_id[&pv.id].pos;
-        let (expected_cw, expected_ccw) = gp.neighbor_junction_offsets(pos).unwrap_or((0, 0));
-        if expected_cw != pv.cw_nbr || expected_ccw != pv.ccw_nbr {
-            vtype_errors += 1;
-            if vtype_errors <= 5 {
-                eprintln!(
-                    "  ERROR: VTYPE {} neighbor offsets: expected ({}, {}), got ({}, {})",
-                    pv.id, expected_cw, expected_ccw, pv.cw_nbr, pv.ccw_nbr
-                );
-            }
-        }
-        let pvt = gp.junction_vertex_type_at(pos);
-        let expected = OpenVertexType {
-            cw: EdgeInfo {
-                tile_id: pv.cw_tile_id,
-                tile_offset: pv.cw_offset,
-            },
-            inner: pv.inner.clone(),
-            ccw: EdgeInfo {
-                tile_id: pv.ccw_tile_id,
-                tile_offset: pv.ccw_offset,
-            },
-        };
-        match pvt {
-            Some(actual) if actual.cw == expected.cw && actual.ccw == expected.ccw => {}
-            Some(actual) => {
-                vtype_errors += 1;
-                if vtype_errors <= 5 {
-                    eprintln!(
-                        "  ERROR: VTYPE {} mismatch: expected {:?}, got {:?}",
-                        pv.id, expected, actual
-                    );
-                }
-            }
-            None => {
-                vtype_errors += 1;
-                if vtype_errors <= 5 {
-                    eprintln!("  ERROR: VTYPE {}: vertex_type_at returned None", pv.id);
-                }
-            }
-        }
-    }
-    if vtype_errors > 0 {
-        return Err(format!("{} vertex type mismatches", vtype_errors));
-    }
-    eprintln!(
-        "  All {} vertex types verified in {:.2?}",
-        pf.vtypes.len(),
-        t2.elapsed(),
-    );
-
-    eprintln!("  Phase 3: Verifying transitions...");
-    let t3 = Instant::now();
-    let mut trans_errors = 0usize;
-    let mut trans_ok = 0usize;
-    let known_ids: BTreeSet<usize> = pf.vtypes.iter().map(|v| v.id).collect();
-    for pt in &pf.transitions {
-        if !known_ids.contains(&pt.src_id) {
-            trans_errors += 1;
-            if trans_errors <= 5 {
-                eprintln!(
-                    "  ERROR: TRANS {} -> {}: unknown src id",
-                    pt.src_id, pt.dst_id
-                );
-            }
-            continue;
-        }
-        if pt.dst_id != 0 && !known_ids.contains(&pt.dst_id) {
-            trans_errors += 1;
-            if trans_errors <= 5 {
-                eprintln!(
-                    "  ERROR: TRANS {} -> {}: unknown dst id",
-                    pt.src_id, pt.dst_id
-                );
-            }
-            continue;
-        }
-        let gp = match reconstructed.get(&pt.src_id) {
-            Some(g) => g,
-            None => {
-                trans_errors += 1;
-                if trans_errors <= 5 {
-                    eprintln!(
-                        "  ERROR: TRANS {} -> {}: no source witness",
-                        pt.src_id, pt.dst_id
-                    );
-                }
-                continue;
-            }
-        };
-        let pos = witnesses_by_id[&pt.src_id].pos;
-        let n = gp.boundary_len();
-
-        let edge_pos = if pt.side == "cw" {
-            (pos + n - 1) % n
-        } else {
-            pos
-        };
-
-        let tile_len = tile_ts.rat(pt.tile_id).len();
-        let candidates: Vec<PatchMatch> = gp.get_all_matches();
-        let mut found = false;
-        for pm in &candidates {
-            if pm.tile_id != pt.tile_id {
-                continue;
-            }
-            if !cyclic_range_contains(pm.start_a, pm.len, edge_pos, n) {
-                continue;
-            }
-            let offset_in_match =
-                (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
-            let computed_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
-                .rem_euclid(tile_len as i64) as usize;
-            if computed_offset != pt.tile_offset {
-                continue;
-            }
-
-            let mut gp2 = gp.clone();
-            if !gp2.add_tile(pm) || !gp2.is_growing() {
-                continue;
-            }
-
-            let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
-
-            let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, n);
-            let covers_cw = cyclic_range_contains(pm.start_a, pm.len, (pos + n - 1) % n, n);
-            let covers_both = covers_cw && covers_ccw;
-
-            if pt.dst_id == 0 {
-                if covers_both {
-                    found = true;
-                    break;
-                }
-            } else if !covers_both {
-                if let Some(actual) = gp2.junction_vertex_type_at(junction_pos) {
-                    let dst_gp = match reconstructed.get(&pt.dst_id) {
-                        Some(g) => g,
-                        None => continue,
-                    };
-                    let dst_pos = match witnesses_by_id.get(&pt.dst_id) {
-                        Some(w) => w.pos,
-                        None => continue,
-                    };
-                    if let Some(expected) = dst_gp.junction_vertex_type_at(dst_pos) {
-                        if actual.cw == expected.cw && actual.ccw == expected.ccw {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-        if found {
-            trans_ok += 1;
-        } else {
-            trans_errors += 1;
-            if trans_errors <= 5 {
-                eprintln!(
-                    "  ERROR: TRANS {} -> {}: no matching glue found",
-                    pt.src_id, pt.dst_id
-                );
-            }
-        }
-    }
-    if trans_errors > 0 {
-        return Err(format!(
-            "{} transition errors ({} ok)",
-            trans_errors, trans_ok
-        ));
-    }
-    eprintln!(
-        "  All {} transitions verified in {:.2?}",
-        pf.transitions.len(),
-        t3.elapsed(),
-    );
-
-    eprintln!("  Phase 4: Completeness check...");
-    let t4 = Instant::now();
-    let mut missing_types: BTreeSet<usize> = BTreeSet::new();
-    let mut total_match_checks = 0usize;
-    for pv in &pf.vtypes {
-        if pv.kind == "dead" || pv.kind == "undead" {
-            continue;
-        }
-        let gp = match reconstructed.get(&pv.id) {
-            Some(g) => g,
-            None => continue,
-        };
-        let pos = witnesses_by_id[&pv.id].pos;
-        for pm in gp.get_matches_touching_vertex(pos) {
-            total_match_checks += 1;
-            let old_n = gp.boundary_len();
-            let mut gp2 = gp.clone();
-            if !gp2.add_tile(&pm) || !gp2.is_growing() {
-                continue;
-            }
-            let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
-            let covers_ccw = cyclic_range_contains(pm.start_a, pm.len, pos, old_n);
-            let covers_cw =
-                cyclic_range_contains(pm.start_a, pm.len, (pos + old_n - 1) % old_n, old_n);
-            if covers_cw && covers_ccw {
-                continue;
-            }
-            if let Some(jvt) = gp2.junction_vertex_type_at(junction_pos) {
-                let found = pf.vtypes.iter().any(|pv| {
-                    let gp = match reconstructed.get(&pv.id) {
-                        Some(g) => g,
-                        None => return false,
-                    };
-                    let wp = match witnesses_by_id.get(&pv.id) {
-                        Some(w) => w.pos,
-                        None => return false,
-                    };
-                    match gp.junction_vertex_type_at(wp) {
-                        Some(stored) => stored == jvt,
-                        None => false,
-                    }
-                });
-                if !found {
-                    missing_types.insert(pv.id);
-                }
-            }
-        }
-    }
-    if !missing_types.is_empty() {
-        return Err(format!(
-            "Completeness FAILED: {} vertex types produce unknown junction types: {:?}",
-            missing_types.len(),
-            missing_types.iter().take(10).collect::<Vec<_>>(),
-        ));
-    }
-    eprintln!(
-        "  Completeness: {} match checks passed in {:.2?}",
-        total_match_checks,
-        t4.elapsed(),
-    );
-
-    eprintln!("  Validation PASSED in {:.2?}", t0.elapsed());
-    Ok(())
-}
-
 fn collect_generic<T: IsComplex + IsRingOrField + Units>(
     ts: Arc<TileSet<T>>,
     ring_name: &str,
@@ -743,8 +76,10 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
     let n_blessed = idx.entries().iter().filter(|e| e.is_blessed()).count();
     let n_undead = idx.entries().iter().filter(|e| e.is_undead()).count();
     let n_dead = idx.entries().iter().filter(|e| e.is_dead()).count();
+    let n_closed = idx.transitions().iter().filter(|t| t.is_closed()).count();
+    let n_open = idx.transitions().len() - n_closed;
     eprintln!(
-        "[{}] types={} (initial={}, free={}, blessed={}, undead={}, dead={}) transitions={} time={:.2?}",
+        "[{}] types={} (initial={}, free={}, blessed={}, undead={}, dead={}) transitions={} ({} open, {} closed) time={:.2?}",
         label,
         n_total,
         n_initial,
@@ -753,10 +88,106 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
         n_undead,
         n_dead,
         idx.transitions().len(),
+        n_open,
+        n_closed,
         elapsed,
     );
 
-    write_collection(&idx, ring_name, output);
+    let collection = Collection::from_index(&idx, ring_name);
+    let t_write = Instant::now();
+    let file = std::fs::File::create(output).unwrap_or_else(|e| panic!("create {output}: {e}"));
+    serde_json::to_writer(std::io::BufWriter::new(file), &collection)
+        .unwrap_or_else(|e| panic!("serialize {output}: {e}"));
+    eprintln!(
+        "  Wrote {} vtypes, {} transitions to {} in {:.2?}",
+        collection.vtypes.len(),
+        collection.transitions.len(),
+        output,
+        t_write.elapsed(),
+    );
+}
+
+fn typed_tileset<T, F>(collection: &Collection, make_rat: F) -> Arc<TileSet<T>>
+where
+    T: IsComplex + IsRingOrField + Units,
+    F: Fn(&[i8]) -> Rat<T>,
+{
+    let rats: Vec<Rat<T>> = collection.tile_angles.iter().map(|s| make_rat(s)).collect();
+    Arc::new(TileSet::new(rats))
+}
+
+fn validate_typed<T: IsComplex + IsRingOrField + Units>(
+    collection: &Collection,
+    tile_ts: &Arc<TileSet<T>>,
+) -> Result<(), String> {
+    let t0 = Instant::now();
+    eprintln!(
+        "  Parsed: ring={}, tiles={}, vtypes={}, transitions={}",
+        collection.ring,
+        collection.tile_angles.len(),
+        collection.vtypes.len(),
+        collection.transitions.len(),
+    );
+
+    eprintln!("  Phase 1: Reconstructing witnesses...");
+    let t1 = Instant::now();
+    let witnesses = collection.reconstruct_witnesses(tile_ts)?;
+    eprintln!(
+        "  Reconstructed {} witnesses in {:.2?}",
+        witnesses.len(),
+        t1.elapsed(),
+    );
+
+    eprintln!("  Phase 2: Verifying vertex types...");
+    let t2 = Instant::now();
+    let vt_errors = collection.vtype_errors(&witnesses);
+    for (id, msg) in vt_errors.iter().take(5) {
+        eprintln!("  ERROR: VTYPE {}: {}", id, msg);
+    }
+    if !vt_errors.is_empty() {
+        return Err(format!("{} vertex type mismatches", vt_errors.len()));
+    }
+    eprintln!(
+        "  All {} vertex types verified in {:.2?}",
+        collection.vtypes.len(),
+        t2.elapsed(),
+    );
+
+    eprintln!("  Phase 3: Verifying transitions...");
+    let t3 = Instant::now();
+    let tr_errors = collection.transition_errors(tile_ts, &witnesses);
+    for ((src, dst), msg) in tr_errors.iter().take(5) {
+        eprintln!("  ERROR: TRANS {} -> {}: {}", src, dst, msg);
+    }
+    if !tr_errors.is_empty() {
+        return Err(format!("{} transition errors", tr_errors.len()));
+    }
+    eprintln!(
+        "  All {} transitions verified in {:.2?}",
+        collection.transitions.len(),
+        t3.elapsed(),
+    );
+
+    eprintln!("  Phase 4: Completeness check...");
+    let t4 = Instant::now();
+    let report = collection.completeness_errors(&witnesses);
+    for id in report.missing.iter().take(10) {
+        eprintln!("  MISSING: VTYPE {} produces unknown junction type", id);
+    }
+    if !report.is_complete() {
+        return Err(format!(
+            "Completeness FAILED: {} vertex types produce unknown junction types",
+            report.missing.len(),
+        ));
+    }
+    eprintln!(
+        "  Completeness: {} match checks passed in {:.2?}",
+        report.matches_checked,
+        t4.elapsed(),
+    );
+
+    eprintln!("  Validation PASSED in {:.2?}", t0.elapsed());
+    Ok(())
 }
 
 fn main() {
@@ -783,40 +214,33 @@ fn main() {
         },
         Commands::Validate { input } => {
             eprintln!("=== Validating: {} ===", input);
-            let pf = parse_file(input).unwrap_or_else(|e| {
-                eprintln!("Parse error: {}", e);
+            let file = std::fs::File::open(input).unwrap_or_else(|e| {
+                eprintln!("Open error: {}", e);
                 std::process::exit(1);
             });
+            let collection: Collection = serde_json::from_reader(std::io::BufReader::new(file))
+                .unwrap_or_else(|e| {
+                    eprintln!("Parse error: {}", e);
+                    std::process::exit(1);
+                });
 
-            match pf.ring_name.as_str() {
+            let result = match collection.ring.as_str() {
                 "ZZ12" => {
-                    let tile_ts = Arc::new(TileSet::new(
-                        pf.tile_seqs
-                            .iter()
-                            .map(|s| Rat::<ZZ12>::from_slice_unchecked(s))
-                            .collect(),
-                    ));
-                    if let Err(e) = validate_common(&pf, &tile_ts) {
-                        eprintln!("FAIL: {}", e);
-                        std::process::exit(1);
-                    }
+                    let ts = typed_tileset(&collection, Rat::<ZZ12>::from_slice_unchecked);
+                    validate_typed(&collection, &ts)
                 }
                 "ZZ10" => {
-                    let tile_ts = Arc::new(TileSet::new(
-                        pf.tile_seqs
-                            .iter()
-                            .map(|s| Rat::<ZZ10>::from_slice_unchecked(s))
-                            .collect(),
-                    ));
-                    if let Err(e) = validate_common(&pf, &tile_ts) {
-                        eprintln!("FAIL: {}", e);
-                        std::process::exit(1);
-                    }
+                    let ts = typed_tileset(&collection, Rat::<ZZ10>::from_slice_unchecked);
+                    validate_typed(&collection, &ts)
                 }
-                _ => {
-                    eprintln!("Unsupported ring: {}", pf.ring_name);
+                other => {
+                    eprintln!("Unsupported ring: {}", other);
                     std::process::exit(1);
                 }
+            };
+            if let Err(e) = result {
+                eprintln!("FAIL: {}", e);
+                std::process::exit(1);
             }
             println!("OK");
         }

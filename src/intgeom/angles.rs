@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn test_revcomp() {
-        assert_eq!(revcomp(vec![].as_slice()), vec![]);
+        assert_eq!(revcomp(vec![].as_slice()), Vec::<i8>::new());
         assert_eq!(revcomp(vec![6].as_slice()), vec![-6]);
         let v = vec![1, 3, -2, 4];
         assert_eq!(revcomp(v.as_slice()), vec![-4, 2, -3, -1]);
