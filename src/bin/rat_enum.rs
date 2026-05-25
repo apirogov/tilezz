@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::thread;
 use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
@@ -120,21 +122,180 @@ fn rat_enum_step<ZZ: ZZType + Units + WithinRadius>(
     }
 }
 
+// -------- multi-threaded enumeration --------
+
+/// Pick a DFS splitting depth such that the seed-walk produces
+/// roughly `10 * n_threads` work units. With a branching factor of
+/// `b` candidate directions per level, depth `d` enumerates at most
+/// `b^d` seeds (the canonical-rotation + intersect + reachability
+/// prunes knock that down further, but the raw count is the right
+/// upper bound for sizing). We invert: `d = ceil(log_b(10 * threads))`.
+///
+/// `branching` is the per-level branching factor of the DFS:
+/// `2 * hturn - 1` for a ZZ ring (the loop walks `(-hturn+1)..hturn`).
+/// E.g. ZZ4 -> 3, ZZ12 -> 11, ZZ24 -> 23.
+fn splitting_depth(n_threads: usize, branching: usize) -> usize {
+    if n_threads <= 1 || branching <= 1 {
+        return 0;
+    }
+    let target = (10 * n_threads) as f64;
+    let depth = (target.ln() / (branching as f64).ln()).ceil() as usize;
+    depth.max(1)
+}
+
+/// Walk the existing DFS only down to `split_depth` and collect every
+/// alive snake state (angle prefix) that survives the canonical-rotation
+/// prune, the `Snake::add` self-intersect check, and the reachability
+/// heuristic. These are the seeds the worker threads will pick up.
+///
+/// Polygons that already close at or above `split_depth` are recorded
+/// directly into `closed` -- they have no remaining work to delegate.
+fn collect_seeds<ZZ: ZZType + Units + WithinRadius>(
+    snake: &mut Snake<ZZ>,
+    max_steps: usize,
+    split_depth: usize,
+    seeds: &mut Vec<Vec<i8>>,
+    closed: &mut HashSet<Vec<i8>>,
+) {
+    let depth = snake.angles().len();
+    if depth >= max_steps {
+        return;
+    }
+    let remaining = (max_steps - depth) as i64;
+
+    for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
+        if !is_canonical_extended(snake.angles(), direction) {
+            continue;
+        }
+        if !snake.add(direction) {
+            continue;
+        }
+        if snake.is_closed() {
+            let r = {
+                let tmp = Rat::from_unchecked(snake);
+                if tmp.chirality() > 0 {
+                    tmp
+                } else {
+                    tmp.reversed()
+                }
+                .canonical()
+            };
+            let seq = r.seq().to_vec();
+            if closed.insert(seq.clone()) {
+                println!("RAT {seq:?}");
+            }
+        } else if snake.head().pos.within_radius(remaining) {
+            if snake.angles().len() >= split_depth {
+                // Reached splitting horizon -- emit this prefix as a
+                // seed for a worker thread to expand.
+                seeds.push(snake.angles().to_vec());
+            } else {
+                collect_seeds::<ZZ>(snake, max_steps, split_depth, seeds, closed);
+            }
+        }
+        snake.pop();
+    }
+}
+
+/// Parallel variant of [`rat_enum`]: splits the DFS at `split_depth`
+/// (selected via [`splitting_depth`]), then hands the resulting alive
+/// prefixes out to `n_threads` worker threads via a shared atomic
+/// counter. Each worker keeps its own `HashSet` and the main thread
+/// merges the per-worker sets at the end.
+pub fn rat_enum_parallel<ZZ: ZZType + Units + WithinRadius>(
+    max_steps: usize,
+    n_threads: usize,
+) -> Vec<Vec<i8>> {
+    // Branching = number of candidate directions per DFS level,
+    // i.e. `(-hturn + 1)..hturn` which has length `2*hturn - 1`.
+    let branching = (2 * ZZ::hturn() as usize).saturating_sub(1);
+    let split_depth = splitting_depth(n_threads, branching);
+
+    println!("-------- enumeration started --------");
+    println!(
+        "parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}"
+    );
+
+    let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
+    let mut seeds: Vec<Vec<i8>> = Vec::new();
+    {
+        let mut snake: Snake<ZZ> = Snake::new();
+        collect_seeds::<ZZ>(
+            &mut snake,
+            max_steps,
+            split_depth,
+            &mut seeds,
+            &mut closed_main,
+        );
+    }
+    println!("parallel: {} seed states collected", seeds.len());
+
+    let next_idx = AtomicUsize::new(0);
+    let seeds_ref: &[Vec<i8>] = &seeds;
+    let next_ref = &next_idx;
+
+    let merged: HashSet<Vec<i8>> = thread::scope(|s| {
+        let mut handles = Vec::with_capacity(n_threads);
+        for _ in 0..n_threads {
+            handles.push(s.spawn(move || -> HashSet<Vec<i8>> {
+                let mut local: HashSet<Vec<i8>> = HashSet::new();
+                loop {
+                    let i = next_ref.fetch_add(1, Ordering::Relaxed);
+                    if i >= seeds_ref.len() {
+                        break;
+                    }
+                    // Rebuild snake from this trusted (already self-
+                    // intersect-checked) prefix and resume DFS.
+                    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
+                    rat_enum_step::<ZZ>(&mut snake, max_steps, &mut local);
+                }
+                local
+            }));
+        }
+        let mut merged = closed_main;
+        for h in handles {
+            let local = h.join().expect("worker panic");
+            merged.extend(local);
+        }
+        merged
+    });
+
+    println!(
+        "-------- enumeration completed --------\n{} rats found",
+        merged.len()
+    );
+
+    let mut result: Vec<Vec<i8>> = merged.into_iter().collect();
+    result.sort_by_key(|x| x.len());
+    result
+}
+
 fn polygons<ZZ: ZZType + Units>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
     rats.into_iter()
         .map(|seq| Rat::<ZZ>::from_slice_unchecked(&seq).to_polyline_f64(Turtle::default()))
         .collect()
 }
 
-fn run_rat_enum_polylines(ring: u8, max_steps: usize) -> Vec<Vec<P64>> {
+fn enumerate_dispatch<ZZ: ZZType + Units + WithinRadius>(
+    max_steps: usize,
+    n_threads: usize,
+) -> Vec<Vec<i8>> {
+    if n_threads <= 1 {
+        rat_enum::<ZZ>(max_steps)
+    } else {
+        rat_enum_parallel::<ZZ>(max_steps, n_threads)
+    }
+}
+
+fn run_rat_enum_polylines(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<P64>> {
     match ring {
-        4 => polygons::<ZZ4>(rat_enum::<ZZ4>(max_steps)),
-        8 => polygons::<ZZ8>(rat_enum::<ZZ8>(max_steps)),
-        12 => polygons::<ZZ12>(rat_enum::<ZZ12>(max_steps)),
-        16 => polygons::<ZZ16>(rat_enum::<ZZ16>(max_steps)),
-        20 => polygons::<ZZ20>(rat_enum::<ZZ20>(max_steps)),
-        24 => polygons::<ZZ24>(rat_enum::<ZZ24>(max_steps)),
-        60 => polygons::<ZZ60>(rat_enum::<ZZ60>(max_steps)),
+        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, n_threads)),
+        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, n_threads)),
+        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, n_threads)),
+        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, n_threads)),
+        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, n_threads)),
+        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, n_threads)),
+        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, n_threads)),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -190,18 +351,18 @@ fn print_stats(rats: &[Vec<i8>]) {
     }
 }
 
-fn run_rat_enum_seqs(ring: u8, max_steps: usize) -> Vec<Vec<i8>> {
-    let f: fn(usize) -> Vec<Vec<i8>> = match ring {
-        4 => rat_enum::<ZZ4>,
-        8 => rat_enum::<ZZ8>,
-        12 => rat_enum::<ZZ12>,
-        16 => rat_enum::<ZZ16>,
-        20 => rat_enum::<ZZ20>,
-        24 => rat_enum::<ZZ24>,
-        60 => rat_enum::<ZZ60>,
+fn run_rat_enum_seqs(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<i8>> {
+    let f: fn(usize, usize) -> Vec<Vec<i8>> = match ring {
+        4 => enumerate_dispatch::<ZZ4>,
+        8 => enumerate_dispatch::<ZZ8>,
+        12 => enumerate_dispatch::<ZZ12>,
+        16 => enumerate_dispatch::<ZZ16>,
+        20 => enumerate_dispatch::<ZZ20>,
+        24 => enumerate_dispatch::<ZZ24>,
+        60 => enumerate_dispatch::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
-    f(max_steps)
+    f(max_steps, n_threads)
 }
 
 // --------
@@ -241,6 +402,25 @@ struct Cli {
     /// achiral / rotational-symmetry histogram after enumeration.
     #[arg(long)]
     stats: bool,
+
+    /// Number of worker threads for the DFS.
+    ///
+    /// `1` (default) runs the original single-threaded path
+    /// unchanged. `0` resolves to `num_cpus::get()`. Any other
+    /// positive value is used as-is, capped at `num_cpus::get()`.
+    #[arg(long, default_value_t = 1)]
+    threads: usize,
+}
+
+/// Resolve the `--threads` CLI value to an actual worker count.
+/// `0` -> `num_cpus::get()`; otherwise cap at `num_cpus::get()`.
+fn resolve_n_threads(requested: usize) -> usize {
+    let max = num_cpus::get().max(1);
+    if requested == 0 {
+        max
+    } else {
+        requested.min(max)
+    }
 }
 
 fn main() {
@@ -249,6 +429,8 @@ fn main() {
         let mut verbose = VERBOSE.lock().unwrap();
         *verbose = true;
     }
+
+    let n_threads = resolve_n_threads(cli.threads);
 
     match cli.mode {
         Mode::Bench => {
@@ -262,7 +444,7 @@ fn main() {
             });
 
             let t0 = Instant::now();
-            let rats: Vec<Vec<i8>> = run_rat_enum_seqs(cli.ring, cli.max_steps);
+            let rats: Vec<Vec<i8>> = run_rat_enum_seqs(cli.ring, cli.max_steps, n_threads);
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
@@ -294,7 +476,7 @@ fn main() {
             }
         }
         Mode::Render => {
-            let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps);
+            let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps, n_threads);
 
             let Some(filename) = cli.filename else {
                 return;
