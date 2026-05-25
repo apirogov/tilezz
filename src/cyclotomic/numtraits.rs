@@ -138,35 +138,43 @@ pub trait ReImSign {
 /// overrides can specialize this for storage formats that admit a cheaper
 /// sign query (notably ZZ12 with its `[i64; 4]` integral-basis storage).
 ///
-/// This is **not** a blanket impl on every `IsComplex`: that would block
-/// per-ring overrides on stable Rust (no specialization). Instead we expose
-/// a macro that generates the impl for each ring type, and any type that
-/// wants a custom impl simply opts out by not invoking the macro.
+/// This is **not** a blanket impl on every cyclotomic ring: that would
+/// block per-ring overrides on stable Rust (no specialization). Instead we
+/// expose a macro that generates the impl for each ring type, and any type
+/// that wants a custom impl simply opts out by not invoking the macro.
+///
+/// The macro takes the ring type plus a per-ring `coeffs_real_sign_*`
+/// function from `cyclotomic::sign` whose shape is
+/// `fn(&[Ratio<i64>], &[f64]) -> i8`. Real-sign feeds it the `.real` halves
+/// of the GaussInt coefficient array, imag-sign the `.imag` halves.
 #[macro_export]
 macro_rules! impl_re_im_sign_via_proj {
-    ($t:ty) => {
+    ($t:ty, $sign_func:path) => {
         impl $crate::cyclotomic::ReImSign for $t {
             fn re_sign(&self) -> i8 {
-                let r = <$t as $crate::cyclotomic::ZZComplex>::re(self);
-                use $crate::cyclotomic::numtraits::ZSigned as _;
-                if r.is_positive() {
-                    1
-                } else if r.is_negative() {
-                    -1
-                } else {
-                    0
+                use $crate::cyclotomic::SymNum;
+                let cs = <$t as SymNum>::zz_coeffs(self);
+                let n = cs.len();
+                // Stack-friendly: ZZ rings have at most 8 symbolic roots.
+                let mut buf: [num_rational::Ratio<i64>; 8] =
+                    [num_rational::Ratio::<i64>::new_raw(0, 1); 8];
+                for (i, c) in cs.iter().enumerate() {
+                    buf[i] = c.real;
                 }
+                let roots = <$t as SymNum>::zz_params().sym_roots_sqs;
+                $sign_func(&buf[..n], roots)
             }
             fn im_sign(&self) -> i8 {
-                let i = <$t as $crate::cyclotomic::ZZComplex>::im(self);
-                use $crate::cyclotomic::numtraits::ZSigned as _;
-                if i.is_positive() {
-                    1
-                } else if i.is_negative() {
-                    -1
-                } else {
-                    0
+                use $crate::cyclotomic::SymNum;
+                let cs = <$t as SymNum>::zz_coeffs(self);
+                let n = cs.len();
+                let mut buf: [num_rational::Ratio<i64>; 8] =
+                    [num_rational::Ratio::<i64>::new_raw(0, 1); 8];
+                for (i, c) in cs.iter().enumerate() {
+                    buf[i] = c.imag;
                 }
+                let roots = <$t as SymNum>::zz_params().sym_roots_sqs;
+                $sign_func(&buf[..n], roots)
             }
         }
     };
@@ -211,31 +219,39 @@ macro_rules! impl_intersect_unit_segments_via_general {
 ///
 /// Equivalent to `|self|^2 <= r * r`, with `r >= 0`. Exists so that the DFS
 /// reachability heuristic in `rat_enum` does not have to materialize a
-/// `ZZ::Real` (which for the still-Ratio-backed real subrings would drag the
-/// Z12 / Ratio arithmetic chain back into the hot path).
+/// real-subring intermediate value -- per-ring overrides can stay in
+/// pure-i64 arithmetic.
 ///
 /// Per-ring overrides should compute the squared norm in pure i64 arithmetic
-/// where possible. The default-via-norm_sq macro is provided for rings that
-/// haven't been migrated yet.
+/// where possible. The default-via-complex64 macro is provided for rings
+/// that don't yet have a direct fast path.
 pub trait WithinRadius {
     /// `true` iff `|self|^2 <= radius * radius`. `radius` must be `>= 0`.
     fn within_radius(&self, radius: i64) -> bool;
 }
 
-/// Default `WithinRadius` impl via `norm_sq` + comparison.
+/// Default `WithinRadius` impl via `complex64()` magnitude with a small
+/// epsilon to tolerate float rounding around the boundary.
 ///
-/// Slow for Ratio-backed real subrings (the comparison goes through
-/// `Ratio<i64>` arithmetic). Rings with i64 storage should provide a direct
-/// override instead of invoking this macro.
+/// This is only the slow fallback path for rings without a pure-i64
+/// specialization (currently every ring except ZZ12 uses this). The DFS
+/// pruning in `rat_enum` is monotone -- false-positives only widen the
+/// search, never compromise correctness -- so a small epsilon bias toward
+/// "inside" is safe.
 #[macro_export]
 macro_rules! impl_within_radius_via_norm_sq {
     ($t:ty) => {
         impl $crate::cyclotomic::WithinRadius for $t {
             fn within_radius(&self, radius: i64) -> bool {
-                let n = $crate::cyclotomic::linalg::norm_sq::<$t>(self);
-                let r_sq = <<$t as $crate::cyclotomic::IsRingOrField>::Real
-                    as core::convert::From<i64>>::from(radius * radius);
-                n <= r_sq
+                use $crate::cyclotomic::SymNum;
+                let c = <$t as SymNum>::complex64(self);
+                let norm_sq = c.re * c.re + c.im * c.im;
+                let r_sq = (radius as f64) * (radius as f64);
+                // 1e-9 tolerance: well below the resolution of any
+                // representable lattice point in any ring of practical
+                // interest, but enough to absorb f64 rounding for very
+                // dense rings like ZZ60.
+                norm_sq <= r_sq + 1e-9
             }
         }
     };

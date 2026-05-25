@@ -57,7 +57,7 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
 /// sequences. The closure converts angle slices into the ring's `Rat`.
 fn typed_tileset<T, F>(collection: &Collection, make_rat: F) -> Arc<TileSet<T>>
 where
-    T: tilezz::cyclotomic::IsComplex
+    T: tilezz::cyclotomic::IsRingOrField
         + tilezz::cyclotomic::IsRingOrField
         + tilezz::cyclotomic::Units,
     F: Fn(&[i8]) -> Rat<T>,
@@ -68,7 +68,7 @@ where
 
 fn validate_typed<T>(collection: &Collection, tile_ts: &Arc<TileSet<T>>) -> Result<(), String>
 where
-    T: tilezz::cyclotomic::IsComplex
+    T: tilezz::cyclotomic::IsRingOrField
         + tilezz::cyclotomic::IsRingOrField
         + tilezz::cyclotomic::Units,
 {

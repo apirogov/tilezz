@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField, Units};
 use crate::intgeom::patch::{
     ClosedVertexType, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
 };
@@ -82,7 +82,7 @@ impl VTypeKind {
     }
 }
 
-pub struct OpenVertexTypeInfo<T: IsComplex> {
+pub struct OpenVertexTypeInfo<T: IsRingOrField> {
     vtype: OpenVertexType,
     kind: VTypeKind,
     is_initial: bool,
@@ -94,7 +94,7 @@ pub struct OpenVertexTypeInfo<T: IsComplex> {
     ccw_neighbor_offset: usize,
 }
 
-impl<T: IsComplex> OpenVertexTypeInfo<T> {
+impl<T: IsRingOrField> OpenVertexTypeInfo<T> {
     /// The canonical [`OpenVertexType`] this entry describes.
     pub fn vtype(&self) -> &OpenVertexType {
         &self.vtype
@@ -242,7 +242,7 @@ impl ClosedVertexTypeInfo {
 /// [`CLOSED_ID`] sentinel for transitions that close the junction).
 /// Entries are stored in canonical (sorted) order by `OpenVertexType`,
 /// which makes [`Self::range_by_cw`] a partition over the entries.
-pub struct OpenVertexTypeIndex<T: IsComplex> {
+pub struct OpenVertexTypeIndex<T: IsRingOrField> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<OpenVertexTypeInfo<T>>,
     transitions: Vec<TransitionInfo>,
@@ -251,7 +251,7 @@ pub struct OpenVertexTypeIndex<T: IsComplex> {
     closed_reverse: HashMap<ClosedVertexType, usize>,
 }
 
-impl<T: IsComplex + IsRingOrField + Units> OpenVertexTypeIndex<T> {
+impl<T: IsRingOrField + Units> OpenVertexTypeIndex<T> {
     /// Enumerate all open vertex types reachable from `tileset` and
     /// classify each.
     ///
@@ -474,7 +474,7 @@ type RawTransition = (OpenVertexType, RawDst, TransitionSide, usize, usize);
 
 /// Mutable state shared across the seed and BFS phases of
 /// [`OpenVertexTypeIndex::new`].
-struct BfsState<T: IsComplex> {
+struct BfsState<T: IsRingOrField> {
     /// Every VT discovered so far (seed phase + BFS).
     all_types: BTreeSet<OpenVertexType>,
     /// Subset of `all_types` originating from the seed phase.
@@ -498,7 +498,7 @@ struct BfsState<T: IsComplex> {
     witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
 }
 
-impl<T: IsComplex> Default for BfsState<T> {
+impl<T: IsRingOrField> Default for BfsState<T> {
     fn default() -> Self {
         BfsState {
             all_types: BTreeSet::new(),
@@ -514,7 +514,7 @@ impl<T: IsComplex> Default for BfsState<T> {
 /// Phase 1: extract every junction VT from every legal first-glue of
 /// every seed tile. Each discovered VT records a representative
 /// witness patch (the 2-tile patch that contains it).
-fn seed_phase<T: IsComplex + IsRingOrField + Units>(
+fn seed_phase<T: IsRingOrField + Units>(
     state: &mut BfsState<T>,
     tileset: &Arc<TileSet<T>>,
 ) {
@@ -548,7 +548,7 @@ fn seed_phase<T: IsComplex + IsRingOrField + Units>(
 /// Phase 2: process every VT in the queue. For each, enumerate
 /// touching matches and emit raw transitions; also discover any new
 /// VTs exposed by the glues and enqueue them.
-fn bfs_phase<T: IsComplex + IsRingOrField + Units>(
+fn bfs_phase<T: IsRingOrField + Units>(
     state: &mut BfsState<T>,
     tileset: &Arc<TileSet<T>>,
 ) {
@@ -775,7 +775,7 @@ fn build_transition_arrays(
 
 /// Phase 5: assemble per-VT [`OpenVertexTypeInfo`] records, classifying
 /// each as Dead / Undead / Blessed / Free from the fixpoint results.
-fn classify_and_finalize<T: IsComplex + IsRingOrField + Units>(
+fn classify_and_finalize<T: IsRingOrField + Units>(
     vt_list: Vec<OpenVertexType>,
     has_any_realized: &[bool],
     mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
@@ -1068,7 +1068,7 @@ impl Collection {
     /// Snapshot a built [`OpenVertexTypeIndex`], tagged with `ring`.
     pub fn from_index<T>(idx: &OpenVertexTypeIndex<T>, ring: impl Into<String>) -> Self
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let tile_angles = idx
             .tileset()
@@ -1132,7 +1132,7 @@ impl Collection {
         tile_ts: &Arc<TileSet<T>>,
     ) -> Result<HashMap<usize, GrowingPatch<T>>, String>
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
         let mut out = HashMap::with_capacity(self.vtypes.len());
@@ -1174,7 +1174,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> Vec<(usize, String)>
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let mut errors = Vec::new();
         for v in &self.vtypes {
@@ -1217,7 +1217,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> Vec<((usize, usize), String)>
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let mut errors = Vec::new();
         let known_ids: std::collections::BTreeSet<usize> =
@@ -1330,7 +1330,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> CompletenessReport
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let mut missing: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         let mut matches_checked = 0usize;
@@ -1601,7 +1601,7 @@ mod tests {
     /// `witness.junction_vertex_type_at(pos) == Some(vt)`.)
     fn assert_catalog_validity<T>(idx: &OpenVertexTypeIndex<T>)
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         for info in idx.entries() {
             let observed = info.witness().junction_vertex_type_at(info.witness_pos());
@@ -1647,7 +1647,7 @@ mod tests {
     /// enumerate canonical matches here.
     fn assert_catalog_complete_brute<T>(idx: &OpenVertexTypeIndex<T>)
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let ts = idx.tileset();
         for info in idx.entries() {

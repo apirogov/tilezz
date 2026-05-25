@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
+use tilezz::cyclotomic::{IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::intgeom::vertextypes::{Collection, OpenVertexTypeIndex};
@@ -59,7 +59,7 @@ fn make_ts_10() -> Arc<TileSet<ZZ10>> {
     tileset::penrose::<ZZ10>()
 }
 
-fn collect_generic<T: IsComplex + IsRingOrField + Units>(
+fn collect_generic<T: IsRingOrField + Units>(
     ts: Arc<TileSet<T>>,
     ring_name: &str,
     output: &str,
@@ -109,14 +109,14 @@ fn collect_generic<T: IsComplex + IsRingOrField + Units>(
 
 fn typed_tileset<T, F>(collection: &Collection, make_rat: F) -> Arc<TileSet<T>>
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: IsRingOrField + Units,
     F: Fn(&[i8]) -> Rat<T>,
 {
     let rats: Vec<Rat<T>> = collection.tile_angles.iter().map(|s| make_rat(s)).collect();
     Arc::new(TileSet::new(rats))
 }
 
-fn validate_typed<T: IsComplex + IsRingOrField + Units>(
+fn validate_typed<T: IsRingOrField + Units>(
     collection: &Collection,
     tile_ts: &Arc<TileSet<T>>,
 ) -> Result<(), String> {

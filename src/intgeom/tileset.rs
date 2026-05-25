@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsRingOrField, Units};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tiles;
 
@@ -22,11 +22,11 @@ use crate::intgeom::tiles;
 /// tile at index `i` in that order. The index is stable for the
 /// lifetime of the `TileSet` and is what `tile_id` fields in
 /// `PatchMatch` / `EdgeInfo` / etc. refer to.
-pub struct TileSet<T: IsComplex> {
+pub struct TileSet<T: IsRingOrField> {
     rats: Vec<Rat<T>>,
 }
 
-impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
+impl<T: IsRingOrField + Units> TileSet<T> {
     /// Build a `TileSet` from the given tile shapes.
     ///
     /// Sorts and deduplicates the input. Panics if `rats` is empty or
@@ -83,14 +83,14 @@ impl<T: IsComplex + IsRingOrField + Units> TileSet<T> {
 // TileSet::new(vec![..]) → Arc::new(..)` boilerplate at every call site.
 
 /// Singleton hexagon tileset over a ZZ6-compatible ring.
-pub fn hex<T: IsComplex + IsRingOrField + Units + HasZZ6>() -> Arc<TileSet<T>> {
+pub fn hex<T: IsRingOrField + Units + HasZZ6>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![Rat::from_unchecked(
         &tiles::hexagon::<T>(),
     )]))
 }
 
 /// Singleton square tileset over a ZZ4-compatible ring.
-pub fn square<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>> {
+pub fn square<T: IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![Rat::from_unchecked(
         &tiles::square::<T>(),
     )]))
@@ -98,7 +98,7 @@ pub fn square<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>
 
 /// Square + hexagon tileset over a ring supporting both ZZ4 and ZZ6
 /// (the smallest concrete choice is `ZZ12`).
-pub fn mixed<T: IsComplex + IsRingOrField + Units + HasZZ4 + HasZZ6>() -> Arc<TileSet<T>> {
+pub fn mixed<T: IsRingOrField + Units + HasZZ4 + HasZZ6>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![
         Rat::from_unchecked(&tiles::square::<T>()),
         Rat::from_unchecked(&tiles::hexagon::<T>()),
@@ -107,7 +107,7 @@ pub fn mixed<T: IsComplex + IsRingOrField + Units + HasZZ4 + HasZZ6>() -> Arc<Ti
 
 /// All seven standard tetrominoes (O, I, T, S, Z, J, L) as a single
 /// tileset over a ZZ4-compatible ring.
-pub fn tetrominoes<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>> {
+pub fn tetrominoes<T: IsRingOrField + Units + HasZZ4>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![
         Rat::from_unchecked(&tiles::tetromino_O::<T>()),
         Rat::from_unchecked(&tiles::tetromino_I::<T>()),
@@ -120,7 +120,7 @@ pub fn tetrominoes<T: IsComplex + IsRingOrField + Units + HasZZ4>() -> Arc<TileS
 }
 
 /// Singleton spectre tileset over a ZZ12-compatible ring.
-pub fn spectre<T: IsComplex + IsRingOrField + Units + HasZZ12>() -> Arc<TileSet<T>> {
+pub fn spectre<T: IsRingOrField + Units + HasZZ12>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![Rat::from_unchecked(
         &tiles::spectre::<T>(),
     )]))
@@ -128,7 +128,7 @@ pub fn spectre<T: IsComplex + IsRingOrField + Units + HasZZ12>() -> Arc<TileSet<
 
 /// Penrose P3 (narrow + wide rhomb) tileset over a ZZ10-compatible
 /// ring.
-pub fn penrose<T: IsComplex + IsRingOrField + Units + HasZZ10>() -> Arc<TileSet<T>> {
+pub fn penrose<T: IsRingOrField + Units + HasZZ10>() -> Arc<TileSet<T>> {
     Arc::new(TileSet::new(vec![
         Rat::from_unchecked(&tiles::penrose_p3_narrow::<T>()),
         Rat::from_unchecked(&tiles::penrose_p3_wide::<T>()),

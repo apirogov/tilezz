@@ -2,7 +2,7 @@ use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::cyclotomic::geometry::intersect_unit_segments;
-use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField, Units};
 use crate::intgeom::angles;
 use crate::intgeom::grid::UnitSquareGrid;
 use crate::intgeom::matchtypes::{
@@ -297,14 +297,14 @@ pub enum TransitionSide {
 /// pieces of internal code rely on hole-freeness for correctness; the
 /// relevant comments cite this invariant where it matters.
 #[derive(Clone)]
-pub struct GrowingPatch<T: IsComplex> {
+pub struct GrowingPatch<T: IsRingOrField> {
     match_index: Arc<MatchTypeIndex<T>>,
     state: PatchState<T>,
 }
 
 #[derive(Clone)]
 #[allow(clippy::large_enum_variant)]
-enum PatchState<T: IsComplex> {
+enum PatchState<T: IsRingOrField> {
     Seed {
         tile_id: usize,
         cached_matches: Vec<PatchMatch>,
@@ -350,7 +350,7 @@ enum PatchState<T: IsComplex> {
 /// Returns true if position `pos` on the boundary is a junction vertex,
 /// i.e. the boundary angle differs from the tile's internal angle at the
 /// outgoing edge.
-fn is_junction_at<T: IsComplex + IsRingOrField + Units>(
+fn is_junction_at<T: IsRingOrField + Units>(
     angles: &[i8],
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
@@ -484,7 +484,7 @@ struct RawBoundary {
 }
 
 #[cfg(test)]
-fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
+fn raw_is_junction<T: IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
     pos: usize,
@@ -493,7 +493,7 @@ fn raw_is_junction<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[cfg(test)]
-fn next_junction_on_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn next_junction_on_raw_boundary<T: IsRingOrField + Units>(
     boundary: &RawBoundary,
     tileset: &TileSet<T>,
     from_pos: usize,
@@ -530,7 +530,7 @@ struct RawGlueResult {
 /// are therefore `tile_offset, tile_offset + 1, ...`, modulo the tile edge
 /// count. This helper is intentionally shared by VT witness construction and NT
 /// enumeration so that edge-offset conventions cannot diverge again.
-fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn glue_tile_to_raw_boundary<T: IsRingOrField + Units>(
     boundary: &RawBoundary,
     junc_pos: usize,
     target: EdgeInfo,
@@ -599,7 +599,7 @@ fn glue_tile_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 /// "anchor at CCW survivor" choice keeps the formula uniform — a single
 /// modular subtraction — and matches what's most natural for callers
 /// that just glued at a junction and want the next junction's index.
-fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
+fn glue_match_to_raw_boundary<T: IsRingOrField + Units>(
     boundary: &RawBoundary,
     pm: &PatchMatch,
     tileset: &TileSet<T>,
@@ -677,7 +677,7 @@ fn glue_match_to_raw_boundary<T: IsComplex + IsRingOrField + Units>(
 /// For convex tiles (positive internal angles), the sequence is
 /// monotonically non-increasing. This is asserted by
 /// `assert_junction_angle_sequence_valid` in tests.
-fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
+fn junction_angle_sequence<T: IsRingOrField + Units>(
     vtype: &OpenVertexType,
     tileset: &TileSet<T>,
 ) -> Vec<i8> {
@@ -709,7 +709,7 @@ fn junction_angle_sequence<T: IsComplex + IsRingOrField + Units>(
 /// so the caller sees them at their new indices in the final boundary.
 ///
 /// Returns `(new_boundary, junc_pos_after_last_glue)` on success.
-fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
+fn flower_petal_glue<T: IsRingOrField + Units>(
     mut boundary: RawBoundary,
     mut junc_pos: usize,
     targets: &[EdgeInfo],
@@ -741,7 +741,7 @@ fn flower_petal_glue<T: IsComplex + IsRingOrField + Units>(
     Some((boundary, junc_pos))
 }
 
-impl<T: IsComplex + IsRingOrField + Units> GrowingPatch<T> {
+impl<T: IsRingOrField + Units> GrowingPatch<T> {
     /// Construct a fresh `GrowingPatch` seeded with one tile from
     /// `tileset` (the tile at `seed_tile_id`).
     ///
@@ -2065,7 +2065,7 @@ fn build_glued_edges(
 /// cyclic tile-instance run is split into two linear segments at the array
 /// seam (`[0, first_junction)` and `[last_junction, n)`). See
 /// [`TileSegment`] for details.
-fn compute_segments<T: IsComplex + IsRingOrField + Units>(
+fn compute_segments<T: IsRingOrField + Units>(
     angles: &[i8],
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
@@ -2091,7 +2091,7 @@ fn compute_segments<T: IsComplex + IsRingOrField + Units>(
     segments
 }
 
-fn compute_junctions<T: IsComplex + IsRingOrField + Units>(
+fn compute_junctions<T: IsRingOrField + Units>(
     angles: &[i8],
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
@@ -2102,7 +2102,7 @@ fn compute_junctions<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
+fn compute_candidates_at_position<T: IsRingOrField + Units>(
     pos: usize,
     angles: &[i8],
     rat: &Rat<T>,
@@ -2120,7 +2120,7 @@ fn compute_candidates_at_position<T: IsComplex + IsRingOrField + Units>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
+fn append_match_candidate<T: IsRingOrField + Units>(
     pos: usize,
     angles: &[i8],
     rat: &Rat<T>,
@@ -2163,7 +2163,7 @@ fn append_match_candidate<T: IsComplex + IsRingOrField + Units>(
 /// via `seen`, applies the `keep(start_a, len)` filter before the relatively
 /// expensive `try_glue_precomputed`, and hands surviving matches to `emit`.
 #[allow(clippy::too_many_arguments)]
-fn enumerate_junction_candidates_at<T: IsComplex + IsRingOrField + Units>(
+fn enumerate_junction_candidates_at<T: IsRingOrField + Units>(
     pos: usize,
     angles: &[i8],
     rat: &Rat<T>,
@@ -2286,7 +2286,7 @@ pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n:
 /// `PatchMatch`es are not validated here and may produce geometrically
 /// nonsensical glues that downstream self-intersection checks happen
 /// to accept.
-fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
+fn compute_glue_angles<T: IsRingOrField + Units>(
     angles: &[i8],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
@@ -2306,7 +2306,7 @@ fn compute_glue_angles<T: IsComplex + IsRingOrField + Units>(
 ///
 /// Returns `angles.len() + 1` positions (the starting vertex plus one
 /// after each edge).
-fn trace_polyline_from<T: IsComplex + IsRingOrField + Units>(
+fn trace_polyline_from<T: IsRingOrField + Units>(
     start: T,
     initial_dir: i8,
     angles: &[i8],
@@ -2322,11 +2322,11 @@ fn trace_polyline_from<T: IsComplex + IsRingOrField + Units>(
     positions
 }
 
-fn trace_boundary_positions<T: IsComplex + IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
+fn trace_boundary_positions<T: IsRingOrField + Units>(angles: &[i8]) -> Vec<T> {
     trace_polyline_from(T::zero(), 0, angles)
 }
 
-fn build_boundary_grid<T: IsComplex + IsRingOrField + Units>(
+fn build_boundary_grid<T: IsRingOrField + Units>(
     positions: &[T],
     n: usize,
 ) -> (UnitSquareGrid, Vec<(T, T)>, Vec<usize>, usize) {
@@ -2344,7 +2344,7 @@ fn build_boundary_grid<T: IsComplex + IsRingOrField + Units>(
     (grid, seg_data, boundary_edge_ids, n)
 }
 
-fn register_segment<T: IsComplex + IsRingOrField + Units>(
+fn register_segment<T: IsRingOrField + Units>(
     grid: &mut UnitSquareGrid,
     p1: T,
     p2: T,
@@ -2355,7 +2355,7 @@ fn register_segment<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
-fn unregister_segment<T: IsComplex + IsRingOrField + Units>(
+fn unregister_segment<T: IsRingOrField + Units>(
     grid: &mut UnitSquareGrid,
     seg_data: &[(T, T)],
     id: usize,
@@ -2366,7 +2366,7 @@ fn unregister_segment<T: IsComplex + IsRingOrField + Units>(
     }
 }
 
-fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
+fn check_segment_clear<T: IsRingOrField + Units>(
     grid: &UnitSquareGrid,
     seg_data: &[(T, T)],
     p1: T,
@@ -2392,7 +2392,7 @@ fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
 /// boundary grid via [`check_segment_clear`]. The last segment's CCW
 /// endpoint is permitted to coincide with `allowed_last_endpoint` (this
 /// is where the new tile rejoins the existing boundary).
-fn segments_all_clear<T: IsComplex + IsRingOrField + Units>(
+fn segments_all_clear<T: IsRingOrField + Units>(
     grid: &UnitSquareGrid,
     seg_data: &[(T, T)],
     positions: &[T],
@@ -2416,7 +2416,7 @@ fn segments_all_clear<T: IsComplex + IsRingOrField + Units>(
 /// path (every boundary edge is constructed as a single unit step). A
 /// failure here means upstream broke the unit-edge invariant — an
 /// internal bug, not bad input.
-fn dir_of_edge<T: IsComplex + IsRingOrField + Units>(from: T, to: T) -> i8 {
+fn dir_of_edge<T: IsRingOrField + Units>(from: T, to: T) -> i8 {
     let d = to - from;
     for dir in 0..T::turn() {
         if T::unit(dir) == d {
@@ -3394,7 +3394,7 @@ mod tests {
         );
     }
 
-    fn verify_edges_consistency<T: IsComplex + IsRingOrField + Units>(
+    fn verify_edges_consistency<T: IsRingOrField + Units>(
         gp: &GrowingPatch<T>,
         ts: &Arc<TileSet<T>>,
         label: &str,
@@ -3444,7 +3444,7 @@ mod tests {
     /// For each junction position on `glued`, build the minimal VT witness
     /// and assert that extracting the VT from the witness yields the original.
     /// Returns the number of junctions checked (asserts at least one).
-    fn assert_minimal_witness_roundtrips_for<T: IsComplex + IsRingOrField + Units>(
+    fn assert_minimal_witness_roundtrips_for<T: IsRingOrField + Units>(
         glued: &GrowingPatch<T>,
         mi: &Arc<MatchTypeIndex<T>>,
         label: &str,
@@ -3473,7 +3473,7 @@ mod tests {
     /// locate the matching position in the witness boundary, and assert the
     /// witness/brute VTs agree. Also asserts that the witness angle multiset
     /// equals the brute-force angle multiset.
-    fn assert_witness_matches_brute_force<T: IsComplex + IsRingOrField + Units>(
+    fn assert_witness_matches_brute_force<T: IsRingOrField + Units>(
         brute: &GrowingPatch<T>,
         mi: &Arc<MatchTypeIndex<T>>,
         label: &str,
@@ -3526,7 +3526,7 @@ mod tests {
     /// (a) ends at the witness junction angle, and (b) is monotonically
     /// non-increasing. Returns the number of junctions checked (asserts at
     /// least one).
-    fn assert_junction_angle_sequence_valid<T: IsComplex + IsRingOrField + Units>(
+    fn assert_junction_angle_sequence_valid<T: IsRingOrField + Units>(
         glued: &GrowingPatch<T>,
         mi: &Arc<MatchTypeIndex<T>>,
         label: &str,
@@ -3632,7 +3632,7 @@ mod tests {
         );
     }
 
-    fn brute_force_recurse<T: IsComplex + IsRingOrField + Units>(
+    fn brute_force_recurse<T: IsRingOrField + Units>(
         gp: &mut GrowingPatch<T>,
         history: &mut Vec<PatchMatch>,
         max_tiles: usize,
@@ -3656,7 +3656,7 @@ mod tests {
         }
     }
 
-    fn brute_force_patches<T: IsComplex + IsRingOrField + Units>(
+    fn brute_force_patches<T: IsRingOrField + Units>(
         ts: &Arc<TileSet<T>>,
         max_tiles: usize,
     ) -> BTreeMap<Rat<T>, Vec<Vec<PatchMatch>>> {
@@ -3872,7 +3872,7 @@ mod tests {
     /// Two patches with equal snapshots behave identically against further
     /// `add_tile` attempts — grid corruption would show up as a different
     /// reject set even when angles/edges/etc. are still equal.
-    fn classify_candidates<T: IsComplex + IsRingOrField + Units>(
+    fn classify_candidates<T: IsRingOrField + Units>(
         gp: &GrowingPatch<T>,
     ) -> Vec<(PatchMatch, bool)> {
         let mut results: Vec<(PatchMatch, bool)> = gp
@@ -3891,7 +3891,7 @@ mod tests {
     /// Snapshot every publicly observable component of a growing patch,
     /// plus the candidate classification (which doubles as a grid probe).
     #[allow(clippy::type_complexity)]
-    fn snapshot_growing<T: IsComplex + IsRingOrField + Units>(
+    fn snapshot_growing<T: IsRingOrField + Units>(
         gp: &GrowingPatch<T>,
     ) -> (
         Vec<i8>,

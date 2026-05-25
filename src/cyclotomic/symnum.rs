@@ -284,141 +284,12 @@ macro_rules! impl_symnum_display {
     };
 }
 
-/// Like `impl_symnum!`, but only generates the **real-valued** half
-/// (`$name_real`, e.g. `Z12`) without the complex-valued counterpart.
-///
-/// Used when the complex ring is implemented manually with a different
-/// storage format (currently only ZZ12 with its integral-basis `[i64; 4]`).
-#[macro_export]
-macro_rules! impl_symnum_real_only {
-    ($name:ident, $name_real: ident, $params:ident, $mul_func:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name_real {
-            coeffs: [RatioT; $params.sym_roots_num],
-        }
-
-        impl SymNum for $name_real {
-            type Scalar = RatioT;
-
-            #[inline]
-            fn zz_coeffs(&self) -> &[Self::Scalar] {
-                &self.coeffs
-            }
-
-            #[inline]
-            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
-                &mut self.coeffs
-            }
-
-            #[inline]
-            fn zz_params() -> &'static ZZParams<'static> {
-                &$params
-            }
-
-            #[inline]
-            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
-                $mul_func(x, y)
-            }
-
-            #[inline]
-            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
-                let sc: Self::Scalar = Self::Scalar::from(scalar);
-                let mut ret = [Self::Scalar::zero(); $params.sym_roots_num];
-                for (r, c) in ret.iter_mut().zip(x.iter()) {
-                    *r = *c * sc;
-                }
-                ret.to_vec()
-            }
-
-            fn new(coeffs: &[Self::Scalar]) -> Self {
-                let mut ret = Self {
-                    coeffs: [Self::Scalar::zero(); $params.sym_roots_num],
-                };
-                ret.coeffs.clone_from_slice(coeffs);
-                ret
-            }
-
-            fn complex64(&self) -> Complex64 {
-                static SYM_ROOTS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
-                let roots = SYM_ROOTS
-                    .get_or_init(|| $params.sym_roots_sqs.iter().map(|sq| sq.sqrt()).collect());
-                let mut ret = Complex64::zero();
-                for (c, root) in self.zz_coeffs().iter().zip(roots.iter()) {
-                    let re = c.to_f64().unwrap();
-                    ret += Complex64::new(re * root, 0.0);
-                }
-                ret
-            }
-        }
-
-        impl_symnum_display!($name_real);
-    };
-}
-
 #[macro_export]
 macro_rules! impl_symnum {
-    ($name:ident, $name_real: ident, $params:ident, $mul_func:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name_real {
-            coeffs: [RatioT; $params.sym_roots_num],
-        }
+    ($name:ident, $params:ident, $mul_func:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name {
             coeffs: [GIntT; $params.sym_roots_num],
-        }
-
-        impl SymNum for $name_real {
-            type Scalar = RatioT;
-
-            #[inline]
-            fn zz_coeffs(&self) -> &[Self::Scalar] {
-                &self.coeffs
-            }
-
-            #[inline]
-            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
-                &mut self.coeffs
-            }
-
-            #[inline]
-            fn zz_params() -> &'static ZZParams<'static> {
-                &$params
-            }
-
-            #[inline]
-            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
-                $mul_func(x, y)
-            }
-
-            #[inline]
-            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
-                let sc: Self::Scalar = Self::Scalar::from(scalar);
-                let mut ret = [Self::Scalar::zero(); $params.sym_roots_num];
-                for (r, c) in ret.iter_mut().zip(x.iter()) {
-                    *r = *c * sc;
-                }
-                ret.to_vec()
-            }
-
-            fn new(coeffs: &[Self::Scalar]) -> Self {
-                let mut ret = Self {
-                    coeffs: [Self::Scalar::zero(); $params.sym_roots_num],
-                };
-                ret.coeffs.clone_from_slice(coeffs);
-                ret
-            }
-
-            fn complex64(&self) -> Complex64 {
-                static SYM_ROOTS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
-                let roots = SYM_ROOTS
-                    .get_or_init(|| $params.sym_roots_sqs.iter().map(|sq| sq.sqrt()).collect());
-                let mut ret = Complex64::zero();
-                for (c, root) in self.zz_coeffs().iter().zip(roots.iter()) {
-                    let re = c.to_f64().unwrap();
-                    ret += Complex64::new(re * root, 0.0);
-                }
-                ret
-            }
         }
 
         impl SymNum for $name {
@@ -477,48 +348,23 @@ macro_rules! impl_symnum {
         }
 
         impl_symnum_display!($name);
-        impl_symnum_display!($name_real);
     };
 }
 
 // ----------------
 
-#[macro_export]
-macro_rules! impl_real_traits {
-    ($t:ident, $signum_func:ident) => {
-        impl ZSigned for $t {
-            fn signum(&self) -> Self {
-                $signum_func(self)
-            }
-        }
-
-        impl Ord for $t {
-            fn cmp(&self, other: &Self) -> Ordering {
-                let diff = *self - *other;
-                if diff.is_zero() {
-                    return Ordering::Equal;
-                }
-                if diff.is_positive() {
-                    Ordering::Greater
-                } else {
-                    Ordering::Less
-                }
-            }
-        }
-
-        impl PartialOrd for $t {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                Some(self.cmp(other))
-            }
-        }
-
-        impl RealTraits for $t {}
-    };
-}
-
-// ----------------
-
-pub trait ZZComplex: IsRingOrField {
+/// Predicates that classify a cyclotomic ring element as purely real,
+/// purely imaginary, or mixed.
+///
+/// These query just the GaussInt-backed coefficient layout (or, for ZZ12,
+/// the integral-basis layout); they do **not** materialize a real-subring
+/// value, so they survive the deletion of the Z* types unchanged.
+///
+/// `ZZComplex` is intentionally **not** a supertrait of `IsRingOrField` --
+/// it would close a `ComplexTraits -> ZZComplex -> IsRingOrField`
+/// supertrait cycle. Instead, `ComplexTraits: ZZComplex` carries the
+/// `is_real`/`is_imag` API forward to every ring.
+pub trait ZZComplex {
     /// Return true if the value is purely real.
     fn is_real(&self) -> bool;
 
@@ -528,32 +374,6 @@ pub trait ZZComplex: IsRingOrField {
     /// Return true if the value is mixed real **and** imaginary.
     fn is_complex(&self) -> bool {
         !self.is_real() && !self.is_imag()
-    }
-
-    // FIXME: projection is NOT supported in general by the ring, needs field!
-    // --------
-    /// Return the real part of the value,
-    /// i.e. the value (z + z.conj()) / 2
-    fn re(&self) -> <Self as IsRingOrField>::Real
-    where
-        Self: SymNum;
-
-    /// Return the imaginary part of the value (rotated onto the real axis),
-    /// i.e. the value (z - z.conj()) / 2i
-    fn im(&self) -> <Self as IsRingOrField>::Real
-    where
-        Self: SymNum;
-    // --------
-
-    /// Split the value into its real and imaginary contributions.
-    /// Note that the imaginary component is converted to real.
-    ///
-    // NOTE: z = dot(1, z) + i*wedge(1, z), as dot(1, z) = Re(z), wedge(1, z) = Im(z)
-    fn re_im(&self) -> (<Self as IsRingOrField>::Real, <Self as IsRingOrField>::Real)
-    where
-        Self: SymNum,
-    {
-        (self.re(), self.im())
     }
 }
 
@@ -577,22 +397,6 @@ macro_rules! impl_complex_traits {
             fn is_imag(&self) -> bool {
                 self.zz_coeffs().iter().all(|c| c.real.is_zero())
             }
-
-            fn re(&self) -> <Self as IsRingOrField>::Real {
-                let mut ret = <Self as IsRingOrField>::Real::zero();
-                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(self.zz_coeffs()) {
-                    *r = c.real;
-                }
-                ret
-            }
-
-            fn im(&self) -> <Self as IsRingOrField>::Real {
-                let mut ret = <Self as IsRingOrField>::Real::zero();
-                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(self.zz_coeffs()) {
-                    *r = c.imag;
-                }
-                ret
-            }
         }
 
         impl ComplexTraits for $t {}
@@ -602,12 +406,7 @@ macro_rules! impl_complex_traits {
 // ----------------
 
 macro_rules! impl_conj {
-    ($name:ident, $name_real: ident) => {
-        impl Conj for $name_real {
-            fn conj(&self) -> Self {
-                self.clone()
-            }
-        }
+    ($name:ident) => {
         impl Conj for $name {
             fn conj(&self) -> Self {
                 let mut ret = *self;
@@ -685,107 +484,30 @@ macro_rules! impl_intring_traits {
 
 #[macro_export]
 macro_rules! impl_ring_traits {
-    ($name:ident, $name_real: ident) => {
-        impl_primint_traits!($name_real);
+    ($name:ident) => {
         impl_primint_traits!($name);
 
-        impl_intring_traits!($name_real);
         impl_intring_traits!($name);
 
-        impl_conj!($name, $name_real);
+        impl_conj!($name);
 
-        impl RingTraits for $name_real {}
         impl RingTraits for $name {}
-    };
-}
-
-/// Like `impl_functional_traits!`, but only emits the real-half impls.
-///
-/// Used in conjunction with `impl_symnum_real_only!` when the complex
-/// counterpart of the ring is implemented manually with a different
-/// storage layout (currently only ZZ12).
-///
-/// Note that the `IsRingOrField` / `IsRing` / `ZType` impls require us
-/// to name the (manually-implemented) complex type. The `impl_functional_traits!`
-/// macro normally derives `ZZN` from `ZN`, but we keep this simple by
-/// requiring the caller to pass the complex name explicitly.
-#[macro_export]
-macro_rules! impl_functional_traits_real_only {
-    ($name_real: ident, $signum_func:ident) => {
-        // Conj for the real subring is the identity.
-        impl Conj for $name_real {
-            fn conj(&self) -> Self {
-                *self
-            }
-        }
-
-        impl_primint_traits!($name_real);
-        impl_intring_traits!($name_real);
-
-        impl RingTraits for $name_real {}
-
-        impl_real_traits!($name_real, $signum_func);
     };
 }
 
 // --------
 #[macro_export]
 macro_rules! impl_functional_traits {
-    ($name:ident, $name_real: ident, $signum_func:ident) => {
-        impl_ring_traits!($name, $name_real);
-
-        impl_real_traits!($name_real, $signum_func);
+    ($name:ident) => {
+        impl_ring_traits!($name);
 
         impl_complex_traits!($name);
 
-        impl IsRingOrField for $name {
-            type Real = $name_real;
-            type Complex = $name;
-        }
-        impl IsRingOrField for $name_real {
-            type Real = $name_real;
-            type Complex = $name;
-        }
+        impl IsRingOrField for $name {}
 
-        impl IsRing for $name {
-            type Real = $name_real;
-            type Complex = $name;
-        }
-        impl IsRing for $name_real {
-            type Real = $name_real;
-            type Complex = $name;
-        }
+        impl IsRing for $name {}
 
-        impl IsReal for $name_real {
-            type Ring = $name_real;
-        }
-
-        impl IsComplex for $name {
-            type Ring = $name;
-        }
-
-        impl ZType for $name_real {
-            type Complex = $name;
-        }
-        impl ZZType for $name {
-            type Real = $name_real;
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! impl_conversions {
-    ($zz:ident, $z:ident) => {
-        impl From<$z> for $zz {
-            /// Lift real-valued ring value into the corresponding cyclomatic ring
-            fn from(value: $z) -> Self {
-                let mut ret = Self::zero();
-                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
-                    *r = (*c).into();
-                }
-                ret
-            }
-        }
+        impl ZZType for $name {}
     };
 }
 
@@ -948,23 +670,6 @@ macro_rules! zz_test {
                     }
                 }
                 assert_eq!(sc_fac, max_fac);
-            }
-
-            #[test]
-            fn test_xy() {
-                if !ZZi::has_qturn() {
-                    return;
-                }
-
-                // test correctness of splitting and reconstruction
-                for a in 0..ZZi::hturn() {
-                    let p = <ZZi as Units>::unit(a);
-                    let (x, y) = p.re_im();
-                    assert_eq!(
-                        p,
-                        ZZi::from(x) + ZZi::from(y) * <ZZi as Units>::unit(ZZi::qturn())
-                    );
-                }
             }
 
             #[test]

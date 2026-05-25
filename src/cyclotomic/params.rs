@@ -137,17 +137,9 @@ pub const ZZ12_PARAMS: ZZParams = ZZParams {
     scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 1], [1, 0]],
 };
-/// Dimension multiplication matrix (for Z[i]-valued vectors):
-///    c d
-/// a [1 s]
-/// b [s 3]
-/// where s = sqrt(3)
-pub fn zz12_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    let int3 = T::from_i64(3).unwrap();
-    match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + (b * d * int3), a * d + b * c],
-    }
-}
+// NOTE: the symbolic-basis `zz12_mul` is intentionally absent. ZZ12 has
+// migrated to an integral-basis storage with a hand-rolled `Mul<ZZ12>`
+// impl in `zz12.rs`; the symbolic multiplication table is no longer used.
 
 // ----------------
 /// Hex integers
