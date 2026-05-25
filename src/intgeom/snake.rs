@@ -374,7 +374,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
         // Iterate the precomputed deduplicated cell set for this segment's
         // (dx, dy) cell offset (one of 9 cases). Yields at most 8 cells, all
         // unique -- no runtime dedup needed at the cell level.
-        for cell in UnitSquareGrid::unit_seg_cells(prev_pt, new_pt) {
+        for cell in UnitSquareGrid::seg_neighborhood_of(prev_pt, new_pt) {
             for &pt_idx in self.grid.get(cell) {
                 // Vertex-revisit check (only when new_pt is not origin --
                 // origin matches points[0] by polygon closure, which is fine).
