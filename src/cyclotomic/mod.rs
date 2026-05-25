@@ -1,6 +1,6 @@
 //! Cyclotomic rings and fields.
 
-mod numtraits;
+pub(crate) mod numtraits;
 
 pub mod gaussint;
 
@@ -20,6 +20,8 @@ mod traits;
 
 #[macro_use]
 mod types;
+
+mod zz12;
 
 mod units;
 
@@ -44,4 +46,5 @@ pub use traits::{IsComplex, IsReal, IsRing, IsRingOrField, IsZZ4};
 pub use traits::{ZType, ZZType};
 
 pub use types::{Z10, Z12, Z16, Z20, Z24, Z30, Z32, Z4, Z6, Z60, Z8};
-pub use types::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ30, ZZ32, ZZ4, ZZ6, ZZ60, ZZ8};
+pub use types::{ZZ10, ZZ16, ZZ20, ZZ24, ZZ30, ZZ32, ZZ4, ZZ6, ZZ60, ZZ8};
+pub use zz12::ZZ12;

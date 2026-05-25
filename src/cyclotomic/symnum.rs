@@ -284,6 +284,77 @@ macro_rules! impl_symnum_display {
     };
 }
 
+/// Like `impl_symnum!`, but only generates the **real-valued** half
+/// (`$name_real`, e.g. `Z12`) without the complex-valued counterpart.
+///
+/// Used when the complex ring is implemented manually with a different
+/// storage format (currently only ZZ12 with its integral-basis `[i64; 4]`).
+#[macro_export]
+macro_rules! impl_symnum_real_only {
+    ($name:ident, $name_real: ident, $params:ident, $mul_func:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name_real {
+            coeffs: [RatioT; $params.sym_roots_num],
+        }
+
+        impl SymNum for $name_real {
+            type Scalar = RatioT;
+
+            #[inline]
+            fn zz_coeffs(&self) -> &[Self::Scalar] {
+                &self.coeffs
+            }
+
+            #[inline]
+            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
+                &mut self.coeffs
+            }
+
+            #[inline]
+            fn zz_params() -> &'static ZZParams<'static> {
+                &$params
+            }
+
+            #[inline]
+            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
+                $mul_func(x, y)
+            }
+
+            #[inline]
+            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
+                let sc: Self::Scalar = Self::Scalar::from(scalar);
+                let mut ret = [Self::Scalar::zero(); $params.sym_roots_num];
+                for (r, c) in ret.iter_mut().zip(x.iter()) {
+                    *r = *c * sc;
+                }
+                ret.to_vec()
+            }
+
+            fn new(coeffs: &[Self::Scalar]) -> Self {
+                let mut ret = Self {
+                    coeffs: [Self::Scalar::zero(); $params.sym_roots_num],
+                };
+                ret.coeffs.clone_from_slice(coeffs);
+                ret
+            }
+
+            fn complex64(&self) -> Complex64 {
+                static SYM_ROOTS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+                let roots = SYM_ROOTS
+                    .get_or_init(|| $params.sym_roots_sqs.iter().map(|sq| sq.sqrt()).collect());
+                let mut ret = Complex64::zero();
+                for (c, root) in self.zz_coeffs().iter().zip(roots.iter()) {
+                    let re = c.to_f64().unwrap();
+                    ret += Complex64::new(re * root, 0.0);
+                }
+                ret
+            }
+        }
+
+        impl_symnum_display!($name_real);
+    };
+}
+
 #[macro_export]
 macro_rules! impl_symnum {
     ($name:ident, $name_real: ident, $params:ident, $mul_func:ident) => {
@@ -625,6 +696,35 @@ macro_rules! impl_ring_traits {
 
         impl RingTraits for $name_real {}
         impl RingTraits for $name {}
+    };
+}
+
+/// Like `impl_functional_traits!`, but only emits the real-half impls.
+///
+/// Used in conjunction with `impl_symnum_real_only!` when the complex
+/// counterpart of the ring is implemented manually with a different
+/// storage layout (currently only ZZ12).
+///
+/// Note that the `IsRingOrField` / `IsRing` / `ZType` impls require us
+/// to name the (manually-implemented) complex type. The `impl_functional_traits!`
+/// macro normally derives `ZZN` from `ZN`, but we keep this simple by
+/// requiring the caller to pass the complex name explicitly.
+#[macro_export]
+macro_rules! impl_functional_traits_real_only {
+    ($name_real: ident, $signum_func:ident) => {
+        // Conj for the real subring is the identity.
+        impl Conj for $name_real {
+            fn conj(&self) -> Self {
+                *self
+            }
+        }
+
+        impl_primint_traits!($name_real);
+        impl_intring_traits!($name_real);
+
+        impl RingTraits for $name_real {}
+
+        impl_real_traits!($name_real, $signum_func);
     };
 }
 

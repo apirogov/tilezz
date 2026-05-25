@@ -129,35 +129,45 @@ pub trait ReImSign {
     fn im_sign(&self) -> i8;
 }
 
-/// Blanket impl: any complex-valued ring with `ZSigned` real components
-/// can extract signs via `re_im()` + `ZSigned` predicates.
+/// Default `ReImSign` implementation: any complex-valued ring with
+/// `ZSigned` real components can extract signs via `re_im()` + `ZSigned`
+/// predicates.
 ///
 /// This is semantically a no-op vs the previous direct usage of `is_positive`
 /// / `is_negative` / `is_zero` on the projected real parts. Per-ring
 /// overrides can specialize this for storage formats that admit a cheaper
-/// sign query.
-impl<T> ReImSign for T
-where
-    T: super::traits::IsComplex,
-{
-    fn re_sign(&self) -> i8 {
-        let r = self.re();
-        if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_positive(&r) {
-            1
-        } else if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_negative(&r) {
-            -1
-        } else {
-            0
+/// sign query (notably ZZ12 with its `[i64; 4]` integral-basis storage).
+///
+/// This is **not** a blanket impl on every `IsComplex`: that would block
+/// per-ring overrides on stable Rust (no specialization). Instead we expose
+/// a macro that generates the impl for each ring type, and any type that
+/// wants a custom impl simply opts out by not invoking the macro.
+#[macro_export]
+macro_rules! impl_re_im_sign_via_proj {
+    ($t:ty) => {
+        impl $crate::cyclotomic::ReImSign for $t {
+            fn re_sign(&self) -> i8 {
+                let r = <$t as $crate::cyclotomic::ZZComplex>::re(self);
+                use $crate::cyclotomic::numtraits::ZSigned as _;
+                if r.is_positive() {
+                    1
+                } else if r.is_negative() {
+                    -1
+                } else {
+                    0
+                }
+            }
+            fn im_sign(&self) -> i8 {
+                let i = <$t as $crate::cyclotomic::ZZComplex>::im(self);
+                use $crate::cyclotomic::numtraits::ZSigned as _;
+                if i.is_positive() {
+                    1
+                } else if i.is_negative() {
+                    -1
+                } else {
+                    0
+                }
+            }
         }
-    }
-    fn im_sign(&self) -> i8 {
-        let i = self.im();
-        if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_positive(&i) {
-            1
-        } else if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_negative(&i) {
-            -1
-        } else {
-            0
-        }
-    }
+    };
 }

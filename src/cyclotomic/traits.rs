@@ -1,4 +1,4 @@
-use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, OneImag, ZSigned};
+use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, OneImag, ReImSign, ZSigned};
 use super::symnum::SymNum;
 use super::symnum::{IntT, ZZComplex};
 use super::units::Units;
@@ -32,7 +32,7 @@ pub trait IsReal: IsSymNum + RealTraits {
         + IsRingOrField<Real = Self::Ring>
         + IsReal<Ring = Self::Ring>;
 }
-pub trait IsComplex: IsSymNum + ComplexTraits {
+pub trait IsComplex: IsSymNum + ComplexTraits + ReImSign {
     type Ring: IsRing<Complex = Self::Ring>
         + IsRingOrField<Complex = Self::Ring>
         + IsComplex<Ring = Self::Ring>;

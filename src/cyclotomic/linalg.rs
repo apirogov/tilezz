@@ -112,15 +112,20 @@ mod tests {
 
         // {0, 1} dot {1/2, sqrt(3)/2} = sqrt(3) / 2
         // => dot^2 = 3/4
-        let d1 = ZZ12::from(dot(&p60, &pi).pow(2_u8)).complex64();
+        // NOTE: we project via `Z12::complex64()` directly because the new
+        // ZZ12 storage uses an *integral* cyclotomic basis (`[i64; 4]`),
+        // which can't represent fractional Z12 values like 3/4. Z12's own
+        // f64 projection is the right tool to inspect such intermediate
+        // real values numerically.
+        let d1 = dot(&p60, &pi).pow(2_u8).complex64();
         assert_eq!(d1.re, 0.75);
         assert_eq!(d1.im, 0.0);
 
         // same but with negative sign (check indirectly)
-        let d2 = ZZ12::from(dot(&pm60, &pi)).complex64();
+        let d2 = dot(&pm60, &pi).complex64();
         assert!(d2.re < 0.0);
         assert_eq!(d2.im, 0.0);
-        assert_eq!(ZZ12::from(dot(&pm60, &pi).pow(2_u8)).complex64().re, 0.75);
+        assert_eq!(dot(&pm60, &pi).pow(2_u8).complex64().re, 0.75);
     }
 
     #[test]
