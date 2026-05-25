@@ -3,7 +3,7 @@
 use num_traits::One;
 
 use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsComplex, IsRingOrField};
-use super::types::{ZZ10, ZZ20, ZZ6};
+use super::types::{ZZ10, ZZ20};
 use super::units::Units;
 
 // Returns the sum of all units of a complex integer ring.
@@ -40,9 +40,6 @@ pub fn sqrt6<T: IsComplex + HasZZ8 + HasZZ12 + Units>() -> T {
 }
 
 // misc. irregular
-pub fn isqrt3() -> ZZ6 {
-    <ZZ6 as Units>::unit(1) + <ZZ6 as Units>::unit(2)
-}
 pub fn zz10_isqrt_penta() -> ZZ10 {
     <ZZ10 as Units>::unit(1) * ZZ10::from(4) - ZZ10::one() - sqrt5()
 }
@@ -54,7 +51,7 @@ pub fn zz20_half_sqrt_penta() -> ZZ20 {
 mod tests {
     use super::super::params::ZZ10_Y;
     use super::super::symnum::SymNum;
-    use super::super::types::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ30, ZZ32, ZZ60, ZZ8};
+    use super::super::types::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
     use super::*;
 
     #[test]
@@ -79,14 +76,12 @@ mod tests {
 
         assert_eq!(sqrt5::<ZZ10>().complex64().re, sq5);
         assert_eq!(sqrt5::<ZZ20>().complex64().re, sq5);
-        assert_eq!(sqrt5::<ZZ30>().complex64().re, sq5);
         assert_eq!(sqrt5::<ZZ60>().complex64().re, sq5);
 
         assert_eq!(sqrt6::<ZZ24>().complex64().re, sq6);
         // assert_eq!(sqrt6::<ZZ120>().complex().re, sq6);
         // assert_eq!(sqrt6::<ZZ240>().complex().re, sq6);
 
-        assert_eq!(isqrt3().complex64().im, sq3);
         assert_eq!(zz10_isqrt_penta().complex64().im, sq_penta);
         assert_eq!(zz20_half_sqrt_penta().complex64().re, hsq_penta);
     }
