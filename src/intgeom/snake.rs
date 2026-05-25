@@ -9,7 +9,7 @@ use num_traits::Zero;
 
 use super::angles::normalize_angle;
 use super::grid::UnitSquareGrid;
-use crate::cyclotomic::geometry::intersect;
+use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::linalg::wedge;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 
@@ -360,7 +360,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             if new_pt_nz && (new_pt == x || new_pt == y) {
                 return false;
             }
-            if intersect(&new_seg, &s) {
+            if intersect_unit_segments(&new_seg, &s) {
                 return false;
             }
         }

@@ -172,6 +172,41 @@ macro_rules! impl_re_im_sign_via_proj {
     };
 }
 
+/// Per-ring specialization hook for the unit-length segment intersection test.
+///
+/// `intersect_unit_segments(s1, s2)` is semantically equivalent to the generic
+/// `cyclotomic::geometry::intersect(s1, s2)`, but **assumes** both segments
+/// have unit length (i.e. `s1.1 - s1.0` and `s2.1 - s2.0` are unit vectors of
+/// the ring's CCW unit group).
+///
+/// The hot-path implementation lives in ZZ12 and uses a 3-multiplication
+/// pure-i64 fast path that exploits the unit-length structure. Every other
+/// ring defers to the generic `intersect` via `impl_intersect_unit_segments_via_general!`.
+pub trait IntersectUnitSegments: Sized {
+    /// Return whether the unit-length segments `s1` and `s2` intersect.
+    /// Touching only in endpoints does **not** count as intersection.
+    fn intersect_unit_segments(s1: &(Self, Self), s2: &(Self, Self)) -> bool;
+}
+
+/// Default `IntersectUnitSegments` impl: just call the generic `intersect`.
+///
+/// Per-ring overrides (notably ZZ12) opt out by not invoking this macro and
+/// providing a specialized impl directly.
+#[macro_export]
+macro_rules! impl_intersect_unit_segments_via_general {
+    ($t:ty) => {
+        impl $crate::cyclotomic::IntersectUnitSegments for $t {
+            #[inline]
+            fn intersect_unit_segments(
+                s1: &($t, $t),
+                s2: &($t, $t),
+            ) -> bool {
+                $crate::cyclotomic::geometry::intersect::<$t>(s1, s2)
+            }
+        }
+    };
+}
+
 /// Predicate "this point is within Euclidean radius `r` of the origin".
 ///
 /// Equivalent to `|self|^2 <= r * r`, with `r >= 0`. Exists so that the DFS

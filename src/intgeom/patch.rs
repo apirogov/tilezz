@@ -1,7 +1,7 @@
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
-use crate::cyclotomic::geometry::intersect;
+use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 use crate::intgeom::angles;
 use crate::intgeom::grid::UnitSquareGrid;
@@ -2384,7 +2384,7 @@ fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
         if !is_allowed && (p2 == x || p2 == y) {
             return false;
         }
-        if intersect(&(p1, p2), &(x, y)) {
+        if intersect_unit_segments(&(p1, p2), &(x, y)) {
             return false;
         }
     }

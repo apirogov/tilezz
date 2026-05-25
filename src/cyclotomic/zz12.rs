@@ -39,7 +39,7 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 use num_traits::{One, Pow, Zero};
 
-use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, ReImSign, WithinRadius};
+use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, IntersectUnitSegments, ReImSign, WithinRadius};
 use super::params::ZZ12_PARAMS;
 use super::symnum::{SymNum, ZZComplex, ZZParams};
 use super::traits::{
@@ -619,6 +619,100 @@ impl WithinRadius for ZZ12 {
         let n = 2 * (s * b + t * c);
         let four_r_sq = 4 * radius * radius;
         sign_m_plus_n_sqrt3(m - four_r_sq, n) <= 0
+    }
+}
+
+// ----------------
+// IntersectUnitSegments override: 3-multiplication pure-i64 fast path that
+// exploits the unit-length structure of both input segments.
+//
+// Math:
+//
+// For unit segments `(a, b)` and `(c, d)` define
+//   uA = b - a, uB = d - c, delta = c - a.
+// Then (using `wedge(x, y) = Im(conj(x) * y)`):
+//
+//   V = wedge(uA, delta)        -- 1 ZZ12 mul: conj(uA) * delta
+//   K = wedge(uA, uB)           -- 1 ZZ12 mul: conj(uA) * uB
+//   W = wedge(delta, uB)        -- 1 ZZ12 mul: conj(delta) * uB
+//
+// By bilinearity of `wedge`:
+//   wedge(uA, delta + uB) = V + K     (this is `wedge(uA, d - a)`)
+//   wedge(delta - uA, uB) = W - K     (this is `wedge(c - b, uB)`)
+//
+// Matching the generic `intersect` predicates:
+//   is_ccw(a, (c, d))   = sign(wedge(delta, uB + delta))   = sign(W) > 0
+//   is_ccw(b, (c, d))   = sign(wedge(delta - uA, uB + delta - uA))
+//                       = sign(W - K) > 0
+//   is_ccw(a, (b, c))   = sign(wedge(uA, delta))           = sign(V) > 0
+//   is_ccw(a, (b, d))   = sign(wedge(uA, uB + delta))      = sign(V + K) > 0
+//
+// So the generic non-colinear branch
+//   is_ccw(a, (c, d)) != is_ccw(b, (c, d)) && is_ccw(a, (b, c)) != is_ccw(a, (b, d))
+// becomes
+//   (sign(W) > 0) != (sign(W - K) > 0) && (sign(V) > 0) != (sign(V + K) > 0).
+//
+// If `sign(K) == 0` (uA parallel to uB), the colinear/parallel handling of
+// the generic `intersect` may apply, so we fall back to it -- this case is
+// rare on the rat_enum hot path. (Two parallel unit segments either don't
+// touch, touch in an endpoint, or are colinear and overlap; only the last
+// matters and is handled by the is_between check inside `intersect`.)
+
+/// Imaginary-part components of a ZZ12 value `z = (a, b, c, d)`:
+/// `Im(z) = (im_m + im_n * sqrt(3)) / 2` where `im_m = b + 2*d`, `im_n = c`.
+#[inline]
+fn im_components(z: &ZZ12) -> (i64, i64) {
+    let [_, b, c, d] = z.coeffs;
+    (b + 2 * d, c)
+}
+
+impl IntersectUnitSegments for ZZ12 {
+    #[inline]
+    fn intersect_unit_segments(
+        s1: &(ZZ12, ZZ12),
+        s2: &(ZZ12, ZZ12),
+    ) -> bool {
+        let (a, b) = *s1;
+        let (c, d) = *s2;
+
+        // Touching endpoints do not count as a proper intersection.
+        // (If true, there can be no other intersection either.)
+        if a == c || a == d || b == c || b == d {
+            return false;
+        }
+
+        let u_a = b - a;
+        let u_b = d - c;
+        let delta = c - a;
+
+        // ZZ12 mul #1: K = wedge(uA, uB).
+        // If sign(K) == 0 -> uA parallel to uB. Fall back to the generic
+        // intersect to handle the (rare) colinear-overlap case correctly.
+        let (k_m, k_n) = im_components(&(u_a.conj() * u_b));
+        let sign_k = sign_m_plus_n_sqrt3(k_m, k_n);
+        if sign_k == 0 {
+            return super::geometry::intersect::<ZZ12>(s1, s2);
+        }
+
+        // ZZ12 mul #2: W = wedge(delta, uB).
+        // First half of the non-colinear cross test:
+        //   is_ccw(a, (c, d))   = (sign(W)     > 0)
+        //   is_ccw(b, (c, d))   = (sign(W - K) > 0)
+        // Short-circuit `&&` early if these match.
+        let (w_m, w_n) = im_components(&(delta.conj() * u_b));
+        let sign_w = sign_m_plus_n_sqrt3(w_m, w_n);
+        let sign_w_minus_k = sign_m_plus_n_sqrt3(w_m - k_m, w_n - k_n);
+        if (sign_w > 0) == (sign_w_minus_k > 0) {
+            return false;
+        }
+
+        // ZZ12 mul #3: V = wedge(uA, delta).
+        //   is_ccw(a, (b, c))   = (sign(V)     > 0)
+        //   is_ccw(a, (b, d))   = (sign(V + K) > 0)
+        let (v_m, v_n) = im_components(&(u_a.conj() * delta));
+        let sign_v = sign_m_plus_n_sqrt3(v_m, v_n);
+        let sign_v_plus_k = sign_m_plus_n_sqrt3(v_m + k_m, v_n + k_n);
+        (sign_v > 0) != (sign_v_plus_k > 0)
     }
 }
 

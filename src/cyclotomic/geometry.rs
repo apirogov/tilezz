@@ -2,7 +2,7 @@
 use std::ops::Range;
 
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
-use super::numtraits::{Conj, OneImag, ReImSign, ZSigned};
+use super::numtraits::{Conj, IntersectUnitSegments, OneImag, ReImSign, ZSigned};
 use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
@@ -53,6 +53,25 @@ pub fn intersect<ZZ: IsComplex + Conj + ReImSign + PartialEq>(
         // TODO: understand logic why this works
         is_ccw(&a, (&c, &d)) != is_ccw(&b, (&c, &d)) && is_ccw(&a, (&b, &c)) != is_ccw(&a, (&b, &d))
     }
+}
+
+/// Return whether two unit-length segments intersect.
+///
+/// **Precondition**: both `s1.1 - s1.0` and `s2.1 - s2.0` are unit vectors of
+/// the ring's CCW unit group. Behaviour is unspecified if either segment is
+/// not unit-length; callers that cannot guarantee unit-length should use the
+/// generic [`intersect`] instead.
+///
+/// Touching only in endpoints does **not** count as intersection.
+///
+/// Per-ring overrides may exploit the unit-length precondition for speed
+/// (see `IntersectUnitSegments` and the ZZ12 specialization).
+#[inline]
+pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
+    s1: &(ZZ, ZZ),
+    s2: &(ZZ, ZZ),
+) -> bool {
+    ZZ::intersect_unit_segments(s1, s2)
 }
 
 /// Return whether a point is inside a rectangle or on its boundary.
@@ -113,6 +132,7 @@ mod tests {
 
     use super::super::numtraits::{Ccw, OneImag};
     use super::super::types::ZZ12;
+    use super::super::units::Units;
     use super::*;
 
     type ZZi = ZZ12;
@@ -195,6 +215,42 @@ mod tests {
         assert!(intersect(&(a, f), &(b, e))); // perp
         assert!(intersect(&(a, f), &(c, e))); // non-perp
         assert!(intersect(&(a, f), &(d, e))); // non-perp
+    }
+
+    #[test]
+    fn test_intersect_unit_segments_matches_intersect() {
+        // Sanity check: for every pair of unit-length segments we can build
+        // from points on the ZZ12 unit grid (`+/-` real axis, +/- imag axis,
+        // and a few diagonals), the specialized fast path agrees with the
+        // generic `intersect`.
+        let zero: ZZi = ZZi::zero();
+        let one: ZZi = ZZi::one();
+        let mi_one: ZZi = -one;
+        let one_i: ZZi = ZZi::one_i();
+        let mi_i: ZZi = -one_i;
+        let one_plus_i: ZZi = one + one_i;
+
+        // Each point with its 4 axis-unit neighbors gives unit segments.
+        let centers = [zero, one, mi_one, one_i, mi_i, one_plus_i];
+
+        let mut unit_segs: Vec<(ZZi, ZZi)> = Vec::new();
+        for &c in &centers {
+            for k in 0..12i8 {
+                let u = <ZZi as Units>::unit(k);
+                unit_segs.push((c, c + u));
+            }
+        }
+
+        for s1 in &unit_segs {
+            for s2 in &unit_segs {
+                let general = intersect(s1, s2);
+                let specialized = intersect_unit_segments(s1, s2);
+                assert_eq!(
+                    general, specialized,
+                    "mismatch for s1={s1:?}, s2={s2:?}: general={general} specialized={specialized}"
+                );
+            }
+        }
     }
 
     #[test]
