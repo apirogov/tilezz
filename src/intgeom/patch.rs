@@ -2337,8 +2337,7 @@ fn build_boundary_grid<T: IsComplex + IsRingOrField + Units>(
         let p1 = positions[i];
         let p2 = positions[i + 1];
         seg_data.push((p1, p2));
-        let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
-        for &cell in &cells {
+        for cell in UnitSquareGrid::seg_neighborhood_of(p1, p2) {
             grid.add(cell, i);
         }
     }
@@ -2351,8 +2350,7 @@ fn register_segment<T: IsComplex + IsRingOrField + Units>(
     p2: T,
     id: usize,
 ) {
-    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
-    for &cell in &cells {
+    for cell in UnitSquareGrid::seg_neighborhood_of(p1, p2) {
         grid.add(cell, id);
     }
 }
@@ -2363,8 +2361,7 @@ fn unregister_segment<T: IsComplex + IsRingOrField + Units>(
     id: usize,
 ) {
     let (p1, p2) = seg_data[id];
-    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
-    for &cell in &cells {
+    for cell in UnitSquareGrid::seg_neighborhood_of(p1, p2) {
         grid.remove(cell, id);
     }
 }
@@ -2376,16 +2373,16 @@ fn check_segment_clear<T: IsComplex + IsRingOrField + Units>(
     p2: T,
     allowed_endpoint: Option<T>,
 ) -> bool {
-    let cells = UnitSquareGrid::seg_neighborhood_of(p1, p2);
-    let near_ids = grid.get_cells(&cells);
-    for &id in &near_ids {
-        let (x, y) = seg_data[id];
-        let is_allowed = allowed_endpoint == Some(p2);
-        if !is_allowed && (p2 == x || p2 == y) {
-            return false;
-        }
-        if intersect_unit_segments(&(p1, p2), &(x, y)) {
-            return false;
+    let is_allowed = allowed_endpoint == Some(p2);
+    for cell in UnitSquareGrid::seg_neighborhood_of(p1, p2) {
+        for &id in grid.get(cell) {
+            let (x, y) = seg_data[id];
+            if !is_allowed && (p2 == x || p2 == y) {
+                return false;
+            }
+            if intersect_unit_segments(&(p1, p2), &(x, y)) {
+                return false;
+            }
         }
     }
     true
