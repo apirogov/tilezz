@@ -1,9 +1,9 @@
-//! Utility functions to use cycotomic rings and fields for 2D geometry
+//! Utility functions to use cyclotomic rings for 2D geometry
 use num_traits::Zero;
 use std::ops::Range;
 
 use super::linalg::{is_between, is_ccw, wedge};
-use super::numtraits::ZSigned;
+use super::numtraits::{OneImag, ZSigned};
 use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
 pub type Line<T> = (T, T, T);
@@ -60,32 +60,6 @@ pub fn intersect<ZZ: IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool 
     }
 }
 
-/// Given two segments defining a lines,
-/// return that intersection point (if they are not paralel).
-pub fn intersection_point<ZZ: IsComplex + HasZZ4>(
-    &(v, w): &(ZZ, ZZ),
-    &(x, y): &(ZZ, ZZ),
-) -> Option<ZZ::Field>
-where
-    <<ZZ as IsRingOrField>::Real as IsReal>::Field: From<<ZZ as IsRingOrField>::Real>,
-    <ZZ as IsComplex>::Field: From<(
-        <<ZZ as IsRingOrField>::Real as IsReal>::Field,
-        <<ZZ as IsRingOrField>::Real as IsReal>::Field,
-    )>,
-{
-    let l1 @ (a1, b1, c1): Line<ZZ::Real> = line_through(&v, &w);
-    let l2 @ (a2, b2, c2): Line<ZZ::Real> = line_through(&x, &y);
-    if lines_parallel::<ZZ>(&l1, &l2) {
-        None
-    } else {
-        type RealField<ZZ> = <<ZZ as IsRingOrField>::Real as IsReal>::Field;
-        let x_numer: RealField<ZZ> = (b1 * c2 - b2 * c1).into();
-        let y_numer: RealField<ZZ> = (c1 * a2 - c2 * a1).into();
-        let denom: RealField<ZZ> = (a1 * b2 - a2 * b1).into();
-        Some((x_numer / denom, y_numer / denom).into())
-    }
-}
-
 /// Return whether a point is inside a rectangle or on its boundary.
 /// If strict is true, will not consider a point on a boundary as inside.
 pub fn point_in_rect<ZZ: IsComplex>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
@@ -126,20 +100,16 @@ pub fn mod_bound<Z: IsReal>(p: &Z, rng: Range<&Z>) -> Z {
 }
 
 /// Return number modulo rect by repeated addition or subtraction of the x/y components.
-pub fn point_mod_rect<ZZ: IsComplex + HasZZ4>(
-    p: &ZZ,
-    (pos_min, pos_max): &(ZZ, ZZ),
-) -> <ZZ as IsComplex>::Field
+pub fn point_mod_rect<ZZ>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ)) -> ZZ
 where
-    // FIXME: figure out how to make this extra constraint not necessary
-    <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
+    ZZ: IsComplex + HasZZ4 + OneImag + From<<ZZ as IsRingOrField>::Real>,
 {
     let (p_x, p_y) = p.re_im();
     let (x_min, y_min) = pos_min.re_im();
     let (x_max, y_max) = pos_max.re_im();
     let ret_x: <ZZ as IsRingOrField>::Real = mod_bound(&p_x, &x_min..&x_max);
     let ret_y: <ZZ as IsRingOrField>::Real = mod_bound(&p_y, &y_min..&y_max);
-    (ret_x, ret_y).into()
+    ZZ::from(ret_x) + ZZ::one_i() * ZZ::from(ret_y)
 }
 
 #[cfg(test)]
@@ -207,28 +177,16 @@ mod tests {
         // colinear cases:
         // ----
         assert!(!intersect(&(a, b), &(c, d))); // no touch
-        assert!(intersection_point(&(a, b), &(c, d)).is_none());
-
         assert!(!intersect(&(d, c), &(a, b))); // same, permutated
-        assert!(intersection_point(&(d, c), &(a, b)).is_none());
-
         assert!(!intersect(&(a, b), &(b, c))); // touch in an endpoint
-        assert!(intersection_point(&(a, b), &(b, c)).is_none());
-
         assert!(intersect(&(a, c), &(b, d))); // overlap
-        assert!(intersection_point(&(a, c), &(b, d)).is_none());
-
         assert!(intersect(&(a, d), &(b, c))); // overlap (subsuming)
-        assert!(intersection_point(&(a, d), &(b, c)).is_none());
 
         // non-colinear cases:
         // ----
         // parallel
         assert!(!intersect(&(a, b), &(e, f)));
-        assert!(intersection_point(&(a, b), &(e, f)).is_none());
-
         assert!(!intersect(&(a, e), &(b, f)));
-        assert!(intersection_point(&(a, e), &(b, f)).is_none());
 
         // no touch
         assert!(!intersect(&(a, e), &(b, c))); // perp
@@ -236,13 +194,8 @@ mod tests {
 
         // touch in start/end-points
         assert!(!intersect(&(a, e), &(a, b))); // perp
-        assert_eq!(intersection_point(&(a, e), &(a, b)).unwrap(), a.into());
-
         assert!(!intersect(&(a, f), &(a, b))); // non-perp
-        assert_eq!(intersection_point(&(a, f), &(a, b)).unwrap(), a.into());
-
         assert!(!intersect(&(a, e), &(e, e - b))); // non-perp
-        assert_eq!(intersection_point(&(a, e), &(e, e - b)).unwrap(), e.into());
 
         // endpoint of one segment intersects a non-endpoint of other seg
         assert!(intersect(&(b, f), &(a, c))); // perp
@@ -252,11 +205,6 @@ mod tests {
         assert!(intersect(&(a, f), &(b, e))); // perp
         assert!(intersect(&(a, f), &(c, e))); // non-perp
         assert!(intersect(&(a, f), &(d, e))); // non-perp
-
-        // diagonals of unit square intersect at [0.5, 0.5]
-        let expected: <ZZi as IsComplex>::Field =
-            <ZZi as IsComplex>::Field::from(f) / <ZZi as IsComplex>::Field::from(2);
-        assert_eq!(intersection_point(&(a, f), &(b, e)).unwrap(), expected);
     }
 
     #[test]
