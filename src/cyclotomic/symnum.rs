@@ -243,9 +243,8 @@ macro_rules! impl_primint_traits {
     };
 }
 
-macro_rules! impl_symnum_q_from_z {
-    ($q:ident, $z:ident) => {
-
+macro_rules! impl_symnum_display {
+    ($z:ident) => {
         impl Display for $z {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let nums: Vec<String> = self.coeffs.into_iter().map(|x| format!("{x}")).collect();
@@ -282,51 +281,12 @@ macro_rules! impl_symnum_q_from_z {
                 return write!(f, "{result}");
             }
         }
-
-        impl Display for $q {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                self.0.fmt(f)
-            }
-        }
-
-        impl SymNum for $q {
-            type Scalar = <$z as SymNum>::Scalar;
-
-            #[inline]
-            fn new(coeffs: &[Self::Scalar]) -> Self {
-                Self($z::new(coeffs))
-            }
-            #[inline]
-            fn complex64(&self) -> Complex64 {
-                self.0.complex64()
-            }
-            #[inline]
-            fn zz_coeffs(&self) -> &[Self::Scalar] {
-                self.0.zz_coeffs()
-            }
-            #[inline]
-            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
-                self.0.zz_coeffs_mut()
-            }
-            #[inline]
-            fn zz_params() -> &'static ZZParams<'static> {
-                $z::zz_params()
-            }
-            #[inline]
-            fn zz_mul_arrays(x: &[Self::Scalar], y: &[Self::Scalar]) -> Vec<Self::Scalar> {
-                $z::zz_mul_arrays(x, y)
-            }
-            #[inline]
-            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
-                $z::zz_mul_scalar(x, scalar)
-            }
-        }
     };
 }
 
 #[macro_export]
 macro_rules! impl_symnum {
-    ($name:ident, $name_real: ident, $qname: ident, $qname_real: ident, $params:ident, $mul_func:ident) => {
+    ($name:ident, $name_real: ident, $params:ident, $mul_func:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name_real {
             coeffs: [RatioT; $params.sym_roots_num],
@@ -335,10 +295,6 @@ macro_rules! impl_symnum {
         pub struct $name {
             coeffs: [GIntT; $params.sym_roots_num],
         }
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $qname_real(pub $name_real);
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $qname(pub $name);
 
         impl SymNum for $name_real {
             type Scalar = RatioT;
@@ -449,8 +405,8 @@ macro_rules! impl_symnum {
             }
         }
 
-        impl_symnum_q_from_z!($qname, $name);
-        impl_symnum_q_from_z!($qname_real, $name_real);
+        impl_symnum_display!($name);
+        impl_symnum_display!($name_real);
     };
 }
 
@@ -658,62 +614,29 @@ macro_rules! impl_intring_traits {
 
 #[macro_export]
 macro_rules! impl_ring_traits {
-    // ($name:ident, $name_real: ident, $qname: ident, $qname_real: ident, $params:ident, $mul_func:ident, $re_signum_func:ident) => {
-    ($name:ident, $name_real: ident, $qname: ident, $qname_real: ident) => {
+    ($name:ident, $name_real: ident) => {
         impl_primint_traits!($name_real);
-        impl_primint_traits!($qname_real);
         impl_primint_traits!($name);
-        impl_primint_traits!($qname);
 
         impl_intring_traits!($name_real);
-        impl_intring_traits!($qname_real);
         impl_intring_traits!($name);
-        impl_intring_traits!($qname);
 
         impl_conj!($name, $name_real);
-        impl_conj!($qname, $qname_real);
 
         impl RingTraits for $name_real {}
-        impl RingTraits for $qname_real {}
         impl RingTraits for $name {}
-        impl RingTraits for $qname {}
-    };
-}
-
-#[macro_export]
-macro_rules! impl_field_traits {
-    ($q:ty) => {
-        impl Div<$q> for $q {
-            type Output = Self;
-            fn div(self, other: Self) -> Self {
-                Self::from(self.0.mul(zz_inv(&other.0)))
-            }
-        }
-
-        impl IntField for $q {}
-
-        impl FieldTraits for $q {
-            fn coerce_ring(self) -> <Self as IsRealOrComplex>::Ring {
-                self.0
-            }
-        }
     };
 }
 
 // --------
 #[macro_export]
 macro_rules! impl_functional_traits {
-    ($name:ident, $name_real: ident, $qname: ident, $qname_real: ident, $signum_func:ident) => {
-        impl_ring_traits!($name, $name_real, $qname, $qname_real);
-
-        impl_field_traits!($qname);
-        impl_field_traits!($qname_real);
+    ($name:ident, $name_real: ident, $signum_func:ident) => {
+        impl_ring_traits!($name, $name_real);
 
         impl_real_traits!($name_real, $signum_func);
-        impl_real_traits!($qname_real, $signum_func);
 
         impl_complex_traits!($name);
-        impl_complex_traits!($qname);
 
         impl IsRingOrField for $name {
             type Real = $name_real;
@@ -722,31 +645,6 @@ macro_rules! impl_functional_traits {
         impl IsRingOrField for $name_real {
             type Real = $name_real;
             type Complex = $name;
-        }
-        impl IsRingOrField for $qname {
-            type Real = $qname_real;
-            type Complex = $qname;
-        }
-        impl IsRingOrField for $qname_real {
-            type Real = $qname_real;
-            type Complex = $qname;
-        }
-
-        impl IsRealOrComplex for $name {
-            type Ring = $name;
-            type Field = $qname;
-        }
-        impl IsRealOrComplex for $qname {
-            type Ring = $name;
-            type Field = $qname;
-        }
-        impl IsRealOrComplex for $name_real {
-            type Ring = $name_real;
-            type Field = $qname_real;
-        }
-        impl IsRealOrComplex for $qname_real {
-            type Ring = $name_real;
-            type Field = $qname_real;
         }
 
         impl IsRing for $name {
@@ -758,55 +656,26 @@ macro_rules! impl_functional_traits {
             type Complex = $name;
         }
 
-        impl IsField for $qname {
-            type Real = $qname_real;
-            type Complex = $qname;
-        }
-        impl IsField for $qname_real {
-            type Real = $qname_real;
-            type Complex = $qname;
-        }
-
         impl IsReal for $name_real {
             type Ring = $name_real;
-            type Field = $qname_real;
-        }
-        impl IsReal for $qname_real {
-            type Ring = $name_real;
-            type Field = $qname_real;
         }
 
         impl IsComplex for $name {
             type Ring = $name;
-            type Field = $qname;
-        }
-        impl IsComplex for $qname {
-            type Ring = $name;
-            type Field = $qname;
         }
 
         impl ZType for $name_real {
             type Complex = $name;
-            type Field = $qname_real;
         }
         impl ZZType for $name {
             type Real = $name_real;
-            type Field = $qname;
-        }
-        impl QType for $qname_real {
-            type Complex = $qname;
-            type Ring = $name_real;
-        }
-        impl QQType for $qname {
-            type Real = $qname_real;
-            type Ring = $name;
         }
     };
 }
 
 #[macro_export]
 macro_rules! impl_conversions {
-    ($zz:ident, $z:ident, $qq:ident, $q:ident) => {
+    ($zz:ident, $z:ident) => {
         impl From<$z> for $zz {
             /// Lift real-valued ring value into the corresponding cyclomatic ring
             fn from(value: $z) -> Self {
@@ -815,39 +684,6 @@ macro_rules! impl_conversions {
                     *r = (*c).into();
                 }
                 ret
-            }
-        }
-        impl From<$z> for $qq {
-            /// Lift real-valued ring value into the corresponding cyclomatic ring
-            fn from(value: $z) -> Self {
-                let mut ret = Self::zero();
-                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
-                    *r = (*c).into();
-                }
-                ret
-            }
-        }
-        impl From<$q> for $qq {
-            /// Lift real-valued ring value into the corresponding cyclomatic ring
-            fn from(value: $q) -> Self {
-                let mut ret = Self::zero();
-                for (r, c) in ret.zz_coeffs_mut().iter_mut().zip(value.zz_coeffs()) {
-                    *r = (*c).into();
-                }
-                ret
-            }
-        }
-
-        impl From<$z> for $q {
-            /// Lift ring value into the corresponding cyclomatic field
-            fn from(value: $z) -> Self {
-                Self(value)
-            }
-        }
-        impl From<$zz> for $qq {
-            /// Lift ring value into the corresponding cyclomatic field
-            fn from(value: $zz) -> Self {
-                Self(value)
             }
         }
     };

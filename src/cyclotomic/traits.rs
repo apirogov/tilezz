@@ -1,4 +1,4 @@
-use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
+use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, OneImag, ZSigned};
 use super::symnum::SymNum;
 use super::symnum::{IntT, ZZComplex};
 use super::units::Units;
@@ -13,78 +13,36 @@ pub trait RingTraits:
 pub trait IsSymNum: SymNum + RingTraits {}
 impl<T: SymNum + RingTraits> IsSymNum for T {}
 
-pub trait FieldTraits: RingTraits + IntField + IsRealOrComplex {
-    fn coerce_ring(self) -> <Self as IsRealOrComplex>::Ring
-    where
-        Self: Sized;
-}
-
 pub trait IsRingOrField: IsSymNum {
     type Real: IsRingOrField<Real = Self::Real, Complex = Self::Complex> + IsReal;
     type Complex: IsRingOrField<Real = Self::Real, Complex = Self::Complex> + IsComplex;
 }
-pub trait IsRealOrComplex: IsSymNum {
-    type Ring: IsRealOrComplex<Ring = Self::Ring, Field = Self::Field> + IsRing;
-    type Field: IsRealOrComplex<Ring = Self::Ring, Field = Self::Field> + IsField;
-}
 
 pub trait IsRing: IsSymNum {
     type Real: IsReal<Ring = Self::Real>
-        + IsRealOrComplex<Ring = Self::Real>
         + IsRing<Real = Self::Real, Complex = Self::Complex>
         + IsRingOrField<Real = Self::Real, Complex = Self::Complex>;
     type Complex: IsComplex<Ring = Self::Complex>
-        + IsRealOrComplex<Ring = Self::Complex>
         + IsRing<Real = Self::Real, Complex = Self::Complex>
-        + IsRingOrField<Real = Self::Real, Complex = Self::Complex>;
-}
-pub trait IsField: IsSymNum + FieldTraits {
-    type Real: IsReal<Field = Self::Real>
-        + IsRealOrComplex<Field = Self::Real>
-        + IsField<Real = Self::Real, Complex = Self::Complex>
-        + IsRingOrField<Real = Self::Real, Complex = Self::Complex>;
-    type Complex: IsComplex<Field = Self::Complex>
-        + IsRealOrComplex<Field = Self::Complex>
-        + IsField<Real = Self::Real, Complex = Self::Complex>
         + IsRingOrField<Real = Self::Real, Complex = Self::Complex>;
 }
 
 pub trait IsReal: IsSymNum + RealTraits {
     type Ring: IsRing<Real = Self::Ring>
         + IsRingOrField<Real = Self::Ring>
-        + IsReal<Ring = Self::Ring, Field = Self::Field>
-        + IsRealOrComplex<Ring = Self::Ring, Field = Self::Field>;
-    type Field: IsField<Real = Self::Field>
-        + IsRingOrField<Real = Self::Field>
-        + IsReal<Ring = Self::Ring, Field = Self::Field>
-        + IsRealOrComplex<Ring = Self::Ring, Field = Self::Field>;
+        + IsReal<Ring = Self::Ring>;
 }
 pub trait IsComplex: IsSymNum + ComplexTraits {
     type Ring: IsRing<Complex = Self::Ring>
         + IsRingOrField<Complex = Self::Ring>
-        + IsComplex<Ring = Self::Ring, Field = Self::Field>
-        + IsRealOrComplex<Ring = Self::Ring, Field = Self::Field>;
-    type Field: IsField<Complex = Self::Field>
-        + IsRingOrField<Complex = Self::Field>
-        + IsComplex<Ring = Self::Ring, Field = Self::Field>
-        + IsRealOrComplex<Ring = Self::Ring, Field = Self::Field>;
+        + IsComplex<Ring = Self::Ring>;
 }
 
 pub trait ZType: IsRing<Real = Self> + IsReal<Ring = Self> {
     type Complex: ZZType<Real = Self>;
-    type Field: QType<Ring = Self>;
 }
 pub trait ZZType: IsRing<Complex = Self> + IsComplex<Ring = Self> {
     type Real: ZType<Complex = Self>;
-    type Field: QQType<Ring = Self>;
-}
-pub trait QType: IsField<Real = Self> + IsReal<Field = Self> {
-    type Complex: QQType<Real = Self>;
-    type Ring: ZType<Field = Self>;
-}
-pub trait QQType: IsField<Complex = Self> + IsComplex<Field = Self> {
-    type Real: QType<Complex = Self>;
-    type Ring: ZZType<Field = Self>;
 }
 
 /// Ring is exactly ZZ4 (all edges are axis-aligned unit segments).
@@ -125,9 +83,3 @@ impl<T: HasZZ4 + Units> OneImag for T {
         *self == Self::one_i()
     }
 }
-
-impl<T: IsRealOrComplex + IsField> HasZZ4Impl for T where T::Ring: HasZZ4Impl {}
-impl<T: IsRealOrComplex + IsField> HasZZ6Impl for T where T::Ring: HasZZ6Impl {}
-impl<T: IsRealOrComplex + IsField> HasZZ8Impl for T where T::Ring: HasZZ8Impl {}
-impl<T: IsRealOrComplex + IsField> HasZZ10Impl for T where T::Ring: HasZZ10Impl {}
-impl<T: IsRealOrComplex + IsField> HasZZ12Impl for T where T::Ring: HasZZ12Impl {}

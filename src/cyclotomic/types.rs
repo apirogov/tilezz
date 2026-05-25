@@ -3,16 +3,15 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Mul, Neg, Sub};
 
 use num_complex::Complex64;
 use num_traits::{One, Pow, ToPrimitive, Zero};
 
 use paste::paste;
 
-use super::div::zz_inv;
 use super::gaussint::GaussInt;
-use super::numtraits::{Ccw, Conj, InnerIntType, IntField, IntRing, OneImag, ZSigned};
+use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, OneImag, ZSigned};
 use super::params::*;
 use super::sign::{
     zz_partial_signum_1_sym, zz_partial_signum_2_sym, zz_partial_signum_4_pentagonal,
@@ -20,9 +19,8 @@ use super::sign::{
 };
 use super::symnum::{GIntT, RatioT, SymNum, ZZComplex, ZZParams};
 use super::traits::{
-    ComplexTraits, FieldTraits, HasZZ10Impl, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, HasZZ8Impl,
-    IsComplex, IsField, IsReal, IsRealOrComplex, IsRing, IsRingOrField, IsZZ4Impl, QQType, QType,
-    RealTraits, RingTraits, ZType, ZZType,
+    ComplexTraits, HasZZ10Impl, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, HasZZ8Impl, IsComplex, IsReal,
+    IsRing, IsRingOrField, IsZZ4Impl, RealTraits, RingTraits, ZType, ZZType,
 };
 use super::units::Units;
 
@@ -31,14 +29,14 @@ use super::units::Units;
 macro_rules! impl_symnum_struct_for {
     ($($n:expr)*) => ($(
         paste! {
-            impl_symnum!([<ZZ $n>], [<Z $n>], [<QQ $n>], [<Q $n>], [<ZZ $n _PARAMS>], [<zz $n _mul>]);
+            impl_symnum!([<ZZ $n>], [<Z $n>], [<ZZ $n _PARAMS>], [<zz $n _mul>]);
         }
     )*)
 }
 macro_rules! impl_conversions_for {
     ($($n:expr)*) => ($(
         paste! {
-            impl_conversions!([<ZZ $n>], [<Z $n>], [<QQ $n>], [<Q $n>]);
+            impl_conversions!([<ZZ $n>], [<Z $n>]);
         }
     )*)
 }
@@ -61,28 +59,9 @@ macro_rules! impl_from_int_pair {
     ($($n:expr)*) => ($(
         paste! {
             zz_from_int_pair!([<ZZ $n>]);
-            zz_from_int_pair!([<QQ $n>]);
         }
     )*)
 }
-macro_rules! impl_from_real_pair {
-    ($($t:ty)*) => ($(
-        /// Convert from result of projection (which is only closed in the field)
-        impl From<(<Self as IsField>::Real, <Self as IsField>::Real)> for $t {
-            fn from((re, im): (<$t as QQType>::Real, <$t as QQType>::Real)) -> Self {
-                Self::from(re) + Self::one_i() * Self::from(im)
-            }
-        }
-
-        /// Convert from result of projection (which is only closed in the field)
-        impl From<(<<Self as IsComplex>::Ring as IsRing>::Real, <<Self as IsComplex>::Ring as IsRing>::Real)> for $t {
-            fn from((re, im): (<<Self as IsComplex>::Ring as IsRing>::Real, <<Self as IsComplex>::Ring as IsRing>::Real)) -> Self {
-                Self::from(re) + Self::one_i() * Self::from(im)
-            }
-        }
-    )*)
-}
-
 impl_symnum_struct_for!(4 6 8 10 12 16 20 24 30 32 60);
 
 // cached unit lookup per concrete complex type
@@ -98,35 +77,22 @@ super::units::impl_units_for!(ZZ30);
 super::units::impl_units_for!(ZZ32);
 super::units::impl_units_for!(ZZ60);
 
-super::units::impl_units_for!(QQ4);
-super::units::impl_units_for!(QQ6);
-super::units::impl_units_for!(QQ8);
-super::units::impl_units_for!(QQ10);
-super::units::impl_units_for!(QQ12);
-super::units::impl_units_for!(QQ16);
-super::units::impl_units_for!(QQ20);
-super::units::impl_units_for!(QQ24);
-super::units::impl_units_for!(QQ30);
-super::units::impl_units_for!(QQ32);
-super::units::impl_units_for!(QQ60);
-
-impl_functional_traits!(ZZ4, Z4, QQ4, Q4, zz_partial_signum_1_sym);
-impl_functional_traits!(ZZ6, Z6, QQ6, Q6, zz_partial_signum_2_sym);
-impl_functional_traits!(ZZ8, Z8, QQ8, Q8, zz_partial_signum_2_sym);
-impl_functional_traits!(ZZ10, Z10, QQ10, Q10, zz_partial_signum_4_pentagonal);
-impl_functional_traits!(ZZ12, Z12, QQ12, Q12, zz_partial_signum_2_sym);
-impl_functional_traits!(ZZ16, Z16, QQ16, Q16, zz_partial_signum_4_sym);
-impl_functional_traits!(ZZ20, Z20, QQ20, Q20, zz_partial_signum_4_pentagonal);
-impl_functional_traits!(ZZ24, Z24, QQ24, Q24, zz_partial_signum_4_sym);
-impl_functional_traits!(ZZ30, Z30, QQ30, Q30, zz_partial_signum_fallback);
-impl_functional_traits!(ZZ32, Z32, QQ32, Q32, zz_partial_signum_fallback);
-impl_functional_traits!(ZZ60, Z60, QQ60, Q60, zz_partial_signum_fallback);
+impl_functional_traits!(ZZ4, Z4, zz_partial_signum_1_sym);
+impl_functional_traits!(ZZ6, Z6, zz_partial_signum_2_sym);
+impl_functional_traits!(ZZ8, Z8, zz_partial_signum_2_sym);
+impl_functional_traits!(ZZ10, Z10, zz_partial_signum_4_pentagonal);
+impl_functional_traits!(ZZ12, Z12, zz_partial_signum_2_sym);
+impl_functional_traits!(ZZ16, Z16, zz_partial_signum_4_sym);
+impl_functional_traits!(ZZ20, Z20, zz_partial_signum_4_pentagonal);
+impl_functional_traits!(ZZ24, Z24, zz_partial_signum_4_sym);
+impl_functional_traits!(ZZ30, Z30, zz_partial_signum_fallback);
+impl_functional_traits!(ZZ32, Z32, zz_partial_signum_fallback);
+impl_functional_traits!(ZZ60, Z60, zz_partial_signum_fallback);
 impl_conversions_for!(4 6 8 10 12 16 20 24 30 32 60);
 
 zz_triv_impl!(HasZZ4Impl, ZZ4 ZZ8 ZZ12 ZZ16 ZZ20 ZZ24 ZZ32 ZZ60);
 zz_triv_impl!(IsZZ4Impl, ZZ4);
 impl_from_int_pair!(4 8 12 16 20 24 32 60);
-impl_from_real_pair!(QQ4 QQ8 QQ12 QQ16 QQ20 QQ24 QQ32 QQ60);
 
 zz_triv_impl!(HasZZ6Impl, ZZ6 ZZ12 ZZ24 ZZ30 ZZ60);
 zz_triv_impl!(HasZZ8Impl, ZZ8 ZZ16 ZZ24 ZZ32);
@@ -171,49 +137,5 @@ mod tests {
         );
     }
 
-    macro_rules! qq_div_test {
-        ($name:ident, $type:ty) => {
-            mod $name {
-                use super::*;
-
-                type QQi = $type;
-                type ZZi = <$type as IsRealOrComplex>::Ring;
-
-                #[test]
-                fn test_inv() {
-                    // try to invert combinations of units
-                    for k in 0..ZZi::turn() {
-                        for l in 0..ZZi::turn() {
-                            let val = <ZZi as Units>::unit(k) + <ZZi as Units>::unit(l);
-                            if val.is_zero() {
-                                continue;
-                            }
-                            let inv = zz_inv(&val);
-                            assert_eq!(val * inv, ZZi::one());
-                        }
-                    }
-                }
-
-                #[test]
-                fn test_div() {
-                    // test with worst case - all roots are there
-                    let z = zz_units_sum::<QQi>();
-
-                    // symmetry of dividing by rotation unit
-                    // (and testing some operations via QQi types)
-                    assert_eq!(z / ZZi::ccw().into(), z * <QQi as Units>::unit(-1));
-                }
-            }
-        };
-    }
-    macro_rules! qq_div_tests {
-    ($($n:expr)*) => ($(
-        paste! {
-            zz_test!([<qq_ring_ops $n>], [<QQ $n>]);
-            qq_div_test!([<qq_div $n>], [<QQ $n>]);
-         }
-    )*)
-}
     zz_tests!(zz, ZZ, 4 6 8 10 12 16 20 24 30 32 60);
-    qq_div_tests!(4 6 8 10 12 /* 16 20 */ 24 /* 30 32 60 */);
 }

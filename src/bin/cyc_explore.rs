@@ -19,13 +19,15 @@ use tilezz::vis::scene::{
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
 /// Compute the levels of points reachable within the unit square from any Gaussian integer in n steps.
-fn explore<ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync>(
-    n: usize,
-    mod_unit_square: bool,
-    num_threads: usize,
-) -> Vec<Vec<ZZ>>
+fn explore<ZZ>(n: usize, mod_unit_square: bool, num_threads: usize) -> Vec<Vec<ZZ>>
 where
-    <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
+    ZZ: ZZType
+        + HasZZ4
+        + Units
+        + OneImag
+        + Send
+        + Sync
+        + From<<ZZ as IsRingOrField>::Real>,
 {
     // we start at the corners of the unit square
     let start_pts: &[ZZ] = if mod_unit_square {
@@ -64,7 +66,7 @@ where
                             let mut p_dest: ZZ = *p + <ZZ as Units>::unit(i);
                             if mod_unit_square {
                                 // normalize back into unit square (if enabled)
-                                p_dest = point_mod_rect(&p_dest, &unit_square).coerce_ring();
+                                p_dest = point_mod_rect(&p_dest, &unit_square);
                             }
                             let p_dest = p_dest;
 
@@ -97,13 +99,19 @@ where
     round_pts
 }
 
-fn prepare_render<ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync>(
+fn prepare_render<ZZ>(
     num_rounds: usize,
     mod_unit_square: bool,
     num_threads: usize,
 ) -> (Vec<Vec<P64>>, R64)
 where
-    <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
+    ZZ: ZZType
+        + HasZZ4
+        + Units
+        + OneImag
+        + Send
+        + Sync
+        + From<<ZZ as IsRingOrField>::Real>,
 {
     let points: Vec<Vec<P64>> = explore::<ZZ>(num_rounds, mod_unit_square, num_threads)
         .iter()
