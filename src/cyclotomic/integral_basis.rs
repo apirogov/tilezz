@@ -1064,6 +1064,513 @@ macro_rules! impl_integral_within_radius_via_complex64 {
 }
 
 // ----------------
+// Generic test suite for integer-basis cyclotomic rings.
+//
+// `zz_integral_ring_tests!(name: SomeRing)` emits a `mod` of ring-axiom and
+// cyclotomic-structure tests for the given ring type. Used by `rings.rs`
+// (currently for ZZ12 only, but designed so that step 4 can drop in
+// invocations for the other 7 rings without modification).
+//
+// The suite covers:
+//   * Algebra: associativity / commutativity / distributivity / identity /
+//     inverse for `+` and `*`, plus `-`, plus zero-absorbing.
+//   * Cyclotomic structure: `unit(0) = 1`, `unit(N/2) = -1`, the unit cycle
+//     group property `unit(i)*unit(j) = unit((i+j) mod N)`, `unit(1)^k = unit(k)`.
+//   * Conjugation: involution, additive / multiplicative homomorphism,
+//     reality of `x * conj(x)`, conj fixes `1`.
+//   * Cartesian projection: `complex64` is additive / multiplicative within
+//     epsilon, `unit(k).complex64() ~= exp(2*pi*i*k/N)`.
+//   * `ReImSign`: agreement with `complex64()` for non-boundary values.
+//   * `WithinRadius`: agreement with `|z| <= r`.
+//   * `IntersectUnitSegments`: matches the generic `intersect` and is
+//     symmetric in its arguments.
+
+/// Emit a `mod` of generic algebraic / cyclotomic-structure tests for the
+/// given integer-basis cyclotomic ring type.
+///
+/// # Shape
+///
+/// ```ignore
+/// zz_integral_ring_tests!(name: ZZ12);
+/// ```
+///
+/// emits roughly:
+///
+/// ```ignore
+/// #[cfg(test)]
+/// mod zz12_generic_ring_tests {
+///     // ... ~25 #[test] functions for algebra, conjugation, complex64
+///     // projection, signs, within-radius, intersect-unit-segments ...
+/// }
+/// ```
+///
+/// The macro is hygienic across multiple instantiations -- the generated
+/// `mod` is named `<ring_lower>_generic_ring_tests` (e.g. `zz12_generic_ring_tests`).
+///
+/// # Requirements on `name`
+///
+/// The ring type must implement the usual cyclotomic-ring trait bundle:
+/// `SymNum`, `Units`, `Ccw`, `Conj`, `ReImSign`, `WithinRadius`,
+/// `IntersectUnitSegments`, plus `Add`/`Sub`/`Mul`/`Neg`, `Zero`/`One`,
+/// and `From<i64>`.
+#[macro_export]
+macro_rules! zz_integral_ring_tests {
+    (name: $ring:ident) => {
+        ::paste::paste! {
+            #[cfg(test)]
+            mod [<$ring:lower _generic_ring_tests>] {
+                #[allow(unused_imports)]
+                use super::*;
+                use $crate::cyclotomic::{
+                    Ccw, Conj, IntersectUnitSegments, ReImSign, SymNum, Units, WithinRadius,
+                };
+                use $crate::cyclotomic::geometry::intersect;
+                use num_traits::{One, Zero};
+
+                type R = $ring;
+
+                /// Small grid of "interesting" ring elements: zero, the
+                /// integer constants {-2, -1, 1, 2}, every `unit(k)`, and a
+                /// handful of integer combinations of small units.
+                fn sample_elems() -> Vec<R> {
+                    let n = R::turn();
+                    let mut out: Vec<R> = vec![
+                        R::zero(),
+                        R::one(),
+                        -R::one(),
+                        R::from(2i64),
+                        R::from(-2i64),
+                    ];
+                    let mut k = 0i8;
+                    while k < n {
+                        out.push(<R as Units>::unit(k));
+                        k += 1;
+                    }
+                    // A few mixed elements.
+                    out.push(<R as Units>::unit(1) + <R as Units>::unit(2));
+                    out.push(<R as Units>::unit(0) - <R as Units>::unit(3));
+                    out.push(<R as Units>::unit(1) + R::from(3i64));
+                    out.push(R::from(2i64) * <R as Units>::unit(1) - <R as Units>::unit(2));
+                    out
+                }
+
+                /// Smaller sample for O(n^3) tests (associativity etc.).
+                fn small_sample_elems() -> Vec<R> {
+                    vec![
+                        R::zero(),
+                        R::one(),
+                        -R::one(),
+                        <R as Units>::unit(1),
+                        <R as Units>::unit(2),
+                        <R as Units>::unit(1) + <R as Units>::unit(2),
+                        R::from(2i64) - <R as Units>::unit(1),
+                    ]
+                }
+
+                // ---- Algebra ----
+
+                #[test]
+                fn add_identity() {
+                    let zero = R::zero();
+                    for x in sample_elems() {
+                        assert_eq!(x + zero, x, "x + 0 != x for x = {x}");
+                        assert_eq!(zero + x, x, "0 + x != x for x = {x}");
+                    }
+                }
+
+                #[test]
+                fn add_inverse() {
+                    let zero = R::zero();
+                    for x in sample_elems() {
+                        assert_eq!(x + (-x), zero, "x + (-x) != 0 for x = {x}");
+                    }
+                }
+
+                #[test]
+                fn add_commutativity() {
+                    let xs = sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            assert_eq!(*x + *y, *y + *x, "x + y != y + x for x={x}, y={y}");
+                        }
+                    }
+                }
+
+                #[test]
+                fn add_associativity() {
+                    let xs = small_sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            for z in &xs {
+                                assert_eq!(
+                                    (*x + *y) + *z,
+                                    *x + (*y + *z),
+                                    "associativity of + failed at x={x}, y={y}, z={z}",
+                                );
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn mul_identity() {
+                    let one = R::one();
+                    for x in sample_elems() {
+                        assert_eq!(x * one, x, "x * 1 != x for x = {x}");
+                        assert_eq!(one * x, x, "1 * x != x for x = {x}");
+                    }
+                }
+
+                #[test]
+                fn mul_commutativity() {
+                    let xs = sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            assert_eq!(*x * *y, *y * *x, "x * y != y * x for x={x}, y={y}");
+                        }
+                    }
+                }
+
+                #[test]
+                fn mul_associativity() {
+                    let xs = small_sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            for z in &xs {
+                                assert_eq!(
+                                    (*x * *y) * *z,
+                                    *x * (*y * *z),
+                                    "associativity of * failed at x={x}, y={y}, z={z}",
+                                );
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn distributivity() {
+                    let xs = small_sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            for z in &xs {
+                                assert_eq!(
+                                    *x * (*y + *z),
+                                    *x * *y + *x * *z,
+                                    "x*(y+z) != x*y + x*z for x={x}, y={y}, z={z}",
+                                );
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn zero_absorbing() {
+                    let zero = R::zero();
+                    for x in sample_elems() {
+                        assert_eq!(x * zero, zero, "x * 0 != 0 for x = {x}");
+                        assert_eq!(zero * x, zero, "0 * x != 0 for x = {x}");
+                    }
+                }
+
+                #[test]
+                fn sub_eq_add_neg() {
+                    let xs = sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            assert_eq!(
+                                *x - *y,
+                                *x + (-(*y)),
+                                "x - y != x + (-y) for x={x}, y={y}",
+                            );
+                        }
+                    }
+                }
+
+                // ---- Cyclotomic structure ----
+
+                #[test]
+                fn unit_zero_is_one() {
+                    assert_eq!(<R as Units>::unit(0), R::one());
+                    let n = R::turn();
+                    assert_eq!(<R as Units>::unit(n), R::one());
+                    if n % 2 == 0 {
+                        assert_eq!(<R as Units>::unit(n / 2), -R::one());
+                    }
+                }
+
+                #[test]
+                fn unit_cycle_group() {
+                    let n = R::turn();
+                    for i in 0..n {
+                        for j in 0..n {
+                            let lhs = <R as Units>::unit(i) * <R as Units>::unit(j);
+                            let rhs = <R as Units>::unit(
+                                ((i as i16 + j as i16).rem_euclid(n as i16)) as i8,
+                            );
+                            assert_eq!(lhs, rhs, "unit({i})*unit({j}) != unit((i+j) mod N)");
+                        }
+                    }
+                }
+
+                #[test]
+                fn powers_of_zeta() {
+                    let n = R::turn();
+                    let zeta = R::ccw();
+                    let mut acc = R::one();
+                    let mut k = 0i8;
+                    while k < n {
+                        assert_eq!(
+                            acc,
+                            <R as Units>::unit(k),
+                            "unit(1)^{k} != unit({k})",
+                        );
+                        acc = acc * zeta;
+                        k += 1;
+                    }
+                    // After a full turn, we're back at one.
+                    assert_eq!(acc, R::one(), "unit(1)^N != 1");
+                }
+
+                // ---- Conjugation ----
+
+                #[test]
+                fn conj_involution() {
+                    for x in sample_elems() {
+                        assert_eq!(x.conj().conj(), x, "conj(conj(x)) != x for x = {x}");
+                    }
+                }
+
+                #[test]
+                fn conj_distributive_over_add() {
+                    let xs = sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            assert_eq!(
+                                (*x + *y).conj(),
+                                x.conj() + y.conj(),
+                                "conj(x+y) != conj(x)+conj(y) for x={x}, y={y}",
+                            );
+                        }
+                    }
+                }
+
+                #[test]
+                fn conj_distributive_over_mul() {
+                    let xs = small_sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            assert_eq!(
+                                (*x * *y).conj(),
+                                x.conj() * y.conj(),
+                                "conj(x*y) != conj(x)*conj(y) for x={x}, y={y}",
+                            );
+                        }
+                    }
+                }
+
+                #[test]
+                fn conj_fixes_one() {
+                    let one = <R as Units>::unit(0);
+                    assert_eq!(one.conj(), one);
+                }
+
+                #[test]
+                fn x_times_conj_x_is_real() {
+                    for x in sample_elems() {
+                        let prod = x * x.conj();
+                        assert_eq!(
+                            prod.im_sign(),
+                            0,
+                            "x*conj(x) is not real for x = {x}: prod = {prod}",
+                        );
+                    }
+                }
+
+                // ---- Cartesian projection (complex64) ----
+
+                const COMPLEX_EPS: f64 = 1e-9;
+
+                fn approx_eq(a: num_complex::Complex64, b: num_complex::Complex64, eps: f64) -> bool {
+                    (a.re - b.re).abs() < eps && (a.im - b.im).abs() < eps
+                }
+
+                #[test]
+                fn complex64_linear() {
+                    let xs = sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            let lhs = (*x + *y).complex64();
+                            let rhs = x.complex64() + y.complex64();
+                            assert!(
+                                approx_eq(lhs, rhs, COMPLEX_EPS),
+                                "(x+y).complex64() != x.complex64() + y.complex64() for x={x}, y={y}: {lhs} vs {rhs}",
+                            );
+                        }
+                    }
+                }
+
+                #[test]
+                fn complex64_mul_matches() {
+                    let xs = small_sample_elems();
+                    for x in &xs {
+                        for y in &xs {
+                            let lhs = (*x * *y).complex64();
+                            let rhs = x.complex64() * y.complex64();
+                            // Multiplicative slack: integer combinations of small units.
+                            assert!(
+                                approx_eq(lhs, rhs, 1e-8),
+                                "(x*y).complex64() != x.complex64() * y.complex64() for x={x}, y={y}: {lhs} vs {rhs}",
+                            );
+                        }
+                    }
+                }
+
+                #[test]
+                fn complex64_unit_matches_exp() {
+                    let n = R::turn();
+                    for k in 0..n {
+                        let u = <R as Units>::unit(k);
+                        let c = u.complex64();
+                        let angle = 2.0 * std::f64::consts::PI * (k as f64) / (n as f64);
+                        let expected = num_complex::Complex64::new(angle.cos(), angle.sin());
+                        assert!(
+                            approx_eq(c, expected, COMPLEX_EPS),
+                            "unit({k}).complex64() != exp(2*pi*i*{k}/{n}): {c} vs {expected}",
+                        );
+                    }
+                }
+
+                // ---- ReImSign ----
+
+                #[test]
+                fn re_im_sign_agrees_with_complex64() {
+                    for x in sample_elems() {
+                        let c = x.complex64();
+                        let re_sign = x.re_sign();
+                        let im_sign = x.im_sign();
+                        if c.re.abs() > 1e-9 {
+                            let expected = if c.re > 0.0 { 1 } else { -1 };
+                            assert_eq!(
+                                re_sign, expected,
+                                "re_sign disagrees with complex64 for x = {x}: re={}, sign={re_sign}",
+                                c.re,
+                            );
+                        }
+                        if c.im.abs() > 1e-9 {
+                            let expected = if c.im > 0.0 { 1 } else { -1 };
+                            assert_eq!(
+                                im_sign, expected,
+                                "im_sign disagrees with complex64 for x = {x}: im={}, sign={im_sign}",
+                                c.im,
+                            );
+                        }
+                    }
+                }
+
+                // ---- WithinRadius ----
+
+                #[test]
+                fn within_radius_agrees_with_norm() {
+                    let xs = sample_elems();
+                    let radii: [i64; 5] = [0, 1, 2, 3, 5];
+                    for x in &xs {
+                        let n = x.complex64().norm();
+                        for &r in &radii {
+                            let expected_inside = n <= (r as f64) + 1e-9;
+                            let expected_outside = n >= (r as f64) + 1e-9;
+                            let actual = x.within_radius(r);
+                            // Skip near-boundary cases where float epsilon
+                            // could legitimately decide either way.
+                            if (n - r as f64).abs() < 1e-6 {
+                                continue;
+                            }
+                            if expected_inside {
+                                assert!(
+                                    actual,
+                                    "within_radius({r}) should be true for x = {x} (|x| = {n})",
+                                );
+                            }
+                            if expected_outside && n > (r as f64) + 1e-6 {
+                                assert!(
+                                    !actual,
+                                    "within_radius({r}) should be false for x = {x} (|x| = {n})",
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ---- IntersectUnitSegments ----
+
+                #[test]
+                fn intersect_unit_segments_matches_generic() {
+                    let n = R::turn();
+                    let zero = R::zero();
+                    // Anchor points to translate the second segment by.
+                    let anchors: Vec<R> = vec![
+                        zero,
+                        <R as Units>::unit(0),
+                        <R as Units>::unit(1),
+                        <R as Units>::unit(2),
+                        -<R as Units>::unit(0),
+                    ];
+                    // For each (a, b) pair with a < b, the segment is
+                    // (origin, origin + unit(a)) vs (p + unit(0), p + unit(0) + unit(b)).
+                    // We use a sparse grid: every 2 angles, to keep test runtime
+                    // moderate for rings with large N.
+                    let step = (n / 6).max(1);
+                    for ai in (0..n).step_by(step as usize) {
+                        for bi in (0..n).step_by(step as usize) {
+                            for p in &anchors {
+                                let s1 = (zero, <R as Units>::unit(ai));
+                                let s2 = (
+                                    *p,
+                                    *p + <R as Units>::unit(bi),
+                                );
+                                let specialized = <R as IntersectUnitSegments>::intersect_unit_segments(&s1, &s2);
+                                let generic = intersect::<R>(&s1, &s2);
+                                assert_eq!(
+                                    specialized, generic,
+                                    "intersect_unit_segments disagrees with generic intersect: s1=({}, {}), s2=({}, {}); specialized={specialized}, generic={generic}",
+                                    s1.0, s1.1, s2.0, s2.1,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                #[test]
+                fn intersect_unit_segments_symmetric() {
+                    let n = R::turn();
+                    let zero = R::zero();
+                    let anchors: Vec<R> = vec![
+                        zero,
+                        <R as Units>::unit(0),
+                        <R as Units>::unit(1),
+                        <R as Units>::unit(2),
+                    ];
+                    let step = (n / 6).max(1);
+                    for ai in (0..n).step_by(step as usize) {
+                        for bi in (0..n).step_by(step as usize) {
+                            for p in &anchors {
+                                let s1 = (zero, <R as Units>::unit(ai));
+                                let s2 = (
+                                    *p,
+                                    *p + <R as Units>::unit(bi),
+                                );
+                                let ab = <R as IntersectUnitSegments>::intersect_unit_segments(&s1, &s2);
+                                let ba = <R as IntersectUnitSegments>::intersect_unit_segments(&s2, &s1);
+                                assert_eq!(ab, ba, "intersect_unit_segments not symmetric: s1=({}, {}), s2=({}, {})", s1.0, s1.1, s2.0, s2.1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+// ----------------
 // Tests
 
 #[cfg(test)]
