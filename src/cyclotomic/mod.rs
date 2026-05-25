@@ -23,6 +23,8 @@ mod zz12;
 
 mod units;
 
+pub mod integral_basis;
+
 // --------
 
 pub mod constants;
