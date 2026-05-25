@@ -24,6 +24,7 @@ use super::traits::{
 };
 use super::units::Units;
 
+use crate::impl_intersect_unit_segments_via_general;
 use crate::impl_re_im_sign_via_proj;
 use crate::impl_within_radius_via_norm_sq;
 
@@ -139,6 +140,20 @@ impl_within_radius_via_norm_sq!(ZZ24);
 impl_within_radius_via_norm_sq!(ZZ30);
 impl_within_radius_via_norm_sq!(ZZ32);
 impl_within_radius_via_norm_sq!(ZZ60);
+
+// Generate the generic-`intersect`-based `IntersectUnitSegments` for every
+// complex ring **except** ZZ12. ZZ12 provides its own 3-multiplication
+// pure-i64 override in `zz12.rs`.
+impl_intersect_unit_segments_via_general!(ZZ4);
+impl_intersect_unit_segments_via_general!(ZZ6);
+impl_intersect_unit_segments_via_general!(ZZ8);
+impl_intersect_unit_segments_via_general!(ZZ10);
+impl_intersect_unit_segments_via_general!(ZZ16);
+impl_intersect_unit_segments_via_general!(ZZ20);
+impl_intersect_unit_segments_via_general!(ZZ24);
+impl_intersect_unit_segments_via_general!(ZZ30);
+impl_intersect_unit_segments_via_general!(ZZ32);
+impl_intersect_unit_segments_via_general!(ZZ60);
 
 #[cfg(test)]
 mod tests {
