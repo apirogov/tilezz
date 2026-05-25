@@ -78,22 +78,19 @@ macro_rules! impl_from_int_pair {
 // `Z12` (its real subring) to use the standard symbolic storage, so we
 // generate just the real half via `impl_symnum_real_only!`.
 impl_symnum_real_only!(ZZ12, Z12, ZZ12_PARAMS, zz12_mul);
-impl_symnum_struct_for!(4 6 8 10 16 20 24 30 32 60);
+impl_symnum_struct_for!(4 8 10 16 20 24 32 60);
 
 // cached unit lookup per concrete complex type
 super::units::impl_units_for!(ZZ4);
-super::units::impl_units_for!(ZZ6);
 super::units::impl_units_for!(ZZ8);
 super::units::impl_units_for!(ZZ10);
 super::units::impl_units_for!(ZZ16);
 super::units::impl_units_for!(ZZ20);
 super::units::impl_units_for!(ZZ24);
-super::units::impl_units_for!(ZZ30);
 super::units::impl_units_for!(ZZ32);
 super::units::impl_units_for!(ZZ60);
 
 impl_functional_traits!(ZZ4, Z4, zz_partial_signum_1_sym);
-impl_functional_traits!(ZZ6, Z6, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ8, Z8, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ10, Z10, zz_partial_signum_4_pentagonal);
 // Z12 real-only path (ZZ12 is implemented manually in `zz12.rs`).
@@ -101,43 +98,42 @@ impl_functional_traits_real_only!(Z12, zz_partial_signum_2_sym);
 impl_functional_traits!(ZZ16, Z16, zz_partial_signum_4_sym);
 impl_functional_traits!(ZZ20, Z20, zz_partial_signum_4_pentagonal);
 impl_functional_traits!(ZZ24, Z24, zz_partial_signum_4_sym);
-impl_functional_traits!(ZZ30, Z30, zz_partial_signum_fallback);
 impl_functional_traits!(ZZ32, Z32, zz_partial_signum_fallback);
 impl_functional_traits!(ZZ60, Z60, zz_partial_signum_fallback);
-impl_conversions_for!(4 6 8 10 16 20 24 30 32 60);
+impl_conversions_for!(4 8 10 16 20 24 32 60);
 
 zz_triv_impl!(HasZZ4Impl, ZZ4 ZZ8 ZZ16 ZZ20 ZZ24 ZZ32 ZZ60);
 zz_triv_impl!(IsZZ4Impl, ZZ4);
 impl_from_int_pair!(4 8 16 20 24 32 60);
 
-zz_triv_impl!(HasZZ6Impl, ZZ6 ZZ24 ZZ30 ZZ60);
+// NOTE: ZZ6 and ZZ30 standalone types were removed -- they don't contain
+// ZZ4 (no `i`), so the unit-square-grid machinery doesn't apply uniformly.
+// The `HasZZ6Impl` trait stays: ZZ6 still exists as a *subring* of ZZ12,
+// ZZ24, ZZ60, which is what `T: HasZZ6` captures.
+zz_triv_impl!(HasZZ6Impl, ZZ24 ZZ60);
 zz_triv_impl!(HasZZ8Impl, ZZ8 ZZ16 ZZ24 ZZ32);
-zz_triv_impl!(HasZZ10Impl, ZZ10 ZZ20 ZZ30 ZZ60);
+zz_triv_impl!(HasZZ10Impl, ZZ10 ZZ20 ZZ60);
 zz_triv_impl!(HasZZ12Impl, ZZ24 ZZ60);
 
 // Generate the projection-based ReImSign for every complex ring **except** ZZ12.
 // ZZ12 provides its own pure-i64 override in `zz12.rs`.
 impl_re_im_sign_via_proj!(ZZ4);
-impl_re_im_sign_via_proj!(ZZ6);
 impl_re_im_sign_via_proj!(ZZ8);
 impl_re_im_sign_via_proj!(ZZ10);
 impl_re_im_sign_via_proj!(ZZ16);
 impl_re_im_sign_via_proj!(ZZ20);
 impl_re_im_sign_via_proj!(ZZ24);
-impl_re_im_sign_via_proj!(ZZ30);
 impl_re_im_sign_via_proj!(ZZ32);
 impl_re_im_sign_via_proj!(ZZ60);
 
 // Generate the norm_sq-based WithinRadius for every complex ring **except**
 // ZZ12. ZZ12 provides its own pure-i64 override in `zz12.rs`.
 impl_within_radius_via_norm_sq!(ZZ4);
-impl_within_radius_via_norm_sq!(ZZ6);
 impl_within_radius_via_norm_sq!(ZZ8);
 impl_within_radius_via_norm_sq!(ZZ10);
 impl_within_radius_via_norm_sq!(ZZ16);
 impl_within_radius_via_norm_sq!(ZZ20);
 impl_within_radius_via_norm_sq!(ZZ24);
-impl_within_radius_via_norm_sq!(ZZ30);
 impl_within_radius_via_norm_sq!(ZZ32);
 impl_within_radius_via_norm_sq!(ZZ60);
 
@@ -145,13 +141,11 @@ impl_within_radius_via_norm_sq!(ZZ60);
 // complex ring **except** ZZ12. ZZ12 provides its own 3-multiplication
 // pure-i64 override in `zz12.rs`.
 impl_intersect_unit_segments_via_general!(ZZ4);
-impl_intersect_unit_segments_via_general!(ZZ6);
 impl_intersect_unit_segments_via_general!(ZZ8);
 impl_intersect_unit_segments_via_general!(ZZ10);
 impl_intersect_unit_segments_via_general!(ZZ16);
 impl_intersect_unit_segments_via_general!(ZZ20);
 impl_intersect_unit_segments_via_general!(ZZ24);
-impl_intersect_unit_segments_via_general!(ZZ30);
 impl_intersect_unit_segments_via_general!(ZZ32);
 impl_intersect_unit_segments_via_general!(ZZ60);
 
@@ -196,5 +190,5 @@ mod tests {
     // NOTE: ZZ12 is excluded -- it has a non-symbolic storage layout, so the
     // generic SymNum-coefficient tests (e.g. `test_scaling_fac`) don't apply.
     // Its specific tests live in `zz12.rs`.
-    zz_tests!(zz, ZZ, 4 6 8 10 16 20 24 30 32 60);
+    zz_tests!(zz, ZZ, 4 8 10 16 20 24 32 60);
 }

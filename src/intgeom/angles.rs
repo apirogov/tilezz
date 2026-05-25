@@ -243,7 +243,7 @@ pub fn upscale_angles<T: SymNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{SymNum, ZZ12, ZZ24, ZZ6};
+    use crate::cyclotomic::{SymNum, ZZ12, ZZ24};
 
     #[test]
     fn test_revcomp() {
@@ -287,7 +287,8 @@ mod tests {
 
     #[test]
     fn test_upscale_angles() {
-        let exp: &[i8] = &[-4, 8, 12];
-        assert_eq!(upscale_angles::<ZZ24>(ZZ6::turn(), &[-1, 2, 3]), exp);
+        // Upscale ZZ12 angles into ZZ24 (scale factor = 24/12 = 2).
+        let exp: &[i8] = &[-2, 4, 6];
+        assert_eq!(upscale_angles::<ZZ24>(ZZ12::turn(), &[-1, 2, 3]), exp);
     }
 }

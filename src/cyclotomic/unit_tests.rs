@@ -32,14 +32,12 @@ mod unit_tests {
     #[test]
     fn test_unit_tables() {
         test_units!(ZZ4);
-        test_units!(ZZ6);
         test_units!(ZZ8);
         test_units!(ZZ10);
         test_units!(ZZ12);
         test_units!(ZZ16);
         test_units!(ZZ20);
         test_units!(ZZ24);
-        test_units!(ZZ30);
         test_units!(ZZ32);
         test_units!(ZZ60);
     }

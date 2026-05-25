@@ -72,28 +72,6 @@ pub fn zz4_mul<T: IntRing>(x: &[T], y: &[T]) -> Vec<T> {
 }
 
 // ----------------
-/// Eisenstein integers
-pub const ZZ6_PARAMS: ZZParams = ZZParams {
-    full_turn_steps: 6,
-    sym_roots_num: 2,
-    sym_roots_sqs: &[1., 3.],
-    sym_roots_lbls: &["1", "3"],
-    scaling_fac: 2,
-    ccw_unit_coeffs: &[[1, 0], [0, 1]],
-};
-/// Dimension multiplication matrix (for Z[i]-valued vectors):
-///    c d
-/// a [1 s]
-/// b [s 3]
-/// where s = sqrt(3)
-pub fn zz6_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    let int3 = T::from_i64(3).unwrap();
-    match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
-        [[a, b], [c, d]] => vec![a * c + (b * d * int3), a * d + b * c],
-    }
-}
-
-// ----------------
 /// Compass integers
 pub const ZZ8_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 8,
@@ -148,16 +126,27 @@ pub fn zz10_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
 
 // ----------------
 /// Clock integers
+///
+/// Symbolic basis is {1, sqrt(3)} (the Eisenstein basis, even though the
+/// standalone ZZ6 type no longer exists).
 pub const ZZ12_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 12,
-    sym_roots_num: ZZ6_PARAMS.sym_roots_num,
-    sym_roots_sqs: ZZ6_PARAMS.sym_roots_sqs,
-    sym_roots_lbls: ZZ6_PARAMS.sym_roots_lbls,
-    scaling_fac: ZZ6_PARAMS.scaling_fac,
+    sym_roots_num: 2,
+    sym_roots_sqs: &[1., 3.],
+    sym_roots_lbls: &["1", "3"],
+    scaling_fac: 2,
     ccw_unit_coeffs: &[[0, 1], [1, 0]],
 };
+/// Dimension multiplication matrix (for Z[i]-valued vectors):
+///    c d
+/// a [1 s]
+/// b [s 3]
+/// where s = sqrt(3)
 pub fn zz12_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    zz6_mul(x, y)
+    let int3 = T::from_i64(3).unwrap();
+    match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {
+        [[a, b], [c, d]] => vec![a * c + (b * d * int3), a * d + b * c],
+    }
 }
 
 // ----------------
@@ -230,117 +219,6 @@ pub fn zz24_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
             let c3 = a * g + c * e + (b * h + d * f) * int2;
             let c4 = a * h + b * g + c * f + d * e;
             vec![c1, c2, c3, c4]
-        }
-    }
-}
-
-// ----------------
-/// Month integers
-pub const ZZ30_PARAMS: ZZParams = ZZParams {
-    full_turn_steps: 30,
-    sym_roots_num: 8,
-    sym_roots_sqs: &[
-        1.,
-        3.,
-        5.,
-        ZZ10_Y,
-        15.,
-        3. * ZZ10_Y,
-        5. * ZZ10_Y,
-        15. * ZZ10_Y,
-    ],
-    sym_roots_lbls: &[
-        "1",
-        "3",
-        "5",
-        "2(5-sqrt(5))",
-        "15",
-        "6(5-sqrt(5))",
-        "10(5-sqrt(5))",
-        "30(5-sqrt(5))",
-    ],
-    // e^(i*pi/15) = 1/16  (-2 + 2 sqrt(5) + sqrt(6 (5 - sqrt(5))) + sqrt(30 (5 - sqrt(5))))
-    //             + 1/16 i(2 sqrt(3) - 2 sqrt(15) + sqrt(2 (5 - sqrt(5))) + sqrt(10 (5 - sqrt(5))))
-    scaling_fac: 16,
-    ccw_unit_coeffs: &[
-        [-2, 0],
-        [0, 2],
-        [2, 0],
-        [0, 1],
-        [0, -2],
-        [1, 0],
-        [0, 1],
-        [1, 0],
-    ],
-};
-/// Dimension multiplication matrix (for Z[i]-valued vectors):
-/// [1    ,  x   ,   y    ,    z     ,  xy  ,  x z     ,   yz     ,  xyz      ]
-/// [ x   , 3    ,
-/// [  y  ,  xy  ,  5     ,
-/// [   z ,  x z ,    yz  , 10-2y    ,
-/// [ xy  , 3 y  ,  5x    , xyz      , 15   ,
-/// [ x z , 3  z ,   xyz  , 10x-2xy  ,  3yz , 3(10-2y) ,
-/// [  yz ,  xyz ,  5  z  , 10y-10   ,  5xz , 10xy-10x , 5(10-2y)
-/// [ xyz , 3 yz ,  5x z  , 10xy-10x ,  15z , 30y-30   , 50x-10xy , 15(10-2y)
-/// where x = sqrt(3), y = sqrt(5), z = sqrt(2(5-y)) = sqrt(10-2y)
-pub fn zz30_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    let i = |n: i64| T::from_i64(n).unwrap();
-    let int2 = i(2);
-    let int3 = i(3);
-    let int5 = i(5);
-    let int6 = i(6);
-    let int10 = i(10);
-    let int15 = i(15);
-    let int30 = i(30);
-    let int50 = i(50);
-    let int150 = i(150);
-    match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
-        [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
-            // 1
-            let c1_d = ((l1 * r1) + (l2 * r2) * int3 + (l3 * r3) * int5 + (l4 * r4) * int10)
-                + ((l5 * r5) * int15 + (l6 * r6) * int30 + (l7 * r7) * int50 + (l8 * r8) * int150);
-            let c1_a = l4 * r7 * (-int10) + l6 * r8 * (-int30);
-            let c1_b = r4 * l7 * (-int10) + r6 * l8 * (-int30);
-            let c1 = c1_d + c1_a + c1_b;
-
-            // x
-            let c2_a =
-                l1 * r2 + l3 * r5 * int5 + (l4 * r6 - l4 * r8 - l6 * r7) * int10 + l7 * r8 * int50;
-            let c2_b =
-                r1 * l2 + r3 * l5 * int5 + (r4 * l6 - r4 * l8 - r6 * l7) * int10 + r7 * l8 * int50;
-            let c2 = c2_a + c2_b;
-
-            // y
-            let c3_d =
-                r4 * l4 * (-int2) + r6 * l6 * (-int6) + r7 * l7 * (-int10) + r8 * l8 * (-int30);
-            let c3_a = l1 * r3 + l2 * r5 * int3 + l4 * r7 * int10 + l6 * r8 * int30;
-            let c3_b = r1 * l3 + r2 * l5 * int3 + r4 * l7 * int10 + r6 * l8 * int30;
-            let c3 = c3_d + c3_a + c3_b;
-
-            // z
-            let c4_a = l1 * r4 + l2 * r6 * int3 + l3 * r7 * int5 + l5 * r8 * int15;
-            let c4_b = r1 * l4 + r2 * l6 * int3 + r3 * l7 * int5 + r5 * l8 * int15;
-            let c4 = c4_a + c4_b;
-
-            // xy
-            let c5_a = l1 * r5 + l2 * r3 - l4 * r6 * int2 + (l4 * r8 + l6 * r7 - l7 * r8) * int10;
-            let c5_b = r1 * l5 + r2 * l3 - r4 * l6 * int2 + (r4 * l8 + r6 * l7 - r7 * l8) * int10;
-            let c5 = c5_a + c5_b;
-
-            // xz
-            let c6_a = l1 * r6 + l2 * r4 + (l3 * r8 + l5 * r7) * int5;
-            let c6_b = r1 * l6 + r2 * l4 + (r3 * l8 + r5 * l7) * int5;
-            let c6 = c6_a + c6_b;
-
-            // yz
-            let c7_a = l1 * r7 + l2 * r8 * int3 + l3 * r4 + l5 * r6 * int3;
-            let c7_b = r1 * l7 + r2 * l8 * int3 + r3 * l4 + r5 * l6 * int3;
-            let c7 = c7_a + c7_b;
-
-            // xyz
-            let c8 = r1 * l8 + r2 * l7 + r3 * l6 + r4 * l5 + r5 * l4 + r6 * l3 + r7 * l2 + r8 * l1;
-
-            vec![c1, c2, c3, c4, c5, c6, c7, c8]
         }
     }
 }
@@ -457,13 +335,37 @@ pub fn zz32_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
 
 // ----------------
 /// Babylonian integers
+///
+/// Symbolic basis is {1, sqrt(3), sqrt(5), sqrt(2(5-sqrt(5))), sqrt(15),
+/// sqrt(6(5-sqrt(5))), sqrt(10(5-sqrt(5))), sqrt(30(5-sqrt(5)))} -- this is
+/// the basis that the (now removed) ZZ30 standalone type also used; ZZ60
+/// keeps the same algebraic basis but a different `ccw_unit_coeffs` since
+/// e^(i*pi/30) lives at the 60-th-root resolution.
 pub const ZZ60_PARAMS: ZZParams = ZZParams {
     full_turn_steps: 60,
-    sym_roots_num: ZZ30_PARAMS.sym_roots_num,
-    sym_roots_sqs: ZZ30_PARAMS.sym_roots_sqs,
-    sym_roots_lbls: ZZ30_PARAMS.sym_roots_lbls,
-    scaling_fac: ZZ30_PARAMS.scaling_fac,
+    sym_roots_num: 8,
+    sym_roots_sqs: &[
+        1.,
+        3.,
+        5.,
+        ZZ10_Y,
+        15.,
+        3. * ZZ10_Y,
+        5. * ZZ10_Y,
+        15. * ZZ10_Y,
+    ],
+    sym_roots_lbls: &[
+        "1",
+        "3",
+        "5",
+        "2(5-sqrt(5))",
+        "15",
+        "6(5-sqrt(5))",
+        "10(5-sqrt(5))",
+        "30(5-sqrt(5))",
+    ],
     // e^(i*pi/30) = 1/8 (sqrt(3) + sqrt(15) + sqrt(2 (5 - sqrt(5))) + i(-1 - sqrt(5) + sqrt(3)sqrt(2 (5 - sqrt(5)))))
+    scaling_fac: 16,
     ccw_unit_coeffs: &[
         [0, -2],
         [2, 0],
@@ -475,6 +377,74 @@ pub const ZZ60_PARAMS: ZZParams = ZZParams {
         [0, 0],
     ],
 };
+/// Dimension multiplication matrix (for Z[i]-valued vectors):
+/// [1    ,  x   ,   y    ,    z     ,  xy  ,  x z     ,   yz     ,  xyz      ]
+/// [ x   , 3    ,
+/// [  y  ,  xy  ,  5     ,
+/// [   z ,  x z ,    yz  , 10-2y    ,
+/// [ xy  , 3 y  ,  5x    , xyz      , 15   ,
+/// [ x z , 3  z ,   xyz  , 10x-2xy  ,  3yz , 3(10-2y) ,
+/// [  yz ,  xyz ,  5  z  , 10y-10   ,  5xz , 10xy-10x , 5(10-2y)
+/// [ xyz , 3 yz ,  5x z  , 10xy-10x ,  15z , 30y-30   , 50x-10xy , 15(10-2y)
+/// where x = sqrt(3), y = sqrt(5), z = sqrt(2(5-y)) = sqrt(10-2y)
 pub fn zz60_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
-    zz30_mul(x, y)
+    let i = |n: i64| T::from_i64(n).unwrap();
+    let int2 = i(2);
+    let int3 = i(3);
+    let int5 = i(5);
+    let int6 = i(6);
+    let int10 = i(10);
+    let int15 = i(15);
+    let int30 = i(30);
+    let int50 = i(50);
+    let int150 = i(150);
+    match [*array_ref!(x, 0, 8), *array_ref!(y, 0, 8)] {
+        [[l1, l2, l3, l4, l5, l6, l7, l8], [r1, r2, r3, r4, r5, r6, r7, r8]] => {
+            // 1
+            let c1_d = ((l1 * r1) + (l2 * r2) * int3 + (l3 * r3) * int5 + (l4 * r4) * int10)
+                + ((l5 * r5) * int15 + (l6 * r6) * int30 + (l7 * r7) * int50 + (l8 * r8) * int150);
+            let c1_a = l4 * r7 * (-int10) + l6 * r8 * (-int30);
+            let c1_b = r4 * l7 * (-int10) + r6 * l8 * (-int30);
+            let c1 = c1_d + c1_a + c1_b;
+
+            // x
+            let c2_a =
+                l1 * r2 + l3 * r5 * int5 + (l4 * r6 - l4 * r8 - l6 * r7) * int10 + l7 * r8 * int50;
+            let c2_b =
+                r1 * l2 + r3 * l5 * int5 + (r4 * l6 - r4 * l8 - r6 * l7) * int10 + r7 * l8 * int50;
+            let c2 = c2_a + c2_b;
+
+            // y
+            let c3_d =
+                r4 * l4 * (-int2) + r6 * l6 * (-int6) + r7 * l7 * (-int10) + r8 * l8 * (-int30);
+            let c3_a = l1 * r3 + l2 * r5 * int3 + l4 * r7 * int10 + l6 * r8 * int30;
+            let c3_b = r1 * l3 + r2 * l5 * int3 + r4 * l7 * int10 + r6 * l8 * int30;
+            let c3 = c3_d + c3_a + c3_b;
+
+            // z
+            let c4_a = l1 * r4 + l2 * r6 * int3 + l3 * r7 * int5 + l5 * r8 * int15;
+            let c4_b = r1 * l4 + r2 * l6 * int3 + r3 * l7 * int5 + r5 * l8 * int15;
+            let c4 = c4_a + c4_b;
+
+            // xy
+            let c5_a = l1 * r5 + l2 * r3 - l4 * r6 * int2 + (l4 * r8 + l6 * r7 - l7 * r8) * int10;
+            let c5_b = r1 * l5 + r2 * l3 - r4 * l6 * int2 + (r4 * l8 + r6 * l7 - r7 * l8) * int10;
+            let c5 = c5_a + c5_b;
+
+            // xz
+            let c6_a = l1 * r6 + l2 * r4 + (l3 * r8 + l5 * r7) * int5;
+            let c6_b = r1 * l6 + r2 * l4 + (r3 * l8 + r5 * l7) * int5;
+            let c6 = c6_a + c6_b;
+
+            // yz
+            let c7_a = l1 * r7 + l2 * r8 * int3 + l3 * r4 + l5 * r6 * int3;
+            let c7_b = r1 * l7 + r2 * l8 * int3 + r3 * l4 + r5 * l6 * int3;
+            let c7 = c7_a + c7_b;
+
+            // xyz
+            let c8 = r1 * l8 + r2 * l7 + r3 * l6 + r4 * l5 + r5 * l4 + r6 * l3 + r7 * l2 + r8 * l1;
+
+            vec![c1, c2, c3, c4, c5, c6, c7, c8]
+        }
+    }
 }
