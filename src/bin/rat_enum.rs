@@ -5,8 +5,9 @@ use std::time::Instant;
 use clap::{Parser, ValueEnum};
 
 use tilezz::cyclotomic::*;
-use tilezz::intgeom::rat::Rat;
+use tilezz::intgeom::rat::{lex_min_rot, Rat};
 use tilezz::intgeom::snake::{Snake, Turtle};
+use tilezz::stringmatch::repetition_factor;
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::{MarkerStyle, TileStyle};
 use tilezz::vis::plotutils::P64;
@@ -138,6 +139,57 @@ fn run_rat_enum_polylines(ring: u8, max_steps: usize) -> Vec<Vec<P64>> {
     }
 }
 
+/// True iff this canonical sequence equals the canonical form of its
+/// mirror image. The mirror polygon's CCW angle sequence is just
+/// `reverse(seq)` -- traversing the mirrored vertices in CCW order (in
+/// original coordinates) hits the original vertices in reverse order,
+/// and each turn keeps its sign because the mirror's orientation flip
+/// and the CCW-vs-CW flip cancel. Achiral polygons survive a chirality
+/// quotient as a single class.
+fn is_achiral(canonical: &[i8]) -> bool {
+    let mut reflected: Vec<i8> = canonical.iter().rev().copied().collect();
+    let offset = lex_min_rot(&reflected);
+    reflected.rotate_left(offset);
+    reflected == canonical
+}
+
+/// Print per-boundary-length statistics over the enumerated canonical
+/// sequences: total count, achiral count, and a histogram of cyclic
+/// rotational symmetry orders.
+fn print_stats(rats: &[Vec<i8>]) {
+    use std::collections::BTreeMap;
+    // length -> (total, achiral, rep_factor -> count)
+    let mut per_len: BTreeMap<usize, (usize, usize, BTreeMap<usize, usize>)> = BTreeMap::new();
+    for seq in rats {
+        let n = seq.len();
+        let entry = per_len.entry(n).or_default();
+        entry.0 += 1;
+        if is_achiral(seq) {
+            entry.1 += 1;
+        }
+        let rf = repetition_factor(seq);
+        *entry.2.entry(rf).or_insert(0) += 1;
+    }
+    println!("statistics by boundary length:");
+    println!("  length |  total | achiral (%) | rotational symmetry histogram (rep_factor: count)");
+    println!("  -------+--------+-------------+--------------------------------------------------");
+    for (n, (total, achiral, hist)) in &per_len {
+        let pct = if *total > 0 {
+            100.0 * (*achiral as f64) / (*total as f64)
+        } else {
+            0.0
+        };
+        let mut hist_str = String::new();
+        for (rf, cnt) in hist {
+            if !hist_str.is_empty() {
+                hist_str.push_str("  ");
+            }
+            hist_str.push_str(&format!("x{rf}={cnt}"));
+        }
+        println!("  {n:>6} | {total:>6} | {achiral:>5} ({pct:>5.1}%) | {hist_str}");
+    }
+}
+
 fn run_rat_enum_seqs(ring: u8, max_steps: usize) -> Vec<Vec<i8>> {
     let f: fn(usize) -> Vec<Vec<i8>> = match ring {
         4 => rat_enum::<ZZ4>,
@@ -184,6 +236,11 @@ struct Cli {
     /// the `pprof` cargo feature).
     #[arg(long)]
     profile: Option<String>,
+
+    /// In Bench mode, print a per-boundary-length breakdown of total /
+    /// achiral / rotational-symmetry histogram after enumeration.
+    #[arg(long)]
+    stats: bool,
 }
 
 fn main() {
@@ -230,6 +287,10 @@ fn main() {
             #[cfg(not(feature = "pprof"))]
             if cli.profile.is_some() {
                 eprintln!("rat_enum: --profile requires the `pprof` cargo feature");
+            }
+
+            if cli.stats {
+                print_stats(&rats);
             }
         }
         Mode::Render => {
