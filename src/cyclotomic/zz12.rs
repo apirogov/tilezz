@@ -636,27 +636,25 @@ impl WithinRadius for ZZ12 {
 //   K = wedge(uA, uB)           -- 1 ZZ12 mul: conj(uA) * uB
 //   W = wedge(delta, uB)        -- 1 ZZ12 mul: conj(delta) * uB
 //
-// By bilinearity of `wedge`:
-//   wedge(uA, delta + uB) = V + K     (this is `wedge(uA, d - a)`)
-//   wedge(delta - uA, uB) = W - K     (this is `wedge(c - b, uB)`)
+// By bilinearity:
+//   wedge(uA, delta + uB) = V + K     (= wedge(uA, d - a))
+//   wedge(delta - uA, uB) = W - K     (= wedge(c - b, uB))
 //
-// Matching the generic `intersect` predicates:
-//   is_ccw(a, (c, d))   = sign(wedge(delta, uB + delta))   = sign(W) > 0
-//   is_ccw(b, (c, d))   = sign(wedge(delta - uA, uB + delta - uA))
-//                       = sign(W - K) > 0
-//   is_ccw(a, (b, c))   = sign(wedge(uA, delta))           = sign(V) > 0
-//   is_ccw(a, (b, d))   = sign(wedge(uA, uB + delta))      = sign(V + K) > 0
+// The generic non-colinear cross test
+//   (sign(W) > 0) != (sign(W - K) > 0) && (sign(V) > 0) != (sign(V + K) > 0)
+// follows directly.
 //
-// So the generic non-colinear branch
-//   is_ccw(a, (c, d)) != is_ccw(b, (c, d)) && is_ccw(a, (b, c)) != is_ccw(a, (b, d))
-// becomes
-//   (sign(W) > 0) != (sign(W - K) > 0) && (sign(V) > 0) != (sign(V + K) > 0).
-//
-// If `sign(K) == 0` (uA parallel to uB), the colinear/parallel handling of
-// the generic `intersect` may apply, so we fall back to it -- this case is
-// rare on the rat_enum hot path. (Two parallel unit segments either don't
-// touch, touch in an endpoint, or are colinear and overlap; only the last
-// matters and is handled by the is_between check inside `intersect`.)
+// Colinear sub-case (sign(K) == 0):
+// uA is parallel to uB, so `k_z = conj(uA) * uB` is a real unit, either +1
+// (uA == uB) or -1 (uA == -uB). To decide overlap we use the *real* part of
+// the same `v_z = conj(uA) * delta` product, which equals
+//   T = dot(uA, delta)
+// the signed offset of c along the uA axis from a (since |uA| = 1).
+// The interior-overlap conditions, with endpoint contacts already filtered
+// at the top of the function:
+//   uA == uB  (k_z = +1):   interior overlap iff -1 < T < 1
+//   uA == -uB (k_z = -1):   interior overlap iff  0 < T < 2
+// Each condition is two sign-of-(m + n*sqrt(3)) tests on shifted T.
 
 /// Imaginary-part components of a ZZ12 value `z = (a, b, c, d)`:
 /// `Im(z) = (im_m + im_n * sqrt(3)) / 2` where `im_m = b + 2*d`, `im_n = c`.
@@ -664,6 +662,14 @@ impl WithinRadius for ZZ12 {
 fn im_components(z: &ZZ12) -> (i64, i64) {
     let [_, b, c, d] = z.coeffs;
     (b + 2 * d, c)
+}
+
+/// Real-part components of a ZZ12 value `z = (a, b, c, d)`:
+/// `Re(z) = (re_m + re_n * sqrt(3)) / 2` where `re_m = 2*a + c`, `re_n = b`.
+#[inline]
+fn re_components(z: &ZZ12) -> (i64, i64) {
+    let [a, b, c, _] = z.coeffs;
+    (2 * a + c, b)
 }
 
 impl IntersectUnitSegments for ZZ12 {
@@ -676,7 +682,7 @@ impl IntersectUnitSegments for ZZ12 {
         let (c, d) = *s2;
 
         // Touching endpoints do not count as a proper intersection.
-        // (If true, there can be no other intersection either.)
+        // (If any endpoint coincides, no other crossing is possible.)
         if a == c || a == d || b == c || b == d {
             return false;
         }
@@ -686,33 +692,52 @@ impl IntersectUnitSegments for ZZ12 {
         let delta = c - a;
 
         // ZZ12 mul #1: K = wedge(uA, uB).
-        // If sign(K) == 0 -> uA parallel to uB. Fall back to the generic
-        // intersect to handle the (rare) colinear-overlap case correctly.
-        let (k_m, k_n) = im_components(&(u_a.conj() * u_b));
+        let k_z = u_a.conj() * u_b;
+        let (k_m, k_n) = im_components(&k_z);
         let sign_k = sign_m_plus_n_sqrt3(k_m, k_n);
+
+        // ZZ12 mul #2: V = wedge(uA, delta) (Im(v_z)). We also reuse Re(v_z)
+        // = dot(uA, delta) for the inline colinear-overlap test below.
+        let v_z = u_a.conj() * delta;
+        let (v_m, v_n) = im_components(&v_z);
+        let sign_v = sign_m_plus_n_sqrt3(v_m, v_n);
+
         if sign_k == 0 {
-            return super::geometry::intersect::<ZZ12>(s1, s2);
+            // uA parallel to uB. If V != 0 the lines are distinct parallels.
+            if sign_v != 0 {
+                return false;
+            }
+            // Colinear. T = dot(uA, delta) = Re(v_z), in (m + n*sqrt(3))/2 form.
+            let (t_m, t_n) = re_components(&v_z);
+            // k_z = conj(uA) * uB is +1 (uA == uB) or -1 (uA == -uB) when K = 0.
+            // We read k_z.coeffs[0] directly; the other coeffs are 0 in both cases.
+            debug_assert_eq!([k_z.coeffs[1], k_z.coeffs[2], k_z.coeffs[3]], [0, 0, 0]);
+            if k_z.coeffs[0] == 1 {
+                // uA == uB. Interior overlap iff -1 < T < 1, i.e.
+                // sign(T + 1) > 0 && sign(T - 1) < 0.
+                // T +/- 1 has (m, n) shifted by +/- 2 in m (since 1 = (2 + 0*sqrt(3))/2).
+                return sign_m_plus_n_sqrt3(t_m + 2, t_n) > 0
+                    && sign_m_plus_n_sqrt3(t_m - 2, t_n) < 0;
+            } else {
+                debug_assert_eq!(k_z.coeffs[0], -1);
+                // uA == -uB. Interior overlap iff 0 < T < 2.
+                return sign_m_plus_n_sqrt3(t_m, t_n) > 0
+                    && sign_m_plus_n_sqrt3(t_m - 4, t_n) < 0;
+            }
         }
 
-        // ZZ12 mul #2: W = wedge(delta, uB).
-        // First half of the non-colinear cross test:
-        //   is_ccw(a, (c, d))   = (sign(W)     > 0)
-        //   is_ccw(b, (c, d))   = (sign(W - K) > 0)
-        // Short-circuit `&&` early if these match.
-        let (w_m, w_n) = im_components(&(delta.conj() * u_b));
-        let sign_w = sign_m_plus_n_sqrt3(w_m, w_n);
-        let sign_w_minus_k = sign_m_plus_n_sqrt3(w_m - k_m, w_n - k_n);
-        if (sign_w > 0) == (sign_w_minus_k > 0) {
+        // Non-colinear case. V test first, then W test (either is a valid
+        // short-circuit; we just preserve V from above).
+        let sign_v_plus_k = sign_m_plus_n_sqrt3(v_m + k_m, v_n + k_n);
+        if (sign_v > 0) == (sign_v_plus_k > 0) {
             return false;
         }
 
-        // ZZ12 mul #3: V = wedge(uA, delta).
-        //   is_ccw(a, (b, c))   = (sign(V)     > 0)
-        //   is_ccw(a, (b, d))   = (sign(V + K) > 0)
-        let (v_m, v_n) = im_components(&(u_a.conj() * delta));
-        let sign_v = sign_m_plus_n_sqrt3(v_m, v_n);
-        let sign_v_plus_k = sign_m_plus_n_sqrt3(v_m + k_m, v_n + k_n);
-        (sign_v > 0) != (sign_v_plus_k > 0)
+        // ZZ12 mul #3: W = wedge(delta, uB).
+        let (w_m, w_n) = im_components(&(delta.conj() * u_b));
+        let sign_w = sign_m_plus_n_sqrt3(w_m, w_n);
+        let sign_w_minus_k = sign_m_plus_n_sqrt3(w_m - k_m, w_n - k_n);
+        (sign_w > 0) != (sign_w_minus_k > 0)
     }
 }
 
