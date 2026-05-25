@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 
-use tilezz::cyclotomic::linalg::norm_sq;
 use tilezz::cyclotomic::*;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::{Snake, Turtle};
@@ -56,7 +55,7 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// [`Rat`] needs a fresh vec for hashing). Each polygon's `n` cyclic
 /// walks collapse to a single canonical walk via the lex-min
 /// rotation prune in [`is_canonical_extended`].
-pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum<ZZ: ZZType + Units + WithinRadius>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
 
@@ -72,7 +71,7 @@ pub fn rat_enum<ZZ: ZZType + Units>(max_steps: usize) -> Vec<Vec<i8>> {
     result
 }
 
-fn rat_enum_step<ZZ: ZZType + Units>(
+fn rat_enum_step<ZZ: ZZType + Units + WithinRadius>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
     result: &mut HashSet<Vec<i8>>,
@@ -84,7 +83,6 @@ fn rat_enum_step<ZZ: ZZType + Units>(
     // Heuristic: the snake's current head must lie within `remaining`
     // unit steps of the origin, else the path can never close in time.
     let remaining = (max_steps - depth) as i64;
-    let remaining_steps_sq = norm_sq(&ZZ::from(remaining));
 
     for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
         // Canonical-rotation prune (see `is_canonical_extended`):
@@ -112,7 +110,7 @@ fn rat_enum_step<ZZ: ZZType + Units>(
             if result.insert(seq.clone()) {
                 println!("RAT {seq:?}");
             }
-        } else if norm_sq(&snake.head().pos) <= remaining_steps_sq {
+        } else if snake.head().pos.within_radius(remaining) {
             // Still reachable -- recurse to extend further.
             rat_enum_step::<ZZ>(snake, max_steps, result);
         }

@@ -25,6 +25,7 @@ use super::traits::{
 use super::units::Units;
 
 use crate::impl_re_im_sign_via_proj;
+use crate::impl_within_radius_via_norm_sq;
 
 // Re-export the manually-implemented ZZ12 so existing
 // `use super::super::types::ZZ12;` paths keep resolving.
@@ -125,6 +126,19 @@ impl_re_im_sign_via_proj!(ZZ24);
 impl_re_im_sign_via_proj!(ZZ30);
 impl_re_im_sign_via_proj!(ZZ32);
 impl_re_im_sign_via_proj!(ZZ60);
+
+// Generate the norm_sq-based WithinRadius for every complex ring **except**
+// ZZ12. ZZ12 provides its own pure-i64 override in `zz12.rs`.
+impl_within_radius_via_norm_sq!(ZZ4);
+impl_within_radius_via_norm_sq!(ZZ6);
+impl_within_radius_via_norm_sq!(ZZ8);
+impl_within_radius_via_norm_sq!(ZZ10);
+impl_within_radius_via_norm_sq!(ZZ16);
+impl_within_radius_via_norm_sq!(ZZ20);
+impl_within_radius_via_norm_sq!(ZZ24);
+impl_within_radius_via_norm_sq!(ZZ30);
+impl_within_radius_via_norm_sq!(ZZ32);
+impl_within_radius_via_norm_sq!(ZZ60);
 
 #[cfg(test)]
 mod tests {

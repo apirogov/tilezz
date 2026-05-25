@@ -35,7 +35,7 @@ pub mod geometry;
 
 pub use num_traits::{One, Pow, Zero};
 
-pub use numtraits::{Ccw, Conj, IntField, IntRing, OneImag, ReImSign};
+pub use numtraits::{Ccw, Conj, IntField, IntRing, OneImag, ReImSign, WithinRadius};
 
 pub use symnum::{SymNum, ZZComplex};
 pub use units::Units;

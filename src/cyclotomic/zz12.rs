@@ -39,7 +39,7 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 use num_traits::{One, Pow, Zero};
 
-use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, ReImSign};
+use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, ReImSign, WithinRadius};
 use super::params::ZZ12_PARAMS;
 use super::symnum::{SymNum, ZZComplex, ZZParams};
 use super::traits::{
@@ -591,6 +591,34 @@ fn sign_m_plus_n_sqrt3(m: i64, n: i64) -> i8 {
             std::cmp::Ordering::Equal => 0,
             std::cmp::Ordering::Greater => 1,
         }
+    }
+}
+
+// ----------------
+// WithinRadius override: pure-i64 squared-norm comparison.
+//
+// For z = (a, b, c, d) in the integral basis {1, zeta, zeta^2, zeta^3}:
+//   Re(z) = ((2a + c) + b*sqrt(3)) / 2
+//   Im(z) = ((b + 2d) + c*sqrt(3)) / 2
+//   |z|^2 = Re(z)^2 + Im(z)^2 = (M + N*sqrt(3)) / 4
+// where
+//   M = (2a + c)^2 + 3*b^2 + (b + 2d)^2 + 3*c^2
+//   N = 2 * ((2a + c)*b + (b + 2d)*c)
+//
+// |z|^2 <= radius^2 iff (M + N*sqrt(3)) / 4 <= radius^2
+//                  iff (M - 4*radius^2) + N*sqrt(3) <= 0
+// which is just `sign_m_plus_n_sqrt3(M - 4 * radius^2, N) <= 0`.
+
+impl WithinRadius for ZZ12 {
+    #[inline]
+    fn within_radius(&self, radius: i64) -> bool {
+        let [a, b, c, d] = self.coeffs;
+        let s = 2 * a + c;
+        let t = b + 2 * d;
+        let m = s * s + 3 * b * b + t * t + 3 * c * c;
+        let n = 2 * (s * b + t * c);
+        let four_r_sq = 4 * radius * radius;
+        sign_m_plus_n_sqrt3(m - four_r_sq, n) <= 0
     }
 }
 
