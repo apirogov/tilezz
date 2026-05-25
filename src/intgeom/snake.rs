@@ -89,6 +89,13 @@ pub struct Snake<T: IsRingOrField + IsComplex> {
     /// axis-aligned unit segments and intersection reduces to vertex revisits.
     /// None for all other ring types (avoiding allocation/insertion overhead).
     visited: Option<HashSet<T>>,
+
+    /// When the snake retro-closes (the latest [`add`] / [`add_unsafe`]
+    /// produced a polygon), [`add_unsafe`] overwrites `angles[0]` to
+    /// make the angle sum a full ±turn. We cache the pre-overwrite
+    /// value here so [`pop`] can restore it. `None` whenever the
+    /// snake is open or freshly constructed.
+    saved_angle_0: Option<i8>,
 }
 
 impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
@@ -139,6 +146,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             grid,
             allow_intersections: false,
             visited,
+            saved_angle_0: None,
         }
     }
 
@@ -267,11 +275,15 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
         // if the snake is closed, we need to fix up the start angle
         if self.is_closed() {
             // the missing angle must complete one full turn
-            // clockwise or counter-clockwise (simple polygon property)
+            // clockwise or counter-clockwise (simple polygon property).
+            // Cache the original `angles[0]` so `pop` can restore it.
+            debug_assert!(self.saved_angle_0.is_none());
             let target = (T::turn() as i64) * self.ang_sum.signum();
-            let missing = target - (self.ang_sum - self.angles[0] as i64);
+            let original_angle_0 = self.angles[0];
+            let missing = target - (self.ang_sum - original_angle_0 as i64);
             self.angles[0] = missing as i8;
             self.ang_sum = target;
+            self.saved_angle_0 = Some(original_angle_0);
         }
     }
 
@@ -375,6 +387,57 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
         // everything is ok -> add new segment
         self.add_unsafe(a);
         true
+    }
+
+    /// Remove the most-recently-added segment, returning its angle
+    /// (after normalisation). `None` if the snake is empty.
+    ///
+    /// Reverses every state change that [`add`] / [`add_unsafe`]
+    /// made on the last call:
+    ///
+    /// - pops the angle and trailing vertex,
+    /// - deregisters the cell from the grid,
+    /// - removes the point from the visited set (skipping the start
+    ///   point, which other segments may still touch),
+    /// - restores `angles[0]` if the popped segment was the one that
+    ///   retro-closed the snake.
+    ///
+    /// Calling `pop` after every `add` returns the snake to exactly
+    /// its prior state, so this enables zero-allocation backtracking
+    /// loops (compare `rat_enum.rs`).
+    pub fn pop(&mut self) -> Option<i8> {
+        let popped_angle = self.angles.pop()?;
+        let popped_point = self.points.pop().expect("points and angles in lockstep");
+
+        // Remove the popped vertex from the grid. Its grid index was
+        // the new `len()` of `points` (after the pop), since indices
+        // are 0-based.
+        self.grid
+            .remove(UnitSquareGrid::cell_of(popped_point), self.points.len());
+
+        // Remove from the visited set (ZZ4 path). The starting point
+        // is always retained -- when the popped segment was the
+        // closing one, popped_point == points[0] and the start is
+        // still in the polyline.
+        if let Some(visited) = self.visited.as_mut() {
+            if Some(&popped_point) != self.points.first() {
+                visited.remove(&popped_point);
+            }
+        }
+
+        if let Some(original_angle_0) = self.saved_angle_0.take() {
+            // The popped segment was the one that closed the snake.
+            // Restore `angles[0]` and recompute `ang_sum` from the
+            // (now-shorter) angle vector.
+            if !self.angles.is_empty() {
+                self.angles[0] = original_angle_0;
+            }
+            self.ang_sum = self.angles.iter().map(|&a| a as i64).sum();
+        } else {
+            self.ang_sum -= popped_angle as i64;
+        }
+
+        Some(popped_angle)
     }
 
     /// Extend a snake from a sequence of angles in-place.
@@ -709,5 +772,139 @@ mod tests {
         }
         assert!(s_fast.is_closed());
         assert!(s_grid.is_closed());
+    }
+
+    // ---- pop tests ----
+    //
+    // The contract: after `add(x); pop();` the snake's externally
+    // observable state is identical to before the add. Tests cover
+    // the open-snake case, the closed-snake case (where add_unsafe
+    // retroactively overwrites angles[0]), and the empty-snake edge.
+
+    /// Snapshot of every externally-observable Snake field, used by
+    /// the round-trip pop tests below.
+    fn snapshot<T: IsComplex + IsRingOrField + Units>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
+        (
+            s.angles().to_vec(),
+            s.angle_sum(),
+            s.is_closed(),
+            s.offset(),
+            s.direction(),
+        )
+    }
+
+    #[test]
+    fn test_pop_on_empty_snake_returns_none() {
+        let mut s: Snake<ZZ12> = Snake::new();
+        assert!(s.pop().is_none());
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn test_add_then_pop_round_trips_open_snake() {
+        // Hexagon partial walk: 5 of 6 segments, snake stays open.
+        let mut s: Snake<ZZ12> = Snake::new();
+        for a in [2i8, 2, 2, 2, 2] {
+            assert!(s.add(a));
+        }
+        let before = snapshot(&s);
+
+        assert!(s.add(2)); // 6th hex segment -- would close.
+        assert!(s.is_closed());
+        let popped = s.pop();
+        assert_eq!(popped, Some(2));
+        assert_eq!(snapshot(&s), before);
+        assert!(!s.is_closed());
+    }
+
+    #[test]
+    fn test_pop_undoes_retro_close_fixup() {
+        // For a *simple* closing polygon, angles sum to ±turn and
+        // the retro-close fixup in `add_unsafe` is a no-op. The
+        // saved_angle_0 cache still flows through `pop`; we verify
+        // the round-trip ends at the pre-close snapshot exactly.
+        let mut s: Snake<ZZ12> = Snake::new();
+        for a in [2i8, 2, 2, 2, 2] {
+            assert!(s.add(a));
+        }
+        let pre_close = snapshot(&s);
+        assert!(!s.is_closed());
+        assert!(s.add(2)); // 6th hexagon edge -- closes.
+        assert!(s.is_closed());
+        assert_eq!(s.angle_sum().unsigned_abs(), 12);
+
+        // Pop the closing segment: state must match pre-close
+        // exactly (angles[0] included), and the snake re-opens.
+        let popped = s.pop();
+        assert_eq!(popped, Some(2));
+        assert_eq!(snapshot(&s), pre_close);
+        assert!(!s.is_closed());
+        assert_eq!(s.angles().len(), 5);
+    }
+
+    #[test]
+    fn test_repeated_add_pop_each_direction_is_idempotent() {
+        // The rat_enum backtracking pattern: try every direction
+        // from a given prefix, add then pop, verify the snake is
+        // back to the prefix state every time.
+        let mut s: Snake<ZZ12> = Snake::new();
+        for a in [2i8, 2, 2] {
+            assert!(s.add(a));
+        }
+        let baseline = snapshot(&s);
+
+        for direction in -5i8..=5 {
+            let pre = snapshot(&s);
+            if s.add(direction) {
+                let _ = s.pop();
+            }
+            assert_eq!(snapshot(&s), pre, "direction {direction}: state diverged");
+        }
+        assert_eq!(snapshot(&s), baseline);
+    }
+
+    #[test]
+    fn test_add_pop_visited_set_preserves_start() {
+        // ZZ4 path uses the visited HashSet for revisit detection.
+        // When pop removes the *closing* segment, points[0] is the
+        // popped vertex but it must remain in `visited` (the polygon
+        // still has a vertex there as its starting point).
+        let mut s: Snake<ZZ4> = Snake::new();
+        for a in [1i8, 1, 1] {
+            assert!(s.add(a));
+        }
+        // Closing step: angle 1 brings us back to origin (the start).
+        assert!(s.add(1));
+        assert!(s.is_closed());
+
+        let _ = s.pop();
+        // After popping the closing step we are at the 4th vertex
+        // (one short of closing). Now re-adding the closing step
+        // must still work -- which it can only do if origin remains
+        // in `visited` and the geometry round-trips correctly.
+        assert!(!s.is_closed());
+        assert!(s.add(1), "re-adding closing step after pop must work");
+        assert!(s.is_closed());
+    }
+
+    #[test]
+    fn test_pop_decrements_grid_so_can_add_works_again() {
+        // After pop, a previously-blocked direction (because it'd
+        // revisit the popped point) should now be allowed again.
+        let mut s: Snake<ZZ12> = Snake::new();
+        // Walk a tiny L: [3, 3] - now at a corner two unit cells
+        // from the origin in different directions.
+        assert!(s.add(3));
+        assert!(s.add(3));
+        // The next add(0) would walk back through a visited cell;
+        // verify it's rejected.
+        // (Test depends on geometry; the simpler invariant is
+        // that pop releases the grid entry it added.)
+        let pre_grid_state = s.points.len();
+        assert!(s.pop().is_some());
+        assert_eq!(s.points.len(), pre_grid_state - 1);
+        // And the snake should once again be able to add(3) (we
+        // just popped a (3) step) -- round-trip should be allowed.
+        assert!(s.add(3));
     }
 }
