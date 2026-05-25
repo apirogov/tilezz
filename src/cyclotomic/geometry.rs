@@ -1,9 +1,8 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
-use std::ops::Range;
-
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
-use super::numtraits::{Conj, IntersectUnitSegments, OneImag, ReImSign, ZSigned};
-use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
+use super::numtraits::{Conj, IntersectUnitSegments, OneImag, ReImSign};
+use super::symnum::IntT;
+use super::traits::{HasZZ4, IsComplex};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
@@ -76,54 +75,82 @@ pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
 
 /// Return whether a point is inside a rectangle or on its boundary.
 /// If strict is true, will not consider a point on a boundary as inside.
+///
+/// Implemented via sign tests on the componentwise differences `p - pos_min`
+/// and `pos_max - p`, so no `ZZ::Real` value is materialized.
 pub fn point_in_rect<ZZ: IsComplex>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
-    let (px, py) = p.re_im();
-    let (x_min, y_min) = pos_min.re_im();
-    let (x_max, y_max) = pos_max.re_im();
-    let x_in_open_bound = if strict {
-        (px - x_min).is_positive() && (x_max - px).is_positive()
+    let dlo = *p - *pos_min;
+    let dhi = *pos_max - *p;
+    let signs = [dlo.re_sign(), dlo.im_sign(), dhi.re_sign(), dhi.im_sign()];
+    if strict {
+        signs.iter().all(|&s| s > 0)
     } else {
-        !(px - x_min).is_negative() && !(x_max - px).is_negative()
-    };
-    let y_in_open_bound = if strict {
-        (py - y_min).is_positive() && (y_max - py).is_positive()
-    } else {
-        !(py - y_min).is_negative() && !(y_max - py).is_negative()
-    };
-    x_in_open_bound && y_in_open_bound
-}
-
-/// Put a number into a closed interval by repeated addition or subtraction.
-pub fn mod_bound<Z: IsReal>(p: &Z, rng: Range<&Z>) -> Z {
-    let (l, r) = (rng.start, rng.end);
-    let w = *r - *l;
-    let mut ret = *p;
-
-    let mut was_less = false;
-    while ret < *l {
-        was_less = true;
-        ret = ret + w;
+        signs.iter().all(|&s| s >= 0)
     }
-    if was_less {
-        return ret;
-    }
-    while ret > *r {
-        ret = ret - w;
-    }
-    ret
 }
 
 /// Return number modulo rect by repeated addition or subtraction of the x/y components.
+///
+/// Assumes the rectangle has integer-sized sides (the only case used in the
+/// codebase). Width and height are recovered from `complex64()` and rounded
+/// to the nearest integer; a `debug_assert!` checks that the rounding is
+/// within a small epsilon of the f64 difference, to catch misuse.
+///
+/// Mods `p` into the half-open box `[pos_min, pos_max)` by repeated lattice
+/// shifts of `width` along the real axis and `height` along the imaginary
+/// axis, matching the prior `mod_bound`-on-closed-range semantics.
 pub fn point_mod_rect<ZZ>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ)) -> ZZ
 where
-    ZZ: IsComplex + HasZZ4 + OneImag + From<<ZZ as IsRingOrField>::Real>,
+    ZZ: IsComplex + HasZZ4 + OneImag + From<IntT>,
 {
-    let (p_x, p_y) = p.re_im();
-    let (x_min, y_min) = pos_min.re_im();
-    let (x_max, y_max) = pos_max.re_im();
-    let ret_x: <ZZ as IsRingOrField>::Real = mod_bound(&p_x, &x_min..&x_max);
-    let ret_y: <ZZ as IsRingOrField>::Real = mod_bound(&p_y, &y_min..&y_max);
-    ZZ::from(ret_x) + ZZ::one_i() * ZZ::from(ret_y)
+    // Extract integer width and height from the rectangle via complex64().
+    let cmin = pos_min.complex64();
+    let cmax = pos_max.complex64();
+    let width_f = cmax.re - cmin.re;
+    let height_f = cmax.im - cmin.im;
+    let width = width_f.round() as IntT;
+    let height = height_f.round() as IntT;
+    debug_assert!(
+        (width as f64 - width_f).abs() < 1e-9,
+        "point_mod_rect: rectangle width is not integral (width_f={width_f})"
+    );
+    debug_assert!(
+        (height as f64 - height_f).abs() < 1e-9,
+        "point_mod_rect: rectangle height is not integral (height_f={height_f})"
+    );
+
+    // Build lattice shift steps as ZZ values: w_step = width * 1, h_step = height * i.
+    let w_step: ZZ = ZZ::from(width);
+    let h_step: ZZ = ZZ::one_i() * ZZ::from(height);
+
+    let mut ret = *p;
+
+    // Real axis: bring ret.re into [pos_min.re, pos_max.re), matching the
+    // closed-range mod_bound semantics (< 0 vs > 0 sign tests).
+    let mut was_less = false;
+    while (ret - *pos_min).re_sign() < 0 {
+        was_less = true;
+        ret = ret + w_step;
+    }
+    if !was_less {
+        while (*pos_max - ret).re_sign() < 0 {
+            ret = ret - w_step;
+        }
+    }
+
+    // Imaginary axis: same shape, using h_step and im_sign.
+    let mut was_less = false;
+    while (ret - *pos_min).im_sign() < 0 {
+        was_less = true;
+        ret = ret + h_step;
+    }
+    if !was_less {
+        while (*pos_max - ret).im_sign() < 0 {
+            ret = ret - h_step;
+        }
+    }
+
+    ret
 }
 
 #[cfg(test)]
