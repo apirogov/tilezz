@@ -1565,6 +1565,92 @@ macro_rules! zz_integral_ring_tests {
                         }
                     }
                 }
+
+                // ---- ZZComplex predicates ----
+
+                #[test]
+                fn is_real_imag_complex_predicates() {
+                    use $crate::cyclotomic::ZZComplex;
+
+                    assert!(R::zero().is_real(), "0 should be real");
+                    assert!(R::zero().is_imag(), "0 should be imag");
+                    assert!(!R::zero().is_complex(), "0 should not be (strictly) complex");
+
+                    assert!(R::one().is_real(), "1 should be real");
+                    assert!((-R::one()).is_real(), "-1 should be real");
+                    assert!(!R::one().is_imag(), "1 should not be imag");
+                    assert!(!R::one().is_complex(), "1 should not be (strictly) complex");
+
+                    let n = R::turn();
+                    let qturn = n / 4;
+                    if n % 4 == 0 {
+                        // i = unit(qturn) for any ring containing i.
+                        let i = <R as Units>::unit(qturn);
+                        assert!(!i.is_real(), "i should not be real");
+                        assert!(i.is_imag(), "i should be imag");
+                        assert!(!i.is_complex(), "i should not be (strictly) complex");
+                        assert!((-i).is_imag(), "-i should be imag");
+                    }
+
+                    // unit(1) is a non-axis root of unity for N >= 8.
+                    if n >= 8 && n % 4 == 0 {
+                        let p = <R as Units>::unit(1);
+                        assert!(!p.is_real(), "unit(1) should not be real for N={n}");
+                        assert!(!p.is_imag(), "unit(1) should not be imag for N={n}");
+                        assert!(p.is_complex(), "unit(1) should be strictly complex for N={n}");
+                    }
+                }
+
+                // ---- Pow ----
+
+                #[test]
+                fn pow_at_hturn_is_neg_one() {
+                    use num_traits::Pow;
+                    let n = R::turn();
+                    let hturn = (n / 2) as u8;
+                    let zeta = R::ccw();
+                    assert_eq!(zeta.pow(hturn), -R::one(), "zeta^(N/2) should equal -1");
+                    let turn = n as u8;
+                    assert_eq!(zeta.pow(turn), R::one(), "zeta^N should equal 1");
+                }
+
+                #[test]
+                #[should_panic]
+                fn pow_negative_panics() {
+                    use num_traits::Pow;
+                    let _ = R::one().pow(-1i8);
+                }
+
+                // ---- Sample complex64 values ----
+
+                #[test]
+                fn complex64_sample_values() {
+                    use num_complex::Complex64;
+                    use num_traits::{One, Zero};
+
+                    assert_eq!(R::zero().complex64(), Complex64::zero());
+                    assert_eq!(R::one().complex64(), Complex64::one());
+                    assert_eq!((-R::one()).complex64(), -Complex64::one());
+                    let two = R::one() + R::one();
+                    assert!(
+                        approx_eq(two.complex64(), Complex64::new(2.0, 0.0), COMPLEX_EPS),
+                        "(1+1).complex64() != 2",
+                    );
+                }
+
+                // ---- Hashable round-trip ----
+
+                #[test]
+                fn hashable_round_trip() {
+                    use std::collections::HashSet;
+                    let mut s: HashSet<R> = HashSet::new();
+                    s.insert(R::zero());
+                    s.insert(R::one());
+                    s.insert(R::ccw());
+                    assert!(s.contains(&R::ccw()));
+                    assert!(s.contains(&(R::ccw() + R::zero())));
+                    assert!(!s.contains(&(R::ccw() + R::one())));
+                }
             }
         }
     };
