@@ -5,21 +5,21 @@ pub(crate) mod numtraits;
 pub mod gaussint;
 
 #[macro_use]
-mod symnum;
+pub(crate) mod symnum;
 
 mod sign;
 
 #[cfg(test)]
 mod unit_tests;
 
-mod params;
+pub(crate) mod params;
 
-mod traits;
+pub(crate) mod traits;
 
 #[macro_use]
 mod types;
 
-mod zz12;
+mod rings;
 
 mod units;
 
@@ -48,4 +48,4 @@ pub use traits::{IsRing, IsRingOrField, IsZZ4};
 pub use traits::ZZType;
 
 pub use types::{ZZ10, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
-pub use zz12::ZZ12;
+pub use rings::ZZ12;
