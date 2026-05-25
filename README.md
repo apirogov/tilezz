@@ -46,9 +46,10 @@ To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore
 <img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
 <img src="https://github.com/user-attachments/assets/198814da-471f-49f3-81e1-784c4252c388" width="45%" />
 
-Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: a few minutes),
-Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: around 2,5h).
-The polygon sets were computed using a naive brute-force approach with a single thread on an old Thinkpad T460.
+Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: ~0.1s),
+Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: ~30s).
+The polygon sets are computed by a single-threaded DFS over angle sequences with a lex-min rotation prune
+that collapses each polygon's `n` cyclic walks down to one -- see [rat_enum](./src/bin/rat_enum.rs).
 
 To generate images like these, check out the [rat_enum](./src/bin/rat_enum.rs) example.
 
@@ -95,16 +96,16 @@ to use other efficient string-based algorithms, e.g. to compute combinations of
 tiles.
 
 This library also provides a small, declarative 2D rendering pipeline
-(`vis::scene`) that turns geometric primitives — segments, polylines,
-polygons, vertex markers, text labels, arrowheads — into output formats
+(`vis::scene`) that turns geometric primitives -- segments, polylines,
+polygons, vertex markers, text labels, arrowheads -- into output formats
 suitable for any environment:
 
-* **SVG strings** — always available, no extra dependencies, embeds
+* **SVG strings** -- always available, no extra dependencies, embeds
   directly in HTML, Jupyter, or saved as `.svg`.
-* **PNG bytes** (feature `raster`) — pure-Rust rasterization via
+* **PNG bytes** (feature `raster`) -- pure-Rust rasterization via
   [`resvg`](https://github.com/linebender/resvg) + `tiny-skia`. Works
   on every target `tiny-skia` supports, including WASM.
-* **Animated GIFs** (feature `animation`) — multi-frame output via the
+* **Animated GIFs** (feature `animation`) -- multi-frame output via the
   [`gif`](https://github.com/image-rs/image-gif) crate.
 
 ### Interactive (Jupyter Notebook)
