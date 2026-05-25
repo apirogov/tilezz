@@ -2,6 +2,34 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::SymNum;
 
+/// Precomputed unions of the two 5-cell `+` crosses centered on cells
+/// that are `(dx, dy)` apart, indexed by `(dx + 1) * 3 + (dy + 1)` for
+/// `(dx, dy) in {-1, 0, 1}^2`. All 9 offsets relative to `cell(p1)`,
+/// sorted and deduplicated.
+///
+/// `cell_of` uses `floor`, so a unit-length segment is guaranteed to
+/// have `(dx, dy)` in this range -- no boundary cases.
+static NEIGHBOR_OFFSETS: [&[(i64, i64)]; 9] = [
+    // (dx=-1, dy=-1): p2 down-left of p1
+    &[(-2, -1), (-1, -2), (-1, -1), (-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)],
+    // (dx=-1, dy=0): p2 left of p1
+    &[(-2, 0), (-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, 0)],
+    // (dx=-1, dy=1): p2 up-left of p1
+    &[(-2, 1), (-1, 0), (-1, 1), (-1, 2), (0, -1), (0, 0), (0, 1), (1, 0)],
+    // (dx=0, dy=-1): p2 below p1
+    &[(-1, -1), (-1, 0), (0, -2), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0)],
+    // (dx=0, dy=0): same cell, single 5-cell cross
+    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)],
+    // (dx=0, dy=1): p2 above p1
+    &[(-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (0, 2), (1, 0), (1, 1)],
+    // (dx=1, dy=-1): p2 down-right of p1
+    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, -2), (1, -1), (1, 0), (2, -1)],
+    // (dx=1, dy=0): p2 right of p1
+    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1), (2, 0)],
+    // (dx=1, dy=1): p2 up-right of p1
+    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
+];
+
 #[derive(Debug, Clone)]
 pub struct UnitSquareGrid {
     cells: FxHashMap<(i64, i64), Vec<usize>>,
@@ -15,8 +43,16 @@ impl Default for UnitSquareGrid {
 
 impl UnitSquareGrid {
     pub fn cell_of<T: SymNum>(zz: T) -> (i64, i64) {
+        // Use floor (not round) so that a unit-length segment can never
+        // span more than 2 cells along an axis. With round-half-away-from-
+        // zero, points at exactly +/-0.5 round in opposite directions, so a
+        // unit segment crossing both sides of zero would give a cell-offset
+        // of 2 -- forcing the neighborhood lookup table in `unit_seg_cells`
+        // to enumerate more cases than the conceptual 9. Floor partitions
+        // space into [a, a+1) cells, so the unit shift always changes the
+        // floor by 0 or +/-1.
         let c = zz.complex64();
-        (c.re.round() as i64, c.im.round() as i64)
+        (c.re.floor() as i64, c.im.floor() as i64)
     }
 
     pub fn neighborhood_of<T: SymNum>(zz: T) -> [(i64, i64); 5] {
@@ -31,6 +67,40 @@ impl UnitSquareGrid {
         result.sort_unstable();
         result.dedup();
         result
+    }
+
+    /// Cells covering the neighborhood of a unit-length segment from `p1` to `p2`,
+    /// without intermediate allocations or runtime dedup.
+    ///
+    /// Both endpoints are assumed to be at most one unit apart (the segment is
+    /// unit-length), so the cell offset `(dx, dy) = cell(p2) - cell(p1)` lies in
+    /// `{-1, 0, 1}^2` -- 9 cases. For each case, the union of the two 5-cell `+`
+    /// crosses (one centered on each endpoint's cell) is a fixed list of at most
+    /// 8 distinct cells, sorted at compile time. The lookup is a single array
+    /// index keyed on the packed `(dx + 1) * 3 + (dy + 1)` offset.
+    ///
+    /// Returns an iterator yielding absolute cell coordinates `(cell(p1).0 + ox,
+    /// cell(p1).1 + oy)` over the precomputed offsets for the case at hand.
+    ///
+    /// Panics in debug if the segment is not unit-length (i.e. `(dx, dy)`
+    /// escapes `{-1, 0, 1}^2`).
+    #[inline]
+    pub fn unit_seg_cells<T: SymNum>(
+        p1: T,
+        p2: T,
+    ) -> impl Iterator<Item = (i64, i64)> {
+        let (cx, cy) = Self::cell_of(p1);
+        let (cx2, cy2) = Self::cell_of(p2);
+        let dx = cx2 - cx;
+        let dy = cy2 - cy;
+        debug_assert!(
+            dx.abs() <= 1 && dy.abs() <= 1,
+            "unit_seg_cells: endpoints not unit-distance ({dx}, {dy})"
+        );
+        let idx = ((dx + 1) * 3 + (dy + 1)) as usize;
+        NEIGHBOR_OFFSETS[idx]
+            .iter()
+            .map(move |&(ox, oy)| (cx + ox, cy + oy))
     }
 
     pub fn new() -> Self {
@@ -90,23 +160,41 @@ mod tests {
 
     #[test]
     fn test_cell_of() {
+        // `cell_of` uses floor: cells are `[a, a+1) x [b, b+1)`.
+        // Unit cartesian coordinates for zeta^k:
+        //   k=0:  (1.000,  0.000)
+        //   k=1:  (0.866,  0.500)
+        //   k=2:  (0.500,  0.866)
+        //   k=3:  (0.000,  1.000)
+        //   k=4: (-0.500,  0.866)
+        //   k=5: (-0.866,  0.500)
+        //   k=6: (-1.000,  0.000)
+        //   k=7: (-0.866, -0.500)
+        //   k=8: (-0.500, -0.866)
+        //   k=9:  (0.000, -1.000)
+        //   k=10: (0.500, -0.866)
+        //   k=11: (0.866, -0.500)
         assert_eq!(UnitSquareGrid::cell_of(ZZ12::zero()), (0, 0));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(0)), (1, 0));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(1)), (1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(2)), (1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(1)), (0, 0));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(2)), (0, 0));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(3)), (0, 1));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(4)), (-1, 1));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(5)), (-1, 1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(4)), (-1, 0));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(5)), (-1, 0));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(6)), (-1, 0));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(7)), (-1, -1));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(8)), (-1, -1));
         assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(9)), (0, -1));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(10)), (1, -1));
-        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(11)), (1, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(10)), (0, -1));
+        assert_eq!(UnitSquareGrid::cell_of(<ZZ12 as Units>::unit(11)), (0, -1));
     }
 
     #[test]
     fn test_seg_neighborhood_of() {
+        // With floor-based cell_of, the cells the test points land in
+        // shift relative to the older round-based version; the function
+        // still returns the sorted-deduplicated union of the two 5-cell
+        // `+` crosses around the endpoint cells.
         let tmp1 =
             (ZZ12::one().scale(2) - <ZZ12 as Units>::unit(2) - <ZZ12 as Units>::unit(-1).scale(2))
                 * <ZZ12 as Units>::unit(1);
@@ -116,8 +204,22 @@ mod tests {
         let p1 = (tmp1 - tmp2) * <ZZ12 as Units>::unit(-2);
         let p2 = p1 + <ZZ12 as Units>::unit(2);
         let n0 = UnitSquareGrid::seg_neighborhood_of(p1, p2);
-        assert_eq!(n0, &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
+        // p1 in cell (0, 0), p2 in cell (-1, -1) under floor semantics.
+        assert_eq!(
+            n0,
+            &[
+                (-2, -1),
+                (-1, -2),
+                (-1, -1),
+                (-1, 0),
+                (0, -1),
+                (0, 0),
+                (0, 1),
+                (1, 0),
+            ]
+        );
 
+        // unit(0) = (1.0, 0.0); cell(0, 0) and cell(1, 0).
         let n1 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(0));
         assert_eq!(
             n1,
@@ -133,6 +235,7 @@ mod tests {
             ]
         );
 
+        // unit(3) = (0.0, 1.0); cell(0, 0) and cell(0, 1).
         let n2 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(3));
         assert_eq!(
             n2,
@@ -148,19 +251,68 @@ mod tests {
             ]
         );
 
+        // unit(1) = (sqrt(3)/2, 1/2) ~= (0.866, 0.5); both endpoints in cell (0, 0).
         let n3 = UnitSquareGrid::seg_neighborhood_of(ZZ12::zero(), <ZZ12 as Units>::unit(1));
-        assert_eq!(
-            n3,
-            &[
-                (-1, 0),
-                (0, -1),
-                (0, 0),
-                (0, 1),
-                (1, 0),
-                (1, 1),
-                (1, 2),
-                (2, 1),
-            ]
+        assert_eq!(n3, &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)]);
+    }
+
+    /// Compare the precomputed `unit_seg_cells` against the runtime
+    /// `seg_neighborhood_of` for every (p1, direction) pair on a coarse
+    /// integer-coordinate grid. Both must yield the same cell set
+    /// (as a sorted-deduplicated list) for unit-length segments.
+    #[test]
+    fn test_unit_seg_cells_matches_seg_neighborhood_of() {
+        let mut diffs = Vec::new();
+        for ax in -3..=3i64 {
+            for ay in -3..=3i64 {
+                for bx in -3..=3i64 {
+                    for by in -3..=3i64 {
+                        for dir in 0..12i8 {
+                            // p1 = ax + bx*sqrt(3)/2 + i*(ay + by*sqrt(3)/2). Use
+                            // ZZ12 with integer coeffs to get points spread across
+                            // both axis-aligned and half-integer boundaries.
+                            let p1: ZZ12 = ZZ12::from((ax, ay))
+                                + <ZZ12 as Units>::unit(2).scale(bx)
+                                + <ZZ12 as Units>::unit(2).scale(by)
+                                    * <ZZ12 as Units>::unit(3);
+                            let p2 = p1 + <ZZ12 as Units>::unit(dir);
+                            let mut new_cells: Vec<(i64, i64)> =
+                                UnitSquareGrid::unit_seg_cells(p1, p2).collect();
+                            new_cells.sort_unstable();
+                            new_cells.dedup();
+                            let old_cells: Vec<(i64, i64)> =
+                                UnitSquareGrid::seg_neighborhood_of(p1, p2);
+                            if new_cells != old_cells {
+                                let c1 = UnitSquareGrid::cell_of(p1);
+                                let c2 = UnitSquareGrid::cell_of(p2);
+                                diffs.push((
+                                    (ax, ay, bx, by, dir),
+                                    c1,
+                                    c2,
+                                    new_cells.clone(),
+                                    old_cells.clone(),
+                                ));
+                                if diffs.len() <= 5 {
+                                    eprintln!(
+                                        "DIFF at p1_idx=({ax},{ay},{bx},{by}) dir={dir}: \
+                                         cell(p1)={c1:?}, cell(p2)={c2:?}, \
+                                         dx={}, dy={}",
+                                        c2.0 - c1.0,
+                                        c2.1 - c1.1,
+                                    );
+                                    eprintln!("  new_cells: {new_cells:?}");
+                                    eprintln!("  old_cells: {old_cells:?}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            diffs.is_empty(),
+            "{} (p1, dir) cases mismatch out of total scanned",
+            diffs.len()
         );
     }
 

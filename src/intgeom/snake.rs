@@ -312,6 +312,10 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
 
     /// Return all representative segments of the current snakes
     /// that intersect with at least one of the given cells.
+    ///
+    /// Kept for tests only; the hot path in `can_add` traverses the grid
+    /// directly without materializing this list.
+    #[cfg(test)]
     fn cell_segs(&self, cells: &[(i64, i64)]) -> Vec<(T, T)> {
         let mut seg_pt_indices: Vec<(usize, usize)> = Vec::new();
         for pt_idx in self.grid.get_cells(cells) {
@@ -352,16 +356,55 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
             return new_pt.is_zero() || !visited.contains(&new_pt);
         }
 
-        let neighborhood = UnitSquareGrid::seg_neighborhood_of(prev_pt, new_pt);
-        let neighbor_segs = self.cell_segs(&neighborhood);
-
+        // Direct grid traversal: no intermediate Vec / sort / dedup.
+        // We walk the 5+5 cells of the segment's neighborhood, look up
+        // point indices in each cell directly, and from each point
+        // index recover the (at most two) adjacent segments. A u128
+        // bitmap deduplicates segment ids on the fly -- correctness
+        // relies on `self.len() <= 128`, which is amply true for the
+        // rat_enum search depth.
+        debug_assert!(
+            self.len() < 128,
+            "snake too long for u128 segment bitmap; revisit can_add dedup"
+        );
         let new_pt_nz = !new_pt.is_zero();
-        for s @ (x, y) in neighbor_segs {
-            if new_pt_nz && (new_pt == x || new_pt == y) {
-                return false;
-            }
-            if intersect_unit_segments(&new_seg, &s) {
-                return false;
+        let len = self.len();
+        let mut seen_segs: u128 = 0;
+
+        // Iterate the precomputed deduplicated cell set for this segment's
+        // (dx, dy) cell offset (one of 9 cases). Yields at most 8 cells, all
+        // unique -- no runtime dedup needed at the cell level.
+        for cell in UnitSquareGrid::unit_seg_cells(prev_pt, new_pt) {
+            for &pt_idx in self.grid.get(cell) {
+                // Vertex-revisit check (only when new_pt is not origin --
+                // origin matches points[0] by polygon closure, which is fine).
+                if new_pt_nz && self.points[pt_idx] == new_pt {
+                    return false;
+                }
+                // Segment ending at pt_idx (if any).
+                if pt_idx > 0 {
+                    let seg_id = pt_idx - 1;
+                    let bit = 1u128 << seg_id;
+                    if seen_segs & bit == 0 {
+                        seen_segs |= bit;
+                        let s = (self.points[seg_id], self.points[pt_idx]);
+                        if intersect_unit_segments(&new_seg, &s) {
+                            return false;
+                        }
+                    }
+                }
+                // Segment starting at pt_idx (if any).
+                if pt_idx < len {
+                    let seg_id = pt_idx;
+                    let bit = 1u128 << seg_id;
+                    if seen_segs & bit == 0 {
+                        seen_segs |= bit;
+                        let s = (self.points[pt_idx], self.points[pt_idx + 1]);
+                        if intersect_unit_segments(&new_seg, &s) {
+                            return false;
+                        }
+                    }
+                }
             }
         }
         true
