@@ -94,15 +94,26 @@ angle sequence. Treating (rational) polygons as strings of angles also allows us
 to use other efficient string-based algorithms, e.g. to compute combinations of
 tiles.
 
-This library also provides some plotting functionality based on
-[plotterrs](https://github.com/plotters-rs/plotters), which means that you can
-easily render tiles built with this crate into various backends, including PNG,
-SVG, web pages (HTML5/WASM), including interactive usage in Jupyter.
+This library also provides a small, declarative 2D rendering pipeline
+(`vis::scene`) that turns geometric primitives — segments, polylines,
+polygons, vertex markers, text labels, arrowheads — into output formats
+suitable for any environment:
+
+* **SVG strings** — always available, no extra dependencies, embeds
+  directly in HTML, Jupyter, or saved as `.svg`.
+* **PNG bytes** (feature `raster`) — pure-Rust rasterization via
+  [`resvg`](https://github.com/linebender/resvg) + `tiny-skia`. Works
+  on every target `tiny-skia` supports, including WASM.
+* **Animated GIFs** (feature `animation`) — multi-frame output via the
+  [`gif`](https://github.com/image-rs/image-gif) crate.
 
 ### Interactive (Jupyter Notebook)
 
-Thanks to the capabilities of the `plotters` library, it is easy to use
-[Jupyter notebooks](https://jupyter.org/) with this crate to visualize polygonal tiles.
+The crate integrates with [Jupyter notebooks](https://jupyter.org/)
+through the [evcxr](https://github.com/evcxr/evcxr) Rust kernel. A
+`Scene` exposes an `evcxr_display`-aware wrapper via `scene.display(&vp)`
+that renders inline as SVG; `scene.display_png(&vp)` does the same as
+PNG (requires the `raster` feature).
 
 #### Requirements
 
@@ -110,9 +121,9 @@ Thanks to the capabilities of the `plotters` library, it is easy to use
 * [evcxr](https://github.com/evcxr/evcxr)
 * [evcxr_jupyter](https://github.com/evcxr/evcxr)
 
-If you have all the dependencies installed correctly and can create/open Jupyter
-Notebooks using a Rust kernel (check out the official
-[evcxr documentation](https://plotters-rs.github.io/plotters-doc-data/evcxr-jupyter-integration.html)),
+If you have all the dependencies installed correctly and can create/open
+Jupyter Notebooks using a Rust kernel (check out the
+[evcxr documentation](https://github.com/evcxr/evcxr/blob/main/evcxr_jupyter/README.md)),
 then you are already set up for using this crate interactively.
 
 #### Rendering the Spectre Tile Over the Cyclotomic Integer Ring ZZ12
@@ -135,37 +146,40 @@ cd tilezz
     Create a new Rust notebook (which is powered by `evcxr`) and add the following code into a cell:
 
 ```rust
-// Build and load the crate
-:dep plotters = { version = "^0.3.7", features = ["evcxr", "all_series"] }
-// 1(a) if you want to use a published version of this crate:
-// :dep tilezz = "*"
-// 1(b) (RECOMMENDED) if you cloned this repository and want to use the current development version:
-:dep tilezz = { path = ".." }
+// Build and load the crate. The `raster` feature enables PNG output;
+// SVG works without it.
+:dep tilezz = { path = "..", features = ["raster"] }
 
-// Import what we need
 use tilezz::cyclotomic::*;
-use tilezz::snake::Turtle;
-use tilezz::rat::Rat;
+use tilezz::intgeom::rat::Rat;
+use tilezz::intgeom::snake::Turtle;
+use tilezz::vis::draw::{MarkerStyle, TileStyle};
+use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
-use plotters::prelude::*;
-use tilezz::plotters::{plot_tile, TileStyle};
+// Define a sequence of external angles. All segments have unit length,
+// so this fully determines a polygon.
+let external_angles: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
 
-evcxr_figure((500,500), |root| {
-    // Prepare the canvas
-    let _ = root.fill(&WHITE);
-    let root = root.margin(10, 10, 10, 10);
+// Instantiate an abstract polygon over the cyclotomic ring ZZ12.
+let r: Rat<ZZ12> = external_angles.try_into().unwrap();
+// Trace it out in the cartesian plane.
+let pts: Vec<(f64, f64)> = r.to_polyline_f64(Turtle::default());
 
-    // Define a sequence of external angles. As all segments have unit length, this fully determines a polygon
-    let external_angles: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
-    // Instantiate an abstract polygon over the cyclotomic ring ZZ12 (one full turn = 12 rotational unit steps)
-    let s: Rat<ZZ12> = external_angles.try_into().unwrap();
-    // Trace out the polygon in the cartesian plane using a canonical starting point and facing direction
-    let p = s.to_polyline_f64(Turtle::default());
-    // Plot the concretized polygon with default settings
-    plot_tile(&root, &p, &TileStyle::default());
+// Build a scene with one filled tile + red vertex markers + index labels.
+let mut scene: Scene = Scene::new().with_background(Color::WHITE);
+scene.draw_tile(
+    &pts,
+    &TileStyle::filled(
+        Fill::solid(Color::YELLOW.with_alpha(96)),
+        Stroke::solid(Color::BLACK, 0.04),
+    )
+    .with_vertex_marker(MarkerStyle::filled_circle(0.2, Color::RED))
+    .with_vertex_labels(TextStyle::new(0.15, Color::WHITE).bold()),
+);
 
-    Ok(())
-})
+// Render inline as SVG.
+let vp: Viewport = Viewport::square_for(500, scene.auto_bounds().unwrap(), 16);
+scene.display(&vp)
 ```
 
 After waiting for some seconds (the required dependencies have to be built

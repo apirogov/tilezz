@@ -247,15 +247,13 @@ impl<T: IsComplex + IsRingOrField + Units> Rat<T> {
     }
 
     /// Shift the starting node of the tile (does not affect equivalence).
-    #[allow(dead_code)]
-    pub(crate) fn cycle(mut self, offset: i64) -> Self {
+    pub fn cycle(mut self, offset: i64) -> Self {
         self.cyc = (self.cyc as i64 + offset).rem_euclid(self.len() as i64) as usize;
         self
     }
 
     /// Return a copy with shifted starting node.
-    #[allow(dead_code)]
-    pub(crate) fn cycled(&self, offset: i64) -> Self {
+    pub fn cycled(&self, offset: i64) -> Self {
         self.clone().cycle(offset)
     }
 

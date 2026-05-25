@@ -136,25 +136,43 @@ pub fn render_with_options(
     vp: &Viewport,
     opt: &resvg::usvg::Options<'_>,
 ) -> Result<Vec<u8>, RasterError> {
+    let pixmap = render_to_pixmap(scene, vp, opt)?;
+    pixmap
+        .encode_png()
+        .map_err(|e| RasterError::PngEncode(e.to_string()))
+}
+
+/// Render a scene to a `tiny_skia::Pixmap` (raw RGBA buffer).
+/// Lower-level than [`render_with_options`] / [`to_png`]; used by
+/// `vis::animation::render_gif` to avoid re-encoding PNG between
+/// frames.
+pub fn render_to_pixmap(
+    scene: &Scene,
+    vp: &Viewport,
+    opt: &resvg::usvg::Options<'_>,
+) -> Result<tiny_skia::Pixmap, RasterError> {
     let svg = scene.to_svg(vp);
     let tree =
         resvg::usvg::Tree::from_str(&svg, opt).map_err(|e| RasterError::SvgParse(e.to_string()))?;
-
     let mut pixmap =
         tiny_skia::Pixmap::new(vp.width_px, vp.height_px).ok_or(RasterError::PixmapAlloc {
             width: vp.width_px,
             height: vp.height_px,
         })?;
-
     resvg::render(
         &tree,
         tiny_skia::Transform::identity(),
         &mut pixmap.as_mut(),
     );
+    Ok(pixmap)
+}
 
-    pixmap
-        .encode_png()
-        .map_err(|e| RasterError::PngEncode(e.to_string()))
+/// Public access to the default `usvg::Options` (system-font fontdb
+/// with generic-family aliases configured). Useful for callers
+/// outside `raster` that need to call `render_to_pixmap` directly
+/// (e.g. `vis::animation::render_gif`).
+pub fn default_options() -> resvg::usvg::Options<'static> {
+    default_usvg_options()
 }
 
 impl Scene {

@@ -6,14 +6,15 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
-use plotters::coord::Shift;
-use plotters::prelude::*;
-
 use tilezz::cyclotomic::geometry::point_mod_rect;
 use tilezz::cyclotomic::Units;
 use tilezz::cyclotomic::*;
-use tilezz::vis::plotters::{plot_points, rainbow};
-use tilezz::vis::plotutils::{chart_padding, tiles_bounds, P64, R64};
+use tilezz::vis::animation::render_gif;
+use tilezz::vis::draw::rainbow;
+use tilezz::vis::plotutils::{points_bounds, P64, R64};
+use tilezz::vis::scene::{
+    Color, Fill, Item, MarkerShape, Scene, Stroke, Viewport,
+};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
@@ -96,66 +97,11 @@ where
     round_pts
 }
 
-/// Helper function to plot the points with given settings into a drawing area.
-pub fn render<DB: DrawingBackend>(
-    da: &DrawingArea<DB, Shift>,
-    bounds @ ((x_min, y_min), (x_max, y_max)): R64,
-    point_levels: &[Vec<P64>],
-    level_styles: &[(i32, ShapeStyle)],
-    offset: usize,
-    stride: u32,
-) {
-    let (pad_x, pad_y) = chart_padding(da.dim_in_pixel(), bounds);
-    println!("{pad_x} {pad_y}");
-    let da = da.margin(pad_y / 2, pad_y / 2, pad_x / 2, pad_x / 2);
-
-    // prepare coordinate system
-    let mut chart = ChartBuilder::on(&da)
-        .x_label_area_size(20)
-        .y_label_area_size(20)
-        .build_cartesian_2d(x_min..x_max, y_min..y_max)
-        .unwrap();
-    chart.configure_mesh().draw().unwrap();
-    // plot points level by level with the correct style
-    for i in (0..point_levels.len()).step_by(stride as usize).rev() {
-        let (sz, st) = level_styles[i];
-        plot_points(
-            &mut chart,
-            point_levels[i].as_slice(),
-            |_| format!("{}", i + offset),
-            sz,
-            st,
-        );
-    }
-}
-
-/// Generate combinations of point sizes and colors
-fn get_styles(n: usize, pt_sz: i32, pt_sz_const: bool) -> Vec<(i32, ShapeStyle)> {
-    // get a rainbow color gradient
-    let colors = rainbow(n as u32 + 1, 1.);
-    (0..=n)
-        .collect::<Vec<_>>()
-        .iter()
-        .map(|i| {
-            (
-                ((pt_sz as f64)
-                    * (if pt_sz_const {
-                        1.
-                    } else {
-                        0.98_f64.powi(*i as i32)
-                    })) as i32,
-                colors[*i].filled(),
-            )
-        })
-        .collect()
-}
-
 fn prepare_render<ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync>(
     num_rounds: usize,
     mod_unit_square: bool,
-    chart_width: u32,
     num_threads: usize,
-) -> (Vec<Vec<P64>>, R64, Vec<(i32, ShapeStyle)>)
+) -> (Vec<Vec<P64>>, R64)
 where
     <ZZ as IsComplex>::Field: From<(<ZZ as IsRingOrField>::Real, <ZZ as IsRingOrField>::Real)>,
 {
@@ -163,35 +109,24 @@ where
         .iter()
         .map(|v| v.iter().map(|p| p.xy()).collect())
         .collect();
-
-    let bounds = tiles_bounds(&points);
-
-    let pt_sz_const = !mod_unit_square;
-    let pt_sz = if pt_sz_const {
-        2
-    } else {
-        chart_width as i32 * 3 / 100
-    };
-    let styles = get_styles(points.len(), pt_sz, pt_sz_const);
-
-    (points, bounds, styles)
+    let bounds = points_bounds(points.iter()).unwrap_or(((-0.5, -0.5), (0.5, 0.5)));
+    (points, bounds)
 }
 
 fn prepare_render_for(
     ring: u8,
     num_rounds: usize,
     mod_unit_square: bool,
-    chart_width: u32,
     num_threads: usize,
-) -> (Vec<Vec<P64>>, R64, Vec<(i32, ShapeStyle)>) {
+) -> (Vec<Vec<P64>>, R64) {
     match ring {
-        4 => prepare_render::<ZZ4>(num_rounds, mod_unit_square, chart_width, num_threads),
-        8 => prepare_render::<ZZ8>(num_rounds, mod_unit_square, chart_width, num_threads),
-        12 => prepare_render::<ZZ12>(num_rounds, mod_unit_square, chart_width, num_threads),
-        16 => prepare_render::<ZZ16>(num_rounds, mod_unit_square, chart_width, num_threads),
-        20 => prepare_render::<ZZ20>(num_rounds, mod_unit_square, chart_width, num_threads),
-        24 => prepare_render::<ZZ24>(num_rounds, mod_unit_square, chart_width, num_threads),
-        60 => prepare_render::<ZZ60>(num_rounds, mod_unit_square, chart_width, num_threads),
+        4 => prepare_render::<ZZ4>(num_rounds, mod_unit_square, num_threads),
+        8 => prepare_render::<ZZ8>(num_rounds, mod_unit_square, num_threads),
+        12 => prepare_render::<ZZ12>(num_rounds, mod_unit_square, num_threads),
+        16 => prepare_render::<ZZ16>(num_rounds, mod_unit_square, num_threads),
+        20 => prepare_render::<ZZ20>(num_rounds, mod_unit_square, num_threads),
+        24 => prepare_render::<ZZ24>(num_rounds, mod_unit_square, num_threads),
+        60 => prepare_render::<ZZ60>(num_rounds, mod_unit_square, num_threads),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -274,10 +209,6 @@ fn main() {
     };
 
     let img_dims = (cli.width, cli.width);
-    let chart_width = match output_format.unwrap_or(OutputFormat::Png) {
-        OutputFormat::Gif => cli.width,
-        OutputFormat::Png => cli.width / (cli.row as u32),
-    };
 
     // -------- Compute --------
 
@@ -286,52 +217,168 @@ fn main() {
         println!("Computing points using {num_threads} threads...");
     }
 
-    let (points, bounds, styles) = prepare_render_for(
-        cli.ring,
-        cli.num_rounds,
-        cli.unit_square,
-        chart_width,
-        num_threads,
-    );
+    let (points, bounds) =
+        prepare_render_for(cli.ring, cli.num_rounds, cli.unit_square, num_threads);
 
     // -------- Render --------
 
-    if output_format.is_none() {
+    let Some(output_format) = output_format else {
         return; // dry run -> computation with no rendering
-    }
-    let output_format = output_format.unwrap();
-
-    // get image of desired size for chosen backend depending of format
-    let root = match output_format {
-        OutputFormat::Gif => BitMapBackend::gif(&filename, img_dims, cli.delay).unwrap(),
-        OutputFormat::Png => BitMapBackend::new(&filename, img_dims),
-    }
-    .into_drawing_area();
-
-    if *VERBOSE.lock().unwrap() {
-        println!("Plotting points...");
-    }
-
-    // frame chart of GIF <-> cell of a grid of plots in PNG
-    let grid = match output_format {
-        OutputFormat::Gif => (1, 1),
-        OutputFormat::Png => ((points.len() / cli.row + points.len() % cli.row), cli.row),
     };
-    let areas: Vec<_> = root.split_evenly(grid);
 
-    for i in 0..points.len() {
-        let area = &areas[match output_format {
-            OutputFormat::Gif => 0,
-            OutputFormat::Png => i,
-        }];
+    render_vis(
+        &filename,
+        output_format,
+        img_dims,
+        &points,
+        bounds,
+        cli.num_rounds,
+        cli.row,
+        cli.delay,
+        cli.unit_square,
+    );
+}
 
-        let _ = area.fill(&WHITE);
+// ------------------------------------------------------------------------
+// Scene-graph rendering (vis::scene / vis::raster / vis::animation).
+// ------------------------------------------------------------------------
 
-        let pad = cli.width * 2 / 100;
-        let area = area.margin(pad, pad, pad, pad);
+/// Build a single Scene containing the round-`level` point cloud,
+/// shifted by `(dx, dy)` math units and rendered with the given
+/// `marker_size` (scene units) and color.
+fn add_cell(
+    scene: &mut Scene,
+    points: &[P64],
+    bounds: R64,
+    (dx, dy): (f64, f64),
+    marker_size: f64,
+    color: Color,
+) {
+    let ((mn_x, mn_y), (mx_x, mx_y)) = bounds;
+    // Light cell border.
+    scene.push(Item::Polygon {
+        points: vec![
+            (dx + mn_x, dy + mn_y),
+            (dx + mx_x, dy + mn_y),
+            (dx + mx_x, dy + mx_y),
+            (dx + mn_x, dy + mx_y),
+        ],
+        fill: None,
+        stroke: Some(Stroke::solid(
+            Color::rgb(180, 180, 180),
+            0.005 * (mx_x - mn_x),
+        )),
+        arrow: None,
+    });
+    // Cross-hairs at origin: helps see scale + symmetry.
+    scene.push(Item::Segment {
+        a: (dx + mn_x, dy),
+        b: (dx + mx_x, dy),
+        stroke: Stroke::solid(Color::rgb(225, 225, 225), 0.003 * (mx_x - mn_x)),
+        arrow: None,
+    });
+    scene.push(Item::Segment {
+        a: (dx, dy + mn_y),
+        b: (dx, dy + mx_y),
+        stroke: Stroke::solid(Color::rgb(225, 225, 225), 0.003 * (mx_x - mn_x)),
+        arrow: None,
+    });
+    // Points. Thin black outline so light-coloured palette entries
+    // (yellow, cyan, …) stand out against the white background;
+    // ratio 0.10 keeps the outline visible without swallowing the
+    // fill colour at 6-pixel marker diameters.
+    let outline_width = marker_size * 0.10;
+    for &(x, y) in points {
+        scene.push(Item::Marker {
+            center: (x + dx, y + dy),
+            shape: MarkerShape::Circle,
+            size: marker_size,
+            fill: Some(Fill::solid(color)),
+            stroke: Some(Stroke::solid(Color::BLACK, outline_width)),
+        });
+    }
+}
 
-        // plot into gif frame or png chart matrix grid cell
-        render(&area, bounds, &points[i..=i], &styles[i..=i], i, 1);
-        area.present().unwrap();
+/// Render via the new scene-graph backend. `output_format` decides
+/// PNG-grid vs animated GIF.
+#[allow(clippy::too_many_arguments)]
+fn render_vis(
+    filename: &str,
+    output_format: OutputFormat,
+    img_dims: (u32, u32),
+    points: &[Vec<P64>],
+    bounds: R64,
+    num_rounds: usize,
+    cols: usize,
+    delay_ms: u32,
+    unit_square: bool,
+) {
+    let n = points.len();
+    let palette: Vec<Color> = rainbow(n.max(1), 1.0, 0.5);
+    let ((mn_x, mn_y), (mx_x, mx_y)) = bounds;
+    let cell_w = mx_x - mn_x;
+    let cell_h = mx_y - mn_y;
+
+    // Compute a marker size that renders to roughly 6 pixels of
+    // diameter at the actual per-cell pixel resolution of each
+    // output format. For the PNG grid the cell is `img_w / cols`
+    // pixels wide; for the GIF each frame fills the full image.
+    let marker_size_for = |cell_px_w: f64| -> f64 {
+        if unit_square {
+            0.04 * cell_w
+        } else {
+            let pixel_per_unit = cell_px_w / cell_w;
+            6.0 / pixel_per_unit
+        }
+    };
+
+    match output_format {
+        OutputFormat::Png => {
+            let rows = (num_rounds + 1).div_ceil(cols); // levels 0..=num_rounds, ceil-divided
+            let gap = 0.05 * cell_w;
+            let cell_px_w = (img_dims.0 as f64) / cols as f64;
+            let marker_size = marker_size_for(cell_px_w);
+            let mut scene = Scene::new().with_background(Color::WHITE);
+            for (i, pts) in points.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
+                // Place cells with row 0 at the TOP (highest math y).
+                let dx = col as f64 * (cell_w + gap) - mn_x;
+                let dy = (rows - 1 - row) as f64 * (cell_h + gap) - mn_y;
+                add_cell(&mut scene, pts, bounds, (dx, dy), marker_size, palette[i]);
+            }
+            let total_w = cols as f64 * cell_w + (cols.saturating_sub(1)) as f64 * gap;
+            let total_h = rows as f64 * cell_h + (rows.saturating_sub(1)) as f64 * gap;
+            let total_w_px = img_dims.0;
+            let total_h_px =
+                ((total_h / total_w) * total_w_px as f64).round().max(1.0) as u32;
+            let vp = Viewport::rect_for(
+                total_w_px,
+                total_h_px,
+                ((0.0, 0.0), (total_w, total_h)),
+                16,
+            );
+            let png = scene.to_png(&vp).expect("render PNG");
+            std::fs::write(filename, png).expect("write PNG");
+        }
+        OutputFormat::Gif => {
+            // Each frame fills the whole image, so the effective
+            // cell-pixel-width is the full image width.
+            let marker_size = marker_size_for(img_dims.0 as f64);
+            let mut frames: Vec<Scene> = Vec::with_capacity(n);
+            for (i, pts) in points.iter().enumerate() {
+                let mut frame = Scene::new().with_background(Color::WHITE);
+                add_cell(&mut frame, pts, bounds, (-mn_x, -mn_y), marker_size, palette[i]);
+                frames.push(frame);
+            }
+            let vp = Viewport::square_for(
+                img_dims.0,
+                ((0.0, 0.0), (cell_w, cell_h)),
+                16,
+            );
+            let gif_bytes =
+                render_gif(&frames, &vp, delay_ms as u16).expect("render GIF");
+            std::fs::write(filename, gif_bytes).expect("write GIF");
+        }
     }
 }

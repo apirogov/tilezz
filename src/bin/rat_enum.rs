@@ -9,10 +9,10 @@ use tilezz::cyclotomic::linalg::norm_sq;
 use tilezz::cyclotomic::*;
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::snake::{Snake, Turtle};
+use tilezz::vis::animation::render_gif;
+use tilezz::vis::draw::{MarkerStyle, TileStyle};
 use tilezz::vis::plotutils::P64;
-
-#[cfg(feature = "examples")]
-use plotters::prelude::*;
+use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
@@ -262,55 +262,55 @@ fn main() {
             );
         }
         Mode::Render => {
-            #[cfg(feature = "examples")]
-            {
-                use tilezz::vis::plotters::{plot_tile, TileStyle};
+            let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps);
 
-                let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps);
+            let Some(filename) = cli.filename else {
+                return;
+            };
 
-                let Some(filename) = cli.filename else {
-                    return;
-                };
-
-                let w = 500;
-                let root = BitMapBackend::gif(filename, (w, w), 500)
-                    .unwrap()
-                    .into_drawing_area();
-
-                let _ = root.fill(&WHITE);
-
-                // GIF
-                let grid = (1, 1);
-                let areas: Vec<_> = root.split_evenly(grid);
-
-                let style = TileStyle {
-                    node_size: 0,
-                    node_labels: false,
-                    ..Default::default()
-                };
-                for (ix, tile) in rats.iter().enumerate() {
-                    println!("plotting tile {}/{}", ix + 1, rats.len());
-
-                    let area = &areas[0]; // GIF
-
-                    let _ = area.fill(&WHITE);
-
-                    let pad = w * 2 / 100;
-                    let area = area.margin(pad, pad, pad, pad);
-
-                    plot_tile(&area, tile, &style);
-
-                    area.present().unwrap();
+            // Symmetric square viewport sized to fit every polygon
+            // centered at the origin. Each polygon goes through
+            // Rat::to_polyline_f64 with the default Turtle (origin,
+            // direction 0), so we just need the max |x|/|y| across
+            // all polylines.
+            let mut max_abs: f64 = 1.0;
+            for poly in &rats {
+                for (x, y) in poly {
+                    max_abs = max_abs.max(x.abs()).max(y.abs());
                 }
             }
+            let pad = 0.15 * max_abs;
+            let r = max_abs + pad;
+            let bounds = ((-r, -r), (r, r));
 
-            #[cfg(not(feature = "examples"))]
-            {
-                eprintln!(
-                    "render mode requires building with --features examples (plotters backend)"
-                );
-                std::process::exit(2);
-            }
+            // Style: filled yellow tile with thin black border,
+            // red vertex markers labelled with their index.
+            let style = TileStyle::filled(
+                Fill::solid(Color::YELLOW.with_alpha(80)),
+                Stroke::solid(Color::BLACK, 0.01 * r),
+            )
+            .with_vertex_marker(MarkerStyle::filled_circle(
+                0.06 * r,
+                Color::RED,
+            ))
+            .with_vertex_labels(TextStyle::new(0.04 * r, Color::WHITE).bold());
+
+            let frames: Vec<Scene> = rats
+                .iter()
+                .enumerate()
+                .map(|(ix, tile)| {
+                    println!("rendering frame {}/{}", ix + 1, rats.len());
+                    let mut scene = Scene::new().with_background(Color::WHITE);
+                    scene.draw_tile(tile, &style);
+                    scene
+                })
+                .collect();
+
+            let w = 500u32;
+            let vp = Viewport::square_for(w, bounds, 8);
+            let gif_bytes = render_gif(&frames, &vp, 500).expect("render GIF");
+            std::fs::write(&filename, gif_bytes).expect("write GIF");
+            println!("wrote {filename}");
         }
     }
 }
