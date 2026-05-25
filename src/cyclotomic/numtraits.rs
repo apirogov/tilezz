@@ -171,3 +171,37 @@ macro_rules! impl_re_im_sign_via_proj {
         }
     };
 }
+
+/// Predicate "this point is within Euclidean radius `r` of the origin".
+///
+/// Equivalent to `|self|^2 <= r * r`, with `r >= 0`. Exists so that the DFS
+/// reachability heuristic in `rat_enum` does not have to materialize a
+/// `ZZ::Real` (which for the still-Ratio-backed real subrings would drag the
+/// Z12 / Ratio arithmetic chain back into the hot path).
+///
+/// Per-ring overrides should compute the squared norm in pure i64 arithmetic
+/// where possible. The default-via-norm_sq macro is provided for rings that
+/// haven't been migrated yet.
+pub trait WithinRadius {
+    /// `true` iff `|self|^2 <= radius * radius`. `radius` must be `>= 0`.
+    fn within_radius(&self, radius: i64) -> bool;
+}
+
+/// Default `WithinRadius` impl via `norm_sq` + comparison.
+///
+/// Slow for Ratio-backed real subrings (the comparison goes through
+/// `Ratio<i64>` arithmetic). Rings with i64 storage should provide a direct
+/// override instead of invoking this macro.
+#[macro_export]
+macro_rules! impl_within_radius_via_norm_sq {
+    ($t:ty) => {
+        impl $crate::cyclotomic::WithinRadius for $t {
+            fn within_radius(&self, radius: i64) -> bool {
+                let n = $crate::cyclotomic::linalg::norm_sq::<$t>(self);
+                let r_sq = <<$t as $crate::cyclotomic::IsRingOrField>::Real
+                    as core::convert::From<i64>>::from(radius * radius);
+                n <= r_sq
+            }
+        }
+    };
+}
