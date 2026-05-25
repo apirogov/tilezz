@@ -401,7 +401,15 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
 }
 
 // ----------------
-// Tests for ZZ12 (moved from the old `zz12.rs`).
+// Generic algebraic / cyclotomic-structure test suite for ZZ12.
+//
+// Emits a sibling `zz12_generic_ring_tests` module of ~25 ring-axiom
+// tests. The ring-specific `mod tests` below stays for ZZ12-only checks
+// (Display format, specific value assertions).
+crate::zz_integral_ring_tests!(name: ZZ12);
+
+// ----------------
+// Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
 
 #[cfg(test)]
 mod tests {
