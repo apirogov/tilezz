@@ -65,6 +65,7 @@ pub const ZZ4_PARAMS: ZZParams = ZZParams {
     scaling_fac: 1,
     ccw_unit_coeffs: &[[0, 1]],
 };
+#[allow(dead_code)]
 pub fn zz4_mul<T: IntRing>(x: &[T], y: &[T]) -> Vec<T> {
     match [*array_ref!(x, 0, 1), *array_ref!(y, 0, 1)] {
         [[a], [b]] => vec![a * b],

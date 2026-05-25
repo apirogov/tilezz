@@ -6,16 +6,83 @@
 //! constant bundle (reduction rule, real/imag decomposition tables,
 //! Cartesian projection, sign function) into the generic engine in
 //! `cyclotomic::integral_basis`.
-//!
-//! Step 2: only ZZ12 lives here for now. Steps 3+ will port the other
-//! cyclotomic rings off the GaussInt<Ratio> machinery and into this file.
 
 use num_complex::Complex64;
 use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::ZZ12_PARAMS;
+use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ4_PARAMS};
 use crate::define_integral_zz;
+
+// ----------------
+// ZZ4 -- Gauss integers Z[i].
+//
+// `zeta = i`, `Phi_4(x) = x^2 + 1`, so `zeta^2 = -1`. Storage: `[i64; 2]`
+// over `{1, i}`. The real subring is just `Z` (K = 1, basis `{1}`).
+
+#[inline]
+fn zz4_complex64(coeffs: &[i64; 2]) -> Complex64 {
+    Complex64::new(coeffs[0] as f64, coeffs[1] as f64)
+}
+
+const ZZ4_CARTESIAN: [Complex64; 2] = [
+    Complex64::new(1.0, 0.0), // zeta^0 = 1
+    Complex64::new(0.0, 1.0), // zeta^1 = i
+];
+
+fn zz4_display(coeffs: &[i64; 2], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    // Match the legacy GaussInt<Ratio> Display format used by the symbolic
+    // single-root ring shape (only `sqrt(1)` term, so output is just the
+    // GaussInt).
+    let g = GaussInt::new(
+        Ratio::<i64>::from_integer(coeffs[0]),
+        Ratio::<i64>::from_integer(coeffs[1]),
+    );
+    write!(f, "{g}")
+}
+
+/// Sign of an integer K-vector `[m]` against basis `{sqrt(1)}` = `{1}`: just
+/// the sign of `m`.
+#[inline]
+fn zz4_real_sign(x: &[i64; 1]) -> i8 {
+    x[0].signum() as i8
+}
+
+define_integral_zz! {
+    name: ZZ4,
+    n: 4,
+    phi: 2,
+    real_dim: 1,
+    // Phi_4(x) = x^2 + 1, so zeta^2 = -1.
+    reduction: [-1i64, 0],
+    // Re(zeta^0) = 1, Re(zeta^1) = 0.
+    re_decomp: [[1i64], [0]],
+    // Im(zeta^0) = 0, Im(zeta^1) = 1.
+    im_decomp: [[0i64], [1]],
+    cartesian: ZZ4_CARTESIAN,
+    params: ZZ4_PARAMS,
+    one_in_real_basis: [1i64],
+    display_fn: zz4_display,
+    complex64_fn: zz4_complex64,
+    has: [HasZZ4Impl, IsZZ4Impl],
+}
+
+impl From<(i64, i64)> for ZZ4 {
+    /// `(re, im)` where `i = zeta^1`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients `[a, b]`.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        Self::from_int_coeffs([re, im])
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ4, 4);
+crate::impl_integral_mul_via_basis!(ZZ4, 2);
+crate::impl_integral_conj_via_basis!(ZZ4, 2);
+crate::impl_integral_re_im_sign_via_basis!(ZZ4, 2, 1, zz4_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ4, 2, 1, zz4_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ4);
+crate::zz_integral_ring_tests!(name: ZZ4);
 
 // ----------------
 // ZZ12

@@ -174,7 +174,10 @@ fn ratio_to_i8(r: Ratio<i64>) -> i8 {
     }
 }
 
-/// Sign for rings with a single symbolic root (just `1`): ZZ4.
+/// Sign for rings with a single symbolic root (just `1`): legacy ZZ4 path.
+/// Unused after ZZ4 moved to the integer-basis storage in `rings.rs`; kept
+/// until step 5 deletes the legacy GaussInt<Ratio> infrastructure.
+#[allow(dead_code)]
 pub fn coeffs_real_sign_1_sym(coeffs: &[Ratio<i64>], _roots_sqs: &[f64]) -> i8 {
     ratio_to_i8(coeffs[0])
 }
