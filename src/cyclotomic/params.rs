@@ -87,6 +87,7 @@ pub const ZZ8_PARAMS: ZZParams = ZZParams {
 /// a [1 s]
 /// b [s 2]
 /// where s = sqrt(2)
+#[allow(dead_code)]
 pub fn zz8_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     let int2 = T::from_i64(2).unwrap();
     match [*array_ref!(x, 0, 2), *array_ref!(y, 0, 2)] {

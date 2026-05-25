@@ -182,7 +182,10 @@ pub fn coeffs_real_sign_1_sym(coeffs: &[Ratio<i64>], _roots_sqs: &[f64]) -> i8 {
     ratio_to_i8(coeffs[0])
 }
 
-/// Sign for rings with 2 symbolic roots `{1, sqrt(m)}`: ZZ8, ZZ12.
+/// Sign for rings with 2 symbolic roots `{1, sqrt(m)}`: legacy ZZ8 path.
+/// Unused after ZZ8/ZZ12 moved to integer-basis storage; kept until step 5
+/// deletes the legacy GaussInt<Ratio> infrastructure.
+#[allow(dead_code)]
 pub fn coeffs_real_sign_2_sym(coeffs: &[Ratio<i64>], roots_sqs: &[f64]) -> i8 {
     debug_assert_eq!(coeffs.len(), 2);
     debug_assert_eq!(roots_sqs.len(), 2);

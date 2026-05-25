@@ -11,8 +11,55 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ4_PARAMS};
+use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
 use crate::define_integral_zz;
+
+// ----------------
+// Generic Display helper for integer-basis rings.
+//
+// Each per-ring display function projects its integer-basis vector back to
+// a vector of `GaussInt<Ratio<i64>>` coefficients against the symbolic
+// `sqrt(lbl)` basis (the same basis the legacy `impl_symnum_display`
+// expected), then calls this helper to format the symbolic sum.
+//
+// Output shape matches the legacy macro-generated display:
+//   - "0" when all coefficients are zero
+//   - "<coeff>" for the `sqrt(1)` term
+//   - "<coeff>*sqrt(<lbl>)" for a non-unit sqrt term, with parens around
+//     compound coefficient strings.
+fn format_symbolic<const K: usize>(
+    coeffs: &[GaussInt<Ratio<i64>>; K],
+    labels: &[&'static str; K],
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    let mut parts: Vec<String> = Vec::new();
+    for (coeff, lbl) in coeffs.iter().zip(labels.iter()) {
+        let s = format!("{coeff}");
+        if s == "0" {
+            continue;
+        }
+        let is_real_unit = *lbl == "1";
+        let lbl_str = format!("sqrt({lbl})");
+        if s == "1" {
+            parts.push(if is_real_unit {
+                "1".to_string()
+            } else {
+                lbl_str
+            });
+        } else if is_real_unit {
+            parts.push(s);
+        } else {
+            parts.push(format!("({s})*{lbl_str}"));
+        }
+    }
+    let joined = parts.join(" + ");
+    let result = if joined.is_empty() {
+        "0".to_string()
+    } else {
+        joined
+    };
+    write!(f, "{result}")
+}
 
 // ----------------
 // ZZ4 -- Gauss integers Z[i].
@@ -85,6 +132,105 @@ crate::impl_integral_within_radius_via_complex64!(ZZ4);
 crate::zz_integral_ring_tests!(name: ZZ4);
 
 // ----------------
+// ZZ8 -- compass integers Z[zeta_8].
+//
+// `zeta = e^(2*pi*i/8) = (sqrt(2) + i*sqrt(2)) / 2`, `Phi_8(x) = x^4 + 1`,
+// so `zeta^4 = -1`. Storage: `[i64; 4]` over `{1, zeta, zeta^2, zeta^3}`.
+// The real subring is `Z[sqrt(2)]` (K = 2, basis `{1, sqrt(2)}`) with
+// `/2` implicit denominator on the decomposition tables.
+
+const HALF_SQRT_2: f64 = std::f64::consts::SQRT_2 * 0.5;
+
+#[inline]
+fn zz8_complex64(coeffs: &[i64; 4]) -> Complex64 {
+    // zeta = (sqrt(2)/2, sqrt(2)/2), zeta^2 = (0, 1), zeta^3 = (-sqrt(2)/2, sqrt(2)/2).
+    let [a, b, c, d] = *coeffs;
+    let (a, b, c, d) = (a as f64, b as f64, c as f64, d as f64);
+    let re = a + (b - d) * HALF_SQRT_2;
+    let im = (b + d) * HALF_SQRT_2 + c;
+    Complex64::new(re, im)
+}
+
+const ZZ8_CARTESIAN: [Complex64; 4] = [
+    Complex64::new(1.0, 0.0),
+    Complex64::new(HALF_SQRT_2, HALF_SQRT_2),
+    Complex64::new(0.0, 1.0),
+    Complex64::new(-HALF_SQRT_2, HALF_SQRT_2),
+];
+
+/// Display impl for ZZ8: project `(a, b, c, d)` back to GaussInt-Ratio
+/// coefficients of `{sqrt(1), sqrt(2)}` (the symbolic basis the legacy
+/// `impl_symnum_display` consumed).
+///
+/// ```text
+///   zeta^0 = 1                        -> c0 += a
+///   zeta^1 = sqrt(2)/2 * (1 + i)      -> c1 += b * (1 + i) / 2
+///   zeta^2 = i                        -> c0 += c*i
+///   zeta^3 = sqrt(2)/2 * (-1 + i)     -> c1 += d * (-1 + i) / 2
+/// ```
+fn zz8_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b, c, d] = *coeffs;
+    let half = Ratio::<i64>::new_raw(1, 2);
+    let c0 = GaussInt::new(Ratio::<i64>::from_integer(a), Ratio::<i64>::from_integer(c));
+    let c1 = GaussInt::new(
+        Ratio::<i64>::from_integer(b - d) * half,
+        Ratio::<i64>::from_integer(b + d) * half,
+    );
+    format_symbolic(&[c0, c1], &["1", "2"], f)
+}
+
+/// Sign of `a + b*sqrt(2)` for integers `a`, `b`.
+#[inline]
+fn zz8_real_sign(x: &[i64; 2]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_2::<i64>(x[0], 1, x[1], 2) as i8
+}
+
+define_integral_zz! {
+    name: ZZ8,
+    n: 8,
+    phi: 4,
+    real_dim: 2,
+    // Phi_8(x) = x^4 + 1, so zeta^4 = -1.
+    reduction: [-1i64, 0, 0, 0],
+    // Re(zeta^k) in basis {1, sqrt(2)} with implicit /2:
+    //   Re(zeta^0) = 1            -> [2, 0] / 2
+    //   Re(zeta^1) = sqrt(2)/2    -> [0, 1] / 2
+    //   Re(zeta^2) = 0            -> [0, 0] / 2
+    //   Re(zeta^3) = -sqrt(2)/2   -> [0, -1] / 2
+    re_decomp: [[2i64, 0], [0, 1], [0, 0], [0, -1]],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0            -> [0, 0] / 2
+    //   Im(zeta^1) = sqrt(2)/2    -> [0, 1] / 2
+    //   Im(zeta^2) = 1            -> [2, 0] / 2
+    //   Im(zeta^3) = sqrt(2)/2    -> [0, 1] / 2
+    im_decomp: [[0i64, 0], [0, 1], [2, 0], [0, 1]],
+    cartesian: ZZ8_CARTESIAN,
+    params: ZZ8_PARAMS,
+    // `1` in basis {1, sqrt(2)} with /2 denominator: [2, 0].
+    one_in_real_basis: [2i64, 0],
+    display_fn: zz8_display,
+    complex64_fn: zz8_complex64,
+    has: [HasZZ4Impl, HasZZ8Impl],
+}
+
+impl From<(i64, i64)> for ZZ8 {
+    /// `(re, im)` where `i = zeta^2`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients `[a, 0, b, 0]`.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        Self::from_int_coeffs([re, 0, im, 0])
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ8, 8);
+crate::impl_integral_mul_via_basis!(ZZ8, 4);
+crate::impl_integral_conj_via_basis!(ZZ8, 4);
+crate::impl_integral_re_im_sign_via_basis!(ZZ8, 4, 2, zz8_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ8, 4, 2, zz8_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ8);
+crate::zz_integral_ring_tests!(name: ZZ8);
+
+// ----------------
 // ZZ12
 
 /// Hand-rolled `complex64` for ZZ12: inline `Re`/`Im` of `(a, b, c, d)`
@@ -142,36 +288,7 @@ fn zz12_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
         Ratio::<i64>::from_integer(b) * half,
         Ratio::<i64>::from_integer(c) * half,
     );
-
-    let coeffs = [c0, c1];
-    let labels = ["1", "3"];
-    let mut parts: Vec<String> = Vec::new();
-    for (coeff, lbl) in coeffs.iter().zip(labels.iter()) {
-        let s = format!("{coeff}");
-        if s == "0" {
-            continue;
-        }
-        let is_real_unit = *lbl == "1";
-        let lbl_str = format!("sqrt({lbl})");
-        if s == "1" {
-            parts.push(if is_real_unit {
-                "1".to_string()
-            } else {
-                lbl_str
-            });
-        } else if is_real_unit {
-            parts.push(s);
-        } else {
-            parts.push(format!("({s})*{lbl_str}"));
-        }
-    }
-    let joined = parts.join(" + ");
-    let result = if joined.is_empty() {
-        "0".to_string()
-    } else {
-        joined
-    };
-    write!(f, "{result}")
+    format_symbolic(&[c0, c1], &["1", "3"], f)
 }
 
 define_integral_zz! {
