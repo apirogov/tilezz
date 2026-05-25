@@ -4,11 +4,11 @@
 //! to allow per-concrete-type caching via `OnceLock`.
 
 use super::numtraits::Ccw;
-use super::traits::{IsComplex, IsRingOrField};
+use super::traits::IsRingOrField;
 use num_traits::One;
 
 /// Provides cached lookup for unit vectors (roots of unity) for a concrete complex type.
-pub trait Units: Copy + One + Ccw + IsComplex + IsRingOrField {
+pub trait Units: Copy + One + Ccw + IsRingOrField {
     /// Return unit length vector pointing in direction of given angle.
     fn unit(angle: i8) -> Self;
 

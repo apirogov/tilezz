@@ -10,8 +10,6 @@ mod symnum;
 mod sign;
 
 #[cfg(test)]
-mod sign_extra_tests;
-#[cfg(test)]
 mod unit_tests;
 
 mod params;
@@ -42,11 +40,10 @@ pub use numtraits::{
 pub use symnum::{SymNum, ZZComplex};
 pub use units::Units;
 
-pub use traits::{ComplexTraits, RealTraits, RingTraits};
+pub use traits::{ComplexTraits, RingTraits};
 pub use traits::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
-pub use traits::{IsComplex, IsReal, IsRing, IsRingOrField, IsZZ4};
-pub use traits::{ZType, ZZType};
+pub use traits::{IsRing, IsRingOrField, IsZZ4};
+pub use traits::ZZType;
 
-pub use types::{Z10, Z12, Z16, Z20, Z24, Z32, Z4, Z60, Z8};
 pub use types::{ZZ10, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
 pub use zz12::ZZ12;

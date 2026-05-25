@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::Parser;
-use tilezz::cyclotomic::{IsComplex, IsRingOrField, Units, ZZ10, ZZ12};
+use tilezz::cyclotomic::{IsRingOrField, Units, ZZ10, ZZ12};
 use tilezz::intgeom::neighborhood::{NeighborhoodIndex, NtEntry, NtKind};
 use tilezz::intgeom::tileset::{self, TileSet};
 
@@ -29,7 +29,7 @@ enum TileSetKind {
     Penrose,
 }
 
-fn run_bench<T: IsComplex + IsRingOrField + Units>(label: &str, ts: Arc<TileSet<T>>) {
+fn run_bench<T: IsRingOrField + Units>(label: &str, ts: Arc<TileSet<T>>) {
     eprintln!("=== Neighborhood types: {} ===", label);
 
     #[cfg(feature = "pprof")]

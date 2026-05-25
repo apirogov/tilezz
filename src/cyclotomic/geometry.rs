@@ -2,13 +2,13 @@
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
 use super::numtraits::{Conj, IntersectUnitSegments, OneImag, ReImSign};
 use super::symnum::IntT;
-use super::traits::{HasZZ4, IsComplex};
+use super::traits::{HasZZ4, IsRingOrField};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
 /// Uses the identity `wedge(b - a, p - a) == 0` (i.e. the imaginary part of
 /// `conj(b - a) * (p - a)` is zero), so no `ZZ::Real` value is materialized.
-pub fn is_colinear<ZZ: IsComplex + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
+pub fn is_colinear<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
     wedge_sign(&(*b - *a), &(*p - *a)) == 0
 }
 
@@ -16,7 +16,7 @@ pub fn is_colinear<ZZ: IsComplex + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) -> b
 /// (which includes colinearity).
 ///
 /// Uses the identity `wedge(b - a, d - c) == 0`.
-pub fn lines_parallel<ZZ: IsComplex + Conj + ReImSign>(
+pub fn lines_parallel<ZZ: IsRingOrField + Conj + ReImSign>(
     (a, b): (&ZZ, &ZZ),
     (c, d): (&ZZ, &ZZ),
 ) -> bool {
@@ -26,7 +26,7 @@ pub fn lines_parallel<ZZ: IsComplex + Conj + ReImSign>(
 /// Return whether the line through `(a, b)` is perpendicular to the line through `(c, d)`.
 ///
 /// Uses the identity `dot(b - a, d - c) == 0`.
-pub fn lines_perp<ZZ: IsComplex + Conj + ReImSign>(
+pub fn lines_perp<ZZ: IsRingOrField + Conj + ReImSign>(
     (a, b): (&ZZ, &ZZ),
     (c, d): (&ZZ, &ZZ),
 ) -> bool {
@@ -36,7 +36,7 @@ pub fn lines_perp<ZZ: IsComplex + Conj + ReImSign>(
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: IsComplex + Conj + ReImSign + PartialEq>(
+pub fn intersect<ZZ: IsRingOrField + Conj + ReImSign + PartialEq>(
     &(a, b): &(ZZ, ZZ),
     &(c, d): &(ZZ, ZZ),
 ) -> bool {
@@ -78,7 +78,7 @@ pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
 ///
 /// Implemented via sign tests on the componentwise differences `p - pos_min`
 /// and `pos_max - p`, so no `ZZ::Real` value is materialized.
-pub fn point_in_rect<ZZ: IsComplex>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
+pub fn point_in_rect<ZZ: IsRingOrField>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
     let dlo = *p - *pos_min;
     let dhi = *pos_max - *p;
     let signs = [dlo.re_sign(), dlo.im_sign(), dhi.re_sign(), dhi.im_sign()];
@@ -101,7 +101,7 @@ pub fn point_in_rect<ZZ: IsComplex>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), stric
 /// axis, matching the prior `mod_bound`-on-closed-range semantics.
 pub fn point_mod_rect<ZZ>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ)) -> ZZ
 where
-    ZZ: IsComplex + HasZZ4 + OneImag + From<IntT>,
+    ZZ: IsRingOrField + HasZZ4 + OneImag + From<IntT>,
 {
     // Extract integer width and height from the rectangle via complex64().
     let cmin = pos_min.complex64();

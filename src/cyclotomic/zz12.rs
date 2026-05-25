@@ -39,14 +39,14 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 use num_traits::{One, Pow, Zero};
 
+use super::gaussint::GaussInt;
 use super::numtraits::{Ccw, Conj, InnerIntType, IntRing, IntersectUnitSegments, ReImSign, WithinRadius};
 use super::params::ZZ12_PARAMS;
 use super::symnum::{SymNum, ZZComplex, ZZParams};
 use super::traits::{
-    ComplexTraits, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, IsComplex, IsReal, IsRing, IsRingOrField,
-    RingTraits, ZType, ZZType,
+    ComplexTraits, HasZZ12Impl, HasZZ4Impl, HasZZ6Impl, IsRing, IsRingOrField,
+    RingTraits, ZZType,
 };
-use super::types::Z12;
 use super::units::Units;
 
 /// ZZ12 stored in the integral cyclotomic basis `{1, zeta, zeta^2, zeta^3}`.
@@ -132,47 +132,68 @@ impl SymNum for ZZ12 {
 
 // ----------------
 // Display
+//
+// We format the value against the same symbolic `{sqrt(1), sqrt(3)}` basis
+// the macro-generated rings use, so a ZZ12 prints in the same shape as,
+// say, a ZZ24 element constrained to the ZZ12 subring:
+//
+//   Re(z) = (2a + c)/2 + (b/2) * sqrt(3)
+//   Im(z) = (b + 2d)/2 + (c/2) * sqrt(3)
+//
+// Equivalently, in the symbolic basis the value is
+//   c0 * sqrt(1) + c1 * sqrt(3)
+// where each c_k is a GaussInt<Ratio<i64>> with
+//   c0 = ((2a + c)/2) + ((b + 2d)/2) i
+//   c1 = (b/2)        + (c/2)        i
+//
+// We then defer to the (rich) GaussInt<Ratio<i64>> Display impl for each
+// coefficient and emit the per-term shape used by `impl_symnum_display!`.
 
 impl Display for ZZ12 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Display via the projected Z12 representation so output matches
-        // the previous symbolic-basis storage's format.
-        let z: Zz12DisplayBridge = (*self).into();
-        z.fmt(f)
-    }
-}
+        let [a, b, c, d] = self.coeffs;
+        let half = Ratio::<i64>::new_raw(1, 2);
+        let c0 = GaussInt::new(
+            Ratio::<i64>::from_integer(2 * a + c) * half,
+            Ratio::<i64>::from_integer(b + 2 * d) * half,
+        );
+        let c1 = GaussInt::new(
+            Ratio::<i64>::from_integer(b) * half,
+            Ratio::<i64>::from_integer(c) * half,
+        );
 
-// Bridge type that exists purely so we can reuse Z12's existing `Display`
-// implementation (which prints `(p/2) + (q/2)*sqrt(3)` style). For ZZ12 we
-// show `Re + i*Im` using the existing GaussInt<Z12> display logic.
-struct Zz12DisplayBridge {
-    re: Z12,
-    im: Z12,
-}
-
-impl From<ZZ12> for Zz12DisplayBridge {
-    fn from(z: ZZ12) -> Self {
-        let (re, im) = z.re_im();
-        Self { re, im }
-    }
-}
-
-impl Display for Zz12DisplayBridge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Emulate `GaussInt<Z12>` display so existing tests keep matching.
-        let real_zero = self.re.is_zero();
-        let imag_zero = self.im.is_zero();
-        if real_zero && imag_zero {
-            return write!(f, "0");
+        // Match the `impl_symnum_display!` layout exactly: emit
+        //   "1"            when the term is the real unit and coeff == 1
+        //   "<lbl>"        when the term has coeff == 1 against root != 1
+        //   "<coeff>"      when the term is the real unit (root == 1)
+        //   "(<coeff>)*<lbl>"   for non-unit coefficients against root != 1
+        // and drop zero terms. `<lbl>` here is `sqrt(1)` (for the real unit
+        // case) or `sqrt(3)`.
+        let coeffs = [c0, c1];
+        let labels = ["1", "3"];
+        let mut parts: Vec<String> = Vec::new();
+        for (coeff, lbl) in coeffs.iter().zip(labels.iter()) {
+            let s = format!("{coeff}");
+            if s == "0" {
+                continue;
+            }
+            let is_real_unit = *lbl == "1";
+            let lbl_str = format!("sqrt({lbl})");
+            if s == "1" {
+                parts.push(if is_real_unit {
+                    "1".to_string()
+                } else {
+                    lbl_str
+                });
+            } else if is_real_unit {
+                parts.push(s);
+            } else {
+                parts.push(format!("({s})*{lbl_str}"));
+            }
         }
-        if imag_zero {
-            return write!(f, "{}", self.re);
-        }
-        if real_zero {
-            return write!(f, "{}i", self.im);
-        }
-        // both nonzero
-        write!(f, "{}+{}i", self.re, self.im)
+        let joined = parts.join(" + ");
+        let result = if joined.is_empty() { "0".to_string() } else { joined };
+        write!(f, "{result}")
     }
 }
 
@@ -342,64 +363,6 @@ impl From<(i64, i64)> for ZZ12 {
     }
 }
 
-// Conversion: lift Z12 (real, basis {sqrt(1), sqrt(3)}, scaling_fac=2) into ZZ12.
-//
-// Z12 stores numerators-over-2: `(p, q)` -> `p/2 + (q/2)*sqrt(3)`.
-//
-// In ZZ12's integral basis with `zeta^2 = 1/2 + sqrt(3)/2 * i ...` actually
-// `sqrt(3) = 2*Re(zeta) = zeta + conj(zeta) = zeta + (zeta - zeta^3) = 2*zeta - zeta^3`.
-// And `1 = (1, 0, 0, 0)`.
-//
-// So lifting `p/2 + (q/2)*sqrt(3)`:
-//   (p/2) * (1, 0, 0, 0) + (q/2) * (0, 2, 0, -1) * 1/?
-//
-// Hmm, this requires fractions. Let's instead use the formula that `2 * sqrt(3) = 2*(2*zeta - zeta^3) = 4*zeta - 2*zeta^3`,
-// so `(q/2)*sqrt(3) = q*zeta - (q/2)*zeta^3` ... still fractions for odd q.
-//
-// Actually `sqrt(3) = 2*Re(zeta)`. But we want integral ZZ12 values, so we
-// need `p` and `q` to satisfy divisibility. For the cases that arise in the
-// codebase (sums of unit vectors, norms, dots) the Z12 values DO end up
-// integral in ZZ12, but in general a Z12 can be a half-integer combination.
-//
-// To handle all valid Z12 inputs, we exploit that Z12 stores `(p, q)` as
-// `Ratio<i64>` with potentially-non-trivial denominators. The safe path is
-// to read the rational coefficients directly.
-impl From<Z12> for ZZ12 {
-    fn from(value: Z12) -> Self {
-        // Z12.coeffs = [Ratio<i64>; 2] over basis [sqrt(1) = 1, sqrt(3)].
-        // value = c0 + c1 * sqrt(3), where c0, c1 are Ratio<i64>.
-        // Express in integral basis using sqrt(3) = 2*zeta - zeta^3:
-        //   value = c0 * (1,0,0,0) + c1 * (0, 2, 0, -1)
-        //         = (c0, 2*c1, 0, -c1).
-        //
-        // For Z12 values arising from re_im() of an integral ZZ12, all
-        // coefficients are integers (the Z12 denominators are 1 or 2 but
-        // those halves disappear because Z12 stores `(2a+c, b)` and
-        // `(b+2d, c)` over its scaling_fac=2; once interpreted as actual
-        // rationals they are integers because `c0 = (2a+c)/2` may be a
-        // half-integer when `c` is odd, but then `c1 = b/2` is paired such
-        // that the result is integral in ZZ12).
-        //
-        // To handle the general case we round to integers, panicking if the
-        // resulting ZZ12 would have non-integral coefficients (which is a
-        // logic bug rather than a runtime error).
-        let c0: Ratio<i64> = value.zz_coeffs()[0];
-        let c1: Ratio<i64> = value.zz_coeffs()[1];
-        // (c0, 2*c1, 0, -c1) must be integral.
-        let to_int = |r: Ratio<i64>| -> i64 {
-            assert!(
-                r.denom() == &1,
-                "Z12 -> ZZ12 conversion produced a non-integral coefficient: {r:?}"
-            );
-            *r.numer()
-        };
-        let two = Ratio::<i64>::from_integer(2);
-        Self {
-            coeffs: [to_int(c0), to_int(two * c1), 0, to_int(-c1)],
-        }
-    }
-}
-
 // ----------------
 // RingTraits (auto from InnerIntType + IntRing + Conj + From<IntT> + From<IntType>)
 
@@ -436,62 +399,16 @@ impl ZZComplex for ZZ12 {
         let [a, b, c, _] = self.coeffs;
         b == 0 && (2 * a + c) == 0
     }
-
-    fn re(&self) -> Z12 {
-        // Re = (2a + c)/2 + (b/2) * sqrt(3)
-        // Z12's storage basis is [sqrt(1), sqrt(3)] with `Ratio<i64>` coeffs
-        // (no per-ring scaling factor applied at this layer -- the
-        // `scaling_fac=2` only governs how unit vectors are constructed).
-        let [a, b, c, _] = self.coeffs;
-        let half = Ratio::<i64>::new_raw(1, 2);
-        let c0 = Ratio::<i64>::from_integer(2 * a + c) * half;
-        let c1 = Ratio::<i64>::from_integer(b) * half;
-        Z12::new(&[c0, c1])
-    }
-
-    fn im(&self) -> Z12 {
-        // Im = (b + 2d)/2 + (c/2) * sqrt(3)
-        let [_, b, c, d] = self.coeffs;
-        let half = Ratio::<i64>::new_raw(1, 2);
-        let c0 = Ratio::<i64>::from_integer(b + 2 * d) * half;
-        let c1 = Ratio::<i64>::from_integer(c) * half;
-        Z12::new(&[c0, c1])
-    }
 }
 
 impl ComplexTraits for ZZ12 {}
 
 // ----------------
-// IsRingOrField + IsRing + IsComplex + ZZType
+// IsRingOrField + IsRing + ZZType
 
-impl IsRingOrField for ZZ12 {
-    type Real = Z12;
-    type Complex = ZZ12;
-}
-impl IsRingOrField for Z12 {
-    type Real = Z12;
-    type Complex = ZZ12;
-}
-impl IsRing for ZZ12 {
-    type Real = Z12;
-    type Complex = ZZ12;
-}
-impl IsRing for Z12 {
-    type Real = Z12;
-    type Complex = ZZ12;
-}
-impl IsReal for Z12 {
-    type Ring = Z12;
-}
-impl IsComplex for ZZ12 {
-    type Ring = ZZ12;
-}
-impl ZType for Z12 {
-    type Complex = ZZ12;
-}
-impl ZZType for ZZ12 {
-    type Real = Z12;
-}
+impl IsRingOrField for ZZ12 {}
+impl IsRing for ZZ12 {}
+impl ZZType for ZZ12 {}
 
 // ----------------
 // HasZZ4Impl, HasZZ6Impl, HasZZ12Impl

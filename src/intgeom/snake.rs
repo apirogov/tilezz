@@ -5,13 +5,11 @@ use std::fmt::{Debug, Display};
 
 use num_complex::Complex;
 use num_traits::ToPrimitive;
-use num_traits::Zero;
 
 use super::angles::normalize_angle;
 use super::grid::UnitSquareGrid;
 use crate::cyclotomic::geometry::intersect_unit_segments;
-use crate::cyclotomic::linalg::wedge;
-use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField, Units};
 
 /// Best-effort dedup for `seg_id` against a `u128` bitmap.
 ///
@@ -39,7 +37,7 @@ fn check_and_mark(seen: &mut u128, seg_id: usize) -> bool {
 }
 
 /// Representation of a turtle (i.e. an oriented point).
-pub struct Turtle<T: IsComplex> {
+pub struct Turtle<T: IsRingOrField> {
     /// Position in the complex integer plane.
     pub pos: T,
 
@@ -47,14 +45,14 @@ pub struct Turtle<T: IsComplex> {
     pub dir: i8,
 }
 
-impl<T: IsComplex> Turtle<T> {
+impl<T: IsRingOrField> Turtle<T> {
     /// Create a new turtle with given location and orientation.
     pub fn new(pos: T, dir: i8) -> Self {
         Self { pos, dir }
     }
 }
 
-impl<T: IsComplex> Default for Turtle<T> {
+impl<T: IsRingOrField> Default for Turtle<T> {
     /// Return a canonical turtle, i.e. located at the origin
     /// and looking in the direction of the positive real axis.
     fn default() -> Self {
@@ -82,7 +80,7 @@ impl<T: IsComplex> Default for Turtle<T> {
 /// into the formalism. The snake is in so far asymmetric, until it is closed.
 /// A closed snake traces out a path that can be inverted (see the `Rat` type).
 #[derive(Debug, Clone)]
-pub struct Snake<T: IsRingOrField + IsComplex> {
+pub struct Snake<T: IsRingOrField> {
     /// Abstract sequence of unit segments that point into different directions
     /// (i.e. turtle movement instructions).
     /// Each number corresponds to the corresponding rotated unit in the
@@ -123,7 +121,7 @@ pub struct Snake<T: IsRingOrField + IsComplex> {
     saved_angle_0: Option<i8>,
 }
 
-impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
     type Error = &'static str;
 
     /// Create a snake from an angle sequence.
@@ -136,7 +134,7 @@ impl<I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I]> for Sna
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFrom<&[I; N]>
+impl<const N: usize, I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I; N]>
     for Snake<T>
 {
     type Error = &'static str;
@@ -146,13 +144,13 @@ impl<const N: usize, I: ToPrimitive, T: IsComplex + IsRingOrField + Units> TryFr
     }
 }
 
-impl<T: IsComplex + IsRingOrField + Units> Default for Snake<T> {
+impl<T: IsRingOrField + Units> Default for Snake<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
+impl<T: IsRingOrField + Units> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
@@ -534,22 +532,6 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
         Ok(result)
     }
 
-    /// Return twice the area of the represented polygon, computed using the shoelace formula.
-    /// If the snake is not closed, will implicitly add the segment from the last to first point.
-    /// See: <https://en.wikipedia.org/wiki/Shoelace_formula>
-    pub fn double_area(&self) -> T::Real {
-        let mut result = <T::Real>::zero();
-        for i in 1..self.len() {
-            // println!("{} x {} = {}", self.points[i - 1].wedge(&self.points[i]);
-            result = result + wedge(&self.points[i - 1], &self.points[i]);
-        }
-        if !self.is_closed() {
-            result = result + wedge(&self.points[self.len() - 1], &self.points[0]);
-        }
-
-        result
-    }
-
     /// Point-in-polygon check using raycasting.
     pub fn is_point_inside(&self) -> bool {
         if !self.is_closed() {
@@ -562,23 +544,23 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
 
 // For comparisons (Eq, Ord) and presentation (Display)
 // we only care about the angles, all other data is derivative.
-impl<T: IsComplex> PartialEq for Snake<T> {
+impl<T: IsRingOrField> PartialEq for Snake<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
     }
 }
-impl<T: IsComplex> Eq for Snake<T> {}
-impl<T: IsComplex> PartialOrd for Snake<T> {
+impl<T: IsRingOrField> Eq for Snake<T> {}
+impl<T: IsRingOrField> PartialOrd for Snake<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<T: IsComplex> Ord for Snake<T> {
+impl<T: IsRingOrField> Ord for Snake<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.angles.cmp(&other.angles)
     }
 }
-impl<T: IsComplex> Display for Snake<T> {
+impl<T: IsRingOrField> Display for Snake<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.angles.fmt(f)
     }
@@ -586,10 +568,8 @@ impl<T: IsComplex> Display for Snake<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tiles::{hexagon, square, triangle};
     use super::*;
-    use crate::cyclotomic::{Ccw, SymNum, Z12, ZZ12, ZZ4};
-    use num_rational::Ratio;
+    use crate::cyclotomic::{Ccw, SymNum, ZZ12, ZZ4};
     use num_traits::{One, Zero};
 
     #[test]
@@ -756,27 +736,6 @@ mod tests {
     }
 
     #[test]
-    fn test_area() {
-        // area of an equilateral triangle with side length 1 is sqrt(3)/4
-        let tri_area_sq3 = Ratio::<i64>::new_raw(1, 2);
-        assert_eq!(
-            triangle::<ZZ12>().double_area(),
-            Z12::new(&[0.into(), tri_area_sq3])
-        );
-
-        assert_eq!(
-            square::<ZZ12>().double_area(),
-            Z12::new(&[2.into(), 0.into()])
-        );
-
-        // area of a regular hexagon with side length 1 is 3*sqrt(3)/2
-        assert_eq!(
-            hexagon::<ZZ12>().double_area(),
-            Z12::new(&[0.into(), 3.into()])
-        );
-    }
-
-    #[test]
     fn test_eq_ord() {
         let s1: Snake<ZZ12> = Snake::try_from(&[1, 2, 3]).unwrap();
         let mut s2: Snake<ZZ12> = Snake::try_from(s1.angles.as_slice()).unwrap();
@@ -846,7 +805,7 @@ mod tests {
 
     /// Snapshot of every externally-observable Snake field, used by
     /// the round-trip pop tests below.
-    fn snapshot<T: IsComplex + IsRingOrField + Units>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
+    fn snapshot<T: IsRingOrField + Units>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
         (
             s.angles().to_vec(),
             s.angle_sum(),

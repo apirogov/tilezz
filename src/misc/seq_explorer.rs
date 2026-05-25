@@ -74,7 +74,7 @@ use std::time::Instant;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
-use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField, Units};
 use crate::intgeom::matchtypes::{BpSeed, MatchFinder};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
@@ -89,7 +89,7 @@ use crate::stringmatch::cyclic_contains;
 /// The `(start_a, start_b, len)` triple is the same one stored in
 /// [`Provenance::Glue`] and follows the standard `MatchType`
 /// edge-offset convention.
-pub fn replay_glue<T: IsComplex + IsRingOrField + Units>(
+pub fn replay_glue<T: IsRingOrField + Units>(
     source: &Rat<T>,
     tile: &Rat<T>,
     start_a: usize,
@@ -297,7 +297,7 @@ impl Provenance {
     /// just returns the tile rat; for [`Self::Glue`] re-applies the
     /// match. Returns `Err` on a malformed Glue (shouldn't happen
     /// for provenances produced by a SeqExplorer).
-    pub fn apply<T: IsComplex + IsRingOrField + Units>(
+    pub fn apply<T: IsRingOrField + Units>(
         &self,
         explorer: &SeqExplorer<T>,
     ) -> Result<Rat<T>, String> {
@@ -346,7 +346,7 @@ impl Collection {
     /// name (used only on round-trip, to pick the right `T`).
     pub fn from_explorer<T>(explorer: &SeqExplorer<T>, ring: impl Into<String>) -> Self
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let tile_angles = explorer
             .tileset()
@@ -375,7 +375,7 @@ impl Collection {
     /// `seq_collect.rs` for the ring-dispatch pattern.
     pub fn replay_rats<T>(&self, tile_ts: &TileSet<T>) -> Result<Vec<Rat<T>>, String>
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         let mut rats: Vec<Rat<T>> = Vec::with_capacity(self.provenances.len());
         for (id, prov) in self.provenances.iter().enumerate() {
@@ -404,7 +404,7 @@ impl Collection {
     /// passes.
     pub fn presence_errors<T>(&self, rats: &[Rat<T>]) -> Vec<(usize, Vec<i8>)>
     where
-        T: IsComplex + IsRingOrField + Units,
+        T: IsRingOrField + Units,
     {
         self.subseqs
             .iter()
@@ -454,7 +454,7 @@ pub fn check_fixed_point<T>(
     max_subseq_len: usize,
 ) -> FixedPointReport
 where
-    T: IsComplex + IsRingOrField + Units,
+    T: IsRingOrField + Units,
 {
     let mut report = FixedPointReport::default();
     let mut seen_missing: BTreeSet<Vec<i8>> = BTreeSet::new();
@@ -510,7 +510,7 @@ where
 ///   contributed them;
 /// - [`Self::rats`] / [`Self::provenances`] give the full per-rat
 ///   discovery record.
-pub struct SeqExplorer<T: IsComplex> {
+pub struct SeqExplorer<T: IsRingOrField> {
     tileset: Arc<TileSet<T>>,
     /// Trie of every cyclic length-`≤k` substring seen, with each
     /// node tagged by the `rat_id` of the rat that *first* deposited
@@ -532,7 +532,7 @@ pub struct SeqExplorer<T: IsComplex> {
     max_subseq_len: usize,
 }
 
-impl<T: IsComplex + IsRingOrField + Units> SeqExplorer<T> {
+impl<T: IsRingOrField + Units> SeqExplorer<T> {
     /// Run the BFS over patches of `tileset` to fixed point and
     /// return the populated catalog. Quiet by default; use
     /// [`Self::new_verbose`] to also log per-layer progress to stderr.
@@ -641,7 +641,7 @@ struct LayerStats {
 /// Private build state for [`SeqExplorer::new`]. Owns everything the
 /// BFS needs and exposes it as a sequence of phase helpers
 /// (`seed_phase` → `run_layer*` → `into_explorer`).
-struct Builder<T: IsComplex> {
+struct Builder<T: IsRingOrField> {
     tileset: Arc<TileSet<T>>,
     trie: SeqTrie,
     /// Witness rats only (those that contributed when first inserted).
@@ -673,7 +673,7 @@ struct Builder<T: IsComplex> {
     started: Instant,
 }
 
-impl<T: IsComplex + IsRingOrField + Units> Builder<T> {
+impl<T: IsRingOrField + Units> Builder<T> {
     fn new(tileset: Arc<TileSet<T>>, verbose: bool) -> Self {
         let max_subseq_len = tileset.rats().iter().map(|r| r.len()).max().unwrap_or(0);
         // B-side (tileset) is fixed across all layers; precompute the

@@ -2,12 +2,12 @@
 
 use num_traits::One;
 
-use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsComplex, IsRingOrField};
+use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRingOrField};
 use super::types::{ZZ10, ZZ20};
 use super::units::Units;
 
 // Returns the sum of all units of a complex integer ring.
-pub fn zz_units_sum<T: IsRingOrField + IsComplex + Units>() -> T {
+pub fn zz_units_sum<T: IsRingOrField + Units>() -> T {
     let mut p = T::zero();
     for i in 0..T::turn() {
         p = p + <T as Units>::unit(i).scale(i as i64);
@@ -19,22 +19,22 @@ pub fn zz_units_sum<T: IsRingOrField + IsComplex + Units>() -> T {
 // it means that we can represent any linear combination
 // in a ring that supports quarter turn rotation (i.e. ZZDiv4).
 
-pub fn sqrt2<T: IsComplex + HasZZ8 + Units>() -> T {
+pub fn sqrt2<T: IsRingOrField + HasZZ8 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 8;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
-pub fn sqrt3<T: IsComplex + HasZZ12 + Units>() -> T {
+pub fn sqrt3<T: IsRingOrField + HasZZ12 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 12;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
-pub fn sqrt5<T: IsComplex + HasZZ10 + Units>() -> T {
+pub fn sqrt5<T: IsRingOrField + HasZZ10 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 10;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - T::one()
 }
 
-pub fn sqrt6<T: IsComplex + HasZZ8 + HasZZ12 + Units>() -> T {
+pub fn sqrt6<T: IsRingOrField + HasZZ8 + HasZZ12 + Units>() -> T {
     let sc = T::zz_params().full_turn_steps / 24;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
 }
