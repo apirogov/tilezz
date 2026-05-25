@@ -111,3 +111,53 @@ impl<T: IntRing + Signed> ZSigned for T {
         self.signum()
     }
 }
+
+/// Sign extraction for the real and imaginary parts of a (complex) value.
+///
+/// This trait exists so that geometric predicates can be expressed purely in
+/// terms of `ZZ` arithmetic plus a per-ring sign-of-component query, without
+/// the predicates themselves ever materializing a `ZZ::Real` value. That
+/// allows future ring storage migrations (e.g. ZZ12 stored in a pure-i64
+/// integral basis) to override sign extraction without touching the geometry
+/// code that consumes it.
+///
+/// `re_sign` / `im_sign` must return one of `-1`, `0`, or `1`.
+pub trait ReImSign {
+    /// Sign of the real component: -1, 0, or 1.
+    fn re_sign(&self) -> i8;
+    /// Sign of the imaginary component: -1, 0, or 1.
+    fn im_sign(&self) -> i8;
+}
+
+/// Blanket impl: any complex-valued ring with `ZSigned` real components
+/// can extract signs via `re_im()` + `ZSigned` predicates.
+///
+/// This is semantically a no-op vs the previous direct usage of `is_positive`
+/// / `is_negative` / `is_zero` on the projected real parts. Per-ring
+/// overrides can specialize this for storage formats that admit a cheaper
+/// sign query.
+impl<T> ReImSign for T
+where
+    T: super::traits::IsComplex,
+{
+    fn re_sign(&self) -> i8 {
+        let r = self.re();
+        if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_positive(&r) {
+            1
+        } else if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_negative(&r) {
+            -1
+        } else {
+            0
+        }
+    }
+    fn im_sign(&self) -> i8 {
+        let i = self.im();
+        if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_positive(&i) {
+            1
+        } else if <<T as super::traits::IsRingOrField>::Real as ZSigned>::is_negative(&i) {
+            -1
+        } else {
+            0
+        }
+    }
+}

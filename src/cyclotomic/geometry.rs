@@ -1,58 +1,53 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
-use num_traits::Zero;
 use std::ops::Range;
 
-use super::linalg::{is_between, is_ccw, wedge};
-use super::numtraits::{OneImag, ZSigned};
+use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
+use super::numtraits::{Conj, OneImag, ReImSign, ZSigned};
 use super::traits::{HasZZ4, IsComplex, IsReal, IsRingOrField};
 
-pub type Line<T> = (T, T, T);
-
-/// Get (a, b) for equivalence class of lines line ax + by = c for all c.
+/// Return whether the point `p` lies on the line through `a` and `b`.
 ///
-/// This function is mostly interesting if the constant c does not need to be computed.
-fn line_class_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> (ZZ::Real, ZZ::Real) {
-    ((*p1 - *p2).im(), (*p2 - *p1).re())
+/// Uses the identity `wedge(b - a, p - a) == 0` (i.e. the imaginary part of
+/// `conj(b - a) * (p - a)` is zero), so no `ZZ::Real` value is materialized.
+pub fn is_colinear<ZZ: IsComplex + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
+    wedge_sign(&(*b - *a), &(*p - *a)) == 0
 }
 
-/// Get (a, b, c) for line ax + by + c = 0 based on two points.
-/// y(x) = -(ax + c)/b = -a/b x - c/b = mx + b' with m = -a/b and b' = -c/b
-pub fn line_through<ZZ: IsComplex>(p1: &ZZ, p2: &ZZ) -> Line<ZZ::Real> {
-    // (wedge(&ZZ::one(), &(*p1 - *p2)), dot(&ZZ::one(), &(*p2 - *p1)), wedge(&p1, &p2))
-    let (a, b) = line_class_through::<ZZ>(p1, p2);
-    (a, b, wedge::<ZZ>(p1, p2))
+/// Return whether the line through `(a, b)` is parallel to the line through `(c, d)`
+/// (which includes colinearity).
+///
+/// Uses the identity `wedge(b - a, d - c) == 0`.
+pub fn lines_parallel<ZZ: IsComplex + Conj + ReImSign>(
+    (a, b): (&ZZ, &ZZ),
+    (c, d): (&ZZ, &ZZ),
+) -> bool {
+    wedge_sign(&(*b - *a), &(*d - *c)) == 0
 }
 
-/// Return whether the point is on the given line.
-pub fn is_colinear<ZZ: IsComplex>(p: &ZZ, (a, b, c): &Line<ZZ::Real>) -> bool {
-    // ((*a) * dot(&ZZ::one(), p) + (*b) * wedge(&ZZ::one(), p) + *c).is_zero()
-    (*a * p.re() + *b * p.im() + *c).is_zero()
-}
-
-/// Return whether two lines are parallel (which includes colinearity).
-pub fn lines_parallel<ZZ: IsComplex>(l1: &Line<ZZ::Real>, l2: &Line<ZZ::Real>) -> bool {
-    let ((a1, b1, _), (a2, b2, _)) = (l1, l2);
-    (*a1 * *b2 - *a2 * *b1).is_zero()
-}
-
-/// Return whether two lines are perpendicular.
-pub fn lines_perp<ZZ: IsComplex>(l1: &Line<ZZ::Real>, l2: &Line<ZZ::Real>) -> bool {
-    let ((a1, b1, _), (a2, b2, _)) = (l1, l2);
-    (*a1 * *a2 + *b1 * *b2).is_zero()
+/// Return whether the line through `(a, b)` is perpendicular to the line through `(c, d)`.
+///
+/// Uses the identity `dot(b - a, d - c) == 0`.
+pub fn lines_perp<ZZ: IsComplex + Conj + ReImSign>(
+    (a, b): (&ZZ, &ZZ),
+    (c, d): (&ZZ, &ZZ),
+) -> bool {
+    dot_sign(&(*b - *a), &(*d - *c)) == 0
 }
 
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: IsComplex>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
+pub fn intersect<ZZ: IsComplex + Conj + ReImSign + PartialEq>(
+    &(a, b): &(ZZ, ZZ),
+    &(c, d): &(ZZ, ZZ),
+) -> bool {
     if a == c || a == d || b == c || b == d {
         // we ignore touching endpoints
         // (not counting it as proper intersection of _disjoint_ segments)
         // NOTE: if true, there also cannot be any other intersection
         return false;
     }
-    let l_ab = line_through(&a, &b);
-    if is_colinear(&c, &l_ab) && is_colinear(&d, &l_ab) {
+    if is_colinear(&c, &a, &b) && is_colinear(&d, &a, &b) {
         is_between(&c, (&a, &b)) || is_between(&d, (&a, &b))
     } else {
         // TODO: understand logic why this works
@@ -144,30 +139,25 @@ mod tests {
     fn test_colinear_parallel_perp() {
         let (a, b, c, d, e, f) = get_test_points();
 
-        let l_ab = line_through(&a, &b);
-        let l_ac = line_through(&a, &c);
-        let l_ae = line_through(&a, &e);
-        let l_af = line_through(&a, &f);
-
         // colinear, overlap
-        assert!(is_colinear(&b, &l_ac));
-        assert!(is_colinear(&d, &l_ac));
+        assert!(is_colinear(&b, &a, &c));
+        assert!(is_colinear(&d, &a, &c));
         // colinear, no overlap
-        assert!(is_colinear(&c, &l_ab));
-        assert!(is_colinear(&d, &l_ab));
+        assert!(is_colinear(&c, &a, &b));
+        assert!(is_colinear(&d, &a, &b));
         // parallel (not colinear)
-        assert!(!is_colinear(&e, &l_ab));
-        assert!(!is_colinear(&f, &l_ab));
+        assert!(!is_colinear(&e, &a, &b));
+        assert!(!is_colinear(&f, &a, &b));
         // perpendicular (touches in one point, not in the other)
-        assert!(!(is_colinear(&a, &l_ab) && is_colinear(&e, &l_ab)));
+        assert!(!(is_colinear(&a, &a, &b) && is_colinear(&e, &a, &b)));
         // general case
-        assert!(!is_colinear(&b, &l_af));
-        assert!(!is_colinear(&d, &l_af));
+        assert!(!is_colinear(&b, &a, &f));
+        assert!(!is_colinear(&d, &a, &f));
 
-        assert!(lines_parallel::<ZZi>(&l_ab, &l_ac));
-        assert!(!lines_parallel::<ZZi>(&l_ab, &l_af));
-        assert!(lines_perp::<ZZi>(&l_ab, &l_ae));
-        assert!(!lines_perp::<ZZi>(&l_ab, &l_af));
+        assert!(lines_parallel::<ZZi>((&a, &b), (&a, &c)));
+        assert!(!lines_parallel::<ZZi>((&a, &b), (&a, &f)));
+        assert!(lines_perp::<ZZi>((&a, &b), (&a, &e)));
+        assert!(!lines_perp::<ZZi>((&a, &b), (&a, &f)));
     }
 
     #[test]
