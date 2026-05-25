@@ -581,14 +581,10 @@ pub fn derive_units_lookup<const PHI: usize>(
 
 /// Define an integer-basis cyclotomic ring `ZZ_n`.
 ///
-/// **Step 1 status:** this macro currently generates only a struct shell --
-/// a `[i64; PHI]`-backed wrapper with `from_int_coeffs` / `int_coeffs`
-/// accessors and the standard derives -- to validate that the
-/// macro+const-generic shape compiles. Step 2 expands the body into the full
-/// impl-bag (Add/Sub/Mul/Neg, SymNum, Conj, Units, ReImSign, WithinRadius,
-/// IntersectUnitSegments, ...) by routing each impl to the generic
-/// `integral_basis::*` helpers parameterized on the per-ring constants
-/// listed below.
+/// Emits the full per-ring impl bag (Add/Sub/Mul/Neg, SymNum, Conj, Units,
+/// ReImSign, WithinRadius, IntersectUnitSegments, ...) by routing each impl
+/// to the generic `integral_basis::*` helpers parameterized on the per-ring
+/// constants listed below.
 ///
 /// # Parameters
 ///
@@ -600,12 +596,23 @@ pub fn derive_units_lookup<const PHI: usize>(
 /// * `re_decomp` -- `[[i64; K]; PHI]`, K-vector of `Re(zeta^k)` per `k`.
 /// * `im_decomp` -- `[[i64; K]; PHI]`, K-vector of `Im(zeta^k)` per `k`.
 /// * `cartesian` -- `[Complex64; PHI]`, Cartesian value of `zeta^k` per `k`.
-/// * `real_sign_fn` -- `fn(&[i64; K]) -> i8`, sign of a K-vector against the
-///   ring's real-subring symbolic basis (one of `signum_sum_sqrt_expr_*`
-///   from `cyclotomic::sign`, wrapped to the right K).
-/// * `has` -- list of `HasZZk` subring-containment markers, e.g.
-///   `[HasZZ4, HasZZ6, HasZZ12]`. The macro emits a `zz_triv_impl!`-style
-///   empty `Has*Impl` block per entry (step 2).
+/// * `params` -- `&'static ZZParams<'static>` reference used for the
+///   `SymNum::zz_params()` impl. Provides `full_turn_steps` and the legacy
+///   symbolic-Display labels.
+/// * `one_in_real_basis` -- `[i64; K]`, the K-vector for the real-subring
+///   element `1` (used by the intersect-unit-segments colinear branch).
+/// * `display_fn` -- `fn(&[i64; PHI], &mut std::fmt::Formatter<'_>) -> std::fmt::Result`,
+///   the ring's Display impl. Defined per-ring because the symbolic shape
+///   of `Re`/`Im` differs.
+/// * `complex64_fn` -- `fn(&[i64; PHI]) -> num_complex::Complex64`, the
+///   Cartesian projection used by `SymNum::complex64`. Defined per-ring so
+///   that the ring can supply a hand-rolled inline `Re/Im` expansion instead
+///   of the generic `complex64_basis` loop -- `complex64` shows up in the
+///   `cell_of` grid-bucketing hot path. The provided
+///   `integral_basis::complex64_basis_with::<PHI, &CARTESIAN>` shortcut is
+///   available if no specialization is needed.
+/// * `has` -- list of `HasZZk*Impl` subring-containment markers, e.g.
+///   `[HasZZ4Impl, HasZZ6Impl, HasZZ12Impl]`.
 #[macro_export]
 macro_rules! define_integral_zz {
     (
@@ -617,13 +624,12 @@ macro_rules! define_integral_zz {
         re_decomp: $re_decomp:expr,
         im_decomp: $im_decomp:expr,
         cartesian: $cartesian:expr,
-        real_sign_fn: $real_sign:path,
+        params: $params:path,
+        one_in_real_basis: $one_real:expr,
+        display_fn: $display_fn:path,
+        complex64_fn: $complex64_fn:path,
         has: [$($has:ident),* $(,)?] $(,)?
     ) => {
-        // Step 1: emit only the struct shell plus const-access helpers. The
-        // const-generic call sites baked in here will exercise the
-        // const-generic surface of `integral_basis::*` end-to-end without
-        // forcing the rest of the per-ring impl-bag to land in step 1.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name {
             coeffs: [i64; $phi],
@@ -638,6 +644,14 @@ macro_rules! define_integral_zz {
             pub const REAL_DIM: usize = $k;
             /// The reduction rule for `zeta^PHI` in the integer basis.
             pub const REDUCTION: [i64; $phi] = $reduction;
+            #[doc(hidden)]
+            pub const RE_DECOMP: [[i64; $k]; $phi] = $re_decomp;
+            #[doc(hidden)]
+            pub const IM_DECOMP: [[i64; $k]; $phi] = $im_decomp;
+            #[doc(hidden)]
+            pub const CARTESIAN: [num_complex::Complex64; $phi] = $cartesian;
+            #[doc(hidden)]
+            pub const ONE_IN_REAL_BASIS: [i64; $k] = $one_real;
 
             #[inline]
             pub const fn from_int_coeffs(coeffs: [i64; $phi]) -> Self {
@@ -651,32 +665,401 @@ macro_rules! define_integral_zz {
             }
         }
 
-        // Silence "constant never used" warnings for the per-ring tables on
-        // step-1 builds where they aren't routed through impls yet. Each is
-        // a `const` already, so this is just a single use-site to keep the
-        // value live.
+        // Per-ring `OnceLock`-backed caches (conjugation matrix, units table).
         impl $name {
             #[doc(hidden)]
-            pub const __RE_DECOMP: [[i64; $k]; $phi] = $re_decomp;
+            #[inline]
+            pub fn __conj_matrix() -> &'static [[i64; $phi]; $phi] {
+                static M: std::sync::OnceLock<[[i64; $phi]; $phi]> =
+                    std::sync::OnceLock::new();
+                M.get_or_init(|| {
+                    $crate::cyclotomic::integral_basis::derive_conj_matrix::<$phi>(
+                        $n, &Self::REDUCTION,
+                    )
+                })
+            }
+
             #[doc(hidden)]
-            pub const __IM_DECOMP: [[i64; $k]; $phi] = $im_decomp;
-            #[doc(hidden)]
-            pub const __CARTESIAN: [num_complex::Complex64; $phi] = $cartesian;
-            #[doc(hidden)]
-            pub const __REAL_SIGN: fn(&[i64; $k]) -> i8 = $real_sign;
+            #[inline]
+            pub fn __units_table() -> &'static Vec<[i64; $phi]> {
+                static U: std::sync::OnceLock<Vec<[i64; $phi]>> =
+                    std::sync::OnceLock::new();
+                U.get_or_init(|| {
+                    $crate::cyclotomic::integral_basis::derive_units_lookup::<$phi>(
+                        $n, &Self::REDUCTION,
+                    )
+                })
+            }
         }
 
-        // Mark the requested subring-containment traits (no-op step 1: just
-        // record the names so the call sites validate).
+        // ---- Display ----
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                $display_fn(&self.coeffs, f)
+            }
+        }
+
+        // ---- Neg / Add / Sub / Mul ----
+        impl std::ops::Neg for $name {
+            type Output = Self;
+            #[inline]
+            fn neg(self) -> Self {
+                Self {
+                    coeffs: $crate::cyclotomic::integral_basis::neg_basis::<$phi>(&self.coeffs),
+                }
+            }
+        }
+
+        impl std::ops::Add<$name> for $name {
+            type Output = Self;
+            #[inline]
+            fn add(self, other: Self) -> Self {
+                Self {
+                    coeffs: $crate::cyclotomic::integral_basis::add_basis::<$phi>(
+                        &self.coeffs,
+                        &other.coeffs,
+                    ),
+                }
+            }
+        }
+
+        impl std::ops::Sub<$name> for $name {
+            type Output = Self;
+            #[inline]
+            fn sub(self, other: Self) -> Self {
+                Self {
+                    coeffs: $crate::cyclotomic::integral_basis::sub_basis::<$phi>(
+                        &self.coeffs,
+                        &other.coeffs,
+                    ),
+                }
+            }
+        }
+
+        // NOTE: `impl Mul<$name> for $name` is NOT emitted by this macro.
+        // `Mul` is the single hottest hot-path; we make every ring opt into
+        // either the generic-via-basis path (via `impl_integral_mul_via_basis!`)
+        // or a hand-rolled per-ring fast-path body. See `rings.rs` for ZZ12's
+        // hand-rolled 4x4 Mul.
+
+        // ---- Zero / One ----
+        impl num_traits::Zero for $name {
+            #[inline]
+            fn zero() -> Self {
+                Self { coeffs: [0i64; $phi] }
+            }
+            #[inline]
+            fn is_zero(&self) -> bool {
+                self.coeffs == [0i64; $phi]
+            }
+        }
+
+        impl num_traits::One for $name {
+            #[inline]
+            fn one() -> Self {
+                let mut c = [0i64; $phi];
+                c[0] = 1;
+                Self { coeffs: c }
+            }
+            #[inline]
+            fn is_one(&self) -> bool {
+                if self.coeffs[0] != 1 {
+                    return false;
+                }
+                let mut i = 1;
+                while i < $phi {
+                    if self.coeffs[i] != 0 {
+                        return false;
+                    }
+                    i += 1;
+                }
+                true
+            }
+        }
+
+        impl $crate::cyclotomic::IntRing for $name {}
+
+        // ---- Pow ----
+        impl num_traits::Pow<u8> for $name {
+            type Output = Self;
+            fn pow(self, other: u8) -> Self {
+                use $crate::cyclotomic::SymNum;
+                self.zz_pow(other)
+            }
+        }
+        impl num_traits::Pow<i8> for $name {
+            type Output = Self;
+            fn pow(self, other: i8) -> Self {
+                use $crate::cyclotomic::SymNum;
+                assert!(other >= 0, "Negative powers are not supported!");
+                self.zz_pow(other as u8)
+            }
+        }
+
+        // ---- InnerIntType + From<i64> + From<(i64, i64)> if HasZZ4 ----
+        impl $crate::cyclotomic::numtraits::InnerIntType for $name {
+            type IntType = i64;
+        }
+
+        impl From<i64> for $name {
+            #[inline]
+            fn from(value: i64) -> Self {
+                let mut c = [0i64; $phi];
+                c[0] = value;
+                Self { coeffs: c }
+            }
+        }
+
+        // ---- SymNum ----
+        impl $crate::cyclotomic::SymNum for $name {
+            type Scalar = i64;
+
+            #[inline]
+            fn zz_coeffs(&self) -> &[Self::Scalar] {
+                &self.coeffs
+            }
+
+            #[inline]
+            fn zz_coeffs_mut(&mut self) -> &mut [Self::Scalar] {
+                &mut self.coeffs
+            }
+
+            #[inline]
+            fn zz_params() -> &'static $crate::cyclotomic::symnum::ZZParams<'static> {
+                &$params
+            }
+
+            #[inline]
+            fn zz_mul_arrays(
+                _x: &[Self::Scalar],
+                _y: &[Self::Scalar],
+            ) -> Vec<Self::Scalar> {
+                unreachable!(
+                    "{}: multiplication uses direct Mul impl, not zz_mul_arrays",
+                    stringify!($name),
+                )
+            }
+
+            #[inline]
+            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
+                x.iter().map(|c| *c * scalar).collect()
+            }
+
+            fn new(coeffs: &[Self::Scalar]) -> Self {
+                assert_eq!(
+                    coeffs.len(),
+                    $phi,
+                    concat!(stringify!($name), "::new expects ", stringify!($phi), " integral-basis coefficients")
+                );
+                let mut out = [0i64; $phi];
+                let mut i = 0;
+                while i < $phi {
+                    out[i] = coeffs[i];
+                    i += 1;
+                }
+                Self { coeffs: out }
+            }
+
+            #[inline]
+            fn complex64(&self) -> num_complex::Complex64 {
+                $complex64_fn(&self.coeffs)
+            }
+        }
+
+        // NOTE: `impl Conj for $name` is NOT emitted by this macro.
+        // Conj is on the hot intersect_unit_segments path; the macro lets
+        // each ring choose between the generic-via-basis path (via
+        // `impl_integral_conj_via_basis!`) and a hand-rolled per-ring inline
+        // body. See `rings.rs` for ZZ12's hand-rolled conj
+        // (`(a + c, b, -c, -b - d)`).
+
+        // ---- Ccw ----
+        impl $crate::cyclotomic::Ccw for $name {
+            #[inline]
+            fn ccw() -> Self {
+                <Self as $crate::cyclotomic::Units>::unit(1)
+            }
+            #[inline]
+            fn is_ccw(&self) -> bool {
+                *self == <Self as $crate::cyclotomic::Ccw>::ccw()
+            }
+        }
+
+        // ---- ZZComplex ----
+        impl $crate::cyclotomic::ZZComplex for $name {
+            fn is_real(&self) -> bool {
+                <Self as $crate::cyclotomic::ReImSign>::im_sign(self) == 0
+            }
+            fn is_imag(&self) -> bool {
+                <Self as $crate::cyclotomic::ReImSign>::re_sign(self) == 0
+            }
+        }
+
+        // NOTE: `impl Units for $name` is NOT emitted by this macro.
+        // `Units::unit` shows up in `rat_enum`'s tight loop; per-ring
+        // hand-rolled `static UNIT_TABLE: [[i64; PHI]; N] = [...];` is
+        // faster than the OnceLock + Vec indirection. The default macro
+        // `impl_integral_units_via_basis!` is available for rings that
+        // don't yet have a hand-rolled table.
+
+        // ---- Marker / composite trait impls ----
+        impl $crate::cyclotomic::ComplexTraits for $name {}
+        impl $crate::cyclotomic::RingTraits for $name {}
+        impl $crate::cyclotomic::IsRingOrField for $name {}
+        impl $crate::cyclotomic::IsRing for $name {}
+        impl $crate::cyclotomic::ZZType for $name {}
+
+        // ---- Subring-containment markers ----
         $(
-            const _: fn() = || {
-                // Drop the literal in a typecheck-only context so it's not
-                // an unused-variable warning. Treats `$has` as an ident the
-                // caller is expected to import.
-                #[allow(dead_code)]
-                fn _check<T: $crate::cyclotomic::$has>() {}
-            };
+            impl $crate::cyclotomic::traits::$has for $name {}
         )*
+    };
+}
+
+/// Default `Units` impl for an integer-basis ring: cache `derive_units_lookup`
+/// in a `OnceLock<Vec<[i64; PHI]>>` and index by `angle.rem_euclid(n)`.
+///
+/// Rings whose `unit(k)` is called in a tight loop can provide their own
+/// `impl Units for $name` with a `static UNIT_TABLE: [[i64; PHI]; n] = [...]`
+/// instead, which avoids the OnceLock check and the heap-resident Vec.
+#[macro_export]
+macro_rules! impl_integral_units_via_basis {
+    ($name:ident, $n:expr) => {
+        impl $crate::cyclotomic::Units for $name {
+            #[inline]
+            fn unit(angle: i8) -> Self {
+                let tab = <$name>::__units_table();
+                let idx = angle.rem_euclid($n as i8) as usize;
+                Self::from_int_coeffs(tab[idx])
+            }
+        }
+    };
+}
+
+/// Default `Mul<Self>` impl for an integer-basis ring: route through
+/// [`mul_basis`] with the per-ring `REDUCTION` table.
+///
+/// Rings that have a faster hand-rolled `Mul` can opt out of this macro and
+/// provide their own `impl Mul<$name> for $name { ... }` body (e.g. ZZ12
+/// uses the inline 4x4 polynomial expansion in `rings.rs`).
+#[macro_export]
+macro_rules! impl_integral_mul_via_basis {
+    ($name:ident, $phi:expr) => {
+        impl std::ops::Mul<$name> for $name {
+            type Output = Self;
+            #[inline]
+            fn mul(self, other: Self) -> Self {
+                Self::from_int_coeffs(
+                    $crate::cyclotomic::integral_basis::mul_basis::<$phi>(
+                        &self.int_coeffs(),
+                        &other.int_coeffs(),
+                        &<$name>::REDUCTION,
+                    ),
+                )
+            }
+        }
+    };
+}
+
+/// Default `Conj` impl for an integer-basis ring: route through
+/// [`conj_basis`] with the cached per-ring conjugation matrix.
+///
+/// Rings that have a cheaper inline conjugation (e.g. ZZ12's
+/// `(a + c, b, -c, -b - d)`) can opt out of this macro and provide their
+/// own `impl Conj for $name`.
+#[macro_export]
+macro_rules! impl_integral_conj_via_basis {
+    ($name:ident, $phi:expr) => {
+        impl $crate::cyclotomic::Conj for $name {
+            #[inline]
+            fn conj(&self) -> Self {
+                Self::from_int_coeffs(
+                    $crate::cyclotomic::integral_basis::conj_basis::<$phi>(
+                        &self.int_coeffs(),
+                        <$name>::__conj_matrix(),
+                    ),
+                )
+            }
+        }
+    };
+}
+
+/// Default `ReImSign` impl for an integer-basis ring: route through
+/// `re_sign_basis` / `im_sign_basis` against the per-ring `RE_DECOMP` /
+/// `IM_DECOMP` tables and the supplied `real_sign_fn`.
+///
+/// Rings that have a cheaper hand-rolled sign extraction (e.g. ZZ12 with
+/// `sign_m_plus_n_sqrt3` reading the (m, n) components directly) can opt out
+/// of this macro and provide their own `impl ReImSign for $name { ... }`.
+#[macro_export]
+macro_rules! impl_integral_re_im_sign_via_basis {
+    ($name:ident, $phi:expr, $k:expr, $real_sign:path) => {
+        impl $crate::cyclotomic::ReImSign for $name {
+            #[inline]
+            fn re_sign(&self) -> i8 {
+                $crate::cyclotomic::integral_basis::re_sign_basis::<$phi, $k>(
+                    &<$name>::int_coeffs(self),
+                    &<$name>::RE_DECOMP,
+                    $real_sign,
+                )
+            }
+            #[inline]
+            fn im_sign(&self) -> i8 {
+                $crate::cyclotomic::integral_basis::im_sign_basis::<$phi, $k>(
+                    &<$name>::int_coeffs(self),
+                    &<$name>::IM_DECOMP,
+                    $real_sign,
+                )
+            }
+        }
+    };
+}
+
+/// Default `IntersectUnitSegments` impl for an integer-basis ring: route
+/// through `intersect_unit_segments_basis` with the per-ring constant bundle.
+///
+/// Rings that have a faster hand-rolled fast path (e.g. ZZ12's inline 3-mul
+/// path that exploits the `[i64; 4]` layout and ZZ12-specific
+/// `sign_m_plus_n_sqrt3`) can opt out of this macro and provide their own
+/// `impl IntersectUnitSegments for $name { ... }`.
+#[macro_export]
+macro_rules! impl_integral_intersect_unit_segments_via_basis {
+    ($name:ident, $phi:expr, $k:expr, $real_sign:path) => {
+        impl $crate::cyclotomic::IntersectUnitSegments for $name {
+            #[inline]
+            fn intersect_unit_segments(s1: &($name, $name), s2: &($name, $name)) -> bool {
+                $crate::cyclotomic::integral_basis::intersect_unit_segments_basis::<$phi, $k>(
+                    &(s1.0.int_coeffs(), s1.1.int_coeffs()),
+                    &(s2.0.int_coeffs(), s2.1.int_coeffs()),
+                    &<$name>::REDUCTION,
+                    <$name>::__conj_matrix(),
+                    &<$name>::RE_DECOMP,
+                    &<$name>::IM_DECOMP,
+                    &<$name>::ONE_IN_REAL_BASIS,
+                    $real_sign,
+                )
+            }
+        }
+    };
+}
+
+/// Default `WithinRadius` impl for an integer-basis ring: project to
+/// `Complex64` via the cached `cartesian` table and compare squared norm.
+///
+/// Rings that can compute `|z|^2` in pure-i64 arithmetic (e.g. ZZ12) can opt
+/// out of this macro and provide their own `impl WithinRadius for $name`.
+#[macro_export]
+macro_rules! impl_integral_within_radius_via_complex64 {
+    ($name:ident) => {
+        impl $crate::cyclotomic::WithinRadius for $name {
+            fn within_radius(&self, radius: i64) -> bool {
+                use $crate::cyclotomic::SymNum;
+                let c = <$name as SymNum>::complex64(self);
+                let norm_sq = c.re * c.re + c.im * c.im;
+                let r_sq = (radius as f64) * (radius as f64);
+                norm_sq <= r_sq + 1e-9
+            }
+        }
     };
 }
 
