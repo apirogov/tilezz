@@ -13,6 +13,31 @@ use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::linalg::wedge;
 use crate::cyclotomic::{IsComplex, IsRingOrField, Units};
 
+/// Best-effort dedup for `seg_id` against a `u128` bitmap.
+///
+/// Returns `true` if the caller should process this `seg_id` (and the
+/// bit was just set), `false` if the segment was already marked.
+///
+/// When `seg_id >= 128` the bitmap can't represent it; we fall through
+/// to always returning `true` (no dedup for very long snakes). That's
+/// safe because the only consequence is running `intersect` a second
+/// time on a duplicate -- correct, just slightly wasteful. So there's
+/// no hard cap on snake length; the bitmap is purely an optimization
+/// for the common short-snake case.
+#[inline]
+fn check_and_mark(seen: &mut u128, seg_id: usize) -> bool {
+    if seg_id >= 128 {
+        return true;
+    }
+    let bit = 1u128 << seg_id;
+    if *seen & bit != 0 {
+        false
+    } else {
+        *seen |= bit;
+        true
+    }
+}
+
 /// Representation of a turtle (i.e. an oriented point).
 pub struct Turtle<T: IsComplex> {
     /// Position in the complex integer plane.
@@ -359,14 +384,13 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
         // Direct grid traversal: no intermediate Vec / sort / dedup.
         // We walk the 5+5 cells of the segment's neighborhood, look up
         // point indices in each cell directly, and from each point
-        // index recover the (at most two) adjacent segments. A u128
-        // bitmap deduplicates segment ids on the fly -- correctness
-        // relies on `self.len() <= 128`, which is amply true for the
-        // rat_enum search depth.
-        debug_assert!(
-            self.len() < 128,
-            "snake too long for u128 segment bitmap; revisit can_add dedup"
-        );
+        // index recover the (at most two) adjacent segments.
+        //
+        // A u128 bitmap deduplicates segment ids on the fly when they
+        // fit (i.e. id < 128). Snake lengths beyond that -- e.g. long
+        // patch boundaries -- fall through to running `intersect` on
+        // the duplicate, which is correct (intersect is idempotent),
+        // just slightly wasteful. No hard limit on snake length.
         let new_pt_nz = !new_pt.is_zero();
         let len = self.len();
         let mut seen_segs: u128 = 0;
@@ -384,9 +408,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
                 // Segment ending at pt_idx (if any).
                 if pt_idx > 0 {
                     let seg_id = pt_idx - 1;
-                    let bit = 1u128 << seg_id;
-                    if seen_segs & bit == 0 {
-                        seen_segs |= bit;
+                    if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[seg_id], self.points[pt_idx]);
                         if intersect_unit_segments(&new_seg, &s) {
                             return false;
@@ -396,9 +418,7 @@ impl<T: IsComplex + IsRingOrField + Units> Snake<T> {
                 // Segment starting at pt_idx (if any).
                 if pt_idx < len {
                     let seg_id = pt_idx;
-                    let bit = 1u128 << seg_id;
-                    if seen_segs & bit == 0 {
-                        seen_segs |= bit;
+                    if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[pt_idx], self.points[pt_idx + 1]);
                         if intersect_unit_segments(&new_seg, &s) {
                             return false;
