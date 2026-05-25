@@ -179,6 +179,11 @@ struct Cli {
 
     #[arg(short, long)]
     verbose: bool,
+
+    /// In Bench mode, write a flamegraph SVG to this path (requires
+    /// the `pprof` cargo feature).
+    #[arg(long)]
+    profile: Option<String>,
 }
 
 fn main() {
@@ -190,6 +195,15 @@ fn main() {
 
     match cli.mode {
         Mode::Bench => {
+            #[cfg(feature = "pprof")]
+            let _guard = cli.profile.as_ref().map(|_| {
+                pprof::ProfilerGuardBuilder::default()
+                    .frequency(1000)
+                    .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+                    .build()
+                    .expect("profiler start")
+            });
+
             let t0 = Instant::now();
             let rats: Vec<Vec<i8>> = run_rat_enum_seqs(cli.ring, cli.max_steps);
             let dt = t0.elapsed();
@@ -205,6 +219,18 @@ fn main() {
                 total_boundary_len,
                 dt
             );
+
+            #[cfg(feature = "pprof")]
+            if let (Some(path), Some(guard)) = (cli.profile.as_ref(), _guard.as_ref()) {
+                let report = guard.report().build().expect("profiler report");
+                let svg = std::fs::File::create(path).expect("create flamegraph");
+                report.flamegraph(svg).expect("write flamegraph");
+                println!("wrote flamegraph: {path}");
+            }
+            #[cfg(not(feature = "pprof"))]
+            if cli.profile.is_some() {
+                eprintln!("rat_enum: --profile requires the `pprof` cargo feature");
+            }
         }
         Mode::Render => {
             let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps);
