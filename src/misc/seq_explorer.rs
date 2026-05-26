@@ -87,7 +87,7 @@ use crate::stringmatch::cyclic_contains;
 /// stored rats without needing the full explorer state.
 ///
 /// The `(start_a, start_b, len)` triple is the same one stored in
-/// [`Provenance::Glue`] and follows the standard `MatchType`
+/// [`Provenance::Glue`] and follows the standard `TileMatch`
 /// edge-offset convention.
 pub fn replay_glue<T: IsRing>(
     source: &Rat<T>,
@@ -281,7 +281,7 @@ pub enum Provenance {
     },
     /// A rat produced by gluing tile `tile_idx` onto the rat with id
     /// `source_rat_id`, using the match described by `(start_a,
-    /// start_b, len)` (standard `MatchType` edge-offset convention).
+    /// start_b, len)` (standard `TileMatch` edge-offset convention).
     Glue {
         source_rat_id: usize,
         tile_idx: usize,
