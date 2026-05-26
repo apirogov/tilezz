@@ -183,6 +183,7 @@ pub const ZZ20_PARAMS: ZZParams = ZZParams {
     scaling_fac: ZZ10_PARAMS.scaling_fac,
     ccw_unit_coeffs: &[[0, -2], [0, 2], [1, 0], [1, 0]],
 };
+#[allow(dead_code)]
 pub fn zz20_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     zz10_mul(x, y)
 }
