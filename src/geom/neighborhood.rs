@@ -61,7 +61,7 @@
 //!
 //! **The BFS as it stands does NOT enumerate every boundary segment
 //! that can appear on a legal patch.** A *segment* (in the sense of
-//! [`crate::intgeom::segtypes`]) is a maximal run of edges from one
+//! [`crate::geom::segtypes`]) is a maximal run of edges from one
 //! tile, bounded by two open-vertex junctions on the boundary. The
 //! catalog only sees segments that appear inside some BFS state's
 //! **extended-match window** (= matched interval + one ctx segment of
@@ -90,7 +90,7 @@
 //! will mis-classify the missed segs. A correct seg enumeration would
 //! need a different algorithm — one that doesn't tie segments to a
 //! match-anchor neighborhood. This is an open design problem;
-//! [`crate::intgeom::segtypes`] currently builds against the
+//! [`crate::geom::segtypes`] currently builds against the
 //! incomplete view and is limited accordingly.
 
 use std::collections::VecDeque;
@@ -100,9 +100,9 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsRing};
 use crate::matches::{EdgeRange, Segment};
-use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
-use crate::intgeom::tileset::TileSet;
+use crate::geom::matchtypes::MatchTypeIndex;
+use crate::geom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
+use crate::geom::tileset::TileSet;
 
 /// One catalog entry of a local **interface** between a tile and any
 /// legal context patch sharing one contiguous matched edge run with
@@ -629,7 +629,7 @@ impl<T: IsRing> NeighborhoodIndex<T> {
 
     /// Rebuild a catalog from a [`Collection`]. The caller supplies a
     /// tileset matching `c.tile_angles` (the ring `T` is checked
-    /// against the angle sequences by [`crate::intgeom::rat::Rat`]'s
+    /// against the angle sequences by [`crate::geom::rat::Rat`]'s
     /// usual validity rules at tile-set construction time, not here).
     ///
     /// Validation: the recorded `c.kinds` must agree with what
@@ -937,7 +937,7 @@ fn build_attached_context<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(nt.central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::intgeom::patch::forward_match_length(
+    let match_len = crate::geom::patch::forward_match_length(
         ctx.angles(),
         anchor_pos,
         central_seq,
@@ -1120,7 +1120,7 @@ fn build_surrounded_tile_from_trial<T: IsRing>(
 /// a boundary of length `n` includes the edge at position `target_edge`.
 ///
 /// **Edge-inclusive** check: `target_edge in [pm.start_a(), pm.start_a() +
-/// pm.len() - 1]` (mod n). Compare to [`crate::intgeom::patch::cyclic_range_contains`]
+/// pm.len() - 1]` (mod n). Compare to [`crate::geom::patch::cyclic_range_contains`]
 /// which is **vertex-inclusive** (covers `len + 1` vertices). Don't
 /// substitute one for the other: e.g. for `start=25, len=1, n=26`,
 /// `match_absorbs_edge(target=0) = false` (edge 0 is not in
@@ -1290,7 +1290,7 @@ fn try_construct_nt_from_cw<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::intgeom::patch::forward_match_length(
+    let match_len = crate::geom::patch::forward_match_length(
         ctx.angles(),
         cw_anchor_pos,
         central_seq,
@@ -1348,9 +1348,9 @@ fn nt_is_valid<T: IsRing>(
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::matchtypes::MatchTypeIndex;
-    use crate::intgeom::patch::GrowingPatch;
-    use crate::intgeom::tileset;
+    use crate::geom::matchtypes::MatchTypeIndex;
+    use crate::geom::patch::GrowingPatch;
+    use crate::geom::tileset;
     use std::sync::OnceLock;
 
     fn square_tileset() -> Arc<TileSet<ZZ12>> {
@@ -1713,7 +1713,7 @@ mod tests {
             return None;
         }
         let angles = ctx.angles().to_vec();
-        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+        let rot = crate::geom::rat::lex_min_rot(&angles);
         let mut canon = angles;
         canon.rotate_left(rot);
         Some((nt.central_tile_id, nt.cw_anchor_on_central, canon))
@@ -1881,7 +1881,7 @@ mod tests {
         let ac = build_attached_context(nt, mi)?;
         let aug_n = ac.aug_n;
         let angles = ac.aug.angles().to_vec();
-        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+        let rot = crate::geom::rat::lex_min_rot(&angles);
         let mut canon = angles;
         canon.rotate_left(rot);
         // canon[i] = aug.angles()[(i + rot) % aug_n]. The CW anchor
@@ -1980,7 +1980,7 @@ mod tests {
     /// deeper ctx needed).
     ///
     /// Run via:
-    /// `cargo test --release intgeom::neighborhood::tests::diagnose_extended_window_stats -- --ignored --nocapture`.
+    /// `cargo test --release geom::neighborhood::tests::diagnose_extended_window_stats -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn diagnose_extended_window_stats() {
@@ -2022,7 +2022,7 @@ mod tests {
                     NtEntry::Phase2(st) => {
                         let angles = st.angles.clone();
                         let n = angles.len();
-                        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+                        let rot = crate::geom::rat::lex_min_rot(&angles);
                         let mut canon = angles;
                         canon.rotate_left(rot);
                         if st.is_closed {
@@ -2099,7 +2099,7 @@ mod tests {
     }
 
     /// exact-count regressions. Run via
-    /// `cargo test --release intgeom::neighborhood::tests::diagnose_canonical_class_compression -- --ignored --nocapture`.
+    /// `cargo test --release geom::neighborhood::tests::diagnose_canonical_class_compression -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn diagnose_canonical_class_compression() {
@@ -2216,7 +2216,7 @@ mod tests {
             };
             let target_edge = ac.frontier_pos_on_aug;
             let n_aug = ac.aug_n;
-            let aug_rat = crate::intgeom::rat::Rat::from_slice_unchecked(ac.aug.angles());
+            let aug_rat = crate::geom::rat::Rat::from_slice_unchecked(ac.aug.angles());
             let mut seen: FxHashMap<(usize, usize, usize, usize), ()> = FxHashMap::default();
             for tile_b in 0..mi.tileset().num_tiles() {
                 let other = mi.tileset().rat(tile_b);
@@ -2250,7 +2250,7 @@ mod tests {
                                 None
                             } else {
                                 let trial_angles = trial.angles().to_vec();
-                                let rot = crate::intgeom::rat::lex_min_rot(&trial_angles);
+                                let rot = crate::geom::rat::lex_min_rot(&trial_angles);
                                 let mut canon = trial_angles;
                                 canon.rotate_left(rot);
                                 let fp = (nt.central_tile_id, nt.cw_anchor_on_central, canon);
@@ -2626,7 +2626,7 @@ mod tests {
                             continue;
                         }
                         seen_ab.insert((ns_u, len, ne_u), ());
-                        if !crate::intgeom::glue::junctions_glueable(
+                        if !crate::geom::glue::junctions_glueable(
                             tile_a.seq(),
                             ns_u,
                             len,
@@ -2653,7 +2653,7 @@ mod tests {
                         patch.normalize();
                         let patch_n = patch.boundary_len();
                         let patch_rat =
-                            crate::intgeom::rat::Rat::from_slice_unchecked(patch.angles());
+                            crate::geom::rat::Rat::from_slice_unchecked(patch.angles());
 
                         // Brute third-tile candidates over the 2-tile boundary.
                         let mut seen_third: FxHashMap<(usize, usize, usize, usize), ()> =
@@ -2697,7 +2697,7 @@ mod tests {
                                     // Compute canonical class fingerprint.
                                     let aug_angles = trial.angles().to_vec();
                                     let aug_n = aug_angles.len();
-                                    let rot = crate::intgeom::rat::lex_min_rot(&aug_angles);
+                                    let rot = crate::geom::rat::lex_min_rot(&aug_angles);
                                     let mut canon = aug_angles;
                                     canon.rotate_left(rot);
                                     let gap_start = patch_n - len3;

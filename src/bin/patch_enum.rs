@@ -6,8 +6,8 @@ use clap::Parser;
 use rustc_hash::FxHashSet;
 
 use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4};
-use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::tileset::{self, TileSet};
+use tilezz::geom::rat::Rat;
+use tilezz::geom::tileset::{self, TileSet};
 use tilezz::misc::patch_enum::enum_patches;
 
 #[derive(Parser)]

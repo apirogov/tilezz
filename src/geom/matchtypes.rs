@@ -20,10 +20,10 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::{IsRing};
-use crate::intgeom::glue::junctions_glueable;
-use crate::intgeom::rat::Rat;
-use crate::intgeom::snake::Snake;
-use crate::intgeom::tileset::TileSet;
+use crate::geom::glue::junctions_glueable;
+use crate::geom::rat::Rat;
+use crate::geom::snake::Snake;
+use crate::geom::tileset::TileSet;
 use crate::matches::{EdgeRange, Segment, TileMatch};
 use crate::stringmatch::BitParallelMatcher;
 
@@ -536,7 +536,7 @@ impl<T: IsRing> MatchFinder<T> {
 /// Built by exhaustively enumerating self-matches via [`MatchFinder`]
 /// at construction time, then indexed for O(1) lookup. Suited for
 /// repeated queries against a fixed tileset (e.g. the candidate-match
-/// path used by [`GrowingPatch`](crate::intgeom::patch::GrowingPatch)).
+/// path used by [`GrowingPatch`](crate::geom::patch::GrowingPatch)).
 ///
 /// Internally deduplicates each match with its involution; the public
 /// [`Self::candidates_starting_at`] returns *both* directions
@@ -698,7 +698,7 @@ fn match_touches_active(start_a: usize, mlen: usize, n: usize, active: &[bool]) 
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tiles::{hexagon, spectre, square};
+    use crate::geom::tiles::{hexagon, spectre, square};
     use std::collections::{BTreeSet, HashSet};
 
     const MYSTIC_ZZ12: &[i8] = &[

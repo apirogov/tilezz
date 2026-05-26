@@ -174,7 +174,7 @@ fn junction_angle<T: IsRing>(angle_a: i8, angle_b: i8) -> i8 {
 /// Returns `None` if `merged.abs() == hturn` (degenerate pinched
 /// junction).
 ///
-/// The only production caller is [`crate::intgeom::patch::flower_petal_glue`]
+/// The only production caller is [`crate::geom::patch::flower_petal_glue`]
 /// during Penrose-style flower constructions where a central tile +
 /// petals leave a tile-shaped cavity that the keystone tile closes.
 /// `Snake` would reject the weakly-simple intermediate state; this is
@@ -200,9 +200,9 @@ fn junction_angle<T: IsRing>(angle_a: i8, angle_b: i8) -> i8 {
 ///    along the match must satisfy the revcomp relation
 ///    `a[(ns + i) % n] == -b[(ne + m - i) % m]` for every
 ///    `i ∈ 1..mlen`. The canonical way to obtain such a tuple is
-///    [`crate::intgeom::rat::Rat::get_match`] or
-///    [`crate::intgeom::patch::forward_match_length`] /
-///    [`crate::intgeom::patch::GrowingPatch::get_all_matches`].
+///    [`crate::geom::rat::Rat::get_match`] or
+///    [`crate::geom::patch::forward_match_length`] /
+///    [`crate::geom::patch::GrowingPatch::get_all_matches`].
 ///    A `debug_assert!` enforces this in test builds; in release,
 ///    `glue_raw_angles` is unchecked and may produce a geometrically
 ///    meaningless boundary if fed a bogus interval.
@@ -219,7 +219,7 @@ fn junction_angle<T: IsRing>(angle_a: i8, angle_b: i8) -> i8 {
 /// resulting boundary is a valid simple polygon (no self-intersection,
 /// hole-free) is the caller's responsibility, enforced by one of:
 ///
-/// - [`crate::intgeom::snake::Snake::try_from`] on the returned `angles`
+/// - [`crate::geom::snake::Snake::try_from`] on the returned `angles`
 ///   (used by `Rat::try_glue` and `GrowingPatch::init_from_first_add`);
 /// - incremental grid-segment checks (`check_segment_clear`) used by
 ///   `GrowingPatch::add_tile_growing`;

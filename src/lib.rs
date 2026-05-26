@@ -2,7 +2,7 @@ pub mod cyclotomic;
 
 pub mod matches;
 
-pub mod intgeom;
+pub mod geom;
 
 pub mod misc;
 

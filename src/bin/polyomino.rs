@@ -11,9 +11,9 @@ struct ProfileStats {
 }
 
 use clap::Parser;
-use tilezz::intgeom::angles::normalize_angle;
-use tilezz::intgeom::rat::{lex_min_rot, Rat};
-use tilezz::intgeom::tiles;
+use tilezz::geom::angles::normalize_angle;
+use tilezz::geom::rat::{lex_min_rot, Rat};
+use tilezz::geom::tiles;
 
 const HTURN: i8 = 2;
 const TURN: i32 = 4;
@@ -427,8 +427,8 @@ fn enumerate_onesided(max_size: usize) -> BTreeMap<usize, FxHashSet<Rat<tilezz::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tilezz::intgeom::rat::Rat;
-    use tilezz::intgeom::tiles;
+    use tilezz::geom::rat::Rat;
+    use tilezz::geom::tiles;
 
     fn square_seed() -> (Rat<tilezz::cyclotomic::ZZ4>, Vec<i8>) {
         let seed: Rat<tilezz::cyclotomic::ZZ4> = Rat::from_unchecked(&tiles::square());

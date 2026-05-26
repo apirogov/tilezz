@@ -116,7 +116,7 @@ pub fn tetromino_L<T: HasZZ4>() -> Snake<T> {
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ10, ZZ24};
-    use crate::intgeom::rat::Rat;
+    use crate::geom::rat::Rat;
 
     #[test]
     fn test_upscaling() {

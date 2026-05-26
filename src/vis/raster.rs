@@ -236,9 +236,9 @@ mod tests {
     #[ignore = "writes files to project root; run on demand"]
     fn dump_visual_smoke() {
         use crate::cyclotomic::ZZ12;
-        use crate::intgeom::rat::Rat;
-        use crate::intgeom::snake::Turtle;
-        use crate::intgeom::tiles;
+        use crate::geom::rat::Rat;
+        use crate::geom::snake::Turtle;
+        use crate::geom::tiles;
         use crate::vis::draw::rainbow;
         use crate::vis::scene::{HAlign, Item, MarkerShape, VAlign};
 
