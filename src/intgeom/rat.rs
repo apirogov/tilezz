@@ -45,15 +45,20 @@ pub fn lex_min_rot<T: Eq + Ord>(s: &[T]) -> usize {
 /// minimal rotation and returns two copies of that,
 /// with an offset of the beginning of the sequence wrt.
 /// the original input sequence.
+///
+/// Allocates a single `Vec<i8>` of capacity `2 * angles.len()` and
+/// fills it by rotated-copy-then-duplicate, avoiding the intermediate
+/// clone that the original `to_vec + rotate + extend(&clone())`
+/// pattern produced (3 allocations -> 1).
 pub(crate) fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
-    // normalize (lex. minimal rotation of cyclic sequence)
-    let mut canonical = angles.to_vec();
-    let offset = lex_min_rot(canonical.as_slice());
-    canonical.rotate_left(offset);
-
-    // add a second copy (convenient for slicing and algorithms)
-    canonical.extend(&canonical.clone());
-
+    let n = angles.len();
+    let offset = lex_min_rot(angles);
+    let mut canonical = Vec::with_capacity(2 * n);
+    // First copy: input rotated left by `offset`.
+    canonical.extend_from_slice(&angles[offset..]);
+    canonical.extend_from_slice(&angles[..offset]);
+    // Second copy: duplicate the first half in place.
+    canonical.extend_from_within(..n);
     (canonical, offset)
 }
 
@@ -166,11 +171,11 @@ impl<T: IsRing> Rat<T> {
     /// This skips normalization for performance - only use if you're certain!
     #[doc(hidden)]
     pub fn from_canonical_angles_unchecked(angles: Vec<i8>) -> Self {
-        let _n = angles.len();
+        let n = angles.len();
         let angle_sum: i64 = angles.iter().map(|x| *x as i64).sum();
         let mut seq = angles;
-        let seq2 = seq.clone();
-        seq.extend_from_slice(&seq2);
+        seq.reserve_exact(n);
+        seq.extend_from_within(..n);
         Self {
             phantom: PhantomData,
             angles: seq,
