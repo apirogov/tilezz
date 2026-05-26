@@ -465,14 +465,7 @@ fn main() {
 
     match cli.mode {
         Mode::Bench => {
-            #[cfg(feature = "pprof")]
-            let _guard = cli.profile.as_ref().map(|_| {
-                pprof::ProfilerGuardBuilder::default()
-                    .frequency(1000)
-                    .blocklist(&["libc", "libgcc", "pthread", "vdso"])
-                    .build()
-                    .expect("profiler start")
-            });
+            let profile = tilezz::misc::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
             let rats: Vec<Vec<i8>> =
@@ -492,17 +485,7 @@ fn main() {
                 dt
             );
 
-            #[cfg(feature = "pprof")]
-            if let (Some(path), Some(guard)) = (cli.profile.as_ref(), _guard.as_ref()) {
-                let report = guard.report().build().expect("profiler report");
-                let svg = std::fs::File::create(path).expect("create flamegraph");
-                report.flamegraph(svg).expect("write flamegraph");
-                println!("wrote flamegraph: {path}");
-            }
-            #[cfg(not(feature = "pprof"))]
-            if cli.profile.is_some() {
-                eprintln!("rat_enum: --profile requires the `pprof` cargo feature");
-            }
+            profile.finish();
 
             if cli.stats {
                 print_stats(&rats);

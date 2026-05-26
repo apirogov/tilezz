@@ -22,10 +22,8 @@ use tilezz::intgeom::neighborhood::{self, NeighborhoodIndex};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::intgeom::vertextypes::{self, OpenVertexTypeIndex};
+use tilezz::misc::profile::ProfileGuard;
 use tilezz::misc::seq_explorer::{self, check_fixed_point, SeqExplorer};
-
-#[cfg(feature = "pprof")]
-use pprof::ProfilerGuardBuilder;
 
 #[derive(Parser)]
 #[command(
@@ -544,18 +542,7 @@ fn main() {
             output,
             pprof,
         } => {
-            #[cfg(feature = "pprof")]
-            let _guard = pprof.as_ref().map(|_| {
-                ProfilerGuardBuilder::default()
-                    .frequency(1000)
-                    .blocklist(&["libc", "libgcc", "pthread", "vdso"])
-                    .build()
-                    .expect("profiler start")
-            });
-            #[cfg(not(feature = "pprof"))]
-            if pprof.is_some() {
-                eprintln!("warning: --pprof requires the `pprof` cargo feature");
-            }
+            let profile = ProfileGuard::start(pprof.as_deref());
 
             let payload = match tileset {
                 TileSetKind::Penrose => run_collect_zz10(ts_zz10(tileset), kind, tileset.label()),
@@ -572,13 +559,7 @@ fn main() {
                 eprintln!("  Wrote {} in {:.2?}", path, t_write.elapsed());
             }
 
-            #[cfg(feature = "pprof")]
-            if let (Some(path), Some(guard)) = (pprof.as_ref(), _guard.as_ref()) {
-                let report = guard.report().build().expect("profiler report");
-                let svg = std::fs::File::create(path).expect("create flamegraph");
-                report.flamegraph(svg).expect("write flamegraph");
-                eprintln!("  Wrote flamegraph: {path}");
-            }
+            profile.finish();
         }
         Commands::Validate { input } => {
             eprintln!("=== Validating: {} ===", input);
