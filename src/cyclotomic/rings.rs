@@ -11,7 +11,7 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
+use crate::cyclotomic::params::{ZZ10_Y, ZZ12_PARAMS, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
 use crate::define_integral_zz;
 
 // ----------------
@@ -747,6 +747,180 @@ crate::impl_integral_re_im_sign_via_basis!(ZZ24, 8, 4, zz24_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ24, 8, 4, zz24_real_sign);
 crate::impl_integral_within_radius_via_complex64!(ZZ24);
 crate::zz_integral_ring_tests!(name: ZZ24);
+
+// ----------------
+// ZZ20 -- penrose integers Z[zeta_20].
+//
+// `zeta = e^(2*pi*i/20) = cos(18) + i*sin(18)`, `Phi_20(x) = x^8 - x^6 +
+// x^4 - x^2 + 1`, so `zeta^8 = zeta^6 - zeta^4 + zeta^2 - 1`. Storage:
+// `[i64; 8]` over `{1, zeta, ..., zeta^7}`. The real subring is
+// `Z[sqrt(5), sqrt(10 - 2*sqrt(5))]` (K = 4, basis
+// `{1, sqrt(5), sqrt(10-2*sqrt(5)), sqrt(5(10-2*sqrt(5)))}`) with `/8`
+// implicit denominator.
+//
+// Real-sign extraction is exact via the pentagonal closed-form
+// `signum_sum_sqrt_expr_4_pentagonal`. Note the basis includes
+// `b3 = sqrt(5)*b2` (not the more general `sqrt(m*n)`-shape ZZ24 has).
+//
+// Useful identity:
+//   sqrt(10 + 2*sqrt(5)) = (1 + sqrt(5)) * sqrt(10 - 2*sqrt(5)) / 2
+//                       = (b2 + b3) / 2
+// which is how cos(18), cos(54), sin(72), sin(108) all reduce to the
+// `{b2, b3}` subspace.
+
+/// Symbolic-projection `complex64` for ZZ20. Mirrors ZZ24's approach but
+/// reads the per-ring sqrt values from `ZZ10_Y` (the params constant for
+/// `2*(5 - sqrt(5))`), matching the legacy `complex64` path so the
+/// `cyclotomic::constants::tests::test_constants` bit-exact assertions
+/// (sqrt5, half_sqrt_penta) round-trip identically.
+#[inline]
+fn zz20_complex64(coeffs: &[i64; 8]) -> Complex64 {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let (a, b, c, d, e, f_, g, h) = (
+        a as f64, b as f64, c as f64, d as f64, e as f64, f_ as f64, g as f64, h as f64,
+    );
+    let sq5 = 5.0_f64.sqrt();
+    let sq_y = ZZ10_Y.sqrt();
+    let sq_5y = (5.0 * ZZ10_Y).sqrt();
+    // Re K-vector (scaled by 8) in basis {1, sqrt(5), sqrt(10-2*sqrt(5)),
+    // sqrt(5*(10-2*sqrt(5)))}.
+    let r0 = 8.0 * a + 2.0 * c - 2.0 * e + 2.0 * g;
+    let r1 = 2.0 * c + 2.0 * e - 2.0 * g;
+    let r2 = b + 2.0 * d - 2.0 * h;
+    let r3 = b;
+    let re = (r0 + r1 * sq5 + r2 * sq_y + r3 * sq_5y) * 0.125;
+    // Im K-vector (scaled by 8).
+    let i0 = -2.0 * b + 2.0 * d + 8.0 * f_ + 2.0 * h;
+    let i1 = 2.0 * b + 2.0 * d + 2.0 * h;
+    let i2 = 2.0 * c + e + g;
+    let i3 = e + g;
+    let im = (i0 + i1 * sq5 + i2 * sq_y + i3 * sq_5y) * 0.125;
+    Complex64::new(re, im)
+}
+
+const ZZ20_CARTESIAN: [Complex64; 8] = {
+    // Cached so the unused `CARTESIAN` const has reasonable values for
+    // debugging. Not on any hot path (`complex64_fn` is hand-rolled above).
+    const COS_18: f64 = 0.9510565162951535;
+    const SIN_18: f64 = 0.30901699437494745;
+    const COS_36: f64 = 0.8090169943749475;
+    const SIN_36: f64 = 0.5877852522924731;
+    const COS_54: f64 = 0.5877852522924731;
+    const SIN_54: f64 = 0.8090169943749475;
+    const COS_72: f64 = 0.30901699437494745;
+    const SIN_72: f64 = 0.9510565162951535;
+    [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(COS_18, SIN_18),
+        Complex64::new(COS_36, SIN_36),
+        Complex64::new(COS_54, SIN_54),
+        Complex64::new(COS_72, SIN_72),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(-COS_72, SIN_72),
+        Complex64::new(-COS_54, SIN_54),
+    ]
+};
+
+/// Display impl for ZZ20: project `(a..h)` to GaussInt-Ratio coefficients of
+/// `{sqrt(1), sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}` (the symbolic
+/// labels from the legacy `ZZ20_PARAMS`).
+fn zz20_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let eighth = Ratio::<i64>::new_raw(1, 8);
+    let c0 = GaussInt::new(
+        Ratio::<i64>::from_integer(8 * a + 2 * c - 2 * e + 2 * g) * eighth,
+        Ratio::<i64>::from_integer(-2 * b + 2 * d + 8 * f_ + 2 * h) * eighth,
+    );
+    let c1 = GaussInt::new(
+        Ratio::<i64>::from_integer(2 * c + 2 * e - 2 * g) * eighth,
+        Ratio::<i64>::from_integer(2 * b + 2 * d + 2 * h) * eighth,
+    );
+    let c2 = GaussInt::new(
+        Ratio::<i64>::from_integer(b + 2 * d - 2 * h) * eighth,
+        Ratio::<i64>::from_integer(2 * c + e + g) * eighth,
+    );
+    let c3 = GaussInt::new(
+        Ratio::<i64>::from_integer(b) * eighth,
+        Ratio::<i64>::from_integer(e + g) * eighth,
+    );
+    format_symbolic(
+        &[c0, c1, c2, c3],
+        &["1", "5", "2(5-sqrt(5))", "10(5-sqrt(5))"],
+        f,
+    )
+}
+
+/// Sign of `a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))`
+/// via the closed-form `signum_sum_sqrt_expr_4_pentagonal` (recursive
+/// reduction from `Q(sqrt(5), sqrt(10-2*sqrt(5)))` to `Q(sqrt(5))`).
+#[inline]
+fn zz20_real_sign(x: &[i64; 4]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i64>(x[0], x[1], x[2], x[3]) as i8
+}
+
+define_integral_zz! {
+    name: ZZ20,
+    n: 20,
+    phi: 8,
+    real_dim: 4,
+    // Phi_20(x) = x^8 - x^6 + x^4 - x^2 + 1, so zeta^8 = zeta^6 - zeta^4 + zeta^2 - 1.
+    reduction: [-1i64, 0, 1, 0, -1, 0, 1, 0],
+    // Re(zeta^k) in basis {1, sqrt(5), b2, b3} with implicit /8, where
+    //   b2 = sqrt(10 - 2*sqrt(5)),   b3 = sqrt(5)*b2 = sqrt(5*(10-2*sqrt(5))).
+    //
+    // Useful identity: sqrt(10 + 2*sqrt(5)) = (b2 + b3) / 2, so e.g.
+    //   cos(18) = sqrt(10+2*sqrt(5))/4 = (b2 + b3) / 8 -> [0, 0, 1, 1].
+    //
+    //   Re(zeta^0) = 1                          -> [8, 0, 0, 0]
+    //   Re(zeta^1) = cos(18)  = (b2 + b3)/8     -> [0, 0, 1, 1]
+    //   Re(zeta^2) = cos(36)  = (1+sqrt(5))/4   -> [2, 2, 0, 0]
+    //   Re(zeta^3) = cos(54)  = b2 / 4          -> [0, 0, 2, 0]
+    //   Re(zeta^4) = cos(72)  = (sqrt(5)-1)/4   -> [-2, 2, 0, 0]
+    //   Re(zeta^5) = cos(90)  = 0               -> [0, 0, 0, 0]
+    //   Re(zeta^6) = cos(108) = (1-sqrt(5))/4   -> [2, -2, 0, 0]
+    //   Re(zeta^7) = cos(126) = -b2 / 4         -> [0, 0, -2, 0]
+    re_decomp: [
+        [8i64, 0, 0, 0], [0, 0, 1, 1], [2, 2, 0, 0], [0, 0, 2, 0],
+        [-2, 2, 0, 0], [0, 0, 0, 0], [2, -2, 0, 0], [0, 0, -2, 0],
+    ],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0
+    //   Im(zeta^1) = sin(18)  = (sqrt(5)-1)/4   -> [-2, 2, 0, 0]
+    //   Im(zeta^2) = sin(36)  = b2 / 4          -> [0, 0, 2, 0]
+    //   Im(zeta^3) = sin(54)  = (1+sqrt(5))/4   -> [2, 2, 0, 0]
+    //   Im(zeta^4) = sin(72)  = (b2 + b3)/8     -> [0, 0, 1, 1]
+    //   Im(zeta^5) = sin(90)  = 1               -> [8, 0, 0, 0]
+    //   Im(zeta^6) = sin(108) = (b2 + b3)/8     -> [0, 0, 1, 1]
+    //   Im(zeta^7) = sin(126) = (1+sqrt(5))/4   -> [2, 2, 0, 0]
+    im_decomp: [
+        [0i64, 0, 0, 0], [-2, 2, 0, 0], [0, 0, 2, 0], [2, 2, 0, 0],
+        [0, 0, 1, 1], [8, 0, 0, 0], [0, 0, 1, 1], [2, 2, 0, 0],
+    ],
+    cartesian: ZZ20_CARTESIAN,
+    params: ZZ20_PARAMS,
+    // `1` in basis {1, sqrt(5), b2, b3} with /8 denominator.
+    one_in_real_basis: [8i64, 0, 0, 0],
+    display_fn: zz20_display,
+    complex64_fn: zz20_complex64,
+    has: [HasZZ4Impl, HasZZ10Impl],
+}
+
+impl From<(i64, i64)> for ZZ20 {
+    /// `(re, im)` where `i = zeta^5`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients `[a, 0, 0, 0, 0, b, 0, 0]`.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        Self::from_int_coeffs([re, 0, 0, 0, 0, im, 0, 0])
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ20, 20);
+crate::impl_integral_mul_via_basis!(ZZ20, 8);
+crate::impl_integral_conj_via_basis!(ZZ20, 8);
+crate::impl_integral_re_im_sign_via_basis!(ZZ20, 8, 4, zz20_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ20, 8, 4, zz20_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ20);
+crate::zz_integral_ring_tests!(name: ZZ20);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
