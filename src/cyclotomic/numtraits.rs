@@ -3,10 +3,8 @@
 //! Cyclotomic-ring traits (`SymNum`, `Ccw`, `Conj`, `OneImag`, `ReImSign`,
 //! `IntersectUnitSegments`, `WithinRadius`, `Units`, `IsRing`, ...)
 //! live in `traits.rs`. This file holds only the building blocks that are
-//! sensible for general scalar types (i32, i64, Ratio<T>).
+//! sensible for general integer scalar types (i32, i64, i128).
 
-use num_integer::Integer;
-use num_rational::Ratio;
 use num_traits::{One, Signed, Zero};
 use std::marker::Copy;
 use std::ops::{Add, Div, Mul, Neg, Sub};
@@ -35,8 +33,6 @@ impl IntRing for i64 {}
 impl IntField for i64 {}
 impl IntRing for i128 {}
 impl IntField for i128 {}
-impl<T: Integer + IntRing> IntRing for Ratio<T> {}
-impl<T: Integer + IntField> IntField for Ratio<T> {}
 
 /// Like `num_traits::Signed`, but without the `Num`-like constraints. Lets
 /// us define `signum`-style sign-of-an-expression helpers generically over
@@ -79,7 +75,4 @@ impl InnerIntType for i64 {
 }
 impl InnerIntType for i128 {
     type IntType = i128;
-}
-impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
-    type IntType = T::IntType;
 }

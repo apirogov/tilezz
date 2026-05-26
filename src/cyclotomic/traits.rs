@@ -11,11 +11,9 @@
 
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::ops::Neg;
 
 use num_complex::Complex64;
 use num_integer::Integer;
-use num_rational::Ratio;
 use num_traits::{FromPrimitive, One, ToPrimitive};
 
 use super::numtraits::{InnerIntType, IntField, IntRing, ZSigned};
@@ -36,16 +34,11 @@ pub trait Ccw {
     fn is_ccw(&self) -> bool;
 }
 
-/// Complex conjugation. For 1-dim values (`i32`, `i64`, `Ratio<T>`) this
-/// is the identity.
+/// Complex conjugation. Each cyclotomic ring implements its own;
+/// real-only scalars (i32/i64) would be the identity but the trait is
+/// only used by complex ring elements.
 pub trait Conj {
     fn conj(&self) -> Self;
-}
-
-impl<T: Integer + Clone + Neg<Output = T>> Conj for Ratio<T> {
-    fn conj(&self) -> Self {
-        self.clone()
-    }
 }
 
 /// Rings that contain the imaginary unit `i` (equivalently `4 | n`).
