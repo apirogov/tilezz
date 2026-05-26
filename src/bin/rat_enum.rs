@@ -291,6 +291,7 @@ fn run_rat_enum_polylines(ring: u8, max_steps: usize, n_threads: usize) -> Vec<V
     match ring {
         4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, n_threads)),
         8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, n_threads)),
+        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, n_threads)),
         12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, n_threads)),
         16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, n_threads)),
         20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, n_threads)),
@@ -356,6 +357,7 @@ fn run_rat_enum_seqs(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<i8
     let f: fn(usize, usize) -> Vec<Vec<i8>> = match ring {
         4 => enumerate_dispatch::<ZZ4>,
         8 => enumerate_dispatch::<ZZ8>,
+        10 => enumerate_dispatch::<ZZ10>,
         12 => enumerate_dispatch::<ZZ12>,
         16 => enumerate_dispatch::<ZZ16>,
         20 => enumerate_dispatch::<ZZ20>,
