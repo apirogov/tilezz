@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet;
 use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tileset::{self, TileSet};
-use tilezz::misc::patch_grow::grow_patches;
+use tilezz::misc::patch_enum::enum_patches;
 
 #[derive(Parser)]
 #[command(
@@ -120,7 +120,7 @@ where
     );
 
     let t0 = Instant::now();
-    let patches = grow_patches(Arc::clone(&tileset), max_size);
+    let patches = enum_patches(Arc::clone(&tileset), max_size);
     let elapsed = t0.elapsed();
 
     if validate {
@@ -133,12 +133,12 @@ where
             let brute = bf.get(&k).cloned().unwrap_or_default();
             if fast != brute {
                 eprintln!(
-                    "  size {k}: MISMATCH (grow_patches={}, brute_force={})",
+                    "  size {k}: MISMATCH (enum_patches={}, brute_force={})",
                     fast.len(),
                     brute.len()
                 );
                 for r in fast.difference(&brute).take(5) {
-                    eprintln!("    only in grow_patches: {:?}", r.seq());
+                    eprintln!("    only in enum_patches: {:?}", r.seq());
                 }
                 for r in brute.difference(&fast).take(5) {
                     eprintln!("    only in brute force: {:?}", r.seq());
@@ -151,10 +151,10 @@ where
         }
         let speedup = dt_bf.as_secs_f64() / elapsed.as_secs_f64().max(1e-9);
         eprintln!(
-            "  validate: OK | grow_patches: {elapsed:.2?} | brute_force: {dt_bf:.2?} | {speedup:.1}x speedup"
+            "  validate: OK | enum_patches: {elapsed:.2?} | brute_force: {dt_bf:.2?} | {speedup:.1}x speedup"
         );
     } else {
-        eprintln!("  grow_patches: {elapsed:.2?}");
+        eprintln!("  enum_patches: {elapsed:.2?}");
     }
 
     eprintln!("\n--- Summary ---");

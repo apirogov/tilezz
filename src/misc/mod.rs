@@ -9,10 +9,10 @@
 //!
 //! - [`seq_explorer`]: BFS over patches that enumerates every
 //!   cyclic boundary subsequence reachable from a tileset.
-//! - [`patch_grow`]: layer-BFS patch enumeration over an arbitrary
+//! - [`patch_enum`]: layer-BFS patch enumeration over an arbitrary
 //!   tileset (any combination of tile shapes), returning all
 //!   distinct patches up to a given size.
 
-pub mod patch_grow;
+pub mod patch_enum;
 pub mod profile;
 pub mod seq_explorer;

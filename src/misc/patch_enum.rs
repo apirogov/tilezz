@@ -1,6 +1,6 @@
 //! Multi-tile patch enumeration by incremental boundary glue.
 //!
-//! [`grow_patches`] is the public entry point: given an arbitrary
+//! [`enum_patches`] is the public entry point: given an arbitrary
 //! [`TileSet`] and a maximum size, it enumerates every distinct
 //! patch of up to `max_size` tile copies (drawn from any combination
 //! of tiles in the set) and returns them grouped by size.
@@ -43,7 +43,7 @@ use crate::intgeom::tileset::TileSet;
 ///
 /// Returns a map `size -> {patches of that size}`. Empty `tileset`
 /// or `max_size == 0` yield an empty result.
-pub fn grow_patches<T>(
+pub fn enum_patches<T>(
     tileset: Arc<TileSet<T>>,
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
@@ -84,18 +84,18 @@ where
     results
 }
 
-/// Like [`grow_patches`] but identifies chiral pairs: every patch
+/// Like [`enum_patches`] but identifies chiral pairs: every patch
 /// is stored as `min(rat, rat.reflected())`, so a shape and its
 /// mirror image collapse to a single entry. The result is the set
 /// of **free** patches.
-pub fn grow_patches_free<T>(
+pub fn enum_patches_free<T>(
     tileset: Arc<TileSet<T>>,
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
     T: IsRing,
 {
-    grow_patches(tileset, max_size)
+    enum_patches(tileset, max_size)
         .into_iter()
         .map(|(k, set)| {
             let free: FxHashSet<Rat<T>> = set
@@ -153,7 +153,7 @@ mod tests {
     where
         T: IsRing,
     {
-        let fast = grow_patches(Arc::clone(&tileset), max_size);
+        let fast = enum_patches(Arc::clone(&tileset), max_size);
         let brute = brute_force_grow(&tileset, max_size);
         for k in 1..=max_size {
             let fast_set = fast.get(&k).cloned().unwrap_or_default();
@@ -161,20 +161,20 @@ mod tests {
             assert_eq!(
                 fast_set.len(),
                 brute_set.len(),
-                "{label} size {k}: grow_patches={} brute_force={}",
+                "{label} size {k}: enum_patches={} brute_force={}",
                 fast_set.len(),
                 brute_set.len()
             );
             for r in &brute_set {
                 assert!(
                     fast_set.contains(r),
-                    "{label} size {k}: brute force has rat {r:?} that grow_patches missed"
+                    "{label} size {k}: brute force has rat {r:?} that enum_patches missed"
                 );
             }
             for r in &fast_set {
                 assert!(
                     brute_set.contains(r),
-                    "{label} size {k}: grow_patches has rat {r:?} that brute force missed"
+                    "{label} size {k}: enum_patches has rat {r:?} that brute force missed"
                 );
             }
         }
@@ -186,13 +186,13 @@ mod tests {
         1, 1, 1, 2, 5, 12, 35, 107, 363, 1248, 4460, 16094, 58937, 217117,
     ];
 
-    /// Free polyomino counts via `grow_patches_free` must match OEIS
+    /// Free polyomino counts via `enum_patches_free` must match OEIS
     /// A000105 — this is the strongest external sanity check we have.
     #[test]
     fn square_zz4_free_polyominoes_match_oeis() {
         let max_size = 9;
         let ts = tileset::square::<ZZ4>();
-        let free = grow_patches_free(ts, max_size);
+        let free = enum_patches_free(ts, max_size);
         for (k, &expected) in FREE_POLYOMINOES_NO_HOLES
             .iter()
             .enumerate()
@@ -204,7 +204,7 @@ mod tests {
         }
     }
 
-    /// Hexagon-only (ZZ12): cross-check grow_patches vs brute-force
+    /// Hexagon-only (ZZ12): cross-check enum_patches vs brute-force
     /// `try_glue` up to size 4. Verifies the BP-accelerated path
     /// agrees with the most direct enumeration on a non-square ring.
     #[test]
@@ -222,7 +222,7 @@ mod tests {
 
     /// **Multi-tile** cross-check: mixed square + hexagon tileset
     /// over ZZ12. This is the case the deleted Redelmeier code never
-    /// handled — verifies grow_patches generalizes correctly.
+    /// handled — verifies enum_patches generalizes correctly.
     #[test]
     fn mixed_square_hex_zz12_matches_brute_force_size3() {
         assert_grow_matches_brute_force("mixed", tileset::mixed::<ZZ12>(), 3);
@@ -239,7 +239,7 @@ mod tests {
     /// Empty / degenerate inputs.
     #[test]
     fn max_size_zero_returns_empty() {
-        let result = grow_patches(tileset::square::<ZZ4>(), 0);
+        let result = enum_patches(tileset::square::<ZZ4>(), 0);
         assert!(result.is_empty());
     }
 
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn size_one_equals_input_tileset() {
         let ts = tileset::mixed::<ZZ12>();
-        let result = grow_patches(Arc::clone(&ts), 1);
+        let result = enum_patches(Arc::clone(&ts), 1);
         let size_1 = result.get(&1).expect("size 1 must be present");
         assert_eq!(size_1.len(), ts.num_tiles());
         for r in ts.rats() {
