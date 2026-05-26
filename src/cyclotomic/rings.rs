@@ -11,7 +11,9 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::{ZZ10_Y, ZZ12_PARAMS, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
+use crate::cyclotomic::params::{
+    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS,
+};
 use crate::define_integral_zz;
 
 // ----------------
@@ -921,6 +923,135 @@ crate::impl_integral_re_im_sign_via_basis!(ZZ20, 8, 4, zz20_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ20, 8, 4, zz20_real_sign);
 crate::impl_integral_within_radius_via_complex64!(ZZ20);
 crate::zz_integral_ring_tests!(name: ZZ20);
+
+// ----------------
+// ZZ10 -- halfrose integers Z[zeta_10].
+//
+// `zeta = e^(2*pi*i/10) = cos(36) + i*sin(36)`, `Phi_10(x) = x^4 - x^3 +
+// x^2 - x + 1`, so `zeta^4 = zeta^3 - zeta^2 + zeta - 1`. Storage:
+// `[i64; 4]` over `{1, zeta, zeta^2, zeta^3}`.
+//
+// **Not a CM field with `i`.** `zeta_4 = i` is not in `Q(zeta_10)` (since
+// `4 \nmid 10`), so `Re(z)` and `Im(z)` for `z` in the integer basis live
+// in different `Q`-subspaces of `R`:
+//   Re(z) in `Q(sqrt(5))`                                       (dim 2)
+//   Im(z) in `Q(sqrt(5)) * sqrt(10-2*sqrt(5))`                  (dim 2)
+//
+// We unify them with `K = 4` over basis `{1, sqrt(5), b2, b3}` where
+// `b2 = sqrt(10 - 2*sqrt(5))` and `b3 = sqrt(5)*b2`, matching the
+// existing legacy `ZZ10_PARAMS.sym_roots_sqs`. The `j2`/`j3` columns of
+// `re_decomp` are always zero, and the `j0`/`j1` columns of `im_decomp`
+// are always zero, but the unified shape lets us reuse the exact
+// `signum_sum_sqrt_expr_4_pentagonal` from ZZ20.
+
+#[inline]
+fn zz10_complex64(coeffs: &[i64; 4]) -> Complex64 {
+    let [a, b, c, d] = *coeffs;
+    let (a, b, c, d) = (a as f64, b as f64, c as f64, d as f64);
+    let sq5 = 5.0_f64.sqrt();
+    let sq_y = ZZ10_Y.sqrt();
+    let sq_5y = (5.0 * ZZ10_Y).sqrt();
+    // Re K-vector (scaled by 8) -- only the `{1, sqrt(5)}` coordinates are
+    // ever non-zero.
+    let r0 = 8.0 * a + 2.0 * b - 2.0 * c + 2.0 * d;
+    let r1 = 2.0 * b + 2.0 * c - 2.0 * d;
+    let re = (r0 + r1 * sq5) * 0.125;
+    // Im K-vector (scaled by 8) -- only the `{b2, b3}` coordinates are
+    // ever non-zero.
+    let i2 = 2.0 * b + c + d;
+    let i3 = c + d;
+    let im = (i2 * sq_y + i3 * sq_5y) * 0.125;
+    Complex64::new(re, im)
+}
+
+const ZZ10_CARTESIAN: [Complex64; 4] = {
+    const COS_36: f64 = 0.8090169943749475;
+    const SIN_36: f64 = 0.5877852522924731;
+    const COS_72: f64 = 0.30901699437494745;
+    const SIN_72: f64 = 0.9510565162951535;
+    [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(COS_36, SIN_36),
+        Complex64::new(COS_72, SIN_72),
+        Complex64::new(-COS_72, SIN_72),
+    ]
+};
+
+fn zz10_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b, c, d] = *coeffs;
+    let eighth = Ratio::<i64>::new_raw(1, 8);
+    // Each c_k = (Re_part + Im_part * i) / 8.
+    let c0 = GaussInt::new(
+        Ratio::<i64>::from_integer(8 * a + 2 * b - 2 * c + 2 * d) * eighth,
+        Ratio::<i64>::from_integer(0) * eighth,
+    );
+    let c1 = GaussInt::new(
+        Ratio::<i64>::from_integer(2 * b + 2 * c - 2 * d) * eighth,
+        Ratio::<i64>::from_integer(0) * eighth,
+    );
+    let c2 = GaussInt::new(
+        Ratio::<i64>::from_integer(0) * eighth,
+        Ratio::<i64>::from_integer(2 * b + c + d) * eighth,
+    );
+    let c3 = GaussInt::new(
+        Ratio::<i64>::from_integer(0) * eighth,
+        Ratio::<i64>::from_integer(c + d) * eighth,
+    );
+    format_symbolic(
+        &[c0, c1, c2, c3],
+        &["1", "5", "2(5-sqrt(5))", "10(5-sqrt(5))"],
+        f,
+    )
+}
+
+/// Sign of `a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))`
+/// via the closed-form `signum_sum_sqrt_expr_4_pentagonal` (same exact
+/// reduction as ZZ20). For ZZ10 the `c`/`d` (or `a`/`b`) entries are zero
+/// depending on whether the K-vector is from `re_decomp` or `im_decomp`,
+/// but the function handles those cases trivially.
+#[inline]
+fn zz10_real_sign(x: &[i64; 4]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i64>(x[0], x[1], x[2], x[3]) as i8
+}
+
+define_integral_zz! {
+    name: ZZ10,
+    n: 10,
+    phi: 4,
+    real_dim: 4,
+    // Phi_10(x) = x^4 - x^3 + x^2 - x + 1, so zeta^4 = zeta^3 - zeta^2 + zeta - 1.
+    reduction: [-1i64, 1, -1, 1],
+    // Re(zeta^k) in basis {1, sqrt(5), b2, b3} with implicit /8:
+    //   Re(zeta^0) = 1                          -> [8, 0, 0, 0]
+    //   Re(zeta^1) = cos(36) = (1+sqrt(5))/4    -> [2, 2, 0, 0]
+    //   Re(zeta^2) = cos(72) = (sqrt(5)-1)/4    -> [-2, 2, 0, 0]
+    //   Re(zeta^3) = cos(108) = (1-sqrt(5))/4   -> [2, -2, 0, 0]
+    re_decomp: [
+        [8i64, 0, 0, 0], [2, 2, 0, 0], [-2, 2, 0, 0], [2, -2, 0, 0],
+    ],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0
+    //   Im(zeta^1) = sin(36) = b2 / 4           -> [0, 0, 2, 0]
+    //   Im(zeta^2) = sin(72) = (b2 + b3)/8      -> [0, 0, 1, 1]
+    //   Im(zeta^3) = sin(108) = (b2 + b3)/8     -> [0, 0, 1, 1]
+    im_decomp: [
+        [0i64, 0, 0, 0], [0, 0, 2, 0], [0, 0, 1, 1], [0, 0, 1, 1],
+    ],
+    cartesian: ZZ10_CARTESIAN,
+    params: ZZ10_PARAMS,
+    one_in_real_basis: [8i64, 0, 0, 0],
+    display_fn: zz10_display,
+    complex64_fn: zz10_complex64,
+    has: [HasZZ10Impl],
+}
+
+crate::impl_integral_units_via_basis!(ZZ10, 10);
+crate::impl_integral_mul_via_basis!(ZZ10, 4);
+crate::impl_integral_conj_via_basis!(ZZ10, 4);
+crate::impl_integral_re_im_sign_via_basis!(ZZ10, 4, 4, zz10_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ10);
+crate::zz_integral_ring_tests!(name: ZZ10);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
