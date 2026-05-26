@@ -2,11 +2,11 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsRing};
-use crate::intgeom::patch::{
+use crate::geom::patch::{
     ClosedVertexType, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
 };
-use crate::intgeom::rat::Rat;
-use crate::intgeom::tileset::TileSet;
+use crate::geom::rat::Rat;
+use crate::geom::tileset::TileSet;
 
 /// Reachability classification of an open vertex type within the
 /// VT transition graph.
@@ -963,7 +963,7 @@ fn compute_has_closing(n: usize, transitions: &[TransitionInfo]) -> Vec<bool> {
 // vertex-type cross-check, transition cross-check, completeness scan).
 // =====================================================================
 
-use crate::intgeom::matchtypes::MatchTypeIndex;
+use crate::geom::matchtypes::MatchTypeIndex;
 use serde::{Deserialize, Serialize};
 
 /// Sentinel destination id for transitions that seal the focus vertex
@@ -1387,8 +1387,8 @@ impl Collection {
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
-    use crate::intgeom::tiles;
-    use crate::intgeom::tileset::{self, TileSet};
+    use crate::geom::tiles;
+    use crate::geom::tileset::{self, TileSet};
     use crate::matches::{EdgeRange, Segment};
     use std::sync::Arc;
 
@@ -1448,7 +1448,7 @@ mod tests {
     /// Any drift in the BFS or classification will fail loudly here.
     #[test]
     fn hexagon_vertex_type_counts() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1469,7 +1469,7 @@ mod tests {
     /// Bake in the known VT count for square.
     #[test]
     fn square_vertex_type_counts() {
-        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let sq: crate::geom::snake::Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1484,7 +1484,7 @@ mod tests {
     /// count.
     #[test]
     fn hexagon_transitions_well_formed() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -1523,7 +1523,7 @@ mod tests {
     /// is `Free` or `Blessed`.
     #[test]
     fn hexagon_cursed_fixpoint_invariant() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -1567,7 +1567,7 @@ mod tests {
     /// compares against the recorded classification.
     #[test]
     fn hexagon_blessed_fixpoint_invariant() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -1719,7 +1719,7 @@ mod tests {
 
     #[test]
     fn hexagon_catalog_validity() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1728,7 +1728,7 @@ mod tests {
 
     #[test]
     fn square_catalog_validity() {
-        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let sq: crate::geom::snake::Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1737,7 +1737,7 @@ mod tests {
 
     #[test]
     fn spectre_catalog_validity() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1746,7 +1746,7 @@ mod tests {
 
     #[test]
     fn hexagon_catalog_complete_brute() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1755,7 +1755,7 @@ mod tests {
 
     #[test]
     fn square_catalog_complete_brute() {
-        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let sq: crate::geom::snake::Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -1769,7 +1769,7 @@ mod tests {
     /// n` exactly.
     #[test]
     fn vt_witness_touching_matches_match_brute() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -1803,7 +1803,7 @@ mod tests {
                         if !in_range((pos + n - 1) % n) && !in_range(pos) {
                             continue;
                         }
-                        if !crate::intgeom::glue::junctions_glueable(
+                        if !crate::geom::glue::junctions_glueable(
                             witness.angles(),
                             ns_u,
                             len,
@@ -1840,11 +1840,11 @@ mod tests {
     /// Diagnostic kept around (eprintln output, `#[ignore]`) for
     /// future investigation of `get_matches_touching_vertex` discrepancies
     /// on `from_parts`-constructed witness patches. Run via
-    /// `cargo test --lib --release intgeom::vertextypes::tests::diagnose_spectre_touching_matches -- --ignored --nocapture`.
+    /// `cargo test --lib --release geom::vertextypes::tests::diagnose_spectre_touching_matches -- --ignored --nocapture`.
     #[test]
     #[ignore]
     fn diagnose_spectre_touching_matches() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -1880,7 +1880,7 @@ mod tests {
                         continue;
                     }
                     unfiltered_brute.insert((tile_id, ns_u, len, ne_u));
-                    if !crate::intgeom::glue::junctions_glueable(
+                    if !crate::geom::glue::junctions_glueable(
                         witness.angles(),
                         ns_u,
                         len,
@@ -1958,7 +1958,7 @@ mod tests {
         }
 
         // Probe what MatchTypeIndex actually indexed for (tile=0, offset=0).
-        let mti = crate::intgeom::matchtypes::MatchTypeIndex::new(Arc::clone(&ts));
+        let mti = crate::geom::matchtypes::MatchTypeIndex::new(Arc::clone(&ts));
         let cands = mti.candidates_starting_at(0, 0);
         eprintln!(
             "  MatchTypeIndex.by_start[0][0] = {} candidates",
@@ -2002,8 +2002,8 @@ mod tests {
         }
 
         // Compare: what does compute_all_candidates produce at result[25]?
-        let result = crate::intgeom::patch::GrowingPatch::<ZZ12>::compute_all_candidates(
-            &Arc::new(crate::intgeom::matchtypes::MatchTypeIndex::new(Arc::clone(
+        let result = crate::geom::patch::GrowingPatch::<ZZ12>::compute_all_candidates(
+            &Arc::new(crate::geom::matchtypes::MatchTypeIndex::new(Arc::clone(
                 &ts,
             ))),
             witness.angles(),
@@ -2032,7 +2032,7 @@ mod tests {
             }
             let ns_u = ns.rem_euclid(n as i64) as usize;
             let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-            let gap_ok = crate::intgeom::glue::junctions_glueable(
+            let gap_ok = crate::geom::glue::junctions_glueable(
                 witness.angles(),
                 ns_u,
                 len,
@@ -2065,7 +2065,7 @@ mod tests {
     #[test]
     #[ignore]
     fn spectre_catalog_complete_brute() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2074,7 +2074,7 @@ mod tests {
 
     #[test]
     fn range_by_cw_single_tile() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2095,8 +2095,8 @@ mod tests {
 
     #[test]
     fn range_by_cw_multi_tile() {
-        let sq: crate::intgeom::snake::Snake<ZZ12> = tiles::square();
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let sq: crate::geom::snake::Snake<ZZ12> = tiles::square();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let sq_rat = Rat::try_from(&sq).unwrap();
         let hex_rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![sq_rat, hex_rat]));
@@ -2137,7 +2137,7 @@ mod tests {
     /// conventions will fail here loudly.
     #[test]
     fn spectre_vertex_type_counts() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -2182,7 +2182,7 @@ mod tests {
     /// this also exercises CLOSED_ID handling.
     #[test]
     fn spectre_transitions_well_formed() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -2214,7 +2214,7 @@ mod tests {
     /// Plus: every Dead VT has no realized transitions at all.
     #[test]
     fn spectre_cursed_invariant() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -2264,7 +2264,7 @@ mod tests {
     /// transition must lead to another blessed VT.
     #[test]
     fn spectre_blessed_invariant() {
-        let s: crate::intgeom::snake::Snake<ZZ12> = tiles::spectre();
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
         let rat = Rat::try_from(&s).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
@@ -2294,7 +2294,7 @@ mod tests {
 
     #[test]
     fn hex_segment_types() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2308,7 +2308,7 @@ mod tests {
     /// catalog.
     #[test]
     fn hexagon_closed_vertex_types_are_discovered() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2342,7 +2342,7 @@ mod tests {
     /// Same surface for squares.
     #[test]
     fn square_closed_vertex_types_are_discovered() {
-        let sq: crate::intgeom::snake::Snake<ZZ4> = tiles::square();
+        let sq: crate::geom::snake::Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2365,7 +2365,7 @@ mod tests {
     /// its lex-min cyclic rotation. Verify directly.
     #[test]
     fn closed_vts_are_lex_min_canonical() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);
@@ -2382,7 +2382,7 @@ mod tests {
     /// source open VT's petal ring (the BFS contract).
     #[test]
     fn closing_transitions_resolve_to_canonical_closed_vts() {
-        let hex: crate::intgeom::snake::Snake<ZZ12> = tiles::hexagon();
+        let hex: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(ts);

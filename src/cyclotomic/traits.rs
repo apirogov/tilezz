@@ -71,7 +71,7 @@ pub trait IntersectUnitSegments: Sized {
 }
 
 /// Integer cell coordinates `(floor(Re(self)), floor(Im(self)))` for
-/// spatial bucketing in `intgeom::grid::UnitSquareGrid`.
+/// spatial bucketing in `geom::grid::UnitSquareGrid`.
 ///
 /// Two entry points:
 ///

@@ -1,10 +1,10 @@
 //! Standalone patch-enumeration utilities.
 //!
 //! Independent explorers and growth algorithms that build on the
-//! core [`crate::intgeom`] geometry primitives (`Rat`, `Snake`,
+//! core [`crate::geom`] geometry primitives (`Rat`, `Snake`,
 //! `TileSet`, `GrowingPatch`, `MatchFinder`) but are not part of
 //! the central feature-type / catalog story. Grouped here so they
-//! can evolve independently and so consumers of `intgeom` don't
+//! can evolve independently and so consumers of `geom` don't
 //! pay the cost of compiling them when unwanted.
 //!
 //! - [`seq_explorer`]: BFS over patches that enumerates every

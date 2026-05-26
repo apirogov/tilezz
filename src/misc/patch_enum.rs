@@ -32,9 +32,9 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::{IsRing};
-use crate::intgeom::matchtypes::{BpSeed, MatchFinder};
-use crate::intgeom::rat::Rat;
-use crate::intgeom::tileset::TileSet;
+use crate::geom::matchtypes::{BpSeed, MatchFinder};
+use crate::geom::rat::Rat;
+use crate::geom::tileset::TileSet;
 
 /// Enumerate every distinct **onesided** patch of up to `max_size`
 /// tile copies drawn from `tileset`. Patches are keyed by their
@@ -111,7 +111,7 @@ where
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
-    use crate::intgeom::tileset;
+    use crate::geom::tileset;
 
     /// Independent brute-force reference: for each size, glue every
     /// `(patch, tile, ia, ib)` combination via `try_glue` and collect

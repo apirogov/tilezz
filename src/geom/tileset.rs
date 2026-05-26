@@ -12,8 +12,8 @@
 use std::sync::Arc;
 
 use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsRing};
-use crate::intgeom::rat::Rat;
-use crate::intgeom::tiles;
+use crate::geom::rat::Rat;
+use crate::geom::tiles;
 
 /// An immutable, ordered, deduplicated collection of tile shapes.
 ///
@@ -78,7 +78,7 @@ impl<T: IsRing> TileSet<T> {
 //
 // Common tile families packaged as ready-to-use `Arc<TileSet<T>>`,
 // generic over a compatible cyclotomic ring. Each helper picks tile
-// shapes from [`crate::intgeom::tiles`] and wraps them in a `TileSet`.
+// shapes from [`crate::geom::tiles`] and wraps them in a `TileSet`.
 // Use these to avoid the same `Rat::from_unchecked(&tiles::foo()) →
 // TileSet::new(vec![..]) → Arc::new(..)` boilerplate at every call site.
 
@@ -139,7 +139,7 @@ pub fn penrose<T: HasZZ10>() -> Arc<TileSet<T>> {
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tiles::{hexagon, spectre};
+    use crate::geom::tiles::{hexagon, spectre};
 
     #[test]
     #[should_panic(expected = "mixed chirality")]

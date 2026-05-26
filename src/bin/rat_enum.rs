@@ -7,8 +7,8 @@ use std::time::Instant;
 use clap::{Parser, ValueEnum};
 
 use tilezz::cyclotomic::*;
-use tilezz::intgeom::rat::{lex_min_rot, Rat};
-use tilezz::intgeom::snake::{Snake, Turtle};
+use tilezz::geom::rat::{lex_min_rot, Rat};
+use tilezz::geom::snake::{Snake, Turtle};
 use tilezz::stringmatch::repetition_factor;
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::{MarkerStyle, TileStyle};

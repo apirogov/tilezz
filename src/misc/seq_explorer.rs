@@ -75,10 +75,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::cyclotomic::{IsRing};
-use crate::intgeom::matchtypes::{BpSeed, MatchFinder};
-use crate::intgeom::rat::Rat;
-use crate::intgeom::snake::Snake;
-use crate::intgeom::tileset::TileSet;
+use crate::geom::matchtypes::{BpSeed, MatchFinder};
+use crate::geom::rat::Rat;
+use crate::geom::snake::Snake;
+use crate::geom::tileset::TileSet;
 use crate::stringmatch::cyclic_contains;
 
 /// Re-apply a glue described by `(start_a, start_b, len)` to
@@ -476,7 +476,7 @@ where
             for ti in 0..tileset.num_tiles() {
                 for mt in mf.valid_matches(wi, ti) {
                     report.matches_checked += 1;
-                    let glued = crate::intgeom::matchtypes::apply_match(
+                    let glued = crate::geom::matchtypes::apply_match(
                         &mt,
                         witness_ts.rats(),
                         tileset.rats(),
@@ -955,7 +955,7 @@ impl<T: IsRing> Builder<T> {
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::intgeom::tileset;
+    use crate::geom::tileset;
 
     fn hex_ts() -> Arc<TileSet<ZZ12>> {
         tileset::hex::<ZZ12>()

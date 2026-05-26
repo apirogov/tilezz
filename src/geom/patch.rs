@@ -4,14 +4,14 @@ use std::sync::Arc;
 use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsRing};
 use crate::matches::{EdgeRange, Segment};
-use crate::intgeom::angles;
-use crate::intgeom::glue;
-use crate::intgeom::glue::junctions_glueable;
-use crate::intgeom::grid::UnitSquareGrid;
-use crate::intgeom::matchtypes::MatchTypeIndex;
-use crate::intgeom::rat::Rat;
-use crate::intgeom::snake::Snake;
-use crate::intgeom::tileset::TileSet;
+use crate::geom::angles;
+use crate::geom::glue;
+use crate::geom::glue::junctions_glueable;
+use crate::geom::grid::UnitSquareGrid;
+use crate::geom::matchtypes::MatchTypeIndex;
+use crate::geom::rat::Rat;
+use crate::geom::snake::Snake;
+use crate::geom::tileset::TileSet;
 
 /// Identifies a single tile edge by `(tile_id, tile_offset)`.
 ///
@@ -93,7 +93,7 @@ pub(crate) struct TileSegment {
 ///   (modulo `tile_len`).
 /// * `b.tile_id` indexes into the patch's [`TileSet`].
 ///
-/// (Same convention as the lower-level [`TileMatch`](crate::intgeom::matchtypes::TileMatch).)
+/// (Same convention as the lower-level [`TileMatch`](crate::geom::matchtypes::TileMatch).)
 pub use crate::matches::PatchMatch;
 
 /// An **open** junction vertex: the arrangement of tiles meeting at a
@@ -1410,7 +1410,7 @@ impl<T: IsRing> GrowingPatch<T> {
             return 0;
         }
 
-        let rot = crate::intgeom::rat::lex_min_rot(&angles);
+        let rot = crate::geom::rat::lex_min_rot(&angles);
 
         let mut angles = angles;
         let mut edges = edges;
@@ -2423,9 +2423,9 @@ fn dir_of_edge<T: IsRing>(from: T, to: T) -> i8 {
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
-    use crate::intgeom::matchtypes::MatchTypeIndex;
-    use crate::intgeom::snake::Snake;
-    use crate::intgeom::tiles;
+    use crate::geom::matchtypes::MatchTypeIndex;
+    use crate::geom::snake::Snake;
+    use crate::geom::tiles;
     use std::collections::BTreeMap;
 
     fn ei(tile_id: usize, tile_offset: usize) -> EdgeInfo {
@@ -3139,7 +3139,7 @@ mod tests {
     /// connected patch.
     #[test]
     fn glue_raw_angles_keystone_returns_adjusted_result() {
-        use crate::intgeom::glue::glue_raw_angles;
+        use crate::geom::glue::glue_raw_angles;
         // Self: 8 angles, with 4 consecutive angles forming a revcomp
         // pattern with a hypothetical 4-edge petal whose angles are all 1.
         // Petal angles = [1, 1, 1, 1]; revcomp(petal) reversed and
@@ -3348,10 +3348,10 @@ mod tests {
             return;
         }
         let mut a_canon = a.to_vec();
-        let a_rot = crate::intgeom::rat::lex_min_rot(&a_canon);
+        let a_rot = crate::geom::rat::lex_min_rot(&a_canon);
         a_canon.rotate_left(a_rot);
         let mut b_canon = b.to_vec();
-        let b_rot = crate::intgeom::rat::lex_min_rot(&b_canon);
+        let b_rot = crate::geom::rat::lex_min_rot(&b_canon);
         b_canon.rotate_left(b_rot);
         assert_eq!(
             a_canon, b_canon,
@@ -4077,7 +4077,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::intgeom::glue::junctions_glueable(
+                    if !crate::geom::glue::junctions_glueable(
                         gp.angles(),
                         ns_u,
                         len,
@@ -4139,7 +4139,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::intgeom::glue::junctions_glueable(
+                    if !crate::geom::glue::junctions_glueable(
                         gp.angles(),
                         ns_u,
                         len,
