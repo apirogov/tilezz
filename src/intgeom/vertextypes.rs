@@ -1,3 +1,4 @@
+use crate::matches::{EdgeRange, Segment};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -581,13 +582,13 @@ fn bfs_phase<T: IsRing>(
             //             (goes vertex pos -> pos+1)
             //
             // The match consumes a half-open edge range
-            // [pm.start_a, pm.start_a + pm.len). The focus is sealed
+            // [pm.start_a(), pm.start_a() + pm.len()). The focus is sealed
             // iff BOTH incident edges are in that range. (Note: a
             // vertex-range test would be too permissive — a single-
             // edge match on the CW edge has vertex range [pos-1, pos]
             // touching both pos-1 and pos without consuming the CCW
             // edge of pos.)
-            let edge_in_match = |edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
+            let edge_in_match = |edge: usize| -> bool { (edge + n - pm.start_a()) % n < pm.len() };
             let consumes_cw_edge = edge_in_match((pos + n - 1) % n);
             let consumes_ccw_edge = edge_in_match(pos);
 
@@ -617,24 +618,24 @@ fn bfs_phase<T: IsRing>(
                 TransitionSide::Cw | TransitionSide::Both => (pos + n - 1) % n,
             };
             let offset_in_match =
-                (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
-            let m = tileset.rat(pm.tile_id).len();
-            let tile_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                (edge_pos as i64 - pm.start_a() as i64).rem_euclid(n as i64) as usize;
+            let m = tileset.rat(pm.tile_id()).len();
+            let tile_offset = (pm.start_b() as i64 + pm.len() as i64 - offset_in_match as i64)
                 .rem_euclid(m as i64) as usize;
 
             // Where is the focus's new junction (if any) in the
             // post-glue boundary?
-            //   - side == Ccw: pm.start_a == pos; new boundary's
+            //   - side == Ccw: pm.start_a() == pos; new boundary's
             //     index 0 is at old vertex (pos + len) % n; new
             //     junction at the CW endpoint of the match lives
-            //     at new index seg_len_old = n - pm.len.
+            //     at new index seg_len_old = n - pm.len().
             //   - side == Cw: pm ended at vertex pos (start_a + len
             //     == pos); new boundary's index 0 is at old vertex
             //     pos; new junction at the CCW endpoint of the
             //     match lives at new index 0.
             //   - side == Both: focus vertex is sealed; no junction
             //     position.
-            let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+            let junction_pos = if pm.start_a() == pos { n - pm.len() } else { 0 };
 
             if matches!(side, TransitionSide::Both) {
                 // Compute the closed VT realised at the focus. The
@@ -646,7 +647,7 @@ fn bfs_phase<T: IsRing>(
                     vt.clone(),
                     RawDst::Closed(closed),
                     side,
-                    pm.tile_id,
+                    pm.tile_id(),
                     tile_offset,
                 ));
             } else if let Some(new_vt) = gp2.junction_vertex_type_at(junction_pos) {
@@ -654,7 +655,7 @@ fn bfs_phase<T: IsRing>(
                     vt.clone(),
                     RawDst::Open(new_vt),
                     side,
-                    pm.tile_id,
+                    pm.tile_id(),
                     tile_offset,
                 ));
             }
@@ -1258,19 +1259,19 @@ impl Collection {
             // vertex without consuming its incident edge — the bug
             // the old binary's `validate_common` had.
             let edge_consumed =
-                |pm: &PatchMatch, edge: usize| -> bool { (edge + n - pm.start_a) % n < pm.len };
+                |pm: &PatchMatch, edge: usize| -> bool { (edge + n - pm.start_a()) % n < pm.len() };
             let tile_len = tile_ts.rat(t.tile_id).len();
             let mut found = false;
             for pm in gp.get_all_matches() {
-                if pm.tile_id != t.tile_id {
+                if pm.tile_id() != t.tile_id {
                     continue;
                 }
                 if !edge_consumed(&pm, edge_pos) {
                     continue;
                 }
                 let offset_in_match =
-                    (edge_pos as i64 - pm.start_a as i64).rem_euclid(n as i64) as usize;
-                let computed_offset = (pm.start_b as i64 + pm.len as i64 - offset_in_match as i64)
+                    (edge_pos as i64 - pm.start_a() as i64).rem_euclid(n as i64) as usize;
+                let computed_offset = (pm.start_b() as i64 + pm.len() as i64 - offset_in_match as i64)
                     .rem_euclid(tile_len as i64) as usize;
                 if computed_offset != t.tile_offset {
                     continue;
@@ -1297,7 +1298,7 @@ impl Collection {
                     found = true;
                     break;
                 }
-                let junction_pos = if pm.start_a == pos { n - pm.len } else { 0 };
+                let junction_pos = if pm.start_a() == pos { n - pm.len() } else { 0 };
                 if let Some(actual) = gp2.junction_vertex_type_at(junction_pos) {
                     let Some(dst_gp) = witnesses.get(&t.dst_id) else {
                         continue;
@@ -1347,7 +1348,7 @@ impl Collection {
             // — vertex-touch semantics over-accept matches that don't
             // actually consume the focus's incident edges.
             let edge_consumed = |pm: &PatchMatch, edge: usize| -> bool {
-                (edge + old_n - pm.start_a) % old_n < pm.len
+                (edge + old_n - pm.start_a()) % old_n < pm.len()
             };
             for pm in gp.get_matches_touching_vertex(pos) {
                 matches_checked += 1;
@@ -1355,7 +1356,7 @@ impl Collection {
                 if !gp2.add_tile(&pm) || !gp2.is_growing() {
                     continue;
                 }
-                let junction_pos = if pm.start_a == pos { old_n - pm.len } else { 0 };
+                let junction_pos = if pm.start_a() == pos { old_n - pm.len() } else { 0 };
                 let consumes_ccw = edge_consumed(&pm, pos);
                 let consumes_cw = edge_consumed(&pm, (pos + old_n - 1) % old_n);
                 if consumes_cw && consumes_ccw {
@@ -1690,12 +1691,10 @@ mod tests {
                 if !touches_cw && !touches_ccw {
                     continue;
                 }
-                let pm = PatchMatch {
-                    tile_id,
-                    start_a: ext_start,
-                    start_b: ext_end,
-                    len,
-                };
+                let pm = PatchMatch::new(
+    EdgeRange::new(ext_start, len),
+    Segment::new(tile_id, EdgeRange::new(ext_end, len)),
+);
                 let mut gp2 = witness.clone();
                 if !gp2.add_tile(&pm) || !gp2.is_growing() {
                     continue;
@@ -1826,7 +1825,7 @@ mod tests {
             let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = witness
                 .get_matches_touching_vertex(pos)
                 .into_iter()
-                .map(|pm| (pm.tile_id, pm.start_a, pm.len, pm.start_b))
+                .map(|pm| (pm.tile_id(), pm.start_a(), pm.len(), pm.start_b()))
                 .collect();
 
             assert_eq!(
@@ -1904,7 +1903,7 @@ mod tests {
         let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = witness
             .get_matches_touching_vertex(pos)
             .into_iter()
-            .map(|pm| (pm.tile_id, pm.start_a, pm.len, pm.start_b))
+            .map(|pm| (pm.tile_id(), pm.start_a(), pm.len(), pm.start_b()))
             .collect();
 
         eprintln!(
@@ -2014,7 +2013,7 @@ mod tests {
         for pm in &result[25] {
             eprintln!(
                 "    cac: tile={} start_a={} len={} start_b={}",
-                pm.tile_id, pm.start_a, pm.len, pm.start_b
+                pm.tile_id(), pm.start_a(), pm.len(), pm.start_b()
             );
         }
 
