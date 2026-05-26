@@ -153,6 +153,7 @@ fn zz4_display(coeffs: &[i64; 2], f: &mut std::fmt::Formatter<'_>) -> std::fmt::
 /// the sign of `m`.
 #[inline]
 fn zz4_real_sign(x: &[i64; 1]) -> i8 {
+    // K=1 / trivial; no recursion, no overflow concern.
     x[0].signum() as i8
 }
 
@@ -188,7 +189,7 @@ crate::impl_integral_mul_via_basis!(ZZ4, 2);
 crate::impl_integral_conj_via_basis!(ZZ4, 2);
 crate::impl_integral_re_im_sign_via_basis!(ZZ4, 2, 1, zz4_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ4, 2, 1, zz4_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ4);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ4);
 crate::zz_integral_ring_tests!(name: ZZ4);
 
 // ----------------
@@ -239,9 +240,18 @@ fn zz8_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::
 }
 
 /// Sign of `a + b*sqrt(2)` for integers `a`, `b`.
+///
+/// Computed via `signum_sum_sqrt_expr_2` in i128 to absorb the squaring
+/// in the recursive helper without i64 overflow when called from
+/// `within_radius` on large `z * conj(z) - r_sq` inputs.
 #[inline]
 fn zz8_real_sign(x: &[i64; 2]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_2::<i64>(x[0], 1, x[1], 2) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_2::<i128>(
+        x[0] as i128,
+        1,
+        x[1] as i128,
+        2,
+    ) as i8
 }
 
 define_integral_zz! {
@@ -285,7 +295,7 @@ crate::impl_integral_mul_via_basis!(ZZ8, 4);
 crate::impl_integral_conj_via_basis!(ZZ8, 4);
 crate::impl_integral_re_im_sign_via_basis!(ZZ8, 4, 2, zz8_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ8, 4, 2, zz8_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ8);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ8);
 crate::zz_integral_ring_tests!(name: ZZ8);
 
 // ----------------
@@ -484,7 +494,7 @@ impl crate::cyclotomic::Units for ZZ12 {
 //
 // The matching `impl_integral_re_im_sign_via_basis!` /
 // `impl_integral_intersect_unit_segments_via_basis!` /
-// `impl_integral_within_radius_via_complex64!` macros are available for
+// `impl_integral_within_radius_via_norm_sq!` macros are available for
 // other rings to opt into the generic path with one line each.
 
 /// Sign of `m + n*sqrt(3)` where m, n are i64. Returns -1, 0, or 1.
@@ -745,11 +755,13 @@ fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 }
 
 /// Sign of `a + b*sqrt(2) + c*sqrt(3) + d*sqrt(6)` for integers `a, b, c, d`,
-/// exact via `signum_sum_sqrt_expr_4` (closed-form algebraic comparison since
-/// `2`, `3`, `6 = 2*3` are all integer constants).
+/// exact via `signum_sum_sqrt_expr_4`. i128 internally to absorb the
+/// squaring in the recursive helper when called from `within_radius`.
 #[inline]
 fn zz24_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4::<i64>(x[0], 1, x[1], 2, x[2], 3, x[3], 6) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4::<i128>(
+        x[0] as i128, 1, x[1] as i128, 2, x[2] as i128, 3, x[3] as i128, 6,
+    ) as i8
 }
 
 define_integral_zz! {
@@ -807,7 +819,7 @@ crate::impl_integral_mul_via_basis!(ZZ24, 8);
 crate::impl_integral_conj_via_basis!(ZZ24, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ24, 8, 4, zz24_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ24, 8, 4, zz24_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ24);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ24);
 crate::zz_integral_ring_tests!(name: ZZ24);
 
 // ----------------
@@ -914,9 +926,16 @@ fn zz20_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 /// Sign of `a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))`
 /// via the closed-form `signum_sum_sqrt_expr_4_pentagonal` (recursive
 /// reduction from `Q(sqrt(5), sqrt(10-2*sqrt(5)))` to `Q(sqrt(5))`).
+/// i128 internally to absorb the squaring in the recursive helper when
+/// called from `within_radius`.
 #[inline]
 fn zz20_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i64>(x[0], x[1], x[2], x[3]) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+    ) as i8
 }
 
 define_integral_zz! {
@@ -979,7 +998,7 @@ crate::impl_integral_mul_via_basis!(ZZ20, 8);
 crate::impl_integral_conj_via_basis!(ZZ20, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ20, 8, 4, zz20_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ20, 8, 4, zz20_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ20);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ20);
 crate::zz_integral_ring_tests!(name: ZZ20);
 
 // ----------------
@@ -1068,7 +1087,12 @@ fn zz10_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 /// but the function handles those cases trivially.
 #[inline]
 fn zz10_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i64>(x[0], x[1], x[2], x[3]) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+    ) as i8
 }
 
 define_integral_zz! {
@@ -1106,7 +1130,7 @@ crate::impl_integral_mul_via_basis!(ZZ10, 4);
 crate::impl_integral_conj_via_basis!(ZZ10, 4);
 crate::impl_integral_re_im_sign_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ10);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ10);
 crate::zz_integral_ring_tests!(name: ZZ10);
 
 // ----------------
@@ -1200,7 +1224,12 @@ fn zz16_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 /// from `Q(sqrt(2), sqrt(2+sqrt(2)))` to `Q(sqrt(2))`).
 #[inline]
 fn zz16_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_zz16::<i64>(x[0], x[1], x[2], x[3]) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_zz16::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+    ) as i8
 }
 
 define_integral_zz! {
@@ -1262,7 +1291,7 @@ crate::impl_integral_mul_via_basis!(ZZ16, 8);
 crate::impl_integral_conj_via_basis!(ZZ16, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ16, 8, 4, zz16_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ16, 8, 4, zz16_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ16);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ16);
 crate::zz_integral_ring_tests!(name: ZZ16);
 
 // ----------------
@@ -1420,11 +1449,21 @@ fn zz60_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt
 }
 
 /// Sign of an 8-component K-vector in the ZZ60 real subring basis. Exact
-/// via the closed-form `signum_sum_sqrt_expr_8_zz60`.
+/// via the closed-form `signum_sum_sqrt_expr_8_zz60`. i128 is mandatory
+/// here: the 8-arg helper composes two levels of squaring, and i64
+/// overflows on `within_radius` inputs (squared norm of generic
+/// ring elements).
 #[inline]
 fn zz60_real_sign(x: &[i64; 8]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz60::<i64>(
-        x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz60::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+        x[4] as i128,
+        x[5] as i128,
+        x[6] as i128,
+        x[7] as i128,
     ) as i8
 }
 
@@ -1462,7 +1501,7 @@ crate::impl_integral_mul_via_basis!(ZZ60, 16);
 crate::impl_integral_conj_via_basis!(ZZ60, 16);
 crate::impl_integral_re_im_sign_via_basis!(ZZ60, 16, 8, zz60_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ60, 16, 8, zz60_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ60);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ60);
 crate::zz_integral_ring_tests!(name: ZZ60);
 
 // ----------------
@@ -1605,8 +1644,18 @@ fn zz32_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt
 
 #[inline]
 fn zz32_real_sign(x: &[i64; 8]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz32::<i64>(
-        x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+    // i128 is mandatory: the 8-arg helper composes two levels of
+    // squaring, and i64 overflows on `within_radius` inputs (squared
+    // norm of generic ring elements).
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz32::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+        x[4] as i128,
+        x[5] as i128,
+        x[6] as i128,
+        x[7] as i128,
     ) as i8
 }
 
@@ -1643,7 +1692,7 @@ crate::impl_integral_mul_via_basis!(ZZ32, 16);
 crate::impl_integral_conj_via_basis!(ZZ32, 16);
 crate::impl_integral_re_im_sign_via_basis!(ZZ32, 16, 8, zz32_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ32, 16, 8, zz32_real_sign);
-crate::impl_integral_within_radius_via_complex64!(ZZ32);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ32);
 crate::zz_integral_ring_tests!(name: ZZ32);
 
 // ----------------

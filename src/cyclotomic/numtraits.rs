@@ -33,6 +33,8 @@ impl IntRing for i32 {}
 impl IntField for i32 {}
 impl IntRing for i64 {}
 impl IntField for i64 {}
+impl IntRing for i128 {}
+impl IntField for i128 {}
 impl<T: Integer + IntRing> IntRing for Ratio<T> {}
 impl<T: Integer + IntField> IntField for Ratio<T> {}
 
@@ -74,6 +76,9 @@ impl InnerIntType for i32 {
 }
 impl InnerIntType for i64 {
     type IntType = i64;
+}
+impl InnerIntType for i128 {
+    type IntType = i128;
 }
 impl<T: Integer + IntRing + InnerIntType> InnerIntType for Ratio<T> {
     type IntType = T::IntType;
