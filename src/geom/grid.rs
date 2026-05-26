@@ -30,6 +30,30 @@ static NEIGHBOR_OFFSETS: [&[(i64, i64)]; 9] = [
     &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
 ];
 
+/// Spatial hash from integer unit-square cells to a list of `usize` IDs
+/// stored at each cell.
+///
+/// Cells are the half-open unit squares `[cx, cx+1) x [cy, cy+1)` of
+/// the Cartesian plane, indexed by their lower-left integer corner.
+/// What an "ID" means is up to the caller -- it's usually an index
+/// into the caller's own data:
+///
+/// - [`crate::geom::snake::Snake`] stores **point indices**: each
+///   boundary vertex is filed at one cell (its `cell_of(point)`).
+///   Lookups find which other boundary vertices share that cell or a
+///   nearby one.
+/// - [`crate::geom::patch::GrowingPatch`] stores **segment IDs**:
+///   each boundary edge is filed at *every* cell its
+///   [`Self::seg_neighborhood_of`] reaches (up to 8 cells per
+///   segment). Lookups during incremental glue checks ask "is this
+///   candidate segment within striking distance of an existing
+///   segment?" by reading the neighborhood cells.
+///
+/// The grid is a multimap: multiple IDs can share a cell, and the same
+/// ID can appear in many cells (the segment use case above). Inserts
+/// (`add`) and removals (`remove`) are O(1) per cell; cell lookups
+/// (`get`, `get_cells`) are O(1) per cell plus the size of the cell's
+/// payload.
 #[derive(Debug, Clone)]
 pub struct UnitSquareGrid {
     cells: FxHashMap<(i64, i64), Vec<usize>>,
@@ -43,17 +67,39 @@ impl Default for UnitSquareGrid {
 
 impl UnitSquareGrid {
     /// Compute the half-open cell `[cx, cx+1) x [cy, cy+1)` containing
-    /// `zz`, i.e., `(floor(Re(zz)), floor(Im(zz)))`. Delegates to the
-    /// ring's `CellFloor` impl, which is exact for `HasZZ4` rings (f64
-    /// hint + sign verification) and f64-only for `ZZ10` (which can't
-    /// verify the imag-axis exactly without `i` in the ring).
+    /// `zz`, i.e. `(floor(Re(zz)), floor(Im(zz)))`. Delegates to the
+    /// ring's `CellFloor::cell_floor` impl.
     ///
-    /// Why floor (not round): a unit-length segment never spans more
-    /// than 2 cells along an axis. With round-half-away-from-zero,
-    /// points at exactly +/-0.5 round in opposite directions, so a
-    /// unit segment crossing both sides of zero would give a
-    /// cell-offset of 2 -- forcing the neighborhood lookup table in
-    /// `seg_neighborhood_of` to enumerate more cases than the
+    /// # Speed and exactness
+    ///
+    /// The default `cell_floor` is the fast f64 floor of
+    /// `complex64()`. In **debug builds** it `debug_assert!`s the
+    /// result against the per-ring `cell_floor_exact` (an
+    /// integer-arithmetic sign-verification path that's exact at all
+    /// points, including the measure-zero half-integer grid lines).
+    /// In **release**, no verification -- the f64 path stands alone.
+    ///
+    /// This is safe in practice because canonical ring elements with
+    /// small integer coefficients essentially never land exactly on a
+    /// half-integer boundary; the f64 floor matches `cell_floor_exact`
+    /// on every snake / patch state the codebase actually constructs.
+    /// Debug builds catch any boundary-case divergence in tests.
+    ///
+    /// Every blessed ring has an exact path available (`HasZZ4` rings
+    /// via cell-corner construction + the `rect_signs` sign primitive;
+    /// `ZZ10` via per-axis pentagonal sign helpers, since `i` is not
+    /// in the ring and corner construction isn't available). Callers
+    /// that need bit-exact behaviour in release can invoke
+    /// `zz.cell_floor_exact()` directly.
+    ///
+    /// # Why floor (not round)
+    ///
+    /// A unit-length segment never spans more than 2 cells along an
+    /// axis. With round-half-away-from-zero, points at exactly
+    /// +/-0.5 round in opposite directions, so a unit segment
+    /// crossing both sides of zero would give a cell-offset of 2 --
+    /// forcing the neighborhood lookup table in
+    /// [`Self::seg_neighborhood_of`] to enumerate more cases than the
     /// conceptual 9. Floor partitions space into `[a, a+1)` cells, so
     /// the unit shift always changes the floor by 0 or +/-1.
     pub fn cell_of<T: IsRing>(zz: T) -> (i64, i64) {
@@ -94,12 +140,16 @@ impl UnitSquareGrid {
             .map(move |&(ox, oy)| (cx + ox, cy + oy))
     }
 
+    /// Empty grid; no cells, no entries.
     pub fn new() -> Self {
         Self {
             cells: FxHashMap::default(),
         }
     }
 
+    /// Total number of stored IDs (summed across all cells). An ID
+    /// filed in `k` cells contributes `k` to the count -- this is
+    /// `cell-entries` count, not "distinct IDs".
     pub fn len(&self) -> usize {
         self.cells.values().map(|v| v.len()).sum()
     }
@@ -108,10 +158,20 @@ impl UnitSquareGrid {
         self.cells.values().all(|v| v.is_empty())
     }
 
+    /// File `value` at `cell`. Multiple values at the same cell are
+    /// kept in insertion order (a `Vec`), and the same value can be
+    /// filed at the same cell multiple times -- the grid is a
+    /// multiset per cell, not a set.
     pub fn add(&mut self, cell: (i64, i64), value: usize) {
         self.cells.entry(cell).or_default().push(value);
     }
 
+    /// Remove one occurrence of `value` from `cell`. No-op if `cell`
+    /// has no entries or doesn't contain `value`. When the last
+    /// entry of a cell is removed, the cell itself is dropped from
+    /// the underlying map (so subsequent `get(cell)` returns the
+    /// empty slice via the `unwrap_or(&[])` fallback rather than
+    /// via an empty `Vec`).
     pub fn remove(&mut self, cell: (i64, i64), value: usize) {
         if let Some(vals) = self.cells.get_mut(&cell) {
             if let Some(pos) = vals.iter().position(|&v| v == value) {
@@ -123,10 +183,31 @@ impl UnitSquareGrid {
         }
     }
 
+    /// Return the IDs stored at a single cell, in insertion order.
+    /// Empty slice if the cell has no entries (never been `add`ed to,
+    /// or all its entries have been `remove`d).
+    ///
+    /// Borrow-only; no allocation. For querying a fixed list of
+    /// cells in one call (the typical "what's in this neighborhood?"
+    /// pattern), prefer [`Self::get_cells`] which fuses the lookups
+    /// and returns an owned `Vec`.
     pub fn get(&self, cell: (i64, i64)) -> &[usize] {
         self.cells.get(&cell).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// Return the concatenation of all IDs stored across the given
+    /// cells, in the order: outer = `cells` iteration order, inner =
+    /// insertion order within each cell.
+    ///
+    /// This is the natural pair with [`Self::seg_neighborhood_of`]:
+    /// given a candidate unit-length segment, ask the grid for every
+    /// ID stored in any of the (up to) 8 cells the segment could
+    /// possibly interact with -- one allocation, one pass.
+    ///
+    /// IDs that live in multiple of the queried cells appear once per
+    /// containing cell. Callers that need uniqueness (e.g. unique
+    /// segment IDs from a segment-spreading grid like
+    /// `GrowingPatch`'s) must dedup the returned `Vec` themselves.
     pub fn get_cells(&self, cells: &[(i64, i64)]) -> Vec<usize> {
         let total_entries: usize = cells
             .iter()
