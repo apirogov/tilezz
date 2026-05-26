@@ -20,6 +20,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::{IsRing};
+use crate::intgeom::glue::junctions_glueable;
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
@@ -341,7 +342,7 @@ impl<T: IsRing> MatchFinder<T> {
             if len <= 1 {
                 continue;
             }
-            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+            if !junctions_glueable(a.seq(), ns as usize, len, b.seq(), ne as usize) {
                 continue;
             }
             let ns_u = ns.rem_euclid(n_a as i64) as usize;
@@ -363,7 +364,7 @@ impl<T: IsRing> MatchFinder<T> {
         let seq_b = b.seq();
         for ia in 0..n_a {
             for ib in 0..n_b {
-                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                if !junctions_glueable(seq_a, ia, 1, seq_b, ib) {
                     continue;
                 }
                 let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
@@ -433,7 +434,7 @@ impl<T: IsRing> MatchFinder<T> {
             if len <= 1 {
                 continue;
             }
-            if !junction_gap_nonnegative(a.seq(), ns as usize, len, b.seq(), ne as usize) {
+            if !junctions_glueable(a.seq(), ns as usize, len, b.seq(), ne as usize) {
                 continue;
             }
             if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
@@ -448,7 +449,7 @@ impl<T: IsRing> MatchFinder<T> {
         let seq_b = b.seq();
         for ia in 0..n_a {
             for ib in 0..n_b {
-                if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                if !junctions_glueable(seq_a, ia, 1, seq_b, ib) {
                     continue;
                 }
                 let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
@@ -665,39 +666,6 @@ impl<T: IsRing> MatchTypeIndex<T> {
     pub fn all_candidates_for_tile(&self, tile_id: usize) -> &[Vec<Segment>] {
         &self.by_start[tile_id]
     }
-}
-
-/// Cheap angle-sum check for a single-edge (`len == 1`) match between
-/// boundary `a` at offset `ia` and tile `b` at offset `ib`.
-///
-/// A glue is single-edge-valid when the angles on both sides of the
-/// matched edge sum to strictly positive boundary turns (convex
-/// junctions). Returns `true` if both junction angle sums are
-/// positive.
-pub(crate) fn is_single_edge_candidate(a: &[i8], ia: usize, b: &[i8], ib: usize) -> bool {
-    let na = a.len();
-    let nb = b.len();
-    let left = a[ia] as i32 + b[ib] as i32;
-    let right = a[(ia + 1) % na] as i32 + b[(ib + nb - 1) % nb] as i32;
-    left > 0 && right > 0
-}
-
-/// Cheap angle-sum check for a multi-edge match: the two new junctions
-/// (at the CW and CCW endpoints of the match) must have non-negative
-/// boundary turn. Used as a pre-filter before the more expensive
-/// `try_glue_precomputed` validation.
-pub(crate) fn junction_gap_nonnegative(
-    a: &[i8],
-    ns: usize,
-    mlen: usize,
-    b: &[i8],
-    ne: usize,
-) -> bool {
-    let na = a.len();
-    let nb = b.len();
-    let left = a[(ns + mlen) % na] as i32 + b[(ne + nb - mlen) % nb] as i32;
-    let right = a[ns] as i32 + b[ne] as i32;
-    left >= 0 && right >= 0
 }
 
 /// True iff the cyclic edge range `[start_a, start_a + mlen)` of a
@@ -1057,35 +1025,35 @@ mod tests {
     fn single_edge_candidate_unit() {
         let hex: &[i8] = &[2, 2, 2, 2, 2, 2];
         assert!(
-            is_single_edge_candidate(hex, 0, hex, 0),
+            junctions_glueable(hex, 0, 1, hex, 0),
             "hex (0,0): 2+2=4 > 0 on both sides"
         );
         assert!(
-            is_single_edge_candidate(hex, 0, hex, 3),
+            junctions_glueable(hex, 0, 1, hex, 3),
             "hex (0,3): 2+2=4 > 0 on both sides"
         );
 
         let hexamino: &[i8] = &[-2, 2, 2, 2, 2, -2, 2, 2, 2, 2];
         assert!(
-            !is_single_edge_candidate(hexamino, 0, hexamino, 0),
+            !junctions_glueable(hexamino, 0, 1, hexamino, 0),
             "hexamino (0,0): left=-2+(-2)=-4 < 0, overflow"
         );
         assert!(
-            !is_single_edge_candidate(hexamino, 1, hexamino, 1),
+            !junctions_glueable(hexamino, 1, 1, hexamino, 1),
             "hexamino (1,1): right=2+(-2)=0, collinear extension"
         );
         assert!(
-            is_single_edge_candidate(hexamino, 1, hexamino, 2),
+            junctions_glueable(hexamino, 1, 1, hexamino, 2),
             "hexamino (1,2): left=2+2=4, right=2+2=4, both gaps"
         );
 
         let spectre: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
         assert!(
-            !is_single_edge_candidate(spectre, 3, spectre, 4),
+            !junctions_glueable(spectre, 3, 1, spectre, 4),
             "spectre (3,4): left=2+(-3)=-1 < 0, overflow"
         );
         assert!(
-            is_single_edge_candidate(spectre, 0, spectre, 1),
+            junctions_glueable(spectre, 0, 1, spectre, 1),
             "spectre (0,1): left=3+2=5, right=2+3=5, both gaps"
         );
     }
@@ -1110,7 +1078,7 @@ mod tests {
                     }
                     if rat.try_glue((ia as i64, ib as i64), rat).is_ok() {
                         assert!(
-                            is_single_edge_candidate(seq, ia, seq, ib),
+                            junctions_glueable(seq, ia, 1, seq, ib),
                             "{label}: try_glue accepted single-edge ({ia},{ib}) but heuristic rejected",
                         );
                     }
@@ -1190,7 +1158,7 @@ mod tests {
                         if a.try_glue((ia as i64, ib as i64), b).is_err() {
                             continue;
                         }
-                        if !is_single_edge_candidate(seq_a, ia, seq_b, ib) {
+                        if !junctions_glueable(seq_a, ia, 1, seq_b, ib) {
                             false_rejects += 1;
                         }
                     }

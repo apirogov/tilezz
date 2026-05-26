@@ -1781,7 +1781,7 @@ mod tests {
             let boundary_rat = Rat::from_slice_unchecked(witness.angles());
 
             // Same brute as patch.rs:3108: canonical via rat.get_match,
-            // filter via junction_gap_nonnegative + try_glue_precomputed.
+            // filter via junctions_glueable + try_glue_precomputed.
             let mut filtered_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
                 std::collections::BTreeSet::new();
             for tile_id in 0..ts.num_tiles() {
@@ -1803,7 +1803,7 @@ mod tests {
                         if !in_range((pos + n - 1) % n) && !in_range(pos) {
                             continue;
                         }
-                        if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                        if !crate::intgeom::glue::junctions_glueable(
                             witness.angles(),
                             ns_u,
                             len,
@@ -1857,7 +1857,7 @@ mod tests {
 
         // Same brute as existing patch.rs:3070 test:
         // - rat.get_match for canonical (start_a, len, start_b);
-        // - junction_gap_nonnegative filter;
+        // - junctions_glueable filter;
         // - try_glue_precomputed(unchecked=true).is_ok() filter.
         let mut filtered_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
             std::collections::BTreeSet::new();
@@ -1880,7 +1880,7 @@ mod tests {
                         continue;
                     }
                     unfiltered_brute.insert((tile_id, ns_u, len, ne_u));
-                    if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                    if !crate::intgeom::glue::junctions_glueable(
                         witness.angles(),
                         ns_u,
                         len,
@@ -1920,9 +1920,9 @@ mod tests {
             only_api.len()
         );
         // Probe the hypothesis: missing matches fail strict-convex
-        // `is_single_edge_candidate(clean_tile, ia, clean_tile, ib)` —
+        // `junctions_glueable(clean_tile, ia, clean_tile, ib)` —
         // which uses CLEAN-tile angles — but pass
-        // `junction_gap_nonnegative(boundary, ...)` because the
+        // `junctions_glueable(boundary, ...)` because the
         // boundary's angle at the right-junction position differs from
         // the clean tile's angle (boundary[(sa+len)%n] is at a glue
         // junction, with a turn angle different from the underlying
@@ -2032,7 +2032,7 @@ mod tests {
             }
             let ns_u = ns.rem_euclid(n as i64) as usize;
             let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-            let gap_ok = crate::intgeom::matchtypes::junction_gap_nonnegative(
+            let gap_ok = crate::intgeom::glue::junctions_glueable(
                 witness.angles(),
                 ns_u,
                 len,

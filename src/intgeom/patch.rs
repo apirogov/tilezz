@@ -6,10 +6,9 @@ use crate::cyclotomic::{IsRing};
 use crate::matches::{EdgeRange, Segment};
 use crate::intgeom::angles;
 use crate::intgeom::glue;
+use crate::intgeom::glue::junctions_glueable;
 use crate::intgeom::grid::UnitSquareGrid;
-use crate::intgeom::matchtypes::{
-    is_single_edge_candidate, junction_gap_nonnegative, MatchTypeIndex,
-};
+use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
@@ -1974,7 +1973,7 @@ impl<T: IsRing> GrowingPatch<T> {
                 }
                 let ns_u = ns.rem_euclid(n as i64) as usize;
                 let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-                if !junction_gap_nonnegative(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
+                if !junctions_glueable(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
                     continue;
                 }
                 if let Ok(_glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
@@ -2135,7 +2134,7 @@ fn append_match_candidate<T: IsRing>(
     }
     let ns_u = ns.rem_euclid(n as i64) as usize;
     let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-    if !junction_gap_nonnegative(angles, ns_u, len, tile_b.seq(), ne_u) {
+    if !junctions_glueable(angles, ns_u, len, tile_b.seq(), ne_u) {
         return;
     }
     let key = (ns_u, len, ne_u, cand.tile_id);
@@ -2174,7 +2173,7 @@ fn enumerate_junction_candidates_at<T: IsRing>(
         let b_seq = tile_b.seq();
         let m = b_seq.len();
         for ib in 0..m {
-            if !is_single_edge_candidate(angles, pos, b_seq, ib) {
+            if !junctions_glueable(angles, pos, 1, b_seq, ib) {
                 continue;
             }
             let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
@@ -4048,7 +4047,7 @@ mod tests {
     /// the segment path, and direct iteration for the junction path. This
     /// test brute-forces every `(tile_id_b, ib, start_a)` triple and
     /// applies the same downstream filters
-    /// (`junction_gap_nonnegative`, `try_glue_precomputed`), so a mismatch
+    /// (`junctions_glueable`, `try_glue_precomputed`), so a mismatch
     /// against `get_all_matches()` would indicate a bug in either the
     /// index or the segment/junction routing.
     #[test]
@@ -4078,7 +4077,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                    if !crate::intgeom::glue::junctions_glueable(
                         gp.angles(),
                         ns_u,
                         len,
@@ -4140,7 +4139,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                    if !crate::intgeom::glue::junctions_glueable(
                         gp.angles(),
                         ns_u,
                         len,
