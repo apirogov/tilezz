@@ -7,7 +7,7 @@ use crate::cyclotomic::IsRing;
 /// `(dx, dy) in {-1, 0, 1}^2`. All 9 offsets relative to `cell(p1)`,
 /// sorted and deduplicated.
 ///
-/// `cell_of` uses `floor`, so a unit-length segment is guaranteed to
+/// `cell_of` uses `floor`, so a unit-length edge is guaranteed to
 /// have `(dx, dy)` in this range -- no boundary cases.
 static NEIGHBOR_OFFSETS: [&[(i64, i64)]; 9] = [
     // (dx=-1, dy=-1): p2 down-left of p1
@@ -42,15 +42,15 @@ static NEIGHBOR_OFFSETS: [&[(i64, i64)]; 9] = [
 ///   boundary vertex is filed at one cell (its `cell_of(point)`).
 ///   Lookups find which other boundary vertices share that cell or a
 ///   nearby one.
-/// - [`crate::geom::patch::GrowingPatch`] stores **segment IDs**:
+/// - [`crate::geom::patch::GrowingPatch`] stores **edge IDs**:
 ///   each boundary edge is filed at *every* cell its
-///   [`Self::seg_neighborhood_of`] reaches (up to 8 cells per
-///   segment). Lookups during incremental glue checks ask "is this
-///   candidate segment within striking distance of an existing
-///   segment?" by reading the neighborhood cells.
+///   [`Self::edge_neighborhood_of`] reaches (up to 8 cells per
+///   edge). Lookups during incremental glue checks ask "is this
+///   candidate edge within striking distance of an existing
+///   edge?" by reading the neighborhood cells.
 ///
 /// The grid is a multimap: multiple IDs can share a cell, and the same
-/// ID can appear in many cells (the segment use case above). Inserts
+/// ID can appear in many cells (the edge use case above). Inserts
 /// (`add`) and removals (`remove`) are O(1) per cell; cell lookups
 /// (`get`, `get_cells`) are O(1) per cell plus the size of the cell's
 /// payload.
@@ -94,19 +94,19 @@ impl UnitSquareGrid {
     ///
     /// # Why floor (not round)
     ///
-    /// A unit-length segment never spans more than 2 cells along an
+    /// A unit-length edge never spans more than 2 cells along an
     /// axis. With round-half-away-from-zero, points at exactly
-    /// +/-0.5 round in opposite directions, so a unit segment
+    /// +/-0.5 round in opposite directions, so a unit-length edge
     /// crossing both sides of zero would give a cell-offset of 2 --
     /// forcing the neighborhood lookup table in
-    /// [`Self::seg_neighborhood_of`] to enumerate more cases than the
+    /// [`Self::edge_neighborhood_of`] to enumerate more cases than the
     /// conceptual 9. Floor partitions space into `[a, a+1)` cells, so
     /// the unit shift always changes the floor by 0 or +/-1.
     pub fn cell_of<T: IsRing>(zz: T) -> (i64, i64) {
         zz.cell_floor()
     }
 
-    /// Cells covering the neighborhood of a **unit-length** segment from
+    /// Cells covering the neighborhood of a **unit-length** edge from
     /// `p1` to `p2`, with no intermediate allocations and no runtime sort
     /// or dedup.
     ///
@@ -122,7 +122,7 @@ impl UnitSquareGrid {
     /// Panics in debug if `(dx, dy)` escapes `{-1, 0, 1}^2` (which would
     /// indicate non-unit input or a `cell_of` rounding bug).
     #[inline]
-    pub fn seg_neighborhood_of<T: IsRing>(
+    pub fn edge_neighborhood_of<T: IsRing>(
         p1: T,
         p2: T,
     ) -> impl Iterator<Item = (i64, i64)> {
@@ -132,7 +132,7 @@ impl UnitSquareGrid {
         let dy = cy2 - cy;
         debug_assert!(
             dx.abs() <= 1 && dy.abs() <= 1,
-            "seg_neighborhood_of: endpoints not unit-distance ({dx}, {dy})"
+            "edge_neighborhood_of: endpoints not unit-distance ({dx}, {dy})"
         );
         let idx = ((dx + 1) * 3 + (dy + 1)) as usize;
         NEIGHBOR_OFFSETS[idx]
@@ -199,14 +199,14 @@ impl UnitSquareGrid {
     /// cells, in the order: outer = `cells` iteration order, inner =
     /// insertion order within each cell.
     ///
-    /// This is the natural pair with [`Self::seg_neighborhood_of`]:
-    /// given a candidate unit-length segment, ask the grid for every
-    /// ID stored in any of the (up to) 8 cells the segment could
+    /// This is the natural pair with [`Self::edge_neighborhood_of`]:
+    /// given a candidate unit-length edge, ask the grid for every
+    /// ID stored in any of the (up to) 8 cells the edge could
     /// possibly interact with -- one allocation, one pass.
     ///
     /// IDs that live in multiple of the queried cells appear once per
     /// containing cell. Callers that need uniqueness (e.g. unique
-    /// segment IDs from a segment-spreading grid like
+    /// edge IDs from an edge-spreading grid like
     /// `GrowingPatch`'s) must dedup the returned `Vec` themselves.
     pub fn get_cells(&self, cells: &[(i64, i64)]) -> Vec<usize> {
         let total_entries: usize = cells
@@ -262,12 +262,12 @@ mod tests {
     }
 
     #[test]
-    fn test_seg_neighborhood_of() {
-        // `seg_neighborhood_of` returns the sorted-deduplicated union of
+    fn test_edge_neighborhood_of() {
+        // `edge_neighborhood_of` returns the sorted-deduplicated union of
         // the two 5-cell `+` crosses around the endpoint cells, as an
         // iterator. We collect to compare against expected lists.
         let cells_of = |p1: ZZ12, p2: ZZ12| -> Vec<(i64, i64)> {
-            UnitSquareGrid::seg_neighborhood_of(p1, p2).collect()
+            UnitSquareGrid::edge_neighborhood_of(p1, p2).collect()
         };
 
         let tmp1 =
@@ -330,14 +330,14 @@ mod tests {
         );
     }
 
-    /// Cross-check the precomputed `seg_neighborhood_of` table against the
+    /// Cross-check the precomputed `edge_neighborhood_of` table against the
     /// reference union of two 5-cell `+` crosses for every `(p1, dir)`
     /// pair on a coarse integer-coordinate grid spanning both axis-
     /// aligned and half-integer boundary positions. Any regression in
     /// the lookup table or in `cell_of`'s `{-1, 0, 1}^2` invariant
     /// would surface here.
     #[test]
-    fn test_seg_neighborhood_of_matches_reference() {
+    fn test_edge_neighborhood_of_matches_reference() {
         let mut diffs = 0usize;
         for ax in -3..=3i64 {
             for ay in -3..=3i64 {
@@ -353,7 +353,7 @@ mod tests {
                                     * <ZZ12 as Units>::unit(3);
                             let p2 = p1 + <ZZ12 as Units>::unit(dir);
                             let mut from_table: Vec<(i64, i64)> =
-                                UnitSquareGrid::seg_neighborhood_of(p1, p2).collect();
+                                UnitSquareGrid::edge_neighborhood_of(p1, p2).collect();
                             from_table.sort_unstable();
                             from_table.dedup();
                             // Reference: union of the two 5-cell `+` crosses
