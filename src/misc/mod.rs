@@ -14,4 +14,5 @@
 //!   distinct patches up to a given size.
 
 pub mod patch_grow;
+pub mod profile;
 pub mod seq_explorer;
