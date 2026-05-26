@@ -2626,7 +2626,7 @@ mod tests {
                             continue;
                         }
                         seen_ab.insert((ns_u, len, ne_u), ());
-                        if !crate::intgeom::matchtypes::junction_gap_nonnegative(
+                        if !crate::intgeom::glue::junctions_glueable(
                             tile_a.seq(),
                             ns_u,
                             len,
