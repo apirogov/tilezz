@@ -58,12 +58,17 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// [`Rat`] needs a fresh vec for hashing). Each polygon's `n` cyclic
 /// walks collapse to a single canonical walk via the lex-min
 /// rotation prune in [`is_canonical_extended`].
-pub fn rat_enum<ZZ: IsRing>(max_steps: usize) -> Vec<Vec<i8>> {
+///
+/// `step` restricts the DFS to directions that are multiples of `step`.
+/// `step = 1` (default) walks every direction. `step = 2` on ZZ20 walks
+/// only even-indexed directions, enumerating the ZZ10-equivalent
+/// subset; `step = 2` on ZZ24 enumerates the ZZ12 subset; etc.
+pub fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> Vec<Vec<i8>> {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
 
     println!("-------- enumeration started --------");
-    rat_enum_step::<ZZ>(&mut snake, max_steps, &mut result);
+    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result);
     println!(
         "-------- enumeration completed --------\n{} rats found",
         result.len()
@@ -77,6 +82,7 @@ pub fn rat_enum<ZZ: IsRing>(max_steps: usize) -> Vec<Vec<i8>> {
 fn rat_enum_step<ZZ: IsRing>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
+    step: i8,
     result: &mut HashSet<Vec<i8>>,
 ) {
     let depth = snake.angles().len();
@@ -88,6 +94,9 @@ fn rat_enum_step<ZZ: IsRing>(
     let remaining = (max_steps - depth) as i64;
 
     for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
+        if direction.rem_euclid(step) != 0 {
+            continue;
+        }
         // Canonical-rotation prune (see `is_canonical_extended`):
         // pre-check *before* calling `Snake::add` so that
         // canonical-rejected branches don't pay the cyclotomic
@@ -115,7 +124,7 @@ fn rat_enum_step<ZZ: IsRing>(
             }
         } else if snake.head().pos.within_radius(remaining) {
             // Still reachable -- recurse to extend further.
-            rat_enum_step::<ZZ>(snake, max_steps, result);
+            rat_enum_step::<ZZ>(snake, max_steps, step, result);
         }
         // Backtrack: restore the snake to the pre-add state.
         snake.pop();
@@ -153,6 +162,7 @@ fn splitting_depth(n_threads: usize, branching: usize) -> usize {
 fn collect_seeds<ZZ: IsRing>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
+    step: i8,
     split_depth: usize,
     seeds: &mut Vec<Vec<i8>>,
     closed: &mut HashSet<Vec<i8>>,
@@ -164,6 +174,9 @@ fn collect_seeds<ZZ: IsRing>(
     let remaining = (max_steps - depth) as i64;
 
     for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
+        if direction.rem_euclid(step) != 0 {
+            continue;
+        }
         if !is_canonical_extended(snake.angles(), direction) {
             continue;
         }
@@ -190,7 +203,7 @@ fn collect_seeds<ZZ: IsRing>(
                 // seed for a worker thread to expand.
                 seeds.push(snake.angles().to_vec());
             } else {
-                collect_seeds::<ZZ>(snake, max_steps, split_depth, seeds, closed);
+                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, seeds, closed);
             }
         }
         snake.pop();
@@ -204,11 +217,13 @@ fn collect_seeds<ZZ: IsRing>(
 /// merges the per-worker sets at the end.
 pub fn rat_enum_parallel<ZZ: IsRing>(
     max_steps: usize,
+    step: i8,
     n_threads: usize,
 ) -> Vec<Vec<i8>> {
-    // Branching = number of candidate directions per DFS level,
-    // i.e. `(-hturn + 1)..hturn` which has length `2*hturn - 1`.
-    let branching = (2 * ZZ::hturn() as usize).saturating_sub(1);
+    // Effective branching with `step`: directions in `[-(hturn-1), hturn-1]`
+    // that are multiples of `step`, i.e. `2 * floor((hturn-1)/step) + 1`.
+    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
+    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
     let split_depth = splitting_depth(n_threads, branching);
 
     println!("-------- enumeration started --------");
@@ -223,6 +238,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(
         collect_seeds::<ZZ>(
             &mut snake,
             max_steps,
+            step,
             split_depth,
             &mut seeds,
             &mut closed_main,
@@ -247,7 +263,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(
                     // Rebuild snake from this trusted (already self-
                     // intersect-checked) prefix and resume DFS.
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
-                    rat_enum_step::<ZZ>(&mut snake, max_steps, &mut local);
+                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local);
                 }
                 local
             }));
@@ -278,26 +294,27 @@ fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
 
 fn enumerate_dispatch<ZZ: IsRing>(
     max_steps: usize,
+    step: i8,
     n_threads: usize,
 ) -> Vec<Vec<i8>> {
     if n_threads <= 1 {
-        rat_enum::<ZZ>(max_steps)
+        rat_enum::<ZZ>(max_steps, step)
     } else {
-        rat_enum_parallel::<ZZ>(max_steps, n_threads)
+        rat_enum_parallel::<ZZ>(max_steps, step, n_threads)
     }
 }
 
-fn run_rat_enum_polylines(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<P64>> {
+fn run_rat_enum_polylines(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<P64>> {
     match ring {
-        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, n_threads)),
-        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, n_threads)),
-        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, n_threads)),
-        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, n_threads)),
-        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, n_threads)),
-        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, n_threads)),
-        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, n_threads)),
-        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, n_threads)),
-        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, n_threads)),
+        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads)),
+        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads)),
+        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads)),
+        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads)),
+        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads)),
+        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads)),
+        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads)),
+        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads)),
+        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads)),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -353,8 +370,8 @@ fn print_stats(rats: &[Vec<i8>]) {
     }
 }
 
-fn run_rat_enum_seqs(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<i8>> {
-    let f: fn(usize, usize) -> Vec<Vec<i8>> = match ring {
+fn run_rat_enum_seqs(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
+    let f: fn(usize, i8, usize) -> Vec<Vec<i8>> = match ring {
         4 => enumerate_dispatch::<ZZ4>,
         8 => enumerate_dispatch::<ZZ8>,
         10 => enumerate_dispatch::<ZZ10>,
@@ -366,7 +383,7 @@ fn run_rat_enum_seqs(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<i8
         60 => enumerate_dispatch::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
-    f(max_steps, n_threads)
+    f(max_steps, step, n_threads)
 }
 
 // --------
@@ -414,6 +431,16 @@ struct Cli {
     /// positive value is used as-is, capped at `num_cpus::get()`.
     #[arg(long, default_value_t = 1)]
     threads: usize,
+
+    /// Restrict the DFS to directions that are multiples of `step`.
+    ///
+    /// `1` (default) walks every direction in `(-hturn+1)..hturn`.
+    /// `step = 2` on ZZ20 walks only even-indexed directions, which
+    /// enumerates exactly the ZZ10-equivalent polygons (b=9 vs 19).
+    /// Similarly `step = 2` on ZZ24 -> ZZ12 subset, `step = 3` on
+    /// ZZ24 -> ZZ8 subset, etc.
+    #[arg(long, default_value_t = 1)]
+    step: i8,
 }
 
 /// Resolve the `--threads` CLI value to an actual worker count.
@@ -448,15 +475,17 @@ fn main() {
             });
 
             let t0 = Instant::now();
-            let rats: Vec<Vec<i8>> = run_rat_enum_seqs(cli.ring, cli.max_steps, n_threads);
+            let rats: Vec<Vec<i8>> =
+                run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads);
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
             let total_boundary_len: usize = rats.iter().map(|s| s.len()).sum();
 
             println!(
-                "benchmark: ring={} max_steps={} -> {} unique rats (total boundary len={}) in {:?}",
+                "benchmark: ring={} step={} max_steps={} -> {} unique rats (total boundary len={}) in {:?}",
                 cli.ring,
+                cli.step,
                 cli.max_steps,
                 rats.len(),
                 total_boundary_len,
@@ -480,7 +509,8 @@ fn main() {
             }
         }
         Mode::Render => {
-            let rats: Vec<Vec<P64>> = run_rat_enum_polylines(cli.ring, cli.max_steps, n_threads);
+            let rats: Vec<Vec<P64>> =
+                run_rat_enum_polylines(cli.ring, cli.max_steps, cli.step, n_threads);
 
             let Some(filename) = cli.filename else {
                 return;
