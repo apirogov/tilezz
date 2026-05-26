@@ -993,21 +993,26 @@ macro_rules! impl_integral_intersect_unit_segments_via_basis {
     };
 }
 
-/// Default `WithinRadius` impl for an integer-basis ring: project to
-/// `Complex64` via the cached `cartesian` table and compare squared norm.
+/// Default `WithinRadius` impl for an integer-basis ring: compare
+/// `|z|^2` to `radius^2` exactly via ring arithmetic plus one `re_sign`
+/// call. No f64.
 ///
-/// Rings that can compute `|z|^2` in pure-i64 arithmetic (e.g. ZZ12) can opt
-/// out of this macro and provide their own `impl WithinRadius for $name`.
+/// `|z|^2 = z * conj(z)` is real (lives in the real subring), so
+/// `(radius^2 - z*conj(z)).re_sign() >= 0` is the exact decision.
+///
+/// Rings with a tighter pure-i64 fast path (e.g. ZZ12 inlining its
+/// `{1, sqrt(3)}` norm-squared formula) can opt out of this macro and
+/// provide their own `impl WithinRadius for $name`.
 #[macro_export]
-macro_rules! impl_integral_within_radius_via_complex64 {
+macro_rules! impl_integral_within_radius_via_norm_sq {
     ($name:ident) => {
         impl $crate::cyclotomic::WithinRadius for $name {
+            #[inline]
             fn within_radius(&self, radius: i64) -> bool {
-                use $crate::cyclotomic::SymNum;
-                let c = <$name as SymNum>::complex64(self);
-                let norm_sq = c.re * c.re + c.im * c.im;
-                let r_sq = (radius as f64) * (radius as f64);
-                norm_sq <= r_sq + 1e-9
+                use $crate::cyclotomic::{Conj, ReImSign};
+                let norm_sq = *self * self.conj();
+                let r_sq = <$name as From<i64>>::from(radius * radius);
+                (r_sq - norm_sq).re_sign() >= 0
             }
         }
     };

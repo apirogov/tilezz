@@ -80,10 +80,10 @@ pub trait IntersectUnitSegments: Sized {
 /// Predicate "this point is within Euclidean radius `r` of the origin",
 /// i.e. `|self|^2 <= r * r` with `r >= 0`.
 ///
-/// Used by the DFS reachability pruning in `rat_enum`; each ring routes
-/// through `impl_integral_within_radius_via_complex64!` (f64 magnitude
-/// with a tiny epsilon -- safe because DFS pruning is monotone in
-/// inclusions) or a hand-rolled pure-i64 override (ZZ12).
+/// Used by the DFS reachability pruning in `rat_enum`. Each ring routes
+/// through `impl_integral_within_radius_via_norm_sq!` (exact via
+/// `(r^2 - z*conj(z)).re_sign() >= 0`, pure ring arithmetic) or a
+/// hand-rolled pure-i64 fast path (ZZ12).
 pub trait WithinRadius {
     fn within_radius(&self, radius: i64) -> bool;
 }
