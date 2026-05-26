@@ -77,33 +77,60 @@ fn ts_zz12(kind: &TileSetKind) -> Arc<TileSet<ZZ12>> {
 /// Brute-force reference enumeration: glue every
 /// `(patch, tile, ia, ib)` combination via `try_glue`. No
 /// canonicalisation shortcuts, just the most direct path possible.
+///
+/// Outer-loop parallelism only: each patch's gluing attempts run on a
+/// worker thread, then the per-worker `FxHashSet`s are merged. The
+/// nested `(tile_idx, ia, ib)` loops and the `try_glue` call stay
+/// pointwise identical to the single-threaded brute force, so the set
+/// of attempted glue operations is unchanged.
 fn brute_force_grow<T>(
     tileset: &Arc<TileSet<T>>,
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsRing,
+    T: IsRing + Send + Sync,
 {
     let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
     if max_size == 0 || tileset.num_tiles() == 0 {
         return results;
     }
     results.insert(1, tileset.rats().iter().cloned().collect());
+
+    let n_threads = num_cpus::get().max(1);
+
     for k in 2..=max_size {
         let prev: Vec<Rat<T>> = results[&(k - 1)].iter().cloned().collect();
-        let mut next: FxHashSet<Rat<T>> = FxHashSet::default();
-        for patch in &prev {
-            for tile_idx in 0..tileset.num_tiles() {
-                let tile = tileset.rat(tile_idx);
-                for ia in 0..patch.len() {
-                    for ib in 0..tile.len() {
-                        if let Ok(glued) = patch.try_glue((ia as i64, ib as i64), tile) {
-                            next.insert(glued);
+        let chunk_size = prev.len().div_ceil(n_threads).max(1);
+
+        let next: FxHashSet<Rat<T>> = std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(n_threads);
+            for chunk in prev.chunks(chunk_size) {
+                handles.push(s.spawn(move || {
+                    let mut local: FxHashSet<Rat<T>> = FxHashSet::default();
+                    for patch in chunk {
+                        for tile_idx in 0..tileset.num_tiles() {
+                            let tile = tileset.rat(tile_idx);
+                            for ia in 0..patch.len() {
+                                for ib in 0..tile.len() {
+                                    if let Ok(glued) =
+                                        patch.try_glue((ia as i64, ib as i64), tile)
+                                    {
+                                        local.insert(glued);
+                                    }
+                                }
+                            }
                         }
                     }
-                }
+                    local
+                }));
             }
-        }
+            let mut merged: FxHashSet<Rat<T>> = FxHashSet::default();
+            for h in handles {
+                merged.extend(h.join().expect("brute-force worker panic"));
+            }
+            merged
+        });
+
         results.insert(k, next);
     }
     results
@@ -111,7 +138,7 @@ where
 
 fn run<T>(tileset: Arc<TileSet<T>>, max_size: usize, validate: bool, label: &str)
 where
-    T: IsRing,
+    T: IsRing + Send + Sync,
 {
     eprintln!(
         "tileset: {label} ({} tile{}), max_size: {max_size}, validate: {validate}",
