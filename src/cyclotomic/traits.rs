@@ -54,6 +54,21 @@ pub trait OneImag {
     fn is_one_i(&self) -> bool;
 }
 
+/// Inverse of `From<(i64, i64)>` for rings containing `i`: extract the
+/// `(re, im)` integer pair such that `T::from((re, im)) == self`.
+///
+/// **Precondition (debug-asserted)**: the value is a *lattice point*,
+/// i.e. its integer-basis storage has only the `coeffs[0]` and
+/// `coeffs[qturn]` slots non-zero (the slots where `From<(re, im)>`
+/// writes `re` and `im` respectively). Differences of lattice points
+/// stay lattice points; arbitrary ring values do not.
+///
+/// In release mode no check is performed -- calling on a non-lattice
+/// value returns garbage from the wrong storage slots.
+pub trait LatticePair {
+    fn to_lattice_pair(&self) -> (IntT, IntT);
+}
+
 /// Sign extraction for the real and imaginary parts of a (complex) value.
 /// Each helper returns `-1`, `0`, or `1`.
 ///
@@ -247,11 +262,12 @@ pub trait IsRing:
 /// implements this.
 pub trait IsZZ4Impl {}
 
-/// Rings containing `ZZ4`. Implies `IsRing` plus the lattice-pair
-/// constructor `From<(i64, i64)>` since `i = unit(qturn)` is in the ring.
+/// Rings containing `ZZ4`. Implies `IsRing`, the lattice-pair
+/// constructor `From<(i64, i64)>`, and the matching projection
+/// `LatticePair` since `i = unit(qturn)` is in the ring.
 pub trait HasZZ4Impl {}
-pub trait HasZZ4: IsRing + HasZZ4Impl + From<(IntT, IntT)> {}
-impl<T: IsRing + HasZZ4Impl + From<(IntT, IntT)>> HasZZ4 for T {}
+pub trait HasZZ4: IsRing + HasZZ4Impl + From<(IntT, IntT)> + LatticePair {}
+impl<T: IsRing + HasZZ4Impl + From<(IntT, IntT)> + LatticePair> HasZZ4 for T {}
 
 pub trait IsZZ4: IsRing + IsZZ4Impl {}
 impl<T: IsRing + IsZZ4Impl> IsZZ4 for T {}

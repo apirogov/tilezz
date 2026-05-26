@@ -1,6 +1,6 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
-use super::traits::{HasZZ4, IntersectUnitSegments, IntT, IsRing, OneImag};
+use super::traits::{HasZZ4, IntersectUnitSegments, IsRing, OneImag};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
@@ -89,33 +89,23 @@ pub fn point_in_rect<ZZ: IsRing>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: 
 
 /// Return number modulo rect by repeated addition or subtraction of the x/y components.
 ///
-/// Assumes the rectangle has integer-sized sides (the only case used in the
-/// codebase). Width and height are recovered from `complex64()` and rounded
-/// to the nearest integer; a `debug_assert!` checks that the rounding is
-/// within a small epsilon of the f64 difference, to catch misuse.
+/// The rectangle must be a lattice rectangle: `pos_max - pos_min` must be
+/// of the form `width + height*i` for integer `width, height >= 0`. This
+/// is true when `pos_min` and `pos_max` are built from `From<(i64, i64)>`.
+/// `LatticePair::to_lattice_pair` extracts the integer width/height in
+/// exact ring arithmetic (debug-asserts the difference is a lattice
+/// point).
 ///
-/// Mods `p` into the half-open box `[pos_min, pos_max)` by repeated lattice
-/// shifts of `width` along the real axis and `height` along the imaginary
-/// axis, matching the prior `mod_bound`-on-closed-range semantics.
+/// Mods `p` into the half-open box `[pos_min, pos_max)` by repeated
+/// lattice shifts of `width` along the real axis and `height` along the
+/// imaginary axis, matching the prior `mod_bound`-on-closed-range
+/// semantics.
 pub fn point_mod_rect<ZZ>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ)) -> ZZ
 where
     ZZ: HasZZ4,
 {
-    // Extract integer width and height from the rectangle via complex64().
-    let cmin = pos_min.complex64();
-    let cmax = pos_max.complex64();
-    let width_f = cmax.re - cmin.re;
-    let height_f = cmax.im - cmin.im;
-    let width = width_f.round() as IntT;
-    let height = height_f.round() as IntT;
-    debug_assert!(
-        (width as f64 - width_f).abs() < 1e-9,
-        "point_mod_rect: rectangle width is not integral (width_f={width_f})"
-    );
-    debug_assert!(
-        (height as f64 - height_f).abs() < 1e-9,
-        "point_mod_rect: rectangle height is not integral (height_f={height_f})"
-    );
+    // Extract integer width and height in exact ring arithmetic.
+    let (width, height) = (*pos_max - *pos_min).to_lattice_pair();
 
     // Build lattice shift steps as ZZ values: w_step = width * 1, h_step = height * i.
     let w_step: ZZ = ZZ::from(width);
