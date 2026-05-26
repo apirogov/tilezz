@@ -1127,7 +1127,7 @@ fn build_surrounded_tile_from_trial<T: IsRing>(
 /// `[25, 25]`) but `cyclic_range_contains(0) = true` (vertex 0 is
 /// the CCW endpoint of edge 25).
 fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
-    if pm.len() == 0 {
+    if pm.is_empty() {
         return false;
     }
     let end_inclusive = (pm.start_a() + pm.len() - 1) % n;

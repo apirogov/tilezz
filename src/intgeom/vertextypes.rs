@@ -1,4 +1,3 @@
-use crate::matches::{EdgeRange, Segment};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -1390,6 +1389,7 @@ mod tests {
     use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::intgeom::tiles;
     use crate::intgeom::tileset::{self, TileSet};
+    use crate::matches::{EdgeRange, Segment};
     use std::sync::Arc;
 
     /// End-to-end regression: every recorded transition and the

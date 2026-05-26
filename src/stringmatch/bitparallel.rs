@@ -620,7 +620,7 @@ mod tests {
             assert_eq!(m.b.tile_id, j);
             assert!(m.a.range.start_offset < strings[i].len());
             assert!(m.b.range.start_offset < strings[j].len());
-            assert!(m.len() > 0);
+            assert!(!m.is_empty());
             verify_rc_content(&strings[i], &strings[j], m.a.range.start_offset, m.b.range.start_offset, m.len());
         }
     }

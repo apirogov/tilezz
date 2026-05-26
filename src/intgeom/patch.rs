@@ -8,7 +8,7 @@ use crate::intgeom::angles;
 use crate::intgeom::glue;
 use crate::intgeom::grid::UnitSquareGrid;
 use crate::intgeom::matchtypes::{
-    is_single_edge_candidate, junction_gap_nonnegative, CandidateMatch, MatchTypeIndex,
+    is_single_edge_candidate, junction_gap_nonnegative, MatchTypeIndex,
 };
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
@@ -94,7 +94,7 @@ pub(crate) struct TileSegment {
 ///   (modulo `tile_len`).
 /// * `b.tile_id` indexes into the patch's [`TileSet`].
 ///
-/// (Same convention as the lower-level [`MatchType`](crate::intgeom::matchtypes::MatchType).)
+/// (Same convention as the lower-level [`TileMatch`](crate::intgeom::matchtypes::TileMatch).)
 pub use crate::matches::PatchMatch;
 
 /// An **open** junction vertex: the arrangement of tiles meeting at a
@@ -1211,7 +1211,7 @@ impl<T: IsRing> GrowingPatch<T> {
                     let start = (vertex_index + n - offset) % n;
                     for pm in &source[start] {
                         if cyclic_range_contains(pm.start_a(), pm.len(), vertex_index, n) {
-                            result.push(pm.clone());
+                            result.push(*pm);
                         }
                     }
                 }
@@ -2123,7 +2123,7 @@ fn append_match_candidate<T: IsRing>(
     angles: &[i8],
     rat: &Rat<T>,
     n: usize,
-    cand: &CandidateMatch,
+    cand: &Segment,
     tileset: &TileSet<T>,
     seen: &mut FxHashSet<(usize, usize, usize, usize)>,
     result: &mut [Vec<PatchMatch>],
@@ -3206,7 +3206,7 @@ mod tests {
     #[test]
     fn first_add_produces_growing() {
         let mut gp = hex_patch();
-        let pm = gp.get_all_matches()[0].clone();
+        let pm = gp.get_all_matches()[0];
         assert!(gp.add_tile(&pm), "first add");
 
         assert!(gp.is_growing());
@@ -3224,7 +3224,7 @@ mod tests {
         while step < 3 {
             let candidates = gp.get_all_matches();
             let pm = match candidates.first() {
-                Some(pm) => pm.clone(),
+                Some(pm) => *pm,
                 None => break,
             };
             if !gp.add_tile(&pm) {
@@ -3615,7 +3615,7 @@ mod tests {
         for pm in &gp.get_all_matches() {
             let mut gp2 = gp.clone();
             if gp2.add_tile(pm) {
-                history.push(pm.clone());
+                history.push(*pm);
                 brute_force_recurse(&mut gp2, history, max_tiles, results);
                 history.pop();
             }
@@ -3636,7 +3636,7 @@ mod tests {
         for pm in &seed_matches {
             let mut gp = GrowingPatch::new(Arc::clone(ts), 0);
             assert!(gp.add_tile(pm), "first add");
-            let mut history = vec![pm.clone()];
+            let mut history = vec![*pm];
             brute_force_recurse(&mut gp, &mut history, max_tiles, &mut results);
         }
 
@@ -3646,7 +3646,7 @@ mod tests {
     #[test]
     fn inner_chains_empty_after_first_glue() {
         let gp = hex_patch();
-        let pm = gp.get_all_matches()[0].clone();
+        let pm = gp.get_all_matches()[0];
         let mut gp2 = gp.clone();
         assert!(gp2.add_tile(&pm), "first add");
         let inner = match &gp2.state {
@@ -3664,7 +3664,7 @@ mod tests {
     #[test]
     fn inner_chains_grow_on_second_glue() {
         let gp = hex_patch();
-        let first_match = gp.get_all_matches()[0].clone();
+        let first_match = gp.get_all_matches()[0];
         let mut gp2 = gp.clone();
         assert!(gp2.add_tile(&first_match), "first add");
 
@@ -3705,7 +3705,7 @@ mod tests {
     #[test]
     fn junction_vertex_type_roundtrip_after_first_glue() {
         let gp = hex_patch();
-        let pm = gp.get_all_matches()[0].clone();
+        let pm = gp.get_all_matches()[0];
         let mut gp2 = gp.clone();
         assert!(gp2.add_tile(&pm), "first add");
         let n = gp2.boundary_len();
@@ -3745,7 +3745,7 @@ mod tests {
     fn construct_minimal_witness_hex_with_inner() {
         let gp = hex_patch();
         let mi = gp.match_index().clone();
-        let first = gp.get_all_matches()[0].clone();
+        let first = gp.get_all_matches()[0];
         let mut gp2 = gp.clone();
         assert!(gp2.add_tile(&first), "first add");
 
@@ -3899,7 +3899,7 @@ mod tests {
             .6
             .iter()
             .find(|(_, ok)| !*ok)
-            .map(|(pm, _)| pm.clone())
+            .map(|(pm, _)| *pm)
             .expect("expected at least one colliding candidate");
         assert!(
             !gp.add_tile(&failing_pm),
@@ -3991,7 +3991,7 @@ mod tests {
             let mut trial = gp.clone();
             let gp_ok = trial.add_tile(pm);
             if snake_ok != gp_ok {
-                discrepancies.push((pm.clone(), snake_ok, gp_ok));
+                discrepancies.push((*pm, snake_ok, gp_ok));
             }
             compared += 1;
         }
@@ -4020,7 +4020,7 @@ mod tests {
         let mut step = 0usize;
         while step < 4 {
             let pm = match gp.get_all_matches().first() {
-                Some(pm) => pm.clone(),
+                Some(pm) => *pm,
                 None => break,
             };
             if !gp.add_tile(&pm) {

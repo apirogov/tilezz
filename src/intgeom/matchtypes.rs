@@ -12,7 +12,7 @@
 //!   Use this when you'll query many times against a fixed tileset and
 //!   want O(1) candidate lookup.
 //!
-//! Both share the [`MatchType`] record describing a single match.
+//! Both share the [`TileMatch`] record describing a single match.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -109,30 +109,11 @@ impl<T: IsRing> BpSeed<T> {
     }
 }
 
-/// A description of a single legal glue match between two tile boundaries.
-///
-/// Type alias for [`crate::matches::TileMatch`]; identifies the two
-/// tiles via the nested `Segment`s and tracks an edge-range on each.
-///
-/// # Edge-offset convention (relative to the A/B `range.start_offset`)
-///
-/// * The A-side `start_offset` is the first **matched** edge on side A:
-///   the match consumes edges `start_offset, start_offset+1, ...,
-///   start_offset+len-1` (modulo the tile's edge count).
-/// * The B-side `start_offset` is the first **surviving** edge on side
-///   B, immediately past the match: the match consumes edges
-///   `start_offset-len, ..., start_offset-1` (modulo the tile's edge
-///   count, walked in reverse since B is glued anti-parallel to A).
-///
-/// This asymmetry matches the convention used throughout the
-/// patch/glue path.
-pub type MatchType = TileMatch;
-
-/// Realise a `MatchType` against the two tilesets, producing the
+/// Realise a `TileMatch` against the two tilesets, producing the
 /// resulting boundary as a `Rat`. Assumes the match has been previously
 /// validated (e.g. it came from a `MatchFinder`); will panic otherwise.
 pub fn apply_match<T: IsRing>(
-    m: &MatchType,
+    m: &TileMatch,
     rats_a: &[Rat<T>],
     rats_b: &[Rat<T>],
 ) -> Rat<T> {
@@ -153,7 +134,7 @@ pub fn apply_match<T: IsRing>(
 /// perspective. Adjusts the asymmetric `start_b` (= first surviving)
 /// convention by shifting starts to land on the right edges of the
 /// inverted match.
-fn match_involution(m: &MatchType, len_a: usize, len_b: usize) -> MatchType {
+fn match_involution(m: &TileMatch, len_a: usize, len_b: usize) -> TileMatch {
     let len = m.len();
     TileMatch::new(
         Segment::new(
@@ -168,8 +149,8 @@ fn match_involution(m: &MatchType, len_a: usize, len_b: usize) -> MatchType {
 }
 
 struct TypeEntry {
-    first: MatchType,
-    second: MatchType,
+    first: TileMatch,
+    second: TileMatch,
 }
 
 /// Enumerates legal glue matches between two tilesets (or one tileset
@@ -179,7 +160,7 @@ struct TypeEntry {
 ///
 /// * [`MatchFinder::new`] — match a tileset against **itself**. Both
 ///   `set_a` and `set_b` point at the same `Arc<TileSet>`. The
-///   resulting `MatchType`s describe glues between two tiles drawn
+///   resulting `TileMatch`s describe glues between two tiles drawn
 ///   from the same tileset.
 /// * [`MatchFinder::crossing`] — match **two distinct** tilesets
 ///   against each other. `set_a` and `set_b` are different. Useful
@@ -218,7 +199,7 @@ impl<T: IsRing> MatchFinder<T> {
     }
 
     /// Build a `MatchFinder` that enumerates matches between two
-    /// distinct tilesets `a` and `b`. The returned `MatchType` values
+    /// distinct tilesets `a` and `b`. The returned `TileMatch` values
     /// have `tile_a` indexed into `a.rats()` and `tile_b` indexed into
     /// `b.rats()`. The B-side BP state is built fresh here — use
     /// [`Self::crossing_with_seed`] to amortise across many builds
@@ -278,9 +259,9 @@ impl<T: IsRing> MatchFinder<T> {
         self.set_b.num_tiles()
     }
 
-    /// Realise a `MatchType` against this finder's tilesets, producing
+    /// Realise a `TileMatch` against this finder's tilesets, producing
     /// the resulting boundary `Rat`.
-    pub fn apply_match(&self, m: &MatchType) -> Rat<T> {
+    pub fn apply_match(&self, m: &TileMatch) -> Rat<T> {
         apply_match(m, self.set_a.rats(), self.set_b.rats())
     }
 
@@ -295,7 +276,7 @@ impl<T: IsRing> MatchFinder<T> {
     /// Enumerate the legal glue matches between tile `i` (A-side) and
     /// tile `j` (B-side). Matches are validated (no self-intersection,
     /// no degenerate junction angles) and sorted by `(start_a, start_b)`.
-    pub fn valid_matches(&self, i: usize, j: usize) -> Vec<MatchType> {
+    pub fn valid_matches(&self, i: usize, j: usize) -> Vec<TileMatch> {
         let mut m = Self::validated_matches(self.candidates_for_pair(i, j));
         Self::sort_by_interval(&mut m);
         m
@@ -303,7 +284,7 @@ impl<T: IsRing> MatchFinder<T> {
 
     /// Same as [`Self::valid_matches`] but returns the realised
     /// boundary `Rat` alongside each match.
-    pub fn valid_matches_with_rats(&self, i: usize, j: usize) -> Vec<(Rat<T>, MatchType)> {
+    pub fn valid_matches_with_rats(&self, i: usize, j: usize) -> Vec<(Rat<T>, TileMatch)> {
         let mut m = Self::validated_matches_with_rats(self.candidates_for_pair(i, j));
         m.sort_by(|a, b| {
             a.1.a
@@ -327,7 +308,7 @@ impl<T: IsRing> MatchFinder<T> {
         i: usize,
         j: usize,
         active: &[bool],
-    ) -> Vec<(Rat<T>, MatchType)> {
+    ) -> Vec<(Rat<T>, TileMatch)> {
         let a = self.set_a.rat(i);
         let b = self.set_b.rat(j);
         let cmi_j = self.offset_b + j;
@@ -350,7 +331,7 @@ impl<T: IsRing> MatchFinder<T> {
         }
         let scan_positions: Vec<usize> = (0..n_a).filter(|&p| near_active[p]).collect();
 
-        let mut raw: Vec<(Rat<T>, MatchType)> = Vec::new();
+        let mut raw: Vec<(Rat<T>, TileMatch)> = Vec::new();
 
         let cmi_matches = self
             .engine
@@ -415,13 +396,13 @@ impl<T: IsRing> MatchFinder<T> {
     /// pair. Sorted into a deterministic global order. Result excludes
     /// matches that are involutions of one another (each glue is listed
     /// once, not twice).
-    pub fn all_valid_matches(&self) -> Vec<MatchType> {
+    pub fn all_valid_matches(&self) -> Vec<TileMatch> {
         self.valid_matches_for_pairs(&self.all_pairs())
     }
 
     /// Like [`Self::all_valid_matches`] but restricted to the given
     /// tile-pair set. `(i, j)` denotes `(A-tile i, B-tile j)`.
-    pub fn valid_matches_for_pairs(&self, pairs: &[(usize, usize)]) -> Vec<MatchType> {
+    pub fn valid_matches_for_pairs(&self, pairs: &[(usize, usize)]) -> Vec<TileMatch> {
         let mut m = Self::validated_matches(self.collect_candidates(pairs));
         Self::sort_global(&mut m);
         m
@@ -434,14 +415,14 @@ impl<T: IsRing> MatchFinder<T> {
         Self::validated_results(self.collect_candidates(pairs))
     }
 
-    fn candidates_for_pair(&self, i: usize, j: usize) -> BTreeMap<Rat<T>, Vec<MatchType>> {
+    fn candidates_for_pair(&self, i: usize, j: usize) -> BTreeMap<Rat<T>, Vec<TileMatch>> {
         let a = self.set_a.rat(i);
         let b = self.set_b.rat(j);
         let cmi_j = self.offset_b + j;
         let n_a = a.len();
         let n_b = b.len();
 
-        let mut groups: BTreeMap<Rat<T>, Vec<MatchType>> = BTreeMap::new();
+        let mut groups: BTreeMap<Rat<T>, Vec<TileMatch>> = BTreeMap::new();
         if n_a == 0 || n_b == 0 {
             return groups;
         }
@@ -492,8 +473,8 @@ impl<T: IsRing> MatchFinder<T> {
         (0..na).flat_map(|i| (0..nb).map(move |j| (i, j))).collect()
     }
 
-    fn collect_candidates(&self, pairs: &[(usize, usize)]) -> BTreeMap<Rat<T>, Vec<MatchType>> {
-        let mut all: BTreeMap<Rat<T>, Vec<MatchType>> = BTreeMap::new();
+    fn collect_candidates(&self, pairs: &[(usize, usize)]) -> BTreeMap<Rat<T>, Vec<TileMatch>> {
+        let mut all: BTreeMap<Rat<T>, Vec<TileMatch>> = BTreeMap::new();
         for &(i, j) in pairs {
             for (rat, matches) in self.candidates_for_pair(i, j) {
                 all.entry(rat).or_default().extend(matches);
@@ -502,7 +483,7 @@ impl<T: IsRing> MatchFinder<T> {
         all
     }
 
-    fn validated_matches(groups: BTreeMap<Rat<T>, Vec<MatchType>>) -> Vec<MatchType> {
+    fn validated_matches(groups: BTreeMap<Rat<T>, Vec<TileMatch>>) -> Vec<TileMatch> {
         groups
             .into_iter()
             .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
@@ -511,8 +492,8 @@ impl<T: IsRing> MatchFinder<T> {
     }
 
     fn validated_matches_with_rats(
-        groups: BTreeMap<Rat<T>, Vec<MatchType>>,
-    ) -> Vec<(Rat<T>, MatchType)> {
+        groups: BTreeMap<Rat<T>, Vec<TileMatch>>,
+    ) -> Vec<(Rat<T>, TileMatch)> {
         groups
             .into_iter()
             .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
@@ -520,7 +501,7 @@ impl<T: IsRing> MatchFinder<T> {
             .collect()
     }
 
-    fn validated_results(groups: BTreeMap<Rat<T>, Vec<MatchType>>) -> BTreeSet<Rat<T>> {
+    fn validated_results(groups: BTreeMap<Rat<T>, Vec<TileMatch>>) -> BTreeSet<Rat<T>> {
         groups
             .into_iter()
             .filter(|(rat, _)| Snake::<T>::try_from(rat.seq()).is_ok())
@@ -528,7 +509,7 @@ impl<T: IsRing> MatchFinder<T> {
             .collect()
     }
 
-    fn sort_by_interval(results: &mut [MatchType]) {
+    fn sort_by_interval(results: &mut [TileMatch]) {
         results.sort_by(|a, b| {
             a.a.range
                 .start_offset
@@ -537,7 +518,7 @@ impl<T: IsRing> MatchFinder<T> {
         });
     }
 
-    fn sort_global(results: &mut [MatchType]) {
+    fn sort_global(results: &mut [TileMatch]) {
         results.sort_by(|a, b| {
             a.a.tile_id
                 .cmp(&b.a.tile_id)
@@ -547,17 +528,6 @@ impl<T: IsRing> MatchFinder<T> {
         });
     }
 }
-
-/// Partial-match record indexed by a fixed A-side `(tile, offset)`.
-///
-/// Type alias for [`Segment`]; the A-side is implicit in the lookup key
-/// in [`MatchTypeIndex::candidates_starting_at`], so only the B-side
-/// segment (`tile_id + range`) is stored.
-///
-/// Same edge-offset convention as on the B-side of [`MatchType`]:
-/// `range.start_offset` is the first **surviving** edge, just past the
-/// match end.
-pub type CandidateMatch = Segment;
 
 /// Pre-computed index of all legal glue matches for a single tileset,
 /// indexed by starting `(tile, offset)`.
@@ -573,7 +543,7 @@ pub type CandidateMatch = Segment;
 pub struct MatchTypeIndex<T: IsRing> {
     tileset: Arc<TileSet<T>>,
     entries: Vec<TypeEntry>,
-    by_start: Vec<Vec<Vec<CandidateMatch>>>,
+    by_start: Vec<Vec<Vec<Segment>>>,
 }
 
 impl<T: IsRing> MatchTypeIndex<T> {
@@ -584,7 +554,7 @@ impl<T: IsRing> MatchTypeIndex<T> {
         let all_matches = mf.all_valid_matches();
         let rats = tileset.rats();
 
-        let mut seen: BTreeSet<(MatchType, MatchType)> = BTreeSet::new();
+        let mut seen: BTreeSet<(TileMatch, TileMatch)> = BTreeSet::new();
 
         for mt in &all_matches {
             let len_a = rats[mt.a.tile_id].len();
@@ -604,7 +574,7 @@ impl<T: IsRing> MatchTypeIndex<T> {
             .collect();
 
         let num_tiles = tileset.num_tiles();
-        let mut by_start: Vec<Vec<Vec<CandidateMatch>>> = (0..num_tiles)
+        let mut by_start: Vec<Vec<Vec<Segment>>> = (0..num_tiles)
             .map(|_| vec![vec![]; rats[0].len()])
             .collect();
         for ti in 0..num_tiles {
@@ -638,9 +608,9 @@ impl<T: IsRing> MatchTypeIndex<T> {
         self.entries.len()
     }
 
-    /// Retrieve the canonical-direction `MatchType` for a 1-based id.
+    /// Retrieve the canonical-direction `TileMatch` for a 1-based id.
     /// Use [`Self::signed_id`] + [`Self::apply`] if direction matters.
-    pub fn get(&self, unsigned_id: usize) -> MatchType {
+    pub fn get(&self, unsigned_id: usize) -> TileMatch {
         assert!(
             unsigned_id >= 1 && unsigned_id <= self.entries.len(),
             "match type id {unsigned_id} out of range [1, {}]",
@@ -649,10 +619,10 @@ impl<T: IsRing> MatchTypeIndex<T> {
         self.entries[unsigned_id - 1].first
     }
 
-    /// Find a `MatchType`'s id (1-based) in this index, signed by
+    /// Find a `TileMatch`'s id (1-based) in this index, signed by
     /// direction: positive for the canonical direction, negative for
     /// its involution. `None` if not present.
-    pub fn signed_id(&self, mt: &MatchType) -> Option<i32> {
+    pub fn signed_id(&self, mt: &TileMatch) -> Option<i32> {
         for (idx, entry) in self.entries.iter().enumerate() {
             if *mt == entry.first {
                 return Some((idx + 1) as i32);
@@ -686,13 +656,13 @@ impl<T: IsRing> MatchTypeIndex<T> {
     /// All candidate matches that start at edge `(tile_id, offset)` on
     /// the A side. O(1) lookup; the returned slice borrows from the
     /// pre-computed index.
-    pub fn candidates_starting_at(&self, tile_id: usize, offset: usize) -> &[CandidateMatch] {
+    pub fn candidates_starting_at(&self, tile_id: usize, offset: usize) -> &[Segment] {
         &self.by_start[tile_id][offset]
     }
 
     /// All candidate matches for `tile_id`, grouped by starting
     /// offset. `result[offset]` is the same as `candidates_starting_at(tile_id, offset)`.
-    pub fn all_candidates_for_tile(&self, tile_id: usize) -> &[Vec<CandidateMatch>] {
+    pub fn all_candidates_for_tile(&self, tile_id: usize) -> &[Vec<Segment>] {
         &self.by_start[tile_id]
     }
 }
@@ -772,9 +742,9 @@ mod tests {
         b: &Rat<T>,
         i: usize,
         j: usize,
-    ) -> Vec<MatchType> {
+    ) -> Vec<TileMatch> {
         let mut seen: HashSet<(usize, usize, usize)> = HashSet::new();
-        let mut results: Vec<MatchType> = Vec::new();
+        let mut results: Vec<TileMatch> = Vec::new();
         for ia in 0..a.len() {
             for ib in 0..b.len() {
                 let (ns, len, ne) = a.get_match((ia as i64, ib as i64), b);
@@ -799,8 +769,8 @@ mod tests {
     }
 
     fn assert_match_sets_match<T: IsRing>(
-        mf_matches: &[MatchType],
-        bf_matches: &[MatchType],
+        mf_matches: &[TileMatch],
+        bf_matches: &[TileMatch],
         rats_a: &[Rat<T>],
         rats_b: &[Rat<T>],
         label: &str,
@@ -1782,7 +1752,7 @@ mod tests {
             }
         }
 
-        let all_inv: Vec<MatchType> = all_matches
+        let all_inv: Vec<TileMatch> = all_matches
             .iter()
             .flat_map(|mt| {
                 let inv = match_involution(mt, ts.rat(mt.tile_a()).len(), ts.rat(mt.tile_b()).len());
@@ -1851,7 +1821,7 @@ mod tests {
                 "{label}: MatchFinder.all_valid_matches differs from brute force"
             );
 
-            let mut idx_all: Vec<MatchType> = Vec::new();
+            let mut idx_all: Vec<TileMatch> = Vec::new();
             for entry in &idx.entries {
                 idx_all.push(entry.first);
                 idx_all.push(entry.second);
