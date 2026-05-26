@@ -7,5 +7,3 @@ pub mod misc;
 pub mod stringmatch;
 
 pub mod vis;
-
-pub mod prelude;
