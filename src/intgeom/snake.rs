@@ -9,7 +9,7 @@ use num_traits::ToPrimitive;
 use super::angles::normalize_angle;
 use super::grid::UnitSquareGrid;
 use crate::cyclotomic::geometry::intersect_unit_segments;
-use crate::cyclotomic::{IsRingOrField, Units};
+use crate::cyclotomic::{IsRing, Units};
 
 /// Best-effort dedup for `seg_id` against a `u128` bitmap.
 ///
@@ -37,7 +37,7 @@ fn check_and_mark(seen: &mut u128, seg_id: usize) -> bool {
 }
 
 /// Representation of a turtle (i.e. an oriented point).
-pub struct Turtle<T: IsRingOrField> {
+pub struct Turtle<T: IsRing> {
     /// Position in the complex integer plane.
     pub pos: T,
 
@@ -45,14 +45,14 @@ pub struct Turtle<T: IsRingOrField> {
     pub dir: i8,
 }
 
-impl<T: IsRingOrField> Turtle<T> {
+impl<T: IsRing> Turtle<T> {
     /// Create a new turtle with given location and orientation.
     pub fn new(pos: T, dir: i8) -> Self {
         Self { pos, dir }
     }
 }
 
-impl<T: IsRingOrField> Default for Turtle<T> {
+impl<T: IsRing> Default for Turtle<T> {
     /// Return a canonical turtle, i.e. located at the origin
     /// and looking in the direction of the positive real axis.
     fn default() -> Self {
@@ -80,7 +80,7 @@ impl<T: IsRingOrField> Default for Turtle<T> {
 /// into the formalism. The snake is in so far asymmetric, until it is closed.
 /// A closed snake traces out a path that can be inverted (see the `Rat` type).
 #[derive(Debug, Clone)]
-pub struct Snake<T: IsRingOrField> {
+pub struct Snake<T: IsRing> {
     /// Abstract sequence of unit segments that point into different directions
     /// (i.e. turtle movement instructions).
     /// Each number corresponds to the corresponding rotated unit in the
@@ -121,7 +121,7 @@ pub struct Snake<T: IsRingOrField> {
     saved_angle_0: Option<i8>,
 }
 
-impl<I: ToPrimitive, T: IsRingOrField> TryFrom<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: IsRing> TryFrom<&[I]> for Snake<T> {
     type Error = &'static str;
 
     /// Create a snake from an angle sequence.
@@ -134,7 +134,7 @@ impl<I: ToPrimitive, T: IsRingOrField> TryFrom<&[I]> for Snake<T> {
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsRingOrField> TryFrom<&[I; N]>
+impl<const N: usize, I: ToPrimitive, T: IsRing> TryFrom<&[I; N]>
     for Snake<T>
 {
     type Error = &'static str;
@@ -144,13 +144,13 @@ impl<const N: usize, I: ToPrimitive, T: IsRingOrField> TryFrom<&[I; N]>
     }
 }
 
-impl<T: IsRingOrField> Default for Snake<T> {
+impl<T: IsRing> Default for Snake<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: IsRingOrField> Snake<T> {
+impl<T: IsRing> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
@@ -544,23 +544,23 @@ impl<T: IsRingOrField> Snake<T> {
 
 // For comparisons (Eq, Ord) and presentation (Display)
 // we only care about the angles, all other data is derivative.
-impl<T: IsRingOrField> PartialEq for Snake<T> {
+impl<T: IsRing> PartialEq for Snake<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
     }
 }
-impl<T: IsRingOrField> Eq for Snake<T> {}
-impl<T: IsRingOrField> PartialOrd for Snake<T> {
+impl<T: IsRing> Eq for Snake<T> {}
+impl<T: IsRing> PartialOrd for Snake<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<T: IsRingOrField> Ord for Snake<T> {
+impl<T: IsRing> Ord for Snake<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.angles.cmp(&other.angles)
     }
 }
-impl<T: IsRingOrField> Display for Snake<T> {
+impl<T: IsRing> Display for Snake<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.angles.fmt(f)
     }
@@ -805,7 +805,7 @@ mod tests {
 
     /// Snapshot of every externally-observable Snake field, used by
     /// the round-trip pop tests below.
-    fn snapshot<T: IsRingOrField>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
+    fn snapshot<T: IsRing>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
         (
             s.angles().to_vec(),
             s.angle_sum(),

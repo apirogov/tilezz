@@ -868,7 +868,6 @@ macro_rules! define_integral_zz {
         // don't yet have a hand-rolled table.
 
         // ---- Catch-all "is a cyclotomic ring" marker impls ----
-        impl $crate::cyclotomic::IsRingOrField for $name {}
         impl $crate::cyclotomic::IsRing for $name {}
         impl $crate::cyclotomic::ZZType for $name {}
 

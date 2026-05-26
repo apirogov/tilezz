@@ -2,27 +2,27 @@
 
 use super::angles::upscale_angles;
 use super::snake::Snake;
-use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsRingOrField};
+use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6};
 
 /// Return sequence of a square tile over a compatible ring (divisible by 4).
-pub fn square<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn square<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[1, 1, 1, 1]).as_slice()).unwrap()
 }
 
 /// Return sequence of a equilateral triangle tile over a compatible ring (divisible by 6).
-pub fn triangle<T: IsRingOrField + HasZZ6>() -> Snake<T> {
+pub fn triangle<T: HasZZ6>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(6, &[2, 2, 2]).as_slice()).unwrap()
 }
 
 /// Return sequence of a hexagon tile over a compatible ring (divisible by 6).
-pub fn hexagon<T: IsRingOrField + HasZZ6>() -> Snake<T> {
+pub fn hexagon<T: HasZZ6>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(6, &[1, 1, 1, 1, 1, 1]).as_slice()).unwrap()
 }
 
 // ----
 
 /// Return sequence of the spectre tile over a compatible ring (divisible by 12).
-pub fn spectre<T: IsRingOrField + HasZZ12>() -> Snake<T> {
+pub fn spectre<T: HasZZ12>() -> Snake<T> {
     Snake::try_from(
         upscale_angles::<T>(12, &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2]).as_slice(),
     )
@@ -39,7 +39,7 @@ pub fn spectre<T: IsRingOrField + HasZZ12>() -> Snake<T> {
 
 /// Return the sequence of the Penrose P3 "narrow" (thin) rhomb tile
 /// over a compatible 10-fold cyclotomic ring.
-pub fn penrose_p3_narrow<T: IsRingOrField + HasZZ10>() -> Snake<T> {
+pub fn penrose_p3_narrow<T: HasZZ10>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
         /* */ 1, 0, -1, 2, -1, 0, 0, // 1+ = N3  [0,7]
@@ -52,7 +52,7 @@ pub fn penrose_p3_narrow<T: IsRingOrField + HasZZ10>() -> Snake<T> {
 
 /// Return the sequence of the Penrose P3 "wide" (fat) rhomb tile
 /// over a compatible 10-fold cyclotomic ring.
-pub fn penrose_p3_wide<T: IsRingOrField + HasZZ10>() -> Snake<T> {
+pub fn penrose_p3_wide<T: HasZZ10>() -> Snake<T> {
     // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
         /* */ 2, 0, -1, 2, -1, 0, 0, // 1+ = W3   [0,7]
@@ -71,44 +71,44 @@ pub fn penrose_p3_wide<T: IsRingOrField + HasZZ10>() -> Snake<T> {
 
 /// The square / O-tetromino: a 2×2 block of unit cells.
 #[allow(non_snake_case)]
-pub fn tetromino_O<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_O<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 1, 0, 1, 0, 1, 0, 1]).as_slice()).unwrap()
 }
 
 /// The straight / I-tetromino: a 1×4 strip.
 #[allow(non_snake_case)]
-pub fn tetromino_I<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_I<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[0, 0, 0, 1, 1, 0, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
 /// The T-tetromino: three cells in a row with one centered above.
 #[allow(non_snake_case)]
-pub fn tetromino_T<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_T<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, -1, 1, 1, 0, 0, 1, 1]).as_slice()).unwrap()
 }
 
 /// The S-tetromino (right-handed skew): like an S laid on its side.
 #[allow(non_snake_case)]
-pub fn tetromino_S<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_S<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, -1, 1, 1, 0, 1]).as_slice()).unwrap()
 }
 
 /// The Z-tetromino: the mirror image of S.
 #[allow(non_snake_case)]
-pub fn tetromino_Z<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_Z<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 0, 1, 1, -1, 1, 0, 1, 1]).as_slice()).unwrap()
 }
 
 /// The J-tetromino: three cells in a row with one attached to the
 /// upper-left of the leftmost cell.
 #[allow(non_snake_case)]
-pub fn tetromino_J<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_J<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 1, 1, 0, 1, 0, 0, 1, 1, 0]).as_slice()).unwrap()
 }
 
 /// The L-tetromino: the mirror image of J.
 #[allow(non_snake_case)]
-pub fn tetromino_L<T: IsRingOrField + HasZZ4>() -> Snake<T> {
+pub fn tetromino_L<T: HasZZ4>() -> Snake<T> {
     Snake::try_from(upscale_angles::<T>(4, &[-1, 0, 1, 1, 0, 0, 1, 0, 1, 1]).as_slice()).unwrap()
 }
 

@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 
-use crate::cyclotomic::{IsRingOrField};
+use crate::cyclotomic::{IsRing};
 use crate::intgeom::matchtypes::{BpSeed, MatchFinder};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::tileset::TileSet;
@@ -48,7 +48,7 @@ pub fn grow_patches<T>(
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsRingOrField,
+    T: IsRing,
 {
     let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
     if max_size == 0 || tileset.num_tiles() == 0 {
@@ -93,7 +93,7 @@ pub fn grow_patches_free<T>(
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsRingOrField,
+    T: IsRing,
 {
     grow_patches(tileset, max_size)
         .into_iter()
@@ -122,7 +122,7 @@ mod tests {
         max_size: usize,
     ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
     where
-        T: IsRingOrField,
+        T: IsRing,
     {
         let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
         if max_size == 0 || tileset.num_tiles() == 0 {
@@ -151,7 +151,7 @@ mod tests {
 
     fn assert_grow_matches_brute_force<T>(label: &str, tileset: Arc<TileSet<T>>, max_size: usize)
     where
-        T: IsRingOrField,
+        T: IsRing,
     {
         let fast = grow_patches(Arc::clone(&tileset), max_size);
         let brute = brute_force_grow(&tileset, max_size);
