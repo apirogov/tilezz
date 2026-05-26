@@ -3,41 +3,16 @@ use std::sync::Arc;
 
 use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsRing};
-use crate::geom::matches::{EdgeRange, Segment};
+use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::geom::angles;
 use crate::geom::glue;
 use crate::geom::glue::junctions_glueable;
 use crate::geom::grid::UnitSquareGrid;
-use crate::analysis::matchtypes::MatchTypeIndex;
+use crate::geom::matches::{EdgeRange, PatchSegment, Segment};
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{CoarseJunction, EdgeInfo, OpenVertexType};
-
-/// A maximal contiguous range `[patch_start, patch_end)` of boundary
-/// positions whose edges all come from a single tile instance.
-///
-/// `tile_id` is the tile that segment belongs to; `offset_start` is the
-/// tile-offset of `edges[patch_start]`. Within the segment,
-/// `edges[patch_start + k].tile_offset == (offset_start + k) mod
-/// tile_len`.
-///
-/// **Cyclic-vs-linear caveat.** The boundary is cyclic but
-/// `TileSegment`s are produced from the linear array `[0, n)`. If
-/// position 0 is not a junction, a single cyclic tile-instance run that
-/// straddles position 0 is split into two linear `TileSegment`s — one
-/// at the start `[0, first_junction)` and one at the end
-/// `[last_junction, n)`. Both have the same `tile_id`, and their
-/// offsets are cyclically continuous (the last segment's offsets
-/// continue, modulo tile length, into the first segment's). Callers
-/// that need cyclic tile instances rather than linear segments must
-/// stitch these two halves themselves.
-pub(crate) struct TileSegment {
-    pub(crate) patch_start: usize,
-    pub(crate) patch_end: usize,
-    pub(crate) tile_id: usize,
-    pub(crate) offset_start: usize,
-}
 
 /// A description of a candidate glue between the current patch
 /// boundary and a new tile.
@@ -823,12 +798,12 @@ impl<T: IsRing> GrowingPatch<T> {
         for offset in 0..max_tile_len.min(n) {
             let pos = (target + n - offset) % n;
 
-            if let Some(segment) = segments
-                .iter()
-                .find(|s| pos >= s.patch_start && pos < s.patch_end)
-            {
-                let tile_id = segment.tile_id;
-                let tile_offset = (segment.offset_start + (pos - segment.patch_start))
+            if let Some(segment) = segments.iter().find(|s| {
+                pos >= s.range.start_offset && pos < s.range.start_offset + s.range.len
+            }) {
+                let tile_id = segment.tile_seg.tile_id;
+                let tile_offset = (segment.tile_seg.range.start_offset
+                    + (pos - segment.range.start_offset))
                     % tileset.rat(tile_id).len();
                 let mut tmp_by_start: Vec<Vec<PatchMatch>> = vec![Vec::new(); n];
                 compute_candidates_at_position(
@@ -883,11 +858,12 @@ impl<T: IsRing> GrowingPatch<T> {
         let mut global_seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
 
         for segment in &segments {
-            let tile_id = segment.tile_id;
-            let seg_len = segment.patch_end - segment.patch_start;
+            let tile_id = segment.tile_seg.tile_id;
+            let seg_len = segment.range.len;
             for local_k in 0..seg_len {
-                let tile_offset = (segment.offset_start + local_k) % tileset.rat(tile_id).len();
-                let patch_pos = segment.patch_start + local_k;
+                let tile_offset =
+                    (segment.tile_seg.range.start_offset + local_k) % tileset.rat(tile_id).len();
+                let patch_pos = segment.range.start_offset + local_k;
                 compute_candidates_at_position(
                     patch_pos,
                     angles,
@@ -1337,14 +1313,14 @@ impl<T: IsRing> GrowingPatch<T> {
         Some((cw_offset, ccw_offset))
     }
 
-    /// Partition the boundary into [`TileSegment`]s -- maximal contiguous
+    /// Partition the boundary into [`PatchSegment`]s -- maximal contiguous
     /// runs of edges from the same tile instance.
     ///
-    /// See [`TileSegment`] for the cyclic-vs-linear caveat: when position
+    /// See [`PatchSegment`] for the cyclic-vs-linear caveat: when position
     /// 0 is not at a junction, one cyclic tile-instance run is split into
     /// two linear segments at the array seam.
     #[cfg(test)]
-    pub(crate) fn tile_segments(&self) -> Vec<TileSegment> {
+    pub(crate) fn tile_segments(&self) -> Vec<PatchSegment> {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
             _ => return vec![],
@@ -1779,11 +1755,11 @@ fn build_glued_edges(
     (new_edges, new_ptids)
 }
 
-/// Partition the boundary into [`TileSegment`]s — maximal contiguous runs
-/// of edges from the same tile instance (no junction between them).
+/// Partition the boundary into [`PatchSegment`]s -- maximal contiguous
+/// runs of edges from the same tile instance (no junction between them).
 ///
 /// The segment-break condition is the **canonical** junction check
-/// [`is_junction_at`] — i.e. `angles[i] != tile.seq()[edges[i].tile_offset]`.
+/// [`is_junction_at`] -- i.e. `angles[i] != tile.seq()[edges[i].tile_offset]`.
 /// Every glue updates the boundary angle at the new junction
 /// (`compute_glue_angles` produces an angle that for non-degenerate tiles
 /// is provably different from either tile's natural internal angle at the
@@ -1800,27 +1776,26 @@ fn build_glued_edges(
 /// Cyclic-vs-linear caveat: when position 0 is not at a junction, a single
 /// cyclic tile-instance run is split into two linear segments at the array
 /// seam (`[0, first_junction)` and `[last_junction, n)`). See
-/// [`TileSegment`] for details.
+/// [`PatchSegment`] for details.
 fn compute_segments<T: IsRing>(
     angles: &[i8],
     edges: &[EdgeInfo],
     tileset: &TileSet<T>,
-) -> Vec<TileSegment> {
+) -> Vec<PatchSegment> {
     let n = edges.len();
     if n == 0 {
         return vec![];
     }
-    let mut segments: Vec<TileSegment> = Vec::new();
+    let mut segments: Vec<PatchSegment> = Vec::new();
     let mut seg_start = 0;
     for i in 1..=n {
         let break_here = i == n || is_junction_at(angles, edges, tileset, i);
         if break_here {
-            segments.push(TileSegment {
-                patch_start: seg_start,
-                patch_end: i,
-                tile_id: edges[seg_start].tile_id,
-                offset_start: edges[seg_start].tile_offset,
-            });
+            let len = i - seg_start;
+            segments.push(PatchSegment::new(
+                EdgeRange::new(seg_start, len),
+                Segment::new(edges[seg_start].tile_id, EdgeRange::new(edges[seg_start].tile_offset, len)),
+            ));
             seg_start = i;
         }
     }
@@ -4013,32 +3988,33 @@ mod tests {
 
         // Contiguous partition.
         assert_eq!(
-            segs.first().map(|s| s.patch_start),
+            segs.first().map(|s| s.range.start_offset),
             Some(0),
             "first segment starts at 0"
         );
         assert_eq!(
-            segs.last().map(|s| s.patch_end),
+            segs.last().map(|s| s.range.start_offset + s.range.len),
             Some(n),
             "last segment ends at n"
         );
         for w in segs.windows(2) {
             assert_eq!(
-                w[0].patch_end, w[1].patch_start,
+                w[0].range.start_offset + w[0].range.len,
+                w[1].range.start_offset,
                 "segments must be contiguous"
             );
         }
 
         // Consistent tile_id and contiguous offsets within each segment.
         for seg in &segs {
-            let tile_id = seg.tile_id;
+            let tile_id = seg.tile_seg.tile_id;
             let tile_len = gp.tileset().rat(tile_id).len();
-            for k in 0..(seg.patch_end - seg.patch_start) {
-                let pos = seg.patch_start + k;
+            for k in 0..seg.range.len {
+                let pos = seg.range.start_offset + k;
                 assert_eq!(edges[pos].tile_id, tile_id, "tile_id at pos {pos}");
                 assert_eq!(
                     edges[pos].tile_offset,
-                    (seg.offset_start + k) % tile_len,
+                    (seg.tile_seg.range.start_offset + k) % tile_len,
                     "tile_offset at pos {pos}",
                 );
             }
@@ -4050,7 +4026,7 @@ mod tests {
             .chain((0..n).filter(|&i| gp.is_junction(i)))
             .collect();
         let actual_starts: std::collections::BTreeSet<usize> =
-            segs.iter().map(|s| s.patch_start).collect();
+            segs.iter().map(|s| s.range.start_offset).collect();
         assert_eq!(
             actual_starts, expected_starts,
             "segment starts must equal {{0}} ∪ junctions"
