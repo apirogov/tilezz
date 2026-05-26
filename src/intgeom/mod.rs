@@ -14,8 +14,6 @@ pub mod tileset;
 
 pub mod glue;
 
-pub mod matches;
-
 pub mod matchtypes;
 
 pub mod vertextypes;
