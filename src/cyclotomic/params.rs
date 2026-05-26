@@ -384,6 +384,7 @@ pub const ZZ60_PARAMS: ZZParams = ZZParams {
 /// [  yz ,  xyz ,  5  z  , 10y-10   ,  5xz , 10xy-10x , 5(10-2y)
 /// [ xyz , 3 yz ,  5x z  , 10xy-10x ,  15z , 30y-30   , 50x-10xy , 15(10-2y)
 /// where x = sqrt(3), y = sqrt(5), z = sqrt(2(5-y)) = sqrt(10-2y)
+#[allow(dead_code)]
 pub fn zz60_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     let i = |n: i64| T::from_i64(n).unwrap();
     let int2 = i(2);

@@ -196,6 +196,91 @@ pub fn signum_sum_sqrt_expr_4_pentagonal<T: IntRing + ZSigned + FromPrimitive>(
     -sq * spq
 }
 
+/// Floating-point-free sign of
+///   a + b*sqrt(3) + c*sqrt(5) + d*sqrt(10-2*sqrt(5))
+///     + e*sqrt(15) + f*sqrt(3(10-2*sqrt(5)))
+///     + g*sqrt(5(10-2*sqrt(5))) + h*sqrt(15(10-2*sqrt(5)))
+/// via recursive reduction from `Q(sqrt(3), sqrt(5), sqrt(10-2*sqrt(5)))` to
+/// `Q(sqrt(3), sqrt(5))` (where the inner closed-form
+/// `signum_sum_sqrt_expr_4` applies, since `m = 3, n = 5, l = 15 = m*n`).
+///
+/// This is the ZZ60 real subring. Group as `z = P + Q*sqrt(y)` with
+///   P = a + b*sqrt(3) + c*sqrt(5) + e*sqrt(15)
+///   Q = d + f*sqrt(3) + g*sqrt(5) + h*sqrt(15)
+///   y = 10 - 2*sqrt(5)
+/// Both `P, Q` live in the biquadratic field `Q(sqrt(3), sqrt(5))`. Same
+/// closed-form shape as the pentagonal helper, with one extra
+/// `Q(sqrt(5))` -> `Q(sqrt(3), sqrt(5))` lifting on the inner sign helper.
+#[allow(clippy::too_many_arguments)]
+pub fn signum_sum_sqrt_expr_8_zz60<T: IntRing + ZSigned + FromPrimitive>(
+    a: T,
+    b: T,
+    c: T,
+    d: T,
+    e: T,
+    f: T,
+    g: T,
+    h: T,
+) -> T {
+    let int1 = T::one();
+    let int2 = T::from_i8(2).unwrap();
+    let int3 = T::from_i8(3).unwrap();
+    let int5 = T::from_i8(5).unwrap();
+    let int6 = T::from_i8(6).unwrap();
+    let int10 = T::from_i8(10).unwrap();
+    let int15 = T::from_i8(15).unwrap();
+
+    // sign(P) and sign(Q), each via the exact biquadratic
+    // `signum_sum_sqrt_expr_4(_, 1, _, 3, _, 5, _, 15)`.
+    let sp = signum_sum_sqrt_expr_4(a, int1, b, int3, c, int5, e, int15);
+    let sq = signum_sum_sqrt_expr_4(d, int1, f, int3, g, int5, h, int15);
+
+    if sp == sq {
+        return sp;
+    }
+    if sq.is_zero() {
+        return sp;
+    }
+    if sp.is_zero() {
+        return sq;
+    }
+
+    // P^2 in basis {1, sqrt(3), sqrt(5), sqrt(15)}:
+    //   const:    a^2 + 3*b^2 + 5*c^2 + 15*e^2
+    //   sqrt(3):  2*a*b + 10*c*e        (sqrt(5)*sqrt(15) = 5*sqrt(3))
+    //   sqrt(5):  2*a*c + 6*b*e         (sqrt(3)*sqrt(15) = 3*sqrt(5))
+    //   sqrt(15): 2*a*e + 2*b*c         (sqrt(3)*sqrt(5) = sqrt(15))
+    let p2_0 = a * a + int3 * b * b + int5 * c * c + int15 * e * e;
+    let p2_1 = int2 * a * b + int10 * c * e;
+    let p2_2 = int2 * a * c + int6 * b * e;
+    let p2_3 = int2 * a * e + int2 * b * c;
+
+    // Q^2 in the same basis:
+    let q2_0 = d * d + int3 * f * f + int5 * g * g + int15 * h * h;
+    let q2_1 = int2 * d * f + int10 * g * h;
+    let q2_2 = int2 * d * g + int6 * f * h;
+    let q2_3 = int2 * d * h + int2 * f * g;
+
+    // Q^2 * (10 - 2*sqrt(5)) in {1, sqrt(3), sqrt(5), sqrt(15)}:
+    //   const:    10*q2_0 - 10*q2_2     (2*sqrt(5)*sqrt(5) = 10)
+    //   sqrt(3):  10*q2_1 - 10*q2_3
+    //   sqrt(5):  10*q2_2 - 2*q2_0
+    //   sqrt(15): 10*q2_3 - 2*q2_1
+    let qy_0 = int10 * q2_0 - int10 * q2_2;
+    let qy_1 = int10 * q2_1 - int10 * q2_3;
+    let qy_2 = int10 * q2_2 - int2 * q2_0;
+    let qy_3 = int10 * q2_3 - int2 * q2_1;
+
+    let alpha = p2_0 - qy_0;
+    let beta = p2_1 - qy_1;
+    let gamma = p2_2 - qy_2;
+    let delta = p2_3 - qy_3;
+
+    let spq = signum_sum_sqrt_expr_4(alpha, int1, beta, int3, gamma, int5, delta, int15);
+
+    -sq * spq
+}
+
 // ----------------
 // Coefficient-array sign extractors.
 //
@@ -427,5 +512,60 @@ mod tests {
         // P > 0, Q > 0 -> 1; P < 0, Q < 0 -> -1.
         assert_eq!(sign_zz16(1, 1, 1, 1), 1);
         assert_eq!(sign_zz16(-1, -1, -1, -1), -1);
+    }
+
+    #[test]
+    fn test_sum_root_expr_sign_8_zz60() {
+        // sign of a + b*sqrt(3) + c*sqrt(5) + d*sqrt(10-2*sqrt(5))
+        //        + e*sqrt(15) + f*sqrt(3(10-2*sqrt(5)))
+        //        + g*sqrt(5(10-2*sqrt(5))) + h*sqrt(15(10-2*sqrt(5)))
+        let s = signum_sum_sqrt_expr_8_zz60::<i64>;
+
+        // Trivial axes (each basis element is positive).
+        assert_eq!(s(0, 0, 0, 0, 0, 0, 0, 0), 0);
+        assert_eq!(s(1, 0, 0, 0, 0, 0, 0, 0), 1);
+        assert_eq!(s(-1, 0, 0, 0, 0, 0, 0, 0), -1);
+        assert_eq!(s(0, 1, 0, 0, 0, 0, 0, 0), 1);
+        assert_eq!(s(0, -1, 0, 0, 0, 0, 0, 0), -1);
+        assert_eq!(s(0, 0, 1, 0, 0, 0, 0, 0), 1);
+        assert_eq!(s(0, 0, -1, 0, 0, 0, 0, 0), -1);
+        assert_eq!(s(0, 0, 0, 1, 0, 0, 0, 0), 1);
+        assert_eq!(s(0, 0, 0, -1, 0, 0, 0, 0), -1);
+        assert_eq!(s(0, 0, 0, 0, 1, 0, 0, 0), 1);
+        assert_eq!(s(0, 0, 0, 0, 0, 1, 0, 0), 1);
+        assert_eq!(s(0, 0, 0, 0, 0, 0, 1, 0), 1);
+        assert_eq!(s(0, 0, 0, 0, 0, 0, 0, 1), 1);
+
+        // All-1 / all-(-1) are unambiguous.
+        assert_eq!(s(1, 1, 1, 1, 1, 1, 1, 1), 1);
+        assert_eq!(s(-1, -1, -1, -1, -1, -1, -1, -1), -1);
+
+        // Mixed-sign sanity (numerical): sqrt(3) ~ 1.732, sqrt(5) ~ 2.236,
+        //   sqrt(15) ~ 3.873, sqrt(10-2*sqrt(5)) ~ 2.351,
+        //   sqrt(3*(10-2*sqrt(5))) ~ 4.072, sqrt(5*(10-2*sqrt(5))) ~ 5.257,
+        //   sqrt(15*(10-2*sqrt(5))) ~ 9.106.
+        //
+        //   1 + (-1)*sqrt(3) ~ -0.732 -> -1
+        assert_eq!(s(1, -1, 0, 0, 0, 0, 0, 0), -1);
+        //   2 + (-1)*sqrt(3) ~ 0.268 -> 1
+        assert_eq!(s(2, -1, 0, 0, 0, 0, 0, 0), 1);
+        //   sqrt(15) - sqrt(5) - sqrt(3) ~ -0.095 -> -1
+        assert_eq!(s(0, -1, -1, 0, 1, 0, 0, 0), -1);
+        //   sqrt(15) - sqrt(5) ~ 1.637 -> 1
+        assert_eq!(s(0, 0, -1, 0, 1, 0, 0, 0), 1);
+
+        // P near zero, Q strictly positive: result should be sign(Q).
+        //   d*sqrt(y) -- d > 0 -> sign = +1.
+        assert_eq!(s(0, 0, 0, 1, 0, 0, 0, 0), 1);
+        assert_eq!(s(0, 0, 0, -1, 0, 0, 0, 0), -1);
+
+        // Mixed P, Q opposite signs: nontrivial reduction kicks in.
+        //   P = -1 (so P^2 = 1), Q = 1 (so Q^2 = 1), y ~ 5.528.
+        //   z = -1 + sqrt(y) ~ -1 + 2.351 = 1.351 > 0 -> 1.
+        assert_eq!(s(-1, 0, 0, 1, 0, 0, 0, 0), 1);
+        //   P = -3, Q = 1, y ~ 5.528: z = -3 + 2.351 < 0 -> -1.
+        assert_eq!(s(-3, 0, 0, 1, 0, 0, 0, 0), -1);
+        //   P = 3, Q = -1: z = 3 - 2.351 > 0 -> 1.
+        assert_eq!(s(3, 0, 0, -1, 0, 0, 0, 0), 1);
     }
 }

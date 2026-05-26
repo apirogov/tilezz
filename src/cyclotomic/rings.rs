@@ -13,7 +13,7 @@ use num_rational::Ratio;
 use crate::cyclotomic::gaussint::GaussInt;
 use crate::cyclotomic::params::{
     ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ16_PARAMS, ZZ16_Y, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS,
-    ZZ8_PARAMS,
+    ZZ60_PARAMS, ZZ8_PARAMS,
 };
 use crate::define_integral_zz;
 
@@ -1210,6 +1210,212 @@ crate::impl_integral_re_im_sign_via_basis!(ZZ16, 8, 4, zz16_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ16, 8, 4, zz16_real_sign);
 crate::impl_integral_within_radius_via_complex64!(ZZ16);
 crate::zz_integral_ring_tests!(name: ZZ16);
+
+// ----------------
+// ZZ60 -- babylonian integers Z[zeta_60].
+//
+// `zeta = e^(2*pi*i/60) = cos(6) + i*sin(6)`. `Phi_60(x) = x^16 + x^14 -
+// x^10 - x^8 - x^6 + x^2 + 1`, so `zeta^16 = -zeta^14 + zeta^10 + zeta^8
+// + zeta^6 - zeta^2 - 1`. Storage: `[i64; 16]` over
+// `{1, zeta, ..., zeta^15}`.
+//
+// The real subring is `Q(sqrt(3), sqrt(5), sqrt(10-2*sqrt(5)))`, dim 8
+// over Q, basis:
+//   {1, sqrt(3), sqrt(5), sqrt(y), sqrt(15), sqrt(3y), sqrt(5y), sqrt(15y)}
+// where `y = 10 - 2*sqrt(5)`, with `/16` implicit denominator (matching
+// the legacy `ZZ60_PARAMS.scaling_fac`).
+//
+// Real-sign extraction is **exact** via `signum_sum_sqrt_expr_8_zz60`
+// (closed-form reduction `Q(sqrt(3), sqrt(5), sqrt(y))` -> biquadratic
+// `Q(sqrt(3), sqrt(5))`, where `signum_sum_sqrt_expr_4(_, 1, _, 3, _, 5,
+// _, 15)` applies exactly since `m * n = l` for `m=3, n=5, l=15`).
+//
+// The `re_decomp` / `im_decomp` tables were extracted from the legacy
+// `ZZ60::unit(k)` (which has matching algebraic structure) via the
+// one-shot `codegen_zz60` binary. Their correctness is then verified by
+// the generic `complex64_unit_matches_exp` test in the test suite.
+
+#[inline]
+fn zz60_complex64(coeffs: &[i64; 16]) -> Complex64 {
+    // Symbolic-projection complex64. We project the integer-basis vector
+    // to a K-vector in the symbolic basis, then evaluate each component
+    // as `c * sqrt(N)` in f64 and divide by the implicit /16. This is the
+    // same recipe used by the legacy `complex64` path, so its bit-exact
+    // outputs (used by `cyclotomic::constants::tests::test_constants`) are
+    // preserved.
+    //
+    // Internally we just delegate to the generic `re_sign_basis` /
+    // `im_sign_basis`-style projection routed through f64 sqrt(N) terms.
+    let sq3 = 3.0_f64.sqrt();
+    let sq5 = 5.0_f64.sqrt();
+    let sq15 = 15.0_f64.sqrt();
+    let sqy = ZZ10_Y.sqrt();
+    let sq3y = (3.0 * ZZ10_Y).sqrt();
+    let sq5y = (5.0 * ZZ10_Y).sqrt();
+    let sq15y = (15.0 * ZZ10_Y).sqrt();
+
+    let proj = |table: &[[i64; 8]; 16]| -> f64 {
+        let mut acc = [0i64; 8];
+        for k in 0..16 {
+            let ck = coeffs[k];
+            if ck == 0 {
+                continue;
+            }
+            for j in 0..8 {
+                acc[j] += ck * table[k][j];
+            }
+        }
+        (acc[0] as f64
+            + (acc[1] as f64) * sq3
+            + (acc[2] as f64) * sq5
+            + (acc[3] as f64) * sqy
+            + (acc[4] as f64) * sq15
+            + (acc[5] as f64) * sq3y
+            + (acc[6] as f64) * sq5y
+            + (acc[7] as f64) * sq15y)
+            / 16.0
+    };
+    let re = proj(&ZZ60_RE_DECOMP);
+    let im = proj(&ZZ60_IM_DECOMP);
+    Complex64::new(re, im)
+}
+
+const ZZ60_CARTESIAN: [Complex64; 16] = {
+    // Cached f64 cos/sin pairs for zeta^k = exp(2*pi*i*k/60). Unused at
+    // runtime (complex64_fn projects symbolically) but kept as the macro
+    // requires a `[Complex64; PHI]` const.
+    const fn placeholder() -> Complex64 {
+        Complex64::new(0.0, 0.0)
+    }
+    let mut out = [placeholder(); 16];
+    // We cannot call `.cos()` in const context, so leave all-zero. The
+    // values are recomputed every call in zz60_complex64.
+    out[0] = Complex64::new(1.0, 0.0);
+    out
+};
+
+// Decomposition tables. Auto-generated from legacy ZZ60 via
+// `src/bin/codegen_zz60.rs`.
+const ZZ60_RE_DECOMP: [[i64; 8]; 16] = [
+    [16, 0, 0, 0, 0, 0, 0, 0],
+    [0, 2, 0, 2, 2, 0, 0, 0],
+    [-2, 0, 2, 0, 0, 1, 0, 1],
+    [0, 0, 0, 2, 0, 0, 2, 0],
+    [2, 0, 2, 0, 0, 2, 0, 0],
+    [0, 8, 0, 0, 0, 0, 0, 0],
+    [4, 0, 4, 0, 0, 0, 0, 0],
+    [0, -2, 0, 1, 2, 0, 1, 0],
+    [2, 0, -2, 0, 0, 1, 0, 1],
+    [0, 0, 0, 4, 0, 0, 0, 0],
+    [8, 0, 0, 0, 0, 0, 0, 0],
+    [0, 2, 0, -2, 2, 0, 0, 0],
+    [-4, 0, 4, 0, 0, 0, 0, 0],
+    [0, 2, 0, 1, -2, 0, 1, 0],
+    [-2, 0, -2, 0, 0, 2, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+];
+
+const ZZ60_IM_DECOMP: [[i64; 8]; 16] = [
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [-2, 0, -2, 0, 0, 2, 0, 0],
+    [0, 2, 0, 1, -2, 0, 1, 0],
+    [-4, 0, 4, 0, 0, 0, 0, 0],
+    [0, 2, 0, -2, 2, 0, 0, 0],
+    [8, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 4, 0, 0, 0, 0],
+    [2, 0, -2, 0, 0, 1, 0, 1],
+    [0, -2, 0, 1, 2, 0, 1, 0],
+    [4, 0, 4, 0, 0, 0, 0, 0],
+    [0, 8, 0, 0, 0, 0, 0, 0],
+    [2, 0, 2, 0, 0, 2, 0, 0],
+    [0, 0, 0, 2, 0, 0, 2, 0],
+    [-2, 0, 2, 0, 0, 1, 0, 1],
+    [0, 2, 0, 2, 2, 0, 0, 0],
+    [16, 0, 0, 0, 0, 0, 0, 0],
+];
+
+fn zz60_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let sixteenth = Ratio::<i64>::new_raw(1, 16);
+    // Project to GaussInt-Ratio coefficients of the symbolic basis, each
+    // with the implicit /16 folded in.
+    let mut k_coeffs: [GaussInt<Ratio<i64>>; 8] = [GaussInt::new(
+        Ratio::<i64>::from_integer(0),
+        Ratio::<i64>::from_integer(0),
+    ); 8];
+    for j in 0..8 {
+        let mut re_acc: i64 = 0;
+        let mut im_acc: i64 = 0;
+        for k in 0..16 {
+            re_acc += coeffs[k] * ZZ60_RE_DECOMP[k][j];
+            im_acc += coeffs[k] * ZZ60_IM_DECOMP[k][j];
+        }
+        k_coeffs[j] = GaussInt::new(
+            Ratio::<i64>::from_integer(re_acc) * sixteenth,
+            Ratio::<i64>::from_integer(im_acc) * sixteenth,
+        );
+    }
+    format_symbolic(
+        &k_coeffs,
+        &[
+            "1",
+            "3",
+            "5",
+            "2(5-sqrt(5))",
+            "15",
+            "6(5-sqrt(5))",
+            "10(5-sqrt(5))",
+            "30(5-sqrt(5))",
+        ],
+        f,
+    )
+}
+
+/// Sign of an 8-component K-vector in the ZZ60 real subring basis. Exact
+/// via the closed-form `signum_sum_sqrt_expr_8_zz60`.
+#[inline]
+fn zz60_real_sign(x: &[i64; 8]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz60::<i64>(
+        x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+    ) as i8
+}
+
+define_integral_zz! {
+    name: ZZ60,
+    n: 60,
+    phi: 16,
+    real_dim: 8,
+    // Phi_60(x) = x^16 + x^14 - x^10 - x^8 - x^6 + x^2 + 1, so
+    // zeta^16 = -zeta^14 + zeta^10 + zeta^8 + zeta^6 - zeta^2 - 1.
+    reduction: [-1i64, 0, -1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, -1, 0],
+    re_decomp: ZZ60_RE_DECOMP,
+    im_decomp: ZZ60_IM_DECOMP,
+    cartesian: ZZ60_CARTESIAN,
+    params: ZZ60_PARAMS,
+    one_in_real_basis: [16i64, 0, 0, 0, 0, 0, 0, 0],
+    display_fn: zz60_display,
+    complex64_fn: zz60_complex64,
+    has: [HasZZ4Impl, HasZZ6Impl, HasZZ10Impl, HasZZ12Impl],
+}
+
+impl From<(i64, i64)> for ZZ60 {
+    /// `(re, im)` where `i = zeta^15`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients with `b` at position 15.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        let mut c = [0i64; 16];
+        c[0] = re;
+        c[15] = im;
+        Self::from_int_coeffs(c)
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ60, 60);
+crate::impl_integral_mul_via_basis!(ZZ60, 16);
+crate::impl_integral_conj_via_basis!(ZZ60, 16);
+crate::impl_integral_re_im_sign_via_basis!(ZZ60, 16, 8, zz60_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ60, 16, 8, zz60_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ60);
+crate::zz_integral_ring_tests!(name: ZZ60);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
