@@ -82,6 +82,46 @@ fn format_gauss_pair(re: Ratio<i64>, im: Ratio<i64>) -> String {
 /// of symbolic root labels (`"1"`, `"3"`, `"2+sqrt(2)"`, ...) as the
 /// canonical sum-of-square-roots string.
 ///
+/// Macro emitting the exact `CellFloor` impl for a `HasZZ4` ring.
+///
+/// The f64 `complex64().floor()` gives an initial guess. Then sign checks
+/// against `T::from((k, 0))` and `T::from((0, k))` verify that `zz` lies
+/// in cell `[k, k+1)` on each axis; loops adjust by ±1 until the
+/// invariants hold. For typical inputs the f64 is already correct and
+/// the loops run zero iterations; f64 boundary cases are corrected
+/// exactly by the sign checks. Output is bit-exact regardless of f64.
+macro_rules! impl_cell_floor_via_sign_verify {
+    ($name:ident) => {
+        impl $crate::cyclotomic::CellFloor for $name {
+            #[inline]
+            fn cell_floor(&self) -> (i64, i64) {
+                use $crate::cyclotomic::{ReImSign, SymNum};
+                let c = self.complex64();
+                let mut cx = c.re.floor() as i64;
+                let mut cy = c.im.floor() as i64;
+
+                // Re axis: ensure cx <= Re(self) < cx+1.
+                while (*self - <$name as From<(i64, i64)>>::from((cx, 0))).re_sign() < 0 {
+                    cx -= 1;
+                }
+                while (*self - <$name as From<(i64, i64)>>::from((cx + 1, 0))).re_sign() >= 0 {
+                    cx += 1;
+                }
+
+                // Im axis: ensure cy <= Im(self) < cy+1.
+                while (*self - <$name as From<(i64, i64)>>::from((0, cy))).im_sign() < 0 {
+                    cy -= 1;
+                }
+                while (*self - <$name as From<(i64, i64)>>::from((0, cy + 1))).im_sign() >= 0 {
+                    cy += 1;
+                }
+
+                (cx, cy)
+            }
+        }
+    };
+}
+
 /// Output shape:
 ///   * `"0"` when all coefficients are zero
 ///   * `"<coeff>"` for the `sqrt(1)` term
@@ -199,6 +239,7 @@ crate::impl_integral_conj_via_basis!(ZZ4, 2);
 crate::impl_integral_re_im_sign_via_basis!(ZZ4, 2, 1, zz4_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ4, 2, 1, zz4_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ4);
+impl_cell_floor_via_sign_verify!(ZZ4);
 crate::zz_integral_ring_tests!(name: ZZ4);
 
 // ----------------
@@ -318,6 +359,7 @@ crate::impl_integral_conj_via_basis!(ZZ8, 4);
 crate::impl_integral_re_im_sign_via_basis!(ZZ8, 4, 2, zz8_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ8, 4, 2, zz8_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ8);
+impl_cell_floor_via_sign_verify!(ZZ8);
 crate::zz_integral_ring_tests!(name: ZZ8);
 
 // ----------------
@@ -699,6 +741,51 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
 // Emits a sibling `zz12_generic_ring_tests` module of ~25 ring-axiom
 // tests. The ring-specific `mod tests` below stays for ZZ12-only checks
 // (Display format, specific value assertions).
+/// Hand-rolled ZZ12 `CellFloor` for the rat_enum hot path. Skips the
+/// generic-macro ring multiplication + `re_sign` projection and reads
+/// the `(m, n)` components of `Re`/`Im` inline as `(2a+c, b)` /
+/// `(b+2d, c)`, then dispatches to `sign_m_plus_n_sqrt3` directly.
+///
+/// `Re(z) = (re_m + re_n*sqrt(3))/2`, so `floor(Re) = k` iff
+/// `(re_m - 2k) + re_n*sqrt(3) >= 0` and the same with `k+1` is
+/// strictly negative. f64 gives a starting guess; sign helpers correct
+/// it exactly.
+impl crate::cyclotomic::CellFloor for ZZ12 {
+    #[inline]
+    fn cell_floor(&self) -> (i64, i64) {
+        use crate::cyclotomic::SymNum;
+        let [a, b, c, d] = self.int_coeffs();
+        let re_m = 2 * a + c;
+        let re_n = b;
+        let im_m = b + 2 * d;
+        let im_n = c;
+
+        let cf = self.complex64();
+        let mut cx = cf.re.floor() as i64;
+        let mut cy = cf.im.floor() as i64;
+
+        // Re axis: ensure cx <= Re(z) < cx+1, i.e.
+        //   (re_m - 2*cx) + re_n*sqrt(3) >= 0
+        //   (re_m - 2*(cx+1)) + re_n*sqrt(3) < 0
+        while sign_m_plus_n_sqrt3(re_m - 2 * cx, re_n) < 0 {
+            cx -= 1;
+        }
+        while sign_m_plus_n_sqrt3(re_m - 2 * (cx + 1), re_n) >= 0 {
+            cx += 1;
+        }
+
+        // Im axis: ensure cy <= Im(z) < cy+1.
+        while sign_m_plus_n_sqrt3(im_m - 2 * cy, im_n) < 0 {
+            cy -= 1;
+        }
+        while sign_m_plus_n_sqrt3(im_m - 2 * (cy + 1), im_n) >= 0 {
+            cy += 1;
+        }
+
+        (cx, cy)
+    }
+}
+
 crate::zz_integral_ring_tests!(name: ZZ12);
 
 // ----------------
@@ -868,6 +955,7 @@ crate::impl_integral_conj_via_basis!(ZZ24, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ24, 8, 4, zz24_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ24, 8, 4, zz24_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ24);
+impl_cell_floor_via_sign_verify!(ZZ24);
 crate::zz_integral_ring_tests!(name: ZZ24);
 
 // ----------------
@@ -1060,6 +1148,7 @@ crate::impl_integral_conj_via_basis!(ZZ20, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ20, 8, 4, zz20_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ20, 8, 4, zz20_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ20);
+impl_cell_floor_via_sign_verify!(ZZ20);
 crate::zz_integral_ring_tests!(name: ZZ20);
 
 // ----------------
@@ -1192,6 +1281,21 @@ crate::impl_integral_conj_via_basis!(ZZ10, 4);
 crate::impl_integral_re_im_sign_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ10);
+
+// CellFloor: ZZ10 doesn't contain `i`, so we can't construct `k*i` as a
+// ZZ10 element to verify the imag-axis floor via the exact-sign trick.
+// Falls back to f64. The grid concept inherently assumes axis-aligned
+// cells (a `HasZZ4` notion); for ZZ10 this is at best a heuristic
+// bucketing, with rare f64 boundary-rounding artifacts.
+impl crate::cyclotomic::CellFloor for ZZ10 {
+    #[inline]
+    fn cell_floor(&self) -> (i64, i64) {
+        use crate::cyclotomic::SymNum;
+        let c = self.complex64();
+        (c.re.floor() as i64, c.im.floor() as i64)
+    }
+}
+
 crate::zz_integral_ring_tests!(name: ZZ10);
 
 // ----------------
@@ -1366,6 +1470,7 @@ crate::impl_integral_conj_via_basis!(ZZ16, 8);
 crate::impl_integral_re_im_sign_via_basis!(ZZ16, 8, 4, zz16_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ16, 8, 4, zz16_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ16);
+impl_cell_floor_via_sign_verify!(ZZ16);
 crate::zz_integral_ring_tests!(name: ZZ16);
 
 // ----------------
@@ -1589,6 +1694,7 @@ crate::impl_integral_conj_via_basis!(ZZ60, 16);
 crate::impl_integral_re_im_sign_via_basis!(ZZ60, 16, 8, zz60_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ60, 16, 8, zz60_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ60);
+impl_cell_floor_via_sign_verify!(ZZ60);
 crate::zz_integral_ring_tests!(name: ZZ60);
 
 // ----------------
@@ -1793,6 +1899,7 @@ crate::impl_integral_conj_via_basis!(ZZ32, 16);
 crate::impl_integral_re_im_sign_via_basis!(ZZ32, 16, 8, zz32_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ32, 16, 8, zz32_real_sign);
 crate::impl_integral_within_radius_via_norm_sq!(ZZ32);
+impl_cell_floor_via_sign_verify!(ZZ32);
 crate::zz_integral_ring_tests!(name: ZZ32);
 
 // ----------------
