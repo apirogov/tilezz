@@ -203,6 +203,7 @@ pub const ZZ24_PARAMS: ZZParams = ZZParams {
 /// b [ x  , 2   ,  xy , 2 y ]
 /// c [  y ,  xy , 3   , 3x  ]
 /// d [ xy , 2 y , 3x  , 6   ]
+#[allow(dead_code)]
 pub fn zz24_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     let i = |n: i8| T::from_i8(n).unwrap();
     let (int2, int3, int6) = (i(2), i(3), i(6));
