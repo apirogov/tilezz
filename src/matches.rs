@@ -195,6 +195,24 @@ impl PatchMatch {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    // --- transitional flat-name accessors (will be removed once all
+    // consumers are migrated to the nested layout) ---
+
+    #[doc(hidden)]
+    pub fn start_a(&self) -> usize {
+        self.a_range.start_offset
+    }
+
+    #[doc(hidden)]
+    pub fn start_b(&self) -> usize {
+        self.b.range.start_offset
+    }
+
+    #[doc(hidden)]
+    pub fn tile_id(&self) -> usize {
+        self.b.tile_id
+    }
 }
 
 // ============================================================

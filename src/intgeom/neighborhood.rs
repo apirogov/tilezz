@@ -99,6 +99,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsRing};
+use crate::matches::{EdgeRange, Segment};
 use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::intgeom::tileset::TileSet;
@@ -726,12 +727,10 @@ fn seed_phase<T: IsRing>(
     for id in 1..=match_index.num_types() {
         let mt = match_index.get(id);
         let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.a.tile_id);
-        let pm = PatchMatch {
-            start_a: mt.a.range.start_offset,
-            len: mt.len(),
-            start_b: mt.b.range.start_offset,
-            tile_id: mt.b.tile_id,
-        };
+        let pm = PatchMatch::new(
+                            EdgeRange::new(mt.a.range.start_offset, mt.len()),
+                            Segment::new(mt.b.tile_id, EdgeRange::new(mt.b.range.start_offset, mt.len())),
+                        );
         if !patch.add_tile(&pm) {
             continue;
         }
@@ -787,20 +786,20 @@ fn build_seed_nt<T: IsRing>(
     all_juncs: &[(usize, OpenVertexType)],
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<NeighborhoodType> {
-    let central_tile_id = third_pm.tile_id;
+    let central_tile_id = third_pm.tile_id();
     let central_n = match_index.tileset().rat(central_tile_id).seq().len();
-    let cw_anchor_on_central = third_pm.start_b;
+    let cw_anchor_on_central = third_pm.start_b();
     // Per the shared-edge correspondence (CCW on context = CW on
     // central), the CCW anchor vertex on context maps to tile offset
     // `start_b - match_len` mod central_n.
-    let ccw_anchor_on_central = (cw_anchor_on_central + central_n - third_pm.len) % central_n;
+    let ccw_anchor_on_central = (cw_anchor_on_central + central_n - third_pm.len()) % central_n;
 
     // vt_seq is the junctions incident with the central match: those
     // at positions in [anchor, anchor + match_len], i.e. CCW distance
     // from the anchor is at most match_len.
     let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
         .iter()
-        .filter(|(pos, _)| (pos + patch_n - third_pm.start_a) % patch_n <= third_pm.len)
+        .filter(|(pos, _)| (pos + patch_n - third_pm.start_a()) % patch_n <= third_pm.len())
         .collect();
     if filtered.is_empty() {
         return None;
@@ -812,8 +811,8 @@ fn build_seed_nt<T: IsRing>(
     // anchor on context. ccw_anchor_on_context = CCW distance from
     // last_junc to the CCW anchor. Both stay small as the BFS only
     // adds edges OUTSIDE [cw_anchor, ccw_anchor].
-    let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a) % patch_n;
-    let ccw_anchor_pos = (third_pm.start_a + third_pm.len) % patch_n;
+    let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a()) % patch_n;
+    let ccw_anchor_pos = (third_pm.start_a() + third_pm.len()) % patch_n;
     let ccw_anchor_on_context = (ccw_anchor_pos + patch_n - last_junc) % patch_n;
     Some(NeighborhoodType {
         central_tile_id,
@@ -878,8 +877,8 @@ fn bfs_phase<T: IsRing>(
                 src_id,
                 dst_id,
                 side: outcome.side,
-                tile_id: outcome.petal_pm.tile_id,
-                tile_offset: outcome.petal_pm.start_b,
+                tile_id: outcome.petal_pm.tile_id(),
+                tile_offset: outcome.petal_pm.start_b(),
             });
         }
     }
@@ -952,12 +951,10 @@ fn build_attached_context<T: IsRing>(
     let frontier_is_junction_in_ctx = ctx.is_junction(frontier_on_ctx);
     let last_covered_ctx_edge = ctx.edges()[(anchor_pos + match_len - 1) % ctx_n];
 
-    let central_pm = PatchMatch {
-        start_a: anchor_pos,
-        len: match_len,
-        start_b: nt.cw_anchor_on_central,
-        tile_id: nt.central_tile_id,
-    };
+    let central_pm = PatchMatch::new(
+                            EdgeRange::new(anchor_pos, match_len),
+                            Segment::new(nt.central_tile_id, EdgeRange::new(nt.cw_anchor_on_central, match_len)),
+                        );
     let mut aug = ctx.clone();
     if !aug.add_tile(&central_pm) {
         return None;
@@ -1070,7 +1067,7 @@ fn explore_phase2<T: IsRing>(
         let open_vertex_trial_pos = if is_closed {
             None
         } else {
-            let ccw_on_corona = (petal_pm.start_a + petal_pm.len) % corona_n;
+            let ccw_on_corona = (petal_pm.start_a() + petal_pm.len()) % corona_n;
             Some((open_vertex_pos + corona_n - ccw_on_corona) % corona_n)
         };
         let new_st = build_surrounded_tile_from_trial(
@@ -1119,25 +1116,25 @@ fn build_surrounded_tile_from_trial<T: IsRing>(
     }
 }
 
-/// Whether the cyclic range of `pm.len` edges starting at `pm.start_a` in
+/// Whether the cyclic range of `pm.len()` edges starting at `pm.start_a()` in
 /// a boundary of length `n` includes the edge at position `target_edge`.
 ///
-/// **Edge-inclusive** check: `target_edge in [pm.start_a, pm.start_a +
-/// pm.len - 1]` (mod n). Compare to [`crate::intgeom::patch::cyclic_range_contains`]
+/// **Edge-inclusive** check: `target_edge in [pm.start_a(), pm.start_a() +
+/// pm.len() - 1]` (mod n). Compare to [`crate::intgeom::patch::cyclic_range_contains`]
 /// which is **vertex-inclusive** (covers `len + 1` vertices). Don't
 /// substitute one for the other: e.g. for `start=25, len=1, n=26`,
 /// `match_absorbs_edge(target=0) = false` (edge 0 is not in
 /// `[25, 25]`) but `cyclic_range_contains(0) = true` (vertex 0 is
 /// the CCW endpoint of edge 25).
 fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
-    if pm.len == 0 {
+    if pm.len() == 0 {
         return false;
     }
-    let end_inclusive = (pm.start_a + pm.len - 1) % n;
-    if pm.start_a <= end_inclusive {
-        target_edge >= pm.start_a && target_edge <= end_inclusive
+    let end_inclusive = (pm.start_a() + pm.len() - 1) % n;
+    if pm.start_a() <= end_inclusive {
+        target_edge >= pm.start_a() && target_edge <= end_inclusive
     } else {
-        target_edge >= pm.start_a || target_edge <= end_inclusive
+        target_edge >= pm.start_a() || target_edge <= end_inclusive
     }
 }
 
@@ -1174,7 +1171,7 @@ fn try_step_ccw<T: IsRing>(
         let canonical_open_trial_pos = if is_closed {
             None
         } else {
-            let ccw_pos_on_aug = (petal_pm.start_a + petal_pm.len) % ac.aug_n;
+            let ccw_pos_on_aug = (petal_pm.start_a() + petal_pm.len()) % ac.aug_n;
             Some((ac.gap_start + ac.aug_n - ccw_pos_on_aug) % ac.aug_n)
         };
         let st = build_surrounded_tile_from_trial(
@@ -1190,7 +1187,7 @@ fn try_step_ccw<T: IsRing>(
         });
     }
 
-    let petal_n = match_index.tileset().rat(petal_pm.tile_id).seq().len();
+    let petal_n = match_index.tileset().rat(petal_pm.tile_id()).seq().len();
 
     // The OLD CCW anchor vertex on aug is at position frontier_pos_on_aug
     // = 0. In the petal-vertex coordinate system, aug vertex (start_a + i)
@@ -1198,10 +1195,10 @@ fn try_step_ccw<T: IsRing>(
     // (start_b - i_anchor) where i_anchor = (0 - start_a) mod aug_n. The
     // new ccw edge of vt_seq[-1] starts at this petal vertex going CCW =
     // petal edge[start_b - i_anchor].
-    let i_anchor = (ac.aug_n - petal_pm.start_a) % ac.aug_n;
+    let i_anchor = (ac.aug_n - petal_pm.start_a()) % ac.aug_n;
     let petal_edge = EdgeInfo {
-        tile_id: petal_pm.tile_id,
-        tile_offset: (petal_pm.start_b + petal_n - i_anchor) % petal_n,
+        tile_id: petal_pm.tile_id(),
+        tile_offset: (petal_pm.start_b() + petal_n - i_anchor) % petal_n,
     };
 
     let mut new_vt_seq = nt.vt_seq.clone();
@@ -1306,12 +1303,10 @@ fn try_construct_nt_from_cw<T: IsRing>(
     let ccw_anchor_pos = (cw_anchor_pos + match_len) % ctx_n;
     let (canon_vt_seq, canon_cw_on_ctx, canon_ccw_on_ctx) =
         canonicalize_vt_seq_on_ctx(&ctx, cw_anchor_pos, ccw_anchor_pos, ctx_n)?;
-    let pm = PatchMatch {
-        start_a: cw_anchor_pos,
-        len: match_len,
-        start_b: cw_anchor_on_central,
-        tile_id: central_tile_id,
-    };
+    let pm = PatchMatch::new(
+                            EdgeRange::new(cw_anchor_pos, match_len),
+                            Segment::new(central_tile_id, EdgeRange::new(cw_anchor_on_central, match_len)),
+                        );
     if !ctx.add_tile(&pm) {
         return None;
     }
@@ -1603,12 +1598,10 @@ mod tests {
                 // Don't test those inputs.
                 for len in 0..=n {
                     for target in 0..n {
-                        let pm = PatchMatch {
-                            start_a: start,
-                            len,
-                            start_b: 0,
-                            tile_id: 0,
-                        };
+                        let pm = PatchMatch::new(
+    EdgeRange::new(start, len),
+    Segment::new(0, EdgeRange::new(0, len)),
+);
                         let got = match_absorbs_edge(&pm, target, n);
                         let want = brute(start, len, target, n);
                         assert_eq!(got, want, "n={n} start={start} len={len} target={target}");
@@ -1618,23 +1611,19 @@ mod tests {
         }
 
         // Pin the wrap regression case directly: edge n-1, len 1.
-        let pm = PatchMatch {
-            start_a: 25,
-            len: 1,
-            start_b: 0,
-            tile_id: 0,
-        };
+        let pm = PatchMatch::new(
+                            EdgeRange::new(25, 1),
+                            Segment::new(0, EdgeRange::new(0, 1)),
+                        );
         assert!(match_absorbs_edge(&pm, 25, 26));
         assert!(!match_absorbs_edge(&pm, 0, 26));
 
         // Pin the wrap-spanning case: starts at n-1, len 2, covers
         // edges n-1 and 0.
-        let pm = PatchMatch {
-            start_a: 25,
-            len: 2,
-            start_b: 0,
-            tile_id: 0,
-        };
+        let pm = PatchMatch::new(
+                            EdgeRange::new(25, 2),
+                            Segment::new(0, EdgeRange::new(0, 2)),
+                        );
         assert!(match_absorbs_edge(&pm, 25, 26));
         assert!(match_absorbs_edge(&pm, 0, 26));
         assert!(!match_absorbs_edge(&pm, 1, 26));
@@ -1712,14 +1701,14 @@ mod tests {
         let ctx_n = ctx.boundary_len();
         let first_junc = *jp.first()?;
         let cw_anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
-        let pm = PatchMatch {
-            start_a: cw_anchor_pos,
-            len: (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
+        let pm = PatchMatch::new(
+                            EdgeRange::new(cw_anchor_pos, (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
                 - nt.ccw_anchor_on_central)
-                % mi.tileset().rat(nt.central_tile_id).seq().len(),
-            start_b: nt.cw_anchor_on_central,
-            tile_id: nt.central_tile_id,
-        };
+                % mi.tileset().rat(nt.central_tile_id).seq().len()),
+                            Segment::new(nt.central_tile_id, EdgeRange::new(nt.cw_anchor_on_central, (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
+                - nt.ccw_anchor_on_central)
+                % mi.tileset().rat(nt.central_tile_id).seq().len())),
+                        );
         if !ctx.add_tile(&pm) {
             return None;
         }
@@ -2240,12 +2229,10 @@ mod tests {
                         }
                         let ns_u = ns.rem_euclid(n_aug as i64) as usize;
                         let ne_u = ne.rem_euclid(n_b as i64) as usize;
-                        let pm = PatchMatch {
-                            start_a: ns_u,
-                            len,
-                            start_b: ne_u,
-                            tile_id: tile_b,
-                        };
+                        let pm = PatchMatch::new(
+    EdgeRange::new(ns_u, len),
+    Segment::new(tile_b, EdgeRange::new(ne_u, len)),
+);
                         if !match_absorbs_edge(&pm, target_edge, n_aug) {
                             continue;
                         }
@@ -2503,9 +2490,9 @@ mod tests {
             let first_junc = junc_positions[0];
             let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
             let found = ctx.get_all_matches().into_iter().find(|pm| {
-                pm.tile_id == nt.central_tile_id
-                    && pm.start_a == anchor_pos
-                    && pm.start_b == nt.cw_anchor_on_central
+                pm.tile_id() == nt.central_tile_id
+                    && pm.start_a() == anchor_pos
+                    && pm.start_b() == nt.cw_anchor_on_central
             });
             let Some(pm) = found else {
                 errors.push(format!(
@@ -2656,12 +2643,10 @@ mod tests {
                         }
                         // Build the 2-tile patch.
                         let mut patch = GrowingPatch::new(Arc::clone(&tileset), a);
-                        let pm1 = PatchMatch {
-                            start_a: ns_u,
-                            len,
-                            start_b: ne_u,
-                            tile_id: b,
-                        };
+                        let pm1 = PatchMatch::new(
+    EdgeRange::new(ns_u, len),
+    Segment::new(b, EdgeRange::new(ne_u, len)),
+);
                         if !patch.add_tile(&pm1) {
                             continue;
                         }
@@ -2689,12 +2674,10 @@ mod tests {
                                         continue;
                                     }
                                     seen_third.insert((ns3_u, len3, ne3_u, c), ());
-                                    let pm3 = PatchMatch {
-                                        start_a: ns3_u,
-                                        len: len3,
-                                        start_b: ne3_u,
-                                        tile_id: c,
-                                    };
+                                    let pm3 = PatchMatch::new(
+                            EdgeRange::new(ns3_u, len3),
+                            Segment::new(c, EdgeRange::new(ne3_u, len3)),
+                        );
                                     let mut trial = patch.clone();
                                     if !trial.add_tile(&pm3) {
                                         continue;
@@ -2874,9 +2857,9 @@ mod tests {
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.tile_id == new_nt.central_tile_id
-                        && pm.start_a == anchor_pos
-                        && pm.start_b == new_nt.cw_anchor_on_central
+                    pm.tile_id() == new_nt.central_tile_id
+                        && pm.start_a() == anchor_pos
+                        && pm.start_b() == new_nt.cw_anchor_on_central
                 });
                 let Some(pm) = found else {
                     errors.push(format!(
@@ -2937,9 +2920,9 @@ mod tests {
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.tile_id == new_nt.central_tile_id
-                        && pm.start_a == anchor_pos
-                        && pm.start_b == new_nt.cw_anchor_on_central
+                    pm.tile_id() == new_nt.central_tile_id
+                        && pm.start_a() == anchor_pos
+                        && pm.start_b() == new_nt.cw_anchor_on_central
                 });
                 let Some(pm) = found else {
                     errors.push(format!(
