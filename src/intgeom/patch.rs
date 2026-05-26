@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsRing};
 use crate::intgeom::angles;
+use crate::intgeom::glue;
 use crate::intgeom::grid::UnitSquareGrid;
 use crate::intgeom::matchtypes::{
     is_single_edge_candidate, junction_gap_nonnegative, CandidateMatch, MatchTypeIndex,
@@ -559,7 +560,7 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
 ///
 /// # Caller contract
 ///
-/// Inherits the precondition from [`angles::glue_raw_angles`]: `pm`
+/// Inherits the precondition from [`glue::glue_raw_angles`]: `pm`
 /// must describe a **real** match. The sibling helper
 /// [`glue_tile_to_raw_boundary`] satisfies this by computing
 /// `pm.len = forward_match_length(...)` (canonical max) before
@@ -643,7 +644,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
     };
 
     let gr =
-        angles::glue_raw_angles::<T>(&boundary.angles, tile_seq, pm.start_a, pm.len, pm.start_b)?;
+        glue::glue_raw_angles::<T>(&boundary.angles, tile_seq, pm.start_a, pm.len, pm.start_b)?;
 
     Some(RawGlueResult {
         boundary: RawBoundary {
@@ -1640,7 +1641,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// interval that happens to produce a non-self-intersecting
     /// polyline will be silently accepted with a geometrically
     /// nonsensical boundary. A `debug_assert!` in
-    /// [`angles::glue_raw_angles`] catches this in test builds.
+    /// [`glue::glue_raw_angles`] catches this in test builds.
     pub fn add_tile(&mut self, pm: &PatchMatch) -> bool {
         match &self.state {
             PatchState::Seed { tile_id, .. } => {
@@ -2264,7 +2265,7 @@ pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n:
 /// Compute the new boundary angles after gluing `pm.tile_id`'s tile onto
 /// the boundary `angles` along the match described by `pm`.
 ///
-/// Wraps [`angles::glue_raw_angles`] and additionally rejects glues that
+/// Wraps [`glue::glue_raw_angles`] and additionally rejects glues that
 /// would produce a ±half-turn at either of the two new junction angles
 /// (a half-turn boundary angle means the boundary doubles back on itself
 /// — a degenerate pinched vertex, which is not a valid patch boundary).
@@ -2277,7 +2278,7 @@ pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n:
 ///
 /// # Caller contract
 ///
-/// Inherits the precondition from [`angles::glue_raw_angles`]: `pm` must
+/// Inherits the precondition from [`glue::glue_raw_angles`]: `pm` must
 /// describe a **real** match — `(pm.start_a, pm.len, pm.start_b)` must
 /// satisfy the revcomp relation on the `pm.len - 1` interior angles.
 /// Obtain `pm` from `GrowingPatch::get_all_matches` /
@@ -2292,7 +2293,7 @@ fn compute_glue_angles<T: IsRing>(
     tileset: &Arc<TileSet<T>>,
 ) -> Option<Vec<i8>> {
     let other_seq = tileset.rat(pm.tile_id).seq();
-    let gr = angles::glue_raw_angles::<T>(angles, other_seq, pm.start_a, pm.len, pm.start_b)?;
+    let gr = glue::glue_raw_angles::<T>(angles, other_seq, pm.start_a, pm.len, pm.start_b)?;
     if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
         if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
             return None;
@@ -3161,7 +3162,7 @@ mod tests {
         assert_eq!(new_inner.len(), new_n);
     }
 
-    /// Verify [`angles::glue_raw_angles`] handles `mlen == m` (= the
+    /// Verify [`glue::glue_raw_angles`] handles `mlen == m` (= the
     /// keystone case, `y_raw_len == 1`) by:
     /// - Returning a result of the correct length (`seg_len_old`).
     /// - Setting a non-`None` `a_yx` / `a_xy` (= the merged junction
@@ -3174,7 +3175,7 @@ mod tests {
     /// connected patch.
     #[test]
     fn glue_raw_angles_keystone_returns_adjusted_result() {
-        use crate::intgeom::angles::glue_raw_angles;
+        use crate::intgeom::glue::glue_raw_angles;
         // Self: 8 angles, with 4 consecutive angles forming a revcomp
         // pattern with a hypothetical 4-edge petal whose angles are all 1.
         // Petal angles = [1, 1, 1, 1]; revcomp(petal) reversed and
@@ -4454,7 +4455,7 @@ mod tests {
         let rat = Rat::try_from(&hex).unwrap();
         let seq = rat.seq().to_vec();
 
-        let result = angles::glue_raw_angles::<ZZ12>(&seq, &seq, 0, 1, 0);
+        let result = glue::glue_raw_angles::<ZZ12>(&seq, &seq, 0, 1, 0);
         assert!(result.is_some());
         let gr = result.unwrap();
         assert_eq!(gr.angles.len(), 10);
@@ -4469,7 +4470,7 @@ mod tests {
         let seq = rat.seq();
 
         let rat_result = rat.try_glue((0, 0), &rat).expect("rat glue");
-        let raw_result = angles::glue_raw_angles::<ZZ12>(seq, seq, 0, 1, 0).expect("raw glue");
+        let raw_result = glue::glue_raw_angles::<ZZ12>(seq, seq, 0, 1, 0).expect("raw glue");
 
         // Both glue paths must produce the same boundary up to cyclic
         // rotation (they may pick different starting positions).

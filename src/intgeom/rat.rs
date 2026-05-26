@@ -352,7 +352,7 @@ impl<T: IsRing> Rat<T> {
 
         let self_seq = self.seq();
         let other_seq = other.seq();
-        let gr = super::angles::glue_raw_angles::<T>(self_seq, other_seq, ns_u, mlen, ne_u)
+        let gr = super::glue::glue_raw_angles::<T>(self_seq, other_seq, ns_u, mlen, ne_u)
             .ok_or("Glue produces empty boundary")?;
 
         if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
