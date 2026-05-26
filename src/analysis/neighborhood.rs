@@ -101,7 +101,8 @@ use rustc_hash::FxHashMap;
 use crate::cyclotomic::{IsRing};
 use crate::geom::matches::{EdgeRange, Segment};
 use crate::analysis::matchtypes::MatchTypeIndex;
-use crate::geom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
+use crate::geom::patch::{GrowingPatch, PatchMatch};
+use crate::geom::vertices::{EdgeInfo, OpenVertexType, TransitionSide};
 use crate::geom::tileset::TileSet;
 
 /// One catalog entry of a local **interface** between a tile and any
