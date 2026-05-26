@@ -197,6 +197,85 @@ pub fn signum_sum_sqrt_expr_4_pentagonal<T: IntRing + ZSigned + FromPrimitive>(
 }
 
 /// Floating-point-free sign of
+///   a0 + a1*sqrt(2) + a2*sqrt(2+sqrt(2)) + a3*sqrt(2+sqrt(2+sqrt(2)))
+///     + a4*sqrt(2(2+sqrt(2))) + a5*sqrt(2(2+sqrt(2+sqrt(2))))
+///     + a6*sqrt((2+sqrt(2))(2+sqrt(2+sqrt(2))))
+///     + a7*sqrt(2(2+sqrt(2))(2+sqrt(2+sqrt(2))))
+/// via two levels of recursive reduction.
+///
+/// This is the ZZ32 real subring. Group as `z = P + Q*sqrt(y)` with
+///   P = a0 + a1*sqrt(2) + a2*sqrt(2+sqrt(2)) + a4*sqrt(2(2+sqrt(2)))
+///   Q = a3 + a5*sqrt(2) + a6*sqrt(2+sqrt(2)) + a7*sqrt(2(2+sqrt(2)))
+///   y = 2 + sqrt(2+sqrt(2))
+/// Both `P, Q` live in the ZZ16 real subring `Q(sqrt(2), sqrt(2+sqrt(2)))`,
+/// so `sign(P), sign(Q)` use `signum_sum_sqrt_expr_4_zz16`. The
+/// inner reduction `P^2 - Q^2 * y` also lives in the ZZ16 real subring, so
+/// that sign call closes the recursion (which itself reduces to
+/// `Q(sqrt(2))`).
+#[allow(clippy::too_many_arguments)]
+pub fn signum_sum_sqrt_expr_8_zz32<T: IntRing + ZSigned + FromPrimitive>(
+    a0: T,
+    a1: T,
+    a2: T,
+    a3: T,
+    a4: T,
+    a5: T,
+    a6: T,
+    a7: T,
+) -> T {
+    let int2 = T::from_i8(2).unwrap();
+    let int4 = T::from_i8(4).unwrap();
+
+    let sp = signum_sum_sqrt_expr_4_zz16(a0, a1, a2, a4);
+    let sq = signum_sum_sqrt_expr_4_zz16(a3, a5, a6, a7);
+
+    if sp == sq {
+        return sp;
+    }
+    if sq.is_zero() {
+        return sp;
+    }
+    if sp.is_zero() {
+        return sq;
+    }
+
+    // P^2 in basis {1, sqrt(2), sqrt(2+sqrt(2)), sqrt(2(2+sqrt(2)))}:
+    //   const:    a0^2 + 2*a1^2 + 2*a2^2 + 4*a4^2 + 4*a2*a4
+    //   sqrt(2):  a2^2 + 2*a4^2 + 2*a0*a1 + 4*a2*a4
+    //   sqrt(2+sqrt(2)):       2*a0*a2 + 4*a1*a4
+    //   sqrt(2(2+sqrt(2))):    2*a0*a4 + 2*a1*a2
+    let p0 = a0 * a0 + int2 * a1 * a1 + int2 * a2 * a2 + int4 * a4 * a4 + int4 * a2 * a4;
+    let p1 = a2 * a2 + int2 * a4 * a4 + int2 * a0 * a1 + int4 * a2 * a4;
+    let p2 = int2 * a0 * a2 + int4 * a1 * a4;
+    let p3 = int2 * a0 * a4 + int2 * a1 * a2;
+
+    // Q^2 in same basis (substituting a3, a5, a6, a7 for a0, a1, a2, a4).
+    let q0 = a3 * a3 + int2 * a5 * a5 + int2 * a6 * a6 + int4 * a7 * a7 + int4 * a6 * a7;
+    let q1 = a6 * a6 + int2 * a7 * a7 + int2 * a3 * a5 + int4 * a6 * a7;
+    let q2 = int2 * a3 * a6 + int4 * a5 * a7;
+    let q3 = int2 * a3 * a7 + int2 * a5 * a6;
+
+    // Q^2 * y where y = 2 + sqrt(2+sqrt(2)) = 2 + b2 in basis above:
+    //   const:    2*q0 + 2*q2 + 2*q3   (q3*b1^2 = 2*q3 from b1*b2*b2)
+    //   sqrt(2):  2*q1 + q2 + 2*q3
+    //   sqrt(2+sqrt(2)):       2*q2 + q0
+    //   sqrt(2(2+sqrt(2))):    2*q3 + q1
+    let qy_0 = int2 * q0 + int2 * q2 + int2 * q3;
+    let qy_1 = int2 * q1 + q2 + int2 * q3;
+    let qy_2 = int2 * q2 + q0;
+    let qy_3 = int2 * q3 + q1;
+
+    let alpha = p0 - qy_0;
+    let beta = p1 - qy_1;
+    let gamma = p2 - qy_2;
+    let delta = p3 - qy_3;
+
+    let spq = signum_sum_sqrt_expr_4_zz16(alpha, beta, gamma, delta);
+
+    -sq * spq
+}
+
+/// Floating-point-free sign of
 ///   a + b*sqrt(3) + c*sqrt(5) + d*sqrt(10-2*sqrt(5))
 ///     + e*sqrt(15) + f*sqrt(3(10-2*sqrt(5)))
 ///     + g*sqrt(5(10-2*sqrt(5))) + h*sqrt(15(10-2*sqrt(5)))
@@ -566,6 +645,67 @@ mod tests {
         //   P = -3, Q = 1, y ~ 5.528: z = -3 + 2.351 < 0 -> -1.
         assert_eq!(s(-3, 0, 0, 1, 0, 0, 0, 0), -1);
         //   P = 3, Q = -1: z = 3 - 2.351 > 0 -> 1.
+        assert_eq!(s(3, 0, 0, -1, 0, 0, 0, 0), 1);
+    }
+
+    #[test]
+    fn test_sum_root_expr_sign_8_zz32() {
+        // sign of a0 + a1*sqrt(2) + a2*sqrt(2+sqrt(2)) + a3*sqrt(2+sqrt(2+sqrt(2)))
+        //        + a4*sqrt(2(2+sqrt(2))) + a5*sqrt(2(2+sqrt(2+sqrt(2))))
+        //        + a6*sqrt((2+sqrt(2))(2+sqrt(2+sqrt(2))))
+        //        + a7*sqrt(2(2+sqrt(2))(2+sqrt(2+sqrt(2))))
+        let s = signum_sum_sqrt_expr_8_zz32::<i64>;
+
+        // Numerical reference values:
+        //   sqrt(2)                                   ~ 1.4142
+        //   sqrt(2+sqrt(2))                           ~ 1.8478
+        //   sqrt(2+sqrt(2+sqrt(2)))                   ~ 1.9616
+        //   sqrt(2(2+sqrt(2)))                        ~ 2.6131
+        //   sqrt(2(2+sqrt(2+sqrt(2))))                ~ 2.7741
+        //   sqrt((2+sqrt(2))(2+sqrt(2+sqrt(2))))      ~ 3.6249
+        //   sqrt(2(2+sqrt(2))(2+sqrt(2+sqrt(2))))     ~ 5.1262
+
+        // Trivial axes (each basis element is positive).
+        assert_eq!(s(0, 0, 0, 0, 0, 0, 0, 0), 0);
+        for i in 0..8 {
+            let mut v = [0i64; 8];
+            v[i] = 1;
+            assert_eq!(
+                s(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]),
+                1,
+                "axis {i} positive should be +1"
+            );
+            v[i] = -1;
+            assert_eq!(
+                s(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7]),
+                -1,
+                "axis {i} negative should be -1"
+            );
+        }
+
+        // All-1 / all-(-1).
+        assert_eq!(s(1, 1, 1, 1, 1, 1, 1, 1), 1);
+        assert_eq!(s(-1, -1, -1, -1, -1, -1, -1, -1), -1);
+
+        // Mixed-sign with definite winners.
+        //   1 + (-1)*sqrt(2) ~ -0.414       -> -1
+        assert_eq!(s(1, -1, 0, 0, 0, 0, 0, 0), -1);
+        //   2 + (-1)*sqrt(2) ~ 0.586        -> 1
+        assert_eq!(s(2, -1, 0, 0, 0, 0, 0, 0), 1);
+        //   sqrt(2(2+sqrt(2))) - sqrt(2+sqrt(2+sqrt(2))) ~ 2.613 - 1.962 ~ 0.651 -> 1
+        assert_eq!(s(0, 0, 0, -1, 1, 0, 0, 0), 1);
+        //   sqrt(2+sqrt(2+sqrt(2))) - sqrt(2(2+sqrt(2))) ~ -0.651 -> -1
+        assert_eq!(s(0, 0, 0, 1, -1, 0, 0, 0), -1);
+
+        // Recursion-triggering: P and Q nonzero with opposite signs.
+        //   P = -1, Q = 1 -> z = -1 + sqrt(y) where y = 2+sqrt(2+sqrt(2)) ~ 3.848
+        //   sqrt(y) ~ 1.962, so z ~ 0.962 > 0 -> 1.
+        assert_eq!(s(-1, 0, 0, 1, 0, 0, 0, 0), 1);
+        //   P = -2, Q = 1: z ~ -0.038 < 0 -> -1.
+        assert_eq!(s(-2, 0, 0, 1, 0, 0, 0, 0), -1);
+        //   P = -3, Q = 1: z ~ -1.038 -> -1.
+        assert_eq!(s(-3, 0, 0, 1, 0, 0, 0, 0), -1);
+        //   P = 3, Q = -1: z = 3 - 1.962 > 0 -> 1.
         assert_eq!(s(3, 0, 0, -1, 0, 0, 0, 0), 1);
     }
 }
