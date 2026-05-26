@@ -596,9 +596,6 @@ pub fn derive_units_lookup<const PHI: usize>(
 /// * `re_decomp` -- `[[i64; K]; PHI]`, K-vector of `Re(zeta^k)` per `k`.
 /// * `im_decomp` -- `[[i64; K]; PHI]`, K-vector of `Im(zeta^k)` per `k`.
 /// * `cartesian` -- `[Complex64; PHI]`, Cartesian value of `zeta^k` per `k`.
-/// * `params` -- `&'static ZZParams<'static>` reference used for the
-///   `SymNum::zz_params()` impl. Provides `full_turn_steps` and the legacy
-///   symbolic-Display labels.
 /// * `one_in_real_basis` -- `[i64; K]`, the K-vector for the real-subring
 ///   element `1` (used by the intersect-unit-segments colinear branch).
 /// * `display_fn` -- `fn(&[i64; PHI], &mut std::fmt::Formatter<'_>) -> std::fmt::Result`,
@@ -624,7 +621,6 @@ macro_rules! define_integral_zz {
         re_decomp: $re_decomp:expr,
         im_decomp: $im_decomp:expr,
         cartesian: $cartesian:expr,
-        params: $params:path,
         one_in_real_basis: $one_real:expr,
         display_fn: $display_fn:path,
         complex64_fn: $complex64_fn:path,
@@ -825,8 +821,8 @@ macro_rules! define_integral_zz {
             }
 
             #[inline]
-            fn zz_params() -> &'static $crate::cyclotomic::symnum::ZZParams {
-                &$params
+            fn turn() -> i8 {
+                $n as i8
             }
 
             #[inline]

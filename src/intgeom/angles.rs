@@ -234,9 +234,9 @@ pub fn glue_raw_angles<T: SymNum>(
 pub fn upscale_angles<T: SymNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
     // NOTE: using assertion here because using
     // incompatible rings here is an implementation error.
-    assert_eq!(T::zz_params().full_turn_steps % src_ring, 0);
+    assert_eq!(T::turn() % src_ring, 0);
 
-    let scale = T::zz_params().full_turn_steps / src_ring;
+    let scale = T::turn() / src_ring;
     angles.iter().map(|x| x * scale).collect()
 }
 

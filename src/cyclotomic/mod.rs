@@ -5,25 +5,32 @@
 //! `{1, zeta, ..., zeta^(phi(n)-1)}`, with closed-form exact sign
 //! extraction (no f64 fallback). The shared engine lives in
 //! `integral_basis.rs` (free functions + `define_integral_zz!` macro).
+//!
+//! File layout:
+//!
+//! * `numtraits.rs`       -- foundational numeric traits (`IntRing`,
+//!                           `IntField`, `ZSigned`, `InnerIntType`).
+//! * `traits.rs`          -- cyclotomic-ring trait surface (`SymNum`,
+//!                           `Ccw`, `Conj`, `OneImag`, `ReImSign`,
+//!                           `IntersectUnitSegments`, `WithinRadius`,
+//!                           `Units`, the `IsRingOrField` hierarchy, the
+//!                           `HasZZk` subring markers).
+//! * `sign.rs`            -- exact-sign helpers `signum_sum_sqrt_expr_*`.
+//! * `integral_basis.rs`  -- the generic engine: free helpers and the
+//!                           `define_integral_zz!` macro.
+//! * `rings.rs`           -- one `define_integral_zz!` invocation per
+//!                           ring, sqrt constants, ring-specific tests.
+//! * `constants.rs`       -- `sqrt2/3/5/6` and `zz_units_sum`.
+//! * `geometry.rs`        -- `intersect` segment predicate.
+//! * `linalg.rs`          -- small linear-algebra utilities.
 
 pub(crate) mod numtraits;
 
-pub mod gaussint;
-
-pub(crate) mod symnum;
-
 mod sign;
-
-#[cfg(test)]
-mod unit_tests;
-
-pub(crate) mod params;
 
 pub(crate) mod traits;
 
 mod rings;
-
-mod units;
 
 pub mod integral_basis;
 
@@ -37,16 +44,12 @@ pub mod geometry;
 
 pub use num_traits::{One, Pow, Zero};
 
-pub use numtraits::{
-    Ccw, Conj, IntField, IntRing, IntersectUnitSegments, OneImag, ReImSign, WithinRadius,
+pub use numtraits::{IntField, IntRing};
+
+pub use traits::{
+    Ccw, ComplexTraits, Conj, HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8, IntersectUnitSegments,
+    IsRing, IsRingOrField, IsZZ4, OneImag, ReImSign, RingTraits, SymNum, Units, WithinRadius,
+    ZZComplex, ZZType,
 };
-
-pub use symnum::{SymNum, ZZComplex};
-pub use units::Units;
-
-pub use traits::{ComplexTraits, RingTraits};
-pub use traits::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8};
-pub use traits::{IsRing, IsRingOrField, IsZZ4};
-pub use traits::ZZType;
 
 pub use rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};

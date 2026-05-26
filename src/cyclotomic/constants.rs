@@ -4,7 +4,7 @@ use num_traits::One;
 
 use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRingOrField};
 use super::rings::{ZZ10, ZZ20};
-use super::units::Units;
+use super::traits::Units;
 
 // Returns the sum of all units of a complex integer ring.
 pub fn zz_units_sum<T: IsRingOrField + Units>() -> T {
@@ -20,22 +20,22 @@ pub fn zz_units_sum<T: IsRingOrField + Units>() -> T {
 // in a ring that supports quarter turn rotation (i.e. ZZDiv4).
 
 pub fn sqrt2<T: IsRingOrField + HasZZ8 + Units>() -> T {
-    let sc = T::zz_params().full_turn_steps / 8;
+    let sc = T::turn() / 8;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
 pub fn sqrt3<T: IsRingOrField + HasZZ12 + Units>() -> T {
-    let sc = T::zz_params().full_turn_steps / 12;
+    let sc = T::turn() / 12;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
 pub fn sqrt5<T: IsRingOrField + HasZZ10 + Units>() -> T {
-    let sc = T::zz_params().full_turn_steps / 10;
+    let sc = T::turn() / 10;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - T::one()
 }
 
 pub fn sqrt6<T: IsRingOrField + HasZZ8 + HasZZ12 + Units>() -> T {
-    let sc = T::zz_params().full_turn_steps / 24;
+    let sc = T::turn() / 24;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
 }
 
@@ -49,9 +49,8 @@ pub fn zz20_half_sqrt_penta() -> ZZ20 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::params::ZZ10_Y;
-    use super::super::symnum::SymNum;
-    use super::super::rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
+    use super::super::rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8, ZZ10_Y};
+    use super::super::traits::SymNum;
     use super::*;
 
     #[test]
