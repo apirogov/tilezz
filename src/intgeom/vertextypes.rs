@@ -2026,8 +2026,8 @@ mod tests {
             std::collections::HashSet::new();
         eprintln!("  Simulated compute_candidates_at_position(pos=25, tile_id=0, off=0):");
         for c in cands {
-            let tile_b = ts.rat(c.tile_b);
-            let (ns, len, ne) = bnd_rat.get_match((25i64, c.start_b as i64), tile_b);
+            let tile_b = ts.rat(c.tile_b());
+            let (ns, len, ne) = bnd_rat.get_match((25i64, c.start_b() as i64), tile_b);
             if len == 0 {
                 continue;
             }
@@ -2040,18 +2040,18 @@ mod tests {
                 tile_b.seq(),
                 ne_u,
             );
-            let key = (ns_u, len, ne_u, c.tile_b);
+            let key = (ns_u, len, ne_u, c.tile_b());
             let already_seen = seen.contains(&key);
             let glue_ok = bnd_rat
                 .try_glue_precomputed((ns, len, ne), tile_b, true)
                 .is_ok();
-            let dst = (c.tile_b, ns_u, len, ne_u);
+            let dst = (c.tile_b(), ns_u, len, ne_u);
             let target_match = filtered_brute.contains(&dst) && dst.1 == 25;
             if target_match || !already_seen {
                 eprintln!(
                     "    cand sb={} len={} -> bnd ({ns_u},{len},{ne_u}) gap_ok={gap_ok} \
                      seen_already={already_seen} glue_ok={glue_ok}  target={target_match}",
-                    c.start_b, c.len
+                    c.start_b(), c.range.len
                 );
             }
             seen.insert(key);

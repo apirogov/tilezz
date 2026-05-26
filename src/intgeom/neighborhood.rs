@@ -725,12 +725,12 @@ fn seed_phase<T: IsRing>(
 ) {
     for id in 1..=match_index.num_types() {
         let mt = match_index.get(id);
-        let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.tile_a);
+        let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.a.tile_id);
         let pm = PatchMatch {
-            start_a: mt.start_a,
-            len: mt.len,
-            start_b: mt.start_b,
-            tile_id: mt.tile_b,
+            start_a: mt.a.range.start_offset,
+            len: mt.len(),
+            start_b: mt.b.range.start_offset,
+            tile_id: mt.b.tile_id,
         };
         if !patch.add_tile(&pm) {
             continue;

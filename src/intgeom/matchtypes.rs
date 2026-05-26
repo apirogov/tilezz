@@ -23,7 +23,7 @@ use crate::cyclotomic::{IsRing};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
-use crate::matches::TileMatch;
+use crate::matches::{EdgeRange, Segment, TileMatch};
 use crate::stringmatch::BitParallelMatcher;
 
 /// Bit-parallel engine state. The B-side masks live in a shared
@@ -111,61 +111,60 @@ impl<T: IsRing> BpSeed<T> {
 
 /// A description of a single legal glue match between two tile boundaries.
 ///
-/// Identifies the two tiles by index into their respective tilesets,
-/// the starting *edge* offsets on each side, and the length (in edges)
-/// of the match.
+/// Type alias for [`crate::matches::TileMatch`]; identifies the two
+/// tiles via the nested `Segment`s and tracks an edge-range on each.
 ///
-/// # Edge-offset convention
+/// # Edge-offset convention (relative to the A/B `range.start_offset`)
 ///
-/// * `start_a` is the first **matched** edge on side A: the match
-///   consumes edges `start_a, start_a+1, ..., start_a+len-1` (modulo
-///   `tile_a`'s edge count).
-/// * `start_b` is the first **surviving** edge on side B, immediately
-///   past the match: the match consumes edges `start_b-len, ...,
-///   start_b-1` (modulo `tile_b`'s edge count, walked in reverse since
-///   B is glued anti-parallel to A).
+/// * The A-side `start_offset` is the first **matched** edge on side A:
+///   the match consumes edges `start_offset, start_offset+1, ...,
+///   start_offset+len-1` (modulo the tile's edge count).
+/// * The B-side `start_offset` is the first **surviving** edge on side
+///   B, immediately past the match: the match consumes edges
+///   `start_offset-len, ..., start_offset-1` (modulo the tile's edge
+///   count, walked in reverse since B is glued anti-parallel to A).
 ///
 /// This asymmetry matches the convention used throughout the
-/// patch/glue path; the same `start_b` value flows directly into
-/// [`PatchMatch`](crate::intgeom::patch::PatchMatch) without
-/// translation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct MatchType {
-    pub tile_a: usize,
-    pub start_a: usize,
-    pub tile_b: usize,
-    pub start_b: usize,
-    pub len: usize,
+/// patch/glue path.
+pub type MatchType = TileMatch;
+
+/// Realise a `MatchType` against the two tilesets, producing the
+/// resulting boundary as a `Rat`. Assumes the match has been previously
+/// validated (e.g. it came from a `MatchFinder`); will panic otherwise.
+pub fn apply_match<T: IsRing>(
+    m: &MatchType,
+    rats_a: &[Rat<T>],
+    rats_b: &[Rat<T>],
+) -> Rat<T> {
+    rats_a[m.a.tile_id]
+        .try_glue_precomputed(
+            (
+                m.a.range.start_offset as i64,
+                m.len(),
+                m.b.range.start_offset as i64,
+            ),
+            &rats_b[m.b.tile_id],
+            true,
+        )
+        .expect("match was pre-validated")
 }
 
-impl MatchType {
-    /// Realise this match by gluing the two tiles, producing the
-    /// resulting boundary as a `Rat`. Assumes the match has been
-    /// previously validated (e.g. it came from a `MatchFinder`); will
-    /// panic otherwise.
-    pub fn apply<T: IsRing>(
-        &self,
-        rats_a: &[Rat<T>],
-        rats_b: &[Rat<T>],
-    ) -> Rat<T> {
-        rats_a[self.tile_a]
-            .try_glue_precomputed(
-                (self.start_a as i64, self.len, self.start_b as i64),
-                &rats_b[self.tile_b],
-                true,
-            )
-            .expect("match was pre-validated")
-    }
-
-    fn involution(self, len_a: usize, len_b: usize) -> Self {
-        MatchType {
-            tile_a: self.tile_b,
-            start_a: (self.start_b + len_b - self.len) % len_b,
-            tile_b: self.tile_a,
-            start_b: (self.start_a + self.len) % len_a,
-            len: self.len,
-        }
-    }
+/// The involution of a match: same glue described from the other tile's
+/// perspective. Adjusts the asymmetric `start_b` (= first surviving)
+/// convention by shifting starts to land on the right edges of the
+/// inverted match.
+fn match_involution(m: &MatchType, len_a: usize, len_b: usize) -> MatchType {
+    let len = m.len();
+    TileMatch::new(
+        Segment::new(
+            m.b.tile_id,
+            EdgeRange::new((m.b.range.start_offset + len_b - len) % len_b, len),
+        ),
+        Segment::new(
+            m.a.tile_id,
+            EdgeRange::new((m.a.range.start_offset + len) % len_a, len),
+        ),
+    )
 }
 
 struct TypeEntry {
@@ -282,7 +281,7 @@ impl<T: IsRing> MatchFinder<T> {
     /// Realise a `MatchType` against this finder's tilesets, producing
     /// the resulting boundary `Rat`.
     pub fn apply_match(&self, m: &MatchType) -> Rat<T> {
-        m.apply(self.set_a.rats(), self.set_b.rats())
+        apply_match(m, self.set_a.rats(), self.set_b.rats())
     }
 
     /// Return the maximal reverse-complementary cyclic substrings
@@ -307,9 +306,11 @@ impl<T: IsRing> MatchFinder<T> {
     pub fn valid_matches_with_rats(&self, i: usize, j: usize) -> Vec<(Rat<T>, MatchType)> {
         let mut m = Self::validated_matches_with_rats(self.candidates_for_pair(i, j));
         m.sort_by(|a, b| {
-            a.1.start_a
-                .cmp(&b.1.start_a)
-                .then_with(|| a.1.start_b.cmp(&b.1.start_b))
+            a.1.a
+                .range
+                .start_offset
+                .cmp(&b.1.a.range.start_offset)
+                .then_with(|| a.1.b.range.start_offset.cmp(&b.1.b.range.start_offset))
         });
         m
     }
@@ -369,13 +370,10 @@ impl<T: IsRing> MatchFinder<T> {
             if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
                 raw.push((
                     glued,
-                    MatchType {
-                        tile_a: i,
-                        start_a: ns_u,
-                        tile_b: j,
-                        start_b: ne.rem_euclid(n_b as i64) as usize,
-                        len,
-                    },
+                    TileMatch::new(
+                        Segment::new(i, EdgeRange::new(ns_u, len)),
+                        Segment::new(j, EdgeRange::new(ne.rem_euclid(n_b as i64) as usize, len)),
+                    ),
                 ));
             }
         }
@@ -398,13 +396,10 @@ impl<T: IsRing> MatchFinder<T> {
                 if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
                     raw.push((
                         glued,
-                        MatchType {
-                            tile_a: i,
-                            start_a: ns_u,
-                            tile_b: j,
-                            start_b: ne.rem_euclid(n_b as i64) as usize,
-                            len,
-                        },
+                        TileMatch::new(
+                            Segment::new(i, EdgeRange::new(ns_u, len)),
+                            Segment::new(j, EdgeRange::new(ne.rem_euclid(n_b as i64) as usize, len)),
+                        ),
                     ));
                 }
             }
@@ -461,13 +456,10 @@ impl<T: IsRing> MatchFinder<T> {
                 continue;
             }
             if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
-                groups.entry(glued).or_default().push(MatchType {
-                    tile_a: i,
-                    start_a: ns as usize,
-                    tile_b: j,
-                    start_b: ne as usize,
-                    len,
-                });
+                groups.entry(glued).or_default().push(TileMatch::new(
+                    Segment::new(i, EdgeRange::new(ns as usize, len)),
+                    Segment::new(j, EdgeRange::new(ne as usize, len)),
+                ));
             }
         }
 
@@ -483,13 +475,10 @@ impl<T: IsRing> MatchFinder<T> {
                     continue;
                 }
                 if let Ok(glued) = a.try_glue_precomputed((ns, len, ne), b, true) {
-                    groups.entry(glued).or_default().push(MatchType {
-                        tile_a: i,
-                        start_a: ns as usize,
-                        tile_b: j,
-                        start_b: ne as usize,
-                        len,
-                    });
+                    groups.entry(glued).or_default().push(TileMatch::new(
+                        Segment::new(i, EdgeRange::new(ns as usize, len)),
+                        Segment::new(j, EdgeRange::new(ne as usize, len)),
+                    ));
                 }
             }
         }
@@ -541,38 +530,34 @@ impl<T: IsRing> MatchFinder<T> {
 
     fn sort_by_interval(results: &mut [MatchType]) {
         results.sort_by(|a, b| {
-            a.start_a
-                .cmp(&b.start_a)
-                .then_with(|| a.start_b.cmp(&b.start_b))
+            a.a.range
+                .start_offset
+                .cmp(&b.a.range.start_offset)
+                .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
         });
     }
 
     fn sort_global(results: &mut [MatchType]) {
         results.sort_by(|a, b| {
-            a.tile_a
-                .cmp(&b.tile_a)
-                .then_with(|| a.tile_b.cmp(&b.tile_b))
-                .then_with(|| a.start_a.cmp(&b.start_a))
-                .then_with(|| a.start_b.cmp(&b.start_b))
+            a.a.tile_id
+                .cmp(&b.a.tile_id)
+                .then_with(|| a.b.tile_id.cmp(&b.b.tile_id))
+                .then_with(|| a.a.range.start_offset.cmp(&b.a.range.start_offset))
+                .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
         });
     }
 }
 
 /// Partial-match record indexed by a fixed A-side `(tile, offset)`.
 ///
-/// Returned by [`MatchTypeIndex::candidates_starting_at`]. The A-side
-/// is implicit in the lookup key; only the B-side coordinates plus the
-/// match length are stored.
+/// Type alias for [`Segment`]; the A-side is implicit in the lookup key
+/// in [`MatchTypeIndex::candidates_starting_at`], so only the B-side
+/// segment (`tile_id + range`) is stored.
 ///
-/// The same edge-offset convention applies as on [`MatchType`]:
-/// `start_b` is the first **surviving** edge on side B, just past the
+/// Same edge-offset convention as on the B-side of [`MatchType`]:
+/// `range.start_offset` is the first **surviving** edge, just past the
 /// match end.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CandidateMatch {
-    pub tile_b: usize,
-    pub start_b: usize,
-    pub len: usize,
-}
+pub type CandidateMatch = Segment;
 
 /// Pre-computed index of all legal glue matches for a single tileset,
 /// indexed by starting `(tile, offset)`.
@@ -602,11 +587,11 @@ impl<T: IsRing> MatchTypeIndex<T> {
         let mut seen: BTreeSet<(MatchType, MatchType)> = BTreeSet::new();
 
         for mt in &all_matches {
-            let len_a = rats[mt.tile_a].len();
-            let len_b = rats[mt.tile_b].len();
+            let len_a = rats[mt.a.tile_id].len();
+            let len_b = rats[mt.b.tile_id].len();
 
             let fwd = *mt;
-            let bwd = mt.involution(len_a, len_b);
+            let bwd = match_involution(mt, len_a, len_b);
 
             let (first, second) = if fwd <= bwd { (fwd, bwd) } else { (bwd, fwd) };
 
@@ -626,19 +611,13 @@ impl<T: IsRing> MatchTypeIndex<T> {
             by_start[ti] = vec![vec![]; rats[ti].len()];
         }
         for mt in &all_matches {
-            let cm = CandidateMatch {
-                tile_b: mt.tile_b,
-                start_b: mt.start_b,
-                len: mt.len,
-            };
-            by_start[mt.tile_a][mt.start_a].push(cm);
-            let inv = mt.involution(rats[mt.tile_a].len(), rats[mt.tile_b].len());
-            let cm_inv = CandidateMatch {
-                tile_b: inv.tile_b,
-                start_b: inv.start_b,
-                len: inv.len,
-            };
-            by_start[inv.tile_a][inv.start_a].push(cm_inv);
+            let cm = Segment::new(mt.b.tile_id, EdgeRange::new(mt.b.range.start_offset, mt.len()));
+            by_start[mt.a.tile_id][mt.a.range.start_offset].push(cm);
+            let inv =
+                match_involution(mt, rats[mt.a.tile_id].len(), rats[mt.b.tile_id].len());
+            let cm_inv =
+                Segment::new(inv.b.tile_id, EdgeRange::new(inv.b.range.start_offset, inv.len()));
+            by_start[inv.a.tile_id][inv.a.range.start_offset].push(cm_inv);
         }
 
         MatchTypeIndex {
@@ -701,7 +680,7 @@ impl<T: IsRing> MatchTypeIndex<T> {
         } else {
             entry.second
         };
-        mt.apply(rats, rats)
+        apply_match(&mt, rats, rats)
     }
 
     /// All candidate matches that start at edge `(tile_id, offset)` on
@@ -803,20 +782,18 @@ mod tests {
                     continue;
                 }
                 if a.try_glue_precomputed((ns, len, ne), b, false).is_ok() {
-                    results.push(MatchType {
-                        tile_a: i,
-                        start_a: ns as usize,
-                        tile_b: j,
-                        start_b: ne as usize,
-                        len,
-                    });
+                    results.push(TileMatch::new(
+                        Segment::new(i, EdgeRange::new(ns as usize, len)),
+                        Segment::new(j, EdgeRange::new(ne as usize, len)),
+                    ));
                 }
             }
         }
         results.sort_by(|x, y| {
-            x.start_a
-                .cmp(&y.start_a)
-                .then_with(|| x.start_b.cmp(&y.start_b))
+            x.a.range
+                .start_offset
+                .cmp(&y.a.range.start_offset)
+                .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
         });
         results
     }
@@ -837,16 +814,16 @@ mod tests {
         );
         for (idx, (mf_m, bf_m)) in mf_matches.iter().zip(bf_matches.iter()).enumerate() {
             assert_eq!(
-                (mf_m.start_a, mf_m.len, mf_m.start_b),
-                (bf_m.start_a, bf_m.len, bf_m.start_b),
+                (mf_m.start_a(), mf_m.len(), mf_m.start_b()),
+                (bf_m.start_a(), bf_m.len(), bf_m.start_b()),
                 "{label}: interval mismatch at index {idx}",
             );
             assert_eq!(
-                mf_m.apply(rats_a, rats_b),
-                bf_m.apply(rats_a, rats_b),
+                apply_match(mf_m, rats_a, rats_b),
+                apply_match(bf_m, rats_a, rats_b),
                 "{label}: result mismatch at ({}, {})",
-                mf_m.start_a,
-                mf_m.start_b,
+                mf_m.start_a(),
+                mf_m.start_b(),
             );
         }
     }
@@ -902,7 +879,7 @@ mod tests {
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
-                !(m.start_a == 8 && m.start_b == 0),
+                !(m.start_a() == 8 && m.start_b() == 0),
                 "self-intersecting glue should be filtered"
             );
         }
@@ -925,7 +902,7 @@ mod tests {
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
-                !(m.start_a == 7 && m.start_b == 0),
+                !(m.start_a() == 7 && m.start_b() == 0),
                 "vertex-touching glue should be filtered"
             );
         }
@@ -938,8 +915,8 @@ mod tests {
         let matches = mf.valid_matches(0, 0);
         for w in matches.windows(2) {
             assert!(
-                w[0].start_a <= w[1].start_a
-                    && (w[0].start_a < w[1].start_a || w[0].start_b <= w[1].start_b),
+                w[0].start_a() <= w[1].start_a()
+                    && (w[0].start_a() < w[1].start_a() || w[0].start_b() <= w[1].start_b()),
                 "matches not in deterministic order"
             );
         }
@@ -954,12 +931,12 @@ mod tests {
         let all = mf.all_valid_matches();
         for w in all.windows(2) {
             assert!(
-                w[0].tile_a < w[1].tile_a
-                    || (w[0].tile_a == w[1].tile_a && w[0].tile_b < w[1].tile_b)
-                    || (w[0].tile_a == w[1].tile_a
-                        && w[0].tile_b == w[1].tile_b
-                        && (w[0].start_a < w[1].start_a
-                            || (w[0].start_a == w[1].start_a && w[0].start_b <= w[1].start_b))),
+                w[0].tile_a() < w[1].tile_a()
+                    || (w[0].tile_a() == w[1].tile_a() && w[0].tile_b() < w[1].tile_b())
+                    || (w[0].tile_a() == w[1].tile_a()
+                        && w[0].tile_b() == w[1].tile_b()
+                        && (w[0].start_a() < w[1].start_a()
+                            || (w[0].start_a() == w[1].start_a() && w[0].start_b() <= w[1].start_b()))),
                 "all_valid_matches not sorted"
             );
         }
@@ -993,7 +970,7 @@ mod tests {
         );
 
         for m in &mf_matches {
-            assert_eq!(m.len, 1, "hexagon pair match should be single-edge");
+            assert_eq!(m.len(), 1, "hexagon pair match should be single-edge");
             assert_eq!(
                 mf.apply_match(m).len(),
                 10,
@@ -1038,8 +1015,8 @@ mod tests {
             "hexamino pair should have valid matches"
         );
 
-        let multi_count = mf_matches.iter().filter(|m| m.len > 1).count();
-        let single_count = mf_matches.iter().filter(|m| m.len == 1).count();
+        let multi_count = mf_matches.iter().filter(|m| m.len() > 1).count();
+        let single_count = mf_matches.iter().filter(|m| m.len() == 1).count();
         assert!(
             multi_count > 0,
             "hexamino pair should have multi-edge matches",
@@ -1073,8 +1050,8 @@ mod tests {
             mf_matches.len(),
         );
 
-        let multi_count = mf_matches.iter().filter(|m| m.len > 1).count();
-        let single_count = mf_matches.iter().filter(|m| m.len == 1).count();
+        let multi_count = mf_matches.iter().filter(|m| m.len() > 1).count();
+        let single_count = mf_matches.iter().filter(|m| m.len() == 1).count();
         assert!(
             multi_count > 0,
             "spectre pair should have multi-edge matches"
@@ -1335,8 +1312,8 @@ mod tests {
         );
 
         for m in &matches {
-            assert_eq!(m.tile_a, 0);
-            assert_eq!(m.tile_b, 0);
+            assert_eq!(m.tile_a(), 0);
+            assert_eq!(m.tile_b(), 0);
         }
     }
 
@@ -1359,8 +1336,8 @@ mod tests {
 
         for (s, c) in self_matches.iter().zip(cross_matches.iter()) {
             assert_eq!(
-                (s.start_a, s.len, s.start_b),
-                (c.start_a, c.len, c.start_b),
+                (s.start_a(), s.len(), s.start_b()),
+                (c.start_a(), c.len(), c.start_b()),
                 "intervals should match"
             );
         }
@@ -1385,8 +1362,8 @@ mod tests {
         );
 
         for m in &all {
-            assert!(m.tile_a < 2, "tile_a should index into patches");
-            assert_eq!(m.tile_b, 0, "tile_b should index into seed");
+            assert!(m.tile_a() < 2, "tile_a should index into patches");
+            assert_eq!(m.tile_b(), 0, "tile_b should index into seed");
         }
     }
 
@@ -1406,8 +1383,8 @@ mod tests {
 
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            assert_eq!((mt.tile_a, mt.tile_b), (0, 0));
-            assert_eq!(mt.len, 1);
+            assert_eq!((mt.tile_a(), mt.tile_b()), (0, 0));
+            assert_eq!(mt.len(), 1);
         }
     }
 
@@ -1425,8 +1402,8 @@ mod tests {
 
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            assert_eq!((mt.tile_a, mt.tile_b), (0, 0));
-            assert_eq!(mt.len, 1);
+            assert_eq!((mt.tile_a(), mt.tile_b()), (0, 0));
+            assert_eq!(mt.len(), 1);
         }
     }
 
@@ -1452,12 +1429,12 @@ mod tests {
         let mut found_asymmetric = false;
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            if mt.start_a == mt.start_b {
+            if mt.start_a() == mt.start_b() {
                 continue;
             }
-            let len_a = idx.tileset().rat(mt.tile_a).len();
-            let len_b = idx.tileset().rat(mt.tile_b).len();
-            let inv = mt.involution(len_a, len_b);
+            let len_a = idx.tileset().rat(mt.tile_a()).len();
+            let len_b = idx.tileset().rat(mt.tile_b()).len();
+            let inv = match_involution(&mt, len_a, len_b);
             let sid_fwd = idx.signed_id(&mt).unwrap();
             let sid_inv = idx.signed_id(&inv).unwrap();
             assert_eq!(sid_fwd.abs(), sid_inv.abs(), "same unsigned id");
@@ -1485,13 +1462,10 @@ mod tests {
         let mut found_ids: HashSet<i32> = HashSet::new();
         for ia in 0..6 {
             for ib in 0..6 {
-                let mt = MatchType {
-                    tile_a: 0,
-                    start_a: ia,
-                    tile_b: 0,
-                    start_b: ib,
-                    len: 1,
-                };
+                let mt = TileMatch::new(
+                    Segment::new(0, EdgeRange::new(ia, 1)),
+                    Segment::new(0, EdgeRange::new(ib, 1)),
+                );
                 if let Some(id) = idx.signed_id(&mt) {
                     found_ids.insert(id);
                 }
@@ -1547,13 +1521,13 @@ mod tests {
         let mut has_cross = false;
         for id in 1..=n {
             let mt = idx.get(id);
-            if mt.tile_a == 0 && mt.tile_b == 0 {
+            if mt.tile_a() == 0 && mt.tile_b() == 0 {
                 has_self_hex = true;
             }
-            if mt.tile_a == 1 && mt.tile_b == 1 {
+            if mt.tile_a() == 1 && mt.tile_b() == 1 {
                 has_self_sq = true;
             }
-            if mt.tile_a != mt.tile_b {
+            if mt.tile_a() != mt.tile_b() {
                 has_cross = true;
             }
         }
@@ -1612,18 +1586,18 @@ mod tests {
 
         let mut checked = 0;
         for mt in &matches {
-            if mt.start_a == mt.start_b {
+            if mt.start_a() == mt.start_b() {
                 continue;
             }
 
-            let fwd = (mt.start_a as i64, mt.len, mt.start_b as i64);
+            let fwd = (mt.start_a() as i64, mt.len(), mt.start_b() as i64);
             let rat_fwd = r
                 .try_glue_precomputed(fwd, &r, true)
                 .expect("forward glue should work");
 
-            let ns = mt.start_a as i64;
-            let ne = mt.start_b as i64;
-            let len = mt.len as i64;
+            let ns = mt.start_a() as i64;
+            let ne = mt.start_b() as i64;
+            let len = mt.len() as i64;
 
             let candidates: Vec<(&str, (i64, i64))> = vec![
                 ("(ne, ns)", (ne, ns)),
@@ -1638,14 +1612,14 @@ mod tests {
             let mut found = false;
             for (label, (s, e)) in &candidates {
                 let (ns2, len2, ne2) = r.get_match((*s, *e), &r);
-                if len2 != mt.len {
+                if len2 != mt.len() {
                     continue;
                 }
                 if let Ok(rat_rev) = r.try_glue_precomputed((ns2, len2, ne2), &r, true) {
                     if rat_rev == rat_fwd {
                         eprintln!(
                             "  MATCH {} works: fwd=({},{},{}) rev=({},{},{}) rat_fwd==rat_rev",
-                            label, ns, mt.len, ne, ns2, len2, ne2
+                            label, ns, mt.len(), ne, ns2, len2, ne2
                         );
                         found = true;
 
@@ -1717,7 +1691,7 @@ mod tests {
         let cross_ids: Vec<usize> = (1..=idx.num_types())
             .filter(|id| {
                 let mt = idx.get(*id);
-                mt.tile_a != mt.tile_b
+                mt.tile_a() != mt.tile_b()
             })
             .collect();
 
@@ -1763,9 +1737,9 @@ mod tests {
         let mut cross = 0usize;
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            if mt.tile_a == hex_idx && mt.tile_b == hex_idx {
+            if mt.tile_a() == hex_idx && mt.tile_b() == hex_idx {
                 hex_self += 1;
-            } else if mt.tile_a == bisq_idx && mt.tile_b == bisq_idx {
+            } else if mt.tile_a() == bisq_idx && mt.tile_b() == bisq_idx {
                 bisq_self += 1;
             } else {
                 cross += 1;
@@ -1811,7 +1785,7 @@ mod tests {
         let all_inv: Vec<MatchType> = all_matches
             .iter()
             .flat_map(|mt| {
-                let inv = mt.involution(ts.rat(mt.tile_a).len(), ts.rat(mt.tile_b).len());
+                let inv = match_involution(mt, ts.rat(mt.tile_a()).len(), ts.rat(mt.tile_b()).len());
                 vec![*mt, inv]
             })
             .collect();
@@ -1823,13 +1797,13 @@ mod tests {
 
         for mt in &all_inv {
             let found = idx
-                .candidates_starting_at(mt.tile_a, mt.start_a)
+                .candidates_starting_at(mt.tile_a(), mt.start_a())
                 .iter()
-                .any(|c| c.tile_b == mt.tile_b && c.start_b == mt.start_b && c.len == mt.len);
+                .any(|c| c.tile_b() == mt.tile_b() && c.start_b() == mt.start_b() && c.len() == mt.len());
             assert!(
                 found,
                 "match ({}, {}, {}, {}, {}) not found in secondary index",
-                mt.tile_a, mt.start_a, mt.tile_b, mt.start_b, mt.len
+                mt.tile_a(), mt.start_a(), mt.tile_b(), mt.start_b(), mt.len()
             );
         }
     }
@@ -1860,16 +1834,16 @@ mod tests {
             let all_mf = mf.all_valid_matches();
             let mut mf_sorted = all_mf.clone();
             mf_sorted.sort_by(|x, y| {
-                x.start_a
-                    .cmp(&y.start_a)
-                    .then_with(|| x.start_b.cmp(&y.start_b))
+                x.start_a()
+                    .cmp(&y.start_a())
+                    .then_with(|| x.start_b().cmp(&y.start_b()))
             });
 
             let mut bf_all = bf_matches.clone();
             bf_all.sort_by(|x, y| {
-                x.start_a
-                    .cmp(&y.start_a)
-                    .then_with(|| x.start_b.cmp(&y.start_b))
+                x.start_a()
+                    .cmp(&y.start_a())
+                    .then_with(|| x.start_b().cmp(&y.start_b()))
             });
 
             assert_eq!(
@@ -1883,9 +1857,9 @@ mod tests {
                 idx_all.push(entry.second);
             }
             idx_all.sort_by(|x, y| {
-                x.start_a
-                    .cmp(&y.start_a)
-                    .then_with(|| x.start_b.cmp(&y.start_b))
+                x.start_a()
+                    .cmp(&y.start_a())
+                    .then_with(|| x.start_b().cmp(&y.start_b()))
             });
             idx_all.dedup();
 
@@ -1899,8 +1873,8 @@ mod tests {
 
             for (i, (idx_mt, bf_mt)) in idx_all.iter().zip(bf_all.iter()).enumerate() {
                 assert_eq!(
-                    (idx_mt.start_a, idx_mt.len, idx_mt.start_b),
-                    (bf_mt.start_a, bf_mt.len, bf_mt.start_b),
+                    (idx_mt.start_a(), idx_mt.len(), idx_mt.start_b()),
+                    (bf_mt.start_a(), bf_mt.len(), bf_mt.start_b()),
                     "{label}: tuple mismatch at index {i}",
                 );
             }
@@ -1908,22 +1882,22 @@ mod tests {
             for offset in 0..rat.len() {
                 for cm in idx.candidates_starting_at(0, offset) {
                     let found_direct = bf_all.iter().any(|mt| {
-                        mt.start_a == offset
-                            && mt.tile_b == 0
-                            && mt.start_b == cm.start_b
-                            && mt.len == cm.len
+                        mt.start_a() == offset
+                            && mt.tile_b() == 0
+                            && mt.start_b() == cm.start_b()
+                            && mt.len() == cm.len()
                     });
                     let found_inv = bf_all.iter().any(|mt| {
-                        mt.start_a == cm.start_b
-                            && mt.tile_b == 0
-                            && mt.start_b == offset
-                            && mt.len == cm.len
+                        mt.start_a() == cm.start_b()
+                            && mt.tile_b() == 0
+                            && mt.start_b() == offset
+                            && mt.len() == cm.len()
                     });
                     assert!(
                         found_direct || found_inv,
                         "{label}: secondary (0,{offset})->(sb={},len={}) not in brute force",
-                        cm.start_b,
-                        cm.len,
+                        cm.start_b(),
+                        cm.len(),
                     );
                 }
             }
