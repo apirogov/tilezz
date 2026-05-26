@@ -11,7 +11,7 @@ use num_complex::Complex64;
 use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
+use crate::cyclotomic::params::{ZZ12_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS};
 use crate::define_integral_zz;
 
 // ----------------
@@ -591,6 +591,162 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
 // tests. The ring-specific `mod tests` below stays for ZZ12-only checks
 // (Display format, specific value assertions).
 crate::zz_integral_ring_tests!(name: ZZ12);
+
+// ----------------
+// ZZ24 -- digiclock integers Z[zeta_24].
+//
+// `zeta = e^(2*pi*i/24) = cos(15) + i*sin(15)`, `Phi_24(x) = x^8 - x^4 + 1`,
+// so `zeta^8 = zeta^4 - 1`. Storage: `[i64; 8]` over
+// `{1, zeta, zeta^2, ..., zeta^7}`. The real subring is
+// `Z[sqrt(2), sqrt(3), sqrt(6)]` (K = 4, basis `{1, sqrt(2), sqrt(3), sqrt(6)}`)
+// with `/4` implicit denominator on the decomposition tables.
+//
+// All real-sign extraction is exact via `signum_sum_sqrt_expr_4(a, 1, b, 2,
+// c, 3, d, 6)` -- both `m = 2` and `n = 3` are integer constants and
+// `l = m*n = 6`, so the algebraic identity holds.
+
+/// Symbolic-projection `complex64` for ZZ24.
+///
+/// Computes `Re(z)` and `Im(z)` by first projecting the integer-basis vector
+/// `(a, b, c, d, e, f, g, h)` to a K-vector against `{1, sqrt(2), sqrt(3),
+/// sqrt(6)}`, then evaluating each term as `coeff * sqrt(N)` in `f64` and
+/// dividing by the implicit `4` denominator. This preserves the bit-exact
+/// equalities asserted by `cyclotomic::constants::tests::test_constants`
+/// (e.g. `sqrt2::<ZZ24>().complex64().re == f64::sqrt(2.0)`).
+#[inline]
+fn zz24_complex64(coeffs: &[i64; 8]) -> Complex64 {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let (a, b, c, d, e, f_, g, h) = (
+        a as f64, b as f64, c as f64, d as f64, e as f64, f_ as f64, g as f64, h as f64,
+    );
+    let sqrt2 = std::f64::consts::SQRT_2;
+    let sqrt3 = 3.0_f64.sqrt();
+    let sqrt6 = 6.0_f64.sqrt();
+    // Re K-vector (scaled by 4): coefficients of {1, sqrt(2), sqrt(3), sqrt(6)}.
+    let r0 = 4.0 * a + 2.0 * e;
+    let r1 = b + 2.0 * d - f_ + h;
+    let r2 = 2.0 * c;
+    let r3 = b + f_ - h;
+    let re = (r0 + r1 * sqrt2 + r2 * sqrt3 + r3 * sqrt6) * 0.25;
+    // Im K-vector (scaled by 4).
+    let i0 = 2.0 * c + 4.0 * g;
+    let i1 = -b + 2.0 * d + f_ + h;
+    let i2 = 2.0 * e;
+    let i3 = b + f_ + h;
+    let im = (i0 + i1 * sqrt2 + i2 * sqrt3 + i3 * sqrt6) * 0.25;
+    Complex64::new(re, im)
+}
+
+const ZZ24_CARTESIAN: [Complex64; 8] = {
+    const COS_15: f64 = 0.9659258262890683;
+    const SIN_15: f64 = 0.25881904510252074;
+    const HALF_SQRT_3: f64 = 0.8660254037844386;
+    const HALF_SQRT_2: f64 = std::f64::consts::SQRT_2 * 0.5;
+    [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(COS_15, SIN_15),
+        Complex64::new(HALF_SQRT_3, 0.5),
+        Complex64::new(HALF_SQRT_2, HALF_SQRT_2),
+        Complex64::new(0.5, HALF_SQRT_3),
+        Complex64::new(SIN_15, COS_15),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(-SIN_15, COS_15),
+    ]
+};
+
+/// Display impl for ZZ24: project `(a..h)` back to GaussInt-Ratio coefficients
+/// of `{sqrt(1), sqrt(2), sqrt(3), sqrt(6)}` (the symbolic basis the legacy
+/// `impl_symnum_display` consumed).
+fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let quarter = Ratio::<i64>::new_raw(1, 4);
+    // Coeffs of sqrt(1), sqrt(2), sqrt(3), sqrt(6), each with real and imag
+    // parts (everything scaled by 4 to share the implicit denominator).
+    let c0 = GaussInt::new(
+        Ratio::<i64>::from_integer(4 * a + 2 * e) * quarter,
+        Ratio::<i64>::from_integer(2 * c + 4 * g) * quarter,
+    );
+    let c1 = GaussInt::new(
+        Ratio::<i64>::from_integer(b + 2 * d - f_ + h) * quarter,
+        Ratio::<i64>::from_integer(-b + 2 * d + f_ + h) * quarter,
+    );
+    let c2 = GaussInt::new(
+        Ratio::<i64>::from_integer(2 * c) * quarter,
+        Ratio::<i64>::from_integer(2 * e) * quarter,
+    );
+    let c3 = GaussInt::new(
+        Ratio::<i64>::from_integer(b + f_ - h) * quarter,
+        Ratio::<i64>::from_integer(b + f_ + h) * quarter,
+    );
+    format_symbolic(&[c0, c1, c2, c3], &["1", "2", "3", "6"], f)
+}
+
+/// Sign of `a + b*sqrt(2) + c*sqrt(3) + d*sqrt(6)` for integers `a, b, c, d`,
+/// exact via `signum_sum_sqrt_expr_4` (closed-form algebraic comparison since
+/// `2`, `3`, `6 = 2*3` are all integer constants).
+#[inline]
+fn zz24_real_sign(x: &[i64; 4]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4::<i64>(x[0], 1, x[1], 2, x[2], 3, x[3], 6) as i8
+}
+
+define_integral_zz! {
+    name: ZZ24,
+    n: 24,
+    phi: 8,
+    real_dim: 4,
+    // Phi_24(x) = x^8 - x^4 + 1, so zeta^8 = zeta^4 - 1.
+    reduction: [-1i64, 0, 0, 0, 1, 0, 0, 0],
+    // Re(zeta^k) in basis {1, sqrt(2), sqrt(3), sqrt(6)} with implicit /4:
+    //   Re(zeta^0) = 1            -> [4, 0, 0, 0]
+    //   Re(zeta^1) = cos(15)      -> [0, 1, 0, 1]   (= (sqrt(6)+sqrt(2))/4)
+    //   Re(zeta^2) = cos(30)      -> [0, 0, 2, 0]   (= sqrt(3)/2)
+    //   Re(zeta^3) = cos(45)      -> [0, 2, 0, 0]   (= sqrt(2)/2)
+    //   Re(zeta^4) = cos(60)      -> [2, 0, 0, 0]   (= 1/2)
+    //   Re(zeta^5) = cos(75)      -> [0, -1, 0, 1]  (= (sqrt(6)-sqrt(2))/4)
+    //   Re(zeta^6) = cos(90)      -> [0, 0, 0, 0]
+    //   Re(zeta^7) = cos(105)     -> [0, 1, 0, -1]  (= (sqrt(2)-sqrt(6))/4)
+    re_decomp: [
+        [4i64, 0, 0, 0], [0, 1, 0, 1], [0, 0, 2, 0], [0, 2, 0, 0],
+        [2, 0, 0, 0], [0, -1, 0, 1], [0, 0, 0, 0], [0, 1, 0, -1],
+    ],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0
+    //   Im(zeta^1) = sin(15)      -> [0, -1, 0, 1]  (= (sqrt(6)-sqrt(2))/4)
+    //   Im(zeta^2) = sin(30)      -> [2, 0, 0, 0]   (= 1/2)
+    //   Im(zeta^3) = sin(45)      -> [0, 2, 0, 0]   (= sqrt(2)/2)
+    //   Im(zeta^4) = sin(60)      -> [0, 0, 2, 0]   (= sqrt(3)/2)
+    //   Im(zeta^5) = sin(75)      -> [0, 1, 0, 1]   (= (sqrt(6)+sqrt(2))/4)
+    //   Im(zeta^6) = sin(90)      -> [4, 0, 0, 0]   (= 1)
+    //   Im(zeta^7) = sin(105)     -> [0, 1, 0, 1]   (= (sqrt(6)+sqrt(2))/4)
+    im_decomp: [
+        [0i64, 0, 0, 0], [0, -1, 0, 1], [2, 0, 0, 0], [0, 2, 0, 0],
+        [0, 0, 2, 0], [0, 1, 0, 1], [4, 0, 0, 0], [0, 1, 0, 1],
+    ],
+    cartesian: ZZ24_CARTESIAN,
+    params: ZZ24_PARAMS,
+    // `1` in basis {1, sqrt(2), sqrt(3), sqrt(6)} with /4 denominator.
+    one_in_real_basis: [4i64, 0, 0, 0],
+    display_fn: zz24_display,
+    complex64_fn: zz24_complex64,
+    has: [HasZZ4Impl, HasZZ6Impl, HasZZ8Impl, HasZZ12Impl],
+}
+
+impl From<(i64, i64)> for ZZ24 {
+    /// `(re, im)` where `i = zeta^6`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients `[a, 0, 0, 0, 0, 0, b, 0]`.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        Self::from_int_coeffs([re, 0, 0, 0, 0, 0, im, 0])
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ24, 24);
+crate::impl_integral_mul_via_basis!(ZZ24, 8);
+crate::impl_integral_conj_via_basis!(ZZ24, 8);
+crate::impl_integral_re_im_sign_via_basis!(ZZ24, 8, 4, zz24_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ24, 8, 4, zz24_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ24);
+crate::zz_integral_ring_tests!(name: ZZ24);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
