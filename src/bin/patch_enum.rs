@@ -204,7 +204,7 @@ fn main() {
         eprintln!("note: --validate with max_size > 4 may be very slow");
     }
 
-    let profile = tilezz::misc::profile::ProfileGuard::start(args.pprof.as_deref());
+    let profile = tilezz::util::profile::ProfileGuard::start(args.pprof.as_deref());
 
     let label = format!("{:?}", args.tileset);
     match args.ring {

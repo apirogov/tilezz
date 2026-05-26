@@ -465,7 +465,7 @@ fn main() {
 
     match cli.mode {
         Mode::Bench => {
-            let profile = tilezz::misc::profile::ProfileGuard::start(cli.profile.as_deref());
+            let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
             let rats: Vec<Vec<i8>> =
