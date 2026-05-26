@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use num_traits::ToPrimitive;
 
-use crate::cyclotomic::{IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField};
 
 use super::angles::{comp, revcomp};
 use super::snake::{Snake, Turtle};
@@ -118,7 +118,7 @@ pub struct Rat<T: IsRingOrField> {
     cyc: usize,
 }
 
-impl<T: IsRingOrField + Units> TryFrom<&Snake<T>> for Rat<T> {
+impl<T: IsRingOrField> TryFrom<&Snake<T>> for Rat<T> {
     type Error = &'static str;
     /// Construct a new rat from a snake.
     fn try_from(snake: &Snake<T>) -> Result<Self, Self::Error> {
@@ -130,13 +130,13 @@ impl<T: IsRingOrField + Units> TryFrom<&Snake<T>> for Rat<T> {
     }
 }
 
-impl<I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I]> for Rat<T> {
+impl<I: ToPrimitive, T: IsRingOrField> TryFrom<&[I]> for Rat<T> {
     type Error = &'static str;
     fn try_from(value: &[I]) -> Result<Self, Self::Error> {
         Snake::try_from(value).and_then(|s| Rat::try_from(&s))
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I; N]>
+impl<const N: usize, I: ToPrimitive, T: IsRingOrField> TryFrom<&[I; N]>
     for Rat<T>
 {
     type Error = &'static str;
@@ -146,7 +146,7 @@ impl<const N: usize, I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I; N]>
     }
 }
 
-impl<T: IsRingOrField + Units> Rat<T> {
+impl<T: IsRingOrField> Rat<T> {
     /// Create a rat from an angle sequence.
     /// Assumes that the sequence describes a valid simple polygon.
     pub fn from_slice_unchecked(angles: &[i8]) -> Self {
@@ -390,36 +390,36 @@ impl<T: IsRingOrField + Units> Rat<T> {
     }
 }
 
-impl<T: IsRingOrField + Units> From<Rat<T>> for Snake<T> {
+impl<T: IsRingOrField> From<Rat<T>> for Snake<T> {
     fn from(value: Rat<T>) -> Self {
         Snake::from_slice_unchecked(value.seq())
     }
 }
 
-impl<T: IsRingOrField + Units> PartialEq for Rat<T> {
+impl<T: IsRingOrField> PartialEq for Rat<T> {
     fn eq(&self, other: &Self) -> bool {
         self.angles == other.angles
     }
 }
-impl<T: IsRingOrField + Units> Eq for Rat<T> {}
-impl<T: IsRingOrField + Units> PartialOrd for Rat<T> {
+impl<T: IsRingOrField> Eq for Rat<T> {}
+impl<T: IsRingOrField> PartialOrd for Rat<T> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<T: IsRingOrField + Units> Ord for Rat<T> {
+impl<T: IsRingOrField> Ord for Rat<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.angles.cmp(&other.angles)
     }
 }
 
-impl<T: IsRingOrField + Units> std::hash::Hash for Rat<T> {
+impl<T: IsRingOrField> std::hash::Hash for Rat<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.angles.hash(state);
     }
 }
 
-impl<T: IsRingOrField + Units> Display for Rat<T> {
+impl<T: IsRingOrField> Display for Rat<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.seq().fmt(f)
     }

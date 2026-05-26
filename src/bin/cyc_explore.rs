@@ -21,7 +21,7 @@ static VERBOSE: Mutex<bool> = Mutex::new(false);
 /// Compute the levels of points reachable within the unit square from any Gaussian integer in n steps.
 fn explore<ZZ>(n: usize, mod_unit_square: bool, num_threads: usize) -> Vec<Vec<ZZ>>
 where
-    ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync,
+    ZZ: HasZZ4 + Send + Sync,
 {
     // we start at the corners of the unit square
     let start_pts: &[ZZ] = if mod_unit_square {
@@ -99,7 +99,7 @@ fn prepare_render<ZZ>(
     num_threads: usize,
 ) -> (Vec<Vec<P64>>, R64)
 where
-    ZZ: ZZType + HasZZ4 + Units + OneImag + Send + Sync,
+    ZZ: HasZZ4 + Send + Sync,
 {
     let points: Vec<Vec<P64>> = explore::<ZZ>(num_rounds, mod_unit_square, num_threads)
         .iter()

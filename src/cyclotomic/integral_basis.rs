@@ -867,9 +867,7 @@ macro_rules! define_integral_zz {
         // `impl_integral_units_via_basis!` is available for rings that
         // don't yet have a hand-rolled table.
 
-        // ---- Marker / composite trait impls ----
-        impl $crate::cyclotomic::ComplexTraits for $name {}
-        impl $crate::cyclotomic::RingTraits for $name {}
+        // ---- Catch-all "is a cyclotomic ring" marker impls ----
         impl $crate::cyclotomic::IsRingOrField for $name {}
         impl $crate::cyclotomic::IsRing for $name {}
         impl $crate::cyclotomic::ZZType for $name {}
