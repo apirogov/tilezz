@@ -2,9 +2,8 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::{IsRing};
-use crate::geom::patch::{
-    ClosedVertexType, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
-};
+use crate::geom::patch::{GrowingPatch, PatchMatch};
+use crate::geom::vertices::{ClosedVertexType, EdgeInfo, OpenVertexType, TransitionSide};
 use crate::geom::rat::Rat;
 use crate::geom::tileset::TileSet;
 

@@ -20,4 +20,6 @@ pub mod matches;
 
 pub mod glue;
 
+pub mod vertices;
+
 pub mod patch;
