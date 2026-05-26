@@ -294,10 +294,38 @@ impl TileMatch {
         self.len() == 0
     }
 
-    /// View the match from the other side: swap A and B segments.
-    /// See [`Match::swap_sides`] for the convention note.
-    pub fn swap_sides(self) -> Self {
-        Self { a: self.b, b: self.a }
+    /// The involution of this match: the same glue described from the
+    /// other tile's perspective.
+    ///
+    /// Not a trivial A/B swap. The codebase uses an asymmetric edge-
+    /// offset convention -- on the A side, `range.start_offset` is the
+    /// first **matched** edge; on the B side, it is the first
+    /// **surviving** edge just past the match (see
+    /// [`crate::geom::glue::glue_raw_angles`] for why). When we view
+    /// the match from B's side, the new A is the old B and vice
+    /// versa; but the start offsets need to shift so each lands on the
+    /// first matched / first surviving edge appropriately under the
+    /// new role:
+    ///
+    /// - new A start = (old B start + len_b - len) mod len_b
+    /// - new B start = (old A start + len)         mod len_a
+    ///
+    /// `len_a` / `len_b` are the cyclic boundary lengths of the two
+    /// tiles (`rats[tile_a].len()` and `rats[tile_b].len()` in caller
+    /// terms). Idempotent under the same input lengths:
+    /// `m.involution(la, lb).involution(lb, la) == m`.
+    pub fn involution(self, len_a: usize, len_b: usize) -> Self {
+        let len = self.len();
+        TileMatch::new(
+            Segment::new(
+                self.b.tile_id,
+                EdgeRange::new((self.b.range.start_offset + len_b - len) % len_b, len),
+            ),
+            Segment::new(
+                self.a.tile_id,
+                EdgeRange::new((self.a.range.start_offset + len) % len_a, len),
+            ),
+        )
     }
 }
 
@@ -385,15 +413,31 @@ mod tests {
     }
 
     #[test]
-    fn tile_match_swap_sides_swaps_tile_ids_too() {
+    fn tile_match_involution_swaps_tile_ids_and_shifts() {
+        // Convention reminder: A.start_offset = first matched edge,
+        // B.start_offset = first surviving edge just past the match.
+        //
+        // Take len = 2, len_a = 6, len_b = 5.
+        //   a.tile_id=7, a.range = (1, 2) [matched edges 1..3 on A]
+        //   b.tile_id=9, b.range = (3, 2) [first surviving = 3 on B, matched = 1..3 cyclically]
+        //
+        // Involuted:
+        //   new a = b's segment, start shifted to "first matched on B"
+        //         = (3 + 5 - 2) % 5 = 6 % 5 = 1 -> (9, EdgeRange(1, 2))
+        //   new b = a's segment, start shifted to "first surviving on A"
+        //         = (1 + 2) % 6 = 3 -> (7, EdgeRange(3, 2))
         let tm = TileMatch::new(
             Segment::new(7, EdgeRange::new(1, 2)),
             Segment::new(9, EdgeRange::new(3, 2)),
         );
-        let swapped = tm.swap_sides();
-        assert_eq!(swapped.a.tile_id, 9);
-        assert_eq!(swapped.b.tile_id, 7);
-        assert_eq!(swapped.swap_sides(), tm);
+        let inv = tm.involution(6, 5);
+        assert_eq!(inv.a.tile_id, 9);
+        assert_eq!(inv.a.range, EdgeRange::new(1, 2));
+        assert_eq!(inv.b.tile_id, 7);
+        assert_eq!(inv.b.range, EdgeRange::new(3, 2));
+
+        // Idempotent: involution(la, lb).involution(lb, la) == original.
+        assert_eq!(inv.involution(5, 6), tm);
     }
 
     #[test]
@@ -433,8 +477,6 @@ mod tests {
         let m = Match::new(EdgeRange::new(2, 3), EdgeRange::new(7, 3));
         let tm = m.with_tiles(11, 13);
         assert_eq!(tm.spec(), m);
-        // and swapping sides commutes with spec()
-        assert_eq!(tm.swap_sides().spec(), m.swap_sides());
     }
 
     #[test]

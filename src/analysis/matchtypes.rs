@@ -131,24 +131,6 @@ pub fn apply_match<T: IsRing>(
         .expect("match was pre-validated")
 }
 
-/// The involution of a match: same glue described from the other tile's
-/// perspective. Adjusts the asymmetric `start_b` (= first surviving)
-/// convention by shifting starts to land on the right edges of the
-/// inverted match.
-fn match_involution(m: &TileMatch, len_a: usize, len_b: usize) -> TileMatch {
-    let len = m.len();
-    TileMatch::new(
-        Segment::new(
-            m.b.tile_id,
-            EdgeRange::new((m.b.range.start_offset + len_b - len) % len_b, len),
-        ),
-        Segment::new(
-            m.a.tile_id,
-            EdgeRange::new((m.a.range.start_offset + len) % len_a, len),
-        ),
-    )
-}
-
 struct TypeEntry {
     first: TileMatch,
     second: TileMatch,
@@ -562,7 +544,7 @@ impl<T: IsRing> MatchTypeIndex<T> {
             let len_b = rats[mt.b.tile_id].len();
 
             let fwd = *mt;
-            let bwd = match_involution(mt, len_a, len_b);
+            let bwd = mt.involution(len_a, len_b);
 
             let (first, second) = if fwd <= bwd { (fwd, bwd) } else { (bwd, fwd) };
 
@@ -585,7 +567,7 @@ impl<T: IsRing> MatchTypeIndex<T> {
             let cm = Segment::new(mt.b.tile_id, EdgeRange::new(mt.b.range.start_offset, mt.len()));
             by_start[mt.a.tile_id][mt.a.range.start_offset].push(cm);
             let inv =
-                match_involution(mt, rats[mt.a.tile_id].len(), rats[mt.b.tile_id].len());
+                mt.involution(rats[mt.a.tile_id].len(), rats[mt.b.tile_id].len());
             let cm_inv =
                 Segment::new(inv.b.tile_id, EdgeRange::new(inv.b.range.start_offset, inv.len()));
             by_start[inv.a.tile_id][inv.a.range.start_offset].push(cm_inv);
@@ -1372,7 +1354,7 @@ mod tests {
             }
             let len_a = idx.tileset().rat(mt.a.tile_id).len();
             let len_b = idx.tileset().rat(mt.b.tile_id).len();
-            let inv = match_involution(&mt, len_a, len_b);
+            let inv = mt.involution(len_a, len_b);
             let sid_fwd = idx.signed_id(&mt).unwrap();
             let sid_inv = idx.signed_id(&inv).unwrap();
             assert_eq!(sid_fwd.abs(), sid_inv.abs(), "same unsigned id");
@@ -1723,7 +1705,7 @@ mod tests {
         let all_inv: Vec<TileMatch> = all_matches
             .iter()
             .flat_map(|mt| {
-                let inv = match_involution(mt, ts.rat(mt.a.tile_id).len(), ts.rat(mt.b.tile_id).len());
+                let inv = mt.involution(ts.rat(mt.a.tile_id).len(), ts.rat(mt.b.tile_id).len());
                 vec![*mt, inv]
             })
             .collect();
