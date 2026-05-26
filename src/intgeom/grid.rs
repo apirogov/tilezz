@@ -1,6 +1,6 @@
 use rustc_hash::FxHashMap;
 
-use crate::cyclotomic::SymNum;
+use crate::cyclotomic::IsRingOrField;
 
 /// Precomputed unions of the two 5-cell `+` crosses centered on cells
 /// that are `(dx, dy)` apart, indexed by `(dx + 1) * 3 + (dy + 1)` for
@@ -42,7 +42,7 @@ impl Default for UnitSquareGrid {
 }
 
 impl UnitSquareGrid {
-    pub fn cell_of<T: SymNum>(zz: T) -> (i64, i64) {
+    pub fn cell_of<T: IsRingOrField>(zz: T) -> (i64, i64) {
         // Use floor (not round) so that a unit-length segment can never
         // span more than 2 cells along an axis. With round-half-away-from-
         // zero, points at exactly +/-0.5 round in opposite directions, so a
@@ -71,7 +71,7 @@ impl UnitSquareGrid {
     /// Panics in debug if `(dx, dy)` escapes `{-1, 0, 1}^2` (which would
     /// indicate non-unit input or a `cell_of` rounding bug).
     #[inline]
-    pub fn seg_neighborhood_of<T: SymNum>(
+    pub fn seg_neighborhood_of<T: IsRingOrField>(
         p1: T,
         p2: T,
     ) -> impl Iterator<Item = (i64, i64)> {
