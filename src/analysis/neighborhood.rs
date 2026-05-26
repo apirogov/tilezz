@@ -786,9 +786,9 @@ fn build_seed_nt<T: IsRing>(
     all_juncs: &[(usize, OpenVertexType)],
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<NeighborhoodType> {
-    let central_tile_id = third_pm.tile_id();
+    let central_tile_id = third_pm.b.tile_id;
     let central_n = match_index.tileset().rat(central_tile_id).seq().len();
-    let cw_anchor_on_central = third_pm.start_b();
+    let cw_anchor_on_central = third_pm.b.range.start_offset;
     // Per the shared-edge correspondence (CCW on context = CW on
     // central), the CCW anchor vertex on context maps to tile offset
     // `start_b - match_len` mod central_n.
@@ -799,7 +799,7 @@ fn build_seed_nt<T: IsRing>(
     // from the anchor is at most match_len.
     let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
         .iter()
-        .filter(|(pos, _)| (pos + patch_n - third_pm.start_a()) % patch_n <= third_pm.len())
+        .filter(|(pos, _)| (pos + patch_n - third_pm.a_range.start_offset) % patch_n <= third_pm.len())
         .collect();
     if filtered.is_empty() {
         return None;
@@ -811,8 +811,8 @@ fn build_seed_nt<T: IsRing>(
     // anchor on context. ccw_anchor_on_context = CCW distance from
     // last_junc to the CCW anchor. Both stay small as the BFS only
     // adds edges OUTSIDE [cw_anchor, ccw_anchor].
-    let cw_anchor_on_context = (first_junc + patch_n - third_pm.start_a()) % patch_n;
-    let ccw_anchor_pos = (third_pm.start_a() + third_pm.len()) % patch_n;
+    let cw_anchor_on_context = (first_junc + patch_n - third_pm.a_range.start_offset) % patch_n;
+    let ccw_anchor_pos = (third_pm.a_range.start_offset + third_pm.len()) % patch_n;
     let ccw_anchor_on_context = (ccw_anchor_pos + patch_n - last_junc) % patch_n;
     Some(NeighborhoodType {
         central_tile_id,
@@ -877,8 +877,8 @@ fn bfs_phase<T: IsRing>(
                 src_id,
                 dst_id,
                 side: outcome.side,
-                tile_id: outcome.petal_pm.tile_id(),
-                tile_offset: outcome.petal_pm.start_b(),
+                tile_id: outcome.petal_pm.b.tile_id,
+                tile_offset: outcome.petal_pm.b.range.start_offset,
             });
         }
     }
@@ -1067,7 +1067,7 @@ fn explore_phase2<T: IsRing>(
         let open_vertex_trial_pos = if is_closed {
             None
         } else {
-            let ccw_on_corona = (petal_pm.start_a() + petal_pm.len()) % corona_n;
+            let ccw_on_corona = (petal_pm.a_range.start_offset + petal_pm.len()) % corona_n;
             Some((open_vertex_pos + corona_n - ccw_on_corona) % corona_n)
         };
         let new_st = build_surrounded_tile_from_trial(
@@ -1116,10 +1116,10 @@ fn build_surrounded_tile_from_trial<T: IsRing>(
     }
 }
 
-/// Whether the cyclic range of `pm.len()` edges starting at `pm.start_a()` in
+/// Whether the cyclic range of `pm.len()` edges starting at `pm.a_range.start_offset` in
 /// a boundary of length `n` includes the edge at position `target_edge`.
 ///
-/// **Edge-inclusive** check: `target_edge in [pm.start_a(), pm.start_a() +
+/// **Edge-inclusive** check: `target_edge in [pm.a_range.start_offset, pm.a_range.start_offset +
 /// pm.len() - 1]` (mod n). Compare to [`crate::geom::patch::cyclic_range_contains`]
 /// which is **vertex-inclusive** (covers `len + 1` vertices). Don't
 /// substitute one for the other: e.g. for `start=25, len=1, n=26`,
@@ -1130,11 +1130,11 @@ fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
     if pm.is_empty() {
         return false;
     }
-    let end_inclusive = (pm.start_a() + pm.len() - 1) % n;
-    if pm.start_a() <= end_inclusive {
-        target_edge >= pm.start_a() && target_edge <= end_inclusive
+    let end_inclusive = (pm.a_range.start_offset + pm.len() - 1) % n;
+    if pm.a_range.start_offset <= end_inclusive {
+        target_edge >= pm.a_range.start_offset && target_edge <= end_inclusive
     } else {
-        target_edge >= pm.start_a() || target_edge <= end_inclusive
+        target_edge >= pm.a_range.start_offset || target_edge <= end_inclusive
     }
 }
 
@@ -1171,7 +1171,7 @@ fn try_step_ccw<T: IsRing>(
         let canonical_open_trial_pos = if is_closed {
             None
         } else {
-            let ccw_pos_on_aug = (petal_pm.start_a() + petal_pm.len()) % ac.aug_n;
+            let ccw_pos_on_aug = (petal_pm.a_range.start_offset + petal_pm.len()) % ac.aug_n;
             Some((ac.gap_start + ac.aug_n - ccw_pos_on_aug) % ac.aug_n)
         };
         let st = build_surrounded_tile_from_trial(
@@ -1187,7 +1187,7 @@ fn try_step_ccw<T: IsRing>(
         });
     }
 
-    let petal_n = match_index.tileset().rat(petal_pm.tile_id()).seq().len();
+    let petal_n = match_index.tileset().rat(petal_pm.b.tile_id).seq().len();
 
     // The OLD CCW anchor vertex on aug is at position frontier_pos_on_aug
     // = 0. In the petal-vertex coordinate system, aug vertex (start_a + i)
@@ -1195,10 +1195,10 @@ fn try_step_ccw<T: IsRing>(
     // (start_b - i_anchor) where i_anchor = (0 - start_a) mod aug_n. The
     // new ccw edge of vt_seq[-1] starts at this petal vertex going CCW =
     // petal edge[start_b - i_anchor].
-    let i_anchor = (ac.aug_n - petal_pm.start_a()) % ac.aug_n;
+    let i_anchor = (ac.aug_n - petal_pm.a_range.start_offset) % ac.aug_n;
     let petal_edge = EdgeInfo {
-        tile_id: petal_pm.tile_id(),
-        tile_offset: (petal_pm.start_b() + petal_n - i_anchor) % petal_n,
+        tile_id: petal_pm.b.tile_id,
+        tile_offset: (petal_pm.b.range.start_offset + petal_n - i_anchor) % petal_n,
     };
 
     let mut new_vt_seq = nt.vt_seq.clone();
@@ -2490,9 +2490,9 @@ mod tests {
             let first_junc = junc_positions[0];
             let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
             let found = ctx.get_all_matches().into_iter().find(|pm| {
-                pm.tile_id() == nt.central_tile_id
-                    && pm.start_a() == anchor_pos
-                    && pm.start_b() == nt.cw_anchor_on_central
+                pm.b.tile_id == nt.central_tile_id
+                    && pm.a_range.start_offset == anchor_pos
+                    && pm.b.range.start_offset == nt.cw_anchor_on_central
             });
             let Some(pm) = found else {
                 errors.push(format!(
@@ -2857,9 +2857,9 @@ mod tests {
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.tile_id() == new_nt.central_tile_id
-                        && pm.start_a() == anchor_pos
-                        && pm.start_b() == new_nt.cw_anchor_on_central
+                    pm.b.tile_id == new_nt.central_tile_id
+                        && pm.a_range.start_offset == anchor_pos
+                        && pm.b.range.start_offset == new_nt.cw_anchor_on_central
                 });
                 let Some(pm) = found else {
                     errors.push(format!(
@@ -2920,9 +2920,9 @@ mod tests {
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
                 let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.tile_id() == new_nt.central_tile_id
-                        && pm.start_a() == anchor_pos
-                        && pm.start_b() == new_nt.cw_anchor_on_central
+                    pm.b.tile_id == new_nt.central_tile_id
+                        && pm.a_range.start_offset == anchor_pos
+                        && pm.b.range.start_offset == new_nt.cw_anchor_on_central
                 });
                 let Some(pm) = found else {
                     errors.push(format!(
