@@ -6,7 +6,7 @@ pub mod geom;
 
 pub mod analysis;
 
-pub mod misc;
+pub mod util;
 
 pub mod stringmatch;
 
