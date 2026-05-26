@@ -7,6 +7,8 @@
 //! (where they are produced) and by the [`crate::analysis`] layer
 //! (where the vertex-type catalog is built on top of them).
 
+use crate::geom::rat::lex_min_rot;
+
 // ============================================================
 // EdgeInfo: identifying one edge of one tile.
 // ============================================================
@@ -98,11 +100,17 @@ pub struct ClosedVertexType {
 
 impl ClosedVertexType {
     /// Build from a raw cyclic edge sequence; the result is stored in
-    /// lex-min cyclic rotation.
+    /// lex-min cyclic rotation (computed via Booth's O(n) algorithm in
+    /// [`lex_min_rot`]).
     pub fn from_cyclic(petals: &[EdgeInfo]) -> Self {
-        ClosedVertexType {
-            edges: canonical_cyclic_rotation(petals),
-        }
+        let n = petals.len();
+        let edges = if n <= 1 {
+            petals.to_vec()
+        } else {
+            let offset = lex_min_rot(petals);
+            (0..n).map(|i| petals[(offset + i) % n]).collect()
+        };
+        ClosedVertexType { edges }
     }
 
     /// Build the closed VT realised when the given open VT is sealed
@@ -132,33 +140,6 @@ impl ClosedVertexType {
     pub fn is_empty(&self) -> bool {
         self.edges.is_empty()
     }
-}
-
-/// Lex-min cyclic rotation of `seq`. Compares rotations
-/// lexicographically by their full `n`-element unrolling. Private
-/// to this module -- the only consumer is [`ClosedVertexType::from_cyclic`].
-fn canonical_cyclic_rotation<T: Ord + Clone>(seq: &[T]) -> Vec<T> {
-    let n = seq.len();
-    if n <= 1 {
-        return seq.to_vec();
-    }
-    let mut best = 0usize;
-    for start in 1..n {
-        // Compare rotation `start` vs current best.
-        let mut cmp = std::cmp::Ordering::Equal;
-        for i in 0..n {
-            let a = &seq[(start + i) % n];
-            let b = &seq[(best + i) % n];
-            cmp = a.cmp(b);
-            if cmp != std::cmp::Ordering::Equal {
-                break;
-            }
-        }
-        if cmp == std::cmp::Ordering::Less {
-            best = start;
-        }
-    }
-    (0..n).map(|i| seq[(best + i) % n].clone()).collect()
 }
 
 // ============================================================
