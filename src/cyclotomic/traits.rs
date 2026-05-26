@@ -92,6 +92,25 @@ pub trait IntersectUnitSegments: Sized {
     fn intersect_unit_segments(s1: &(Self, Self), s2: &(Self, Self)) -> bool;
 }
 
+/// Integer cell coordinates `(floor(Re(self)), floor(Im(self)))` for
+/// spatial bucketing in `intgeom::grid::UnitSquareGrid`.
+///
+/// Implementation strategy per ring:
+///
+/// * For rings containing `i` (`HasZZ4`-style: ZZ4, ZZ8, ZZ12, ZZ16,
+///   ZZ20, ZZ24, ZZ32, ZZ60): use `complex64().floor()` as an f64 guess
+///   then verify exactly via integer ring arithmetic + `re_sign`/
+///   `im_sign` checks. f64 is only a hint -- the output is bit-exact.
+/// * For rings without `i` (today: ZZ10): we can't construct `k * i` as
+///   a ring element to verify the imaginary axis exactly, so we fall
+///   back to the unverified f64 path. The grid concept itself implies
+///   axis-aligned cells, which is most natural for `HasZZ4` rings;
+///   non-`HasZZ4` rings would only land in pathological boundary cases
+///   if the trace happens to graze an integer line.
+pub trait CellFloor {
+    fn cell_floor(&self) -> (i64, i64);
+}
+
 /// Predicate "this point is within Euclidean radius `r` of the origin",
 /// i.e. `|self|^2 <= r * r` with `r >= 0`.
 ///
@@ -244,6 +263,7 @@ pub trait IsRing:
     + ReImSign
     + IntersectUnitSegments
     + WithinRadius
+    + CellFloor
     + Units
     + InnerIntType
     + IntRing

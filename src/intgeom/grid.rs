@@ -42,17 +42,22 @@ impl Default for UnitSquareGrid {
 }
 
 impl UnitSquareGrid {
+    /// Compute the half-open cell `[cx, cx+1) x [cy, cy+1)` containing
+    /// `zz`, i.e., `(floor(Re(zz)), floor(Im(zz)))`. Delegates to the
+    /// ring's `CellFloor` impl, which is exact for `HasZZ4` rings (f64
+    /// hint + sign verification) and f64-only for `ZZ10` (which can't
+    /// verify the imag-axis exactly without `i` in the ring).
+    ///
+    /// Why floor (not round): a unit-length segment never spans more
+    /// than 2 cells along an axis. With round-half-away-from-zero,
+    /// points at exactly +/-0.5 round in opposite directions, so a
+    /// unit segment crossing both sides of zero would give a
+    /// cell-offset of 2 -- forcing the neighborhood lookup table in
+    /// `seg_neighborhood_of` to enumerate more cases than the
+    /// conceptual 9. Floor partitions space into `[a, a+1)` cells, so
+    /// the unit shift always changes the floor by 0 or +/-1.
     pub fn cell_of<T: IsRing>(zz: T) -> (i64, i64) {
-        // Use floor (not round) so that a unit-length segment can never
-        // span more than 2 cells along an axis. With round-half-away-from-
-        // zero, points at exactly +/-0.5 round in opposite directions, so a
-        // unit segment crossing both sides of zero would give a cell-offset
-        // of 2 -- forcing the neighborhood lookup table in `unit_seg_cells`
-        // to enumerate more cases than the conceptual 9. Floor partitions
-        // space into [a, a+1) cells, so the unit shift always changes the
-        // floor by 0 or +/-1.
-        let c = zz.complex64();
-        (c.re.floor() as i64, c.im.floor() as i64)
+        zz.cell_floor()
     }
 
     /// Cells covering the neighborhood of a **unit-length** segment from
