@@ -1,12 +1,19 @@
-//! Useful constants available in the cyclotomic rings and fields.
+//! Distinguished ring elements expressed in `ZZn` arithmetic.
+//!
+//! The `sqrt2` / `sqrt3` / `sqrt5` / `sqrt6` family builds the named real
+//! square root as a ring element via `unit(k) + unit(-k) = 2*cos(2*pi*k/n)`
+//! at a suitably chosen angle `k`. The result is a *real* ring element
+//! whose `complex64().re` is bit-exact with the corresponding f64
+//! `sqrt(N)`. Each function is gated on a `HasZZk` marker that guarantees
+//! the chosen angle exists in the ring.
 
 use num_traits::One;
 
-use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRing};
 use super::rings::{ZZ10, ZZ20};
-use super::traits::Units;
+use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRing, Units};
 
-// Returns the sum of all units of a complex integer ring.
+/// Sum of all unit roots scaled by their angle index: `sum_k k * unit(k)`.
+/// Lands at a generic, "interesting" ring point useful for property tests.
 pub fn zz_units_sum<T: IsRing>() -> T {
     let mut p = T::zero();
     for i in 0..T::turn() {
@@ -15,34 +22,42 @@ pub fn zz_units_sum<T: IsRing>() -> T {
     p
 }
 
-// NOTE: as we can get the real-valued square roots represented,
-// it means that we can represent any linear combination
-// in a ring that supports quarter turn rotation (i.e. ZZDiv4).
-
+/// `sqrt(2)` as a ring element of any ring containing ZZ8.
 pub fn sqrt2<T: HasZZ8>() -> T {
     let sc = T::turn() / 8;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
+/// `sqrt(3)` as a ring element of any ring containing ZZ12.
 pub fn sqrt3<T: HasZZ12>() -> T {
     let sc = T::turn() / 12;
     <T as Units>::unit(sc) + <T as Units>::unit(-sc)
 }
 
+/// `sqrt(5)` as a ring element of any ring containing ZZ10. Identity:
+/// `2*(unit(turn/10) + unit(-turn/10)) - 1 = 2*(2*cos(36)) - 1 = sqrt(5)`.
 pub fn sqrt5<T: HasZZ10>() -> T {
     let sc = T::turn() / 10;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - T::one()
 }
 
+/// `sqrt(6)` as a ring element of any ring containing both ZZ8 and ZZ12
+/// (i.e. ZZ24, the smallest ring with both). Identity:
+/// `2*(unit(turn/24) + unit(-turn/24)) - sqrt(2) = 2*(2*cos(15)) - sqrt(2) = sqrt(6)`.
 pub fn sqrt6<T: HasZZ8 + HasZZ12>() -> T {
     let sc = T::turn() / 24;
     (<T as Units>::unit(sc) + <T as Units>::unit(-sc)) * T::one().scale(2) - sqrt2::<T>()
 }
 
-// misc. irregular
+// ----------------
+// Misc ring-specific square roots that don't fit the HasZZk pattern.
+
+/// The pentagonal radical `i * sqrt(10 - 2*sqrt(5))` as a ZZ10 element.
 pub fn zz10_isqrt_penta() -> ZZ10 {
     <ZZ10 as Units>::unit(1) * ZZ10::from(4) - ZZ10::one() - sqrt5()
 }
+
+/// `sqrt(10 - 2*sqrt(5)) / 2` as a ZZ20 element.
 pub fn zz20_half_sqrt_penta() -> ZZ20 {
     <ZZ20 as Units>::unit(3) + <ZZ20 as Units>::unit(-3)
 }

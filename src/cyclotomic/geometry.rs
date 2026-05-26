@@ -5,7 +5,7 @@ use super::traits::{HasZZ4, IntersectUnitSegments, IntT, IsRing, OneImag};
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
 /// Uses the identity `wedge(b - a, p - a) == 0` (i.e. the imaginary part of
-/// `conj(b - a) * (p - a)` is zero), so no `ZZ::Real` value is materialized.
+/// `conj(b - a) * (p - a)` is zero), so no real-subring intermediate is materialized.
 pub fn is_colinear<ZZ: IsRing>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
     wedge_sign(&(*b - *a), &(*p - *a)) == 0
 }
@@ -75,7 +75,7 @@ pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
 /// If strict is true, will not consider a point on a boundary as inside.
 ///
 /// Implemented via sign tests on the componentwise differences `p - pos_min`
-/// and `pos_max - p`, so no `ZZ::Real` value is materialized.
+/// and `pos_max - p`, so no real-subring intermediate is materialized.
 pub fn point_in_rect<ZZ: IsRing>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
     let dlo = *p - *pos_min;
     let dhi = *pos_max - *p;

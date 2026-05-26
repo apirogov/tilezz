@@ -58,7 +58,7 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// [`Rat`] needs a fresh vec for hashing). Each polygon's `n` cyclic
 /// walks collapse to a single canonical walk via the lex-min
 /// rotation prune in [`is_canonical_extended`].
-pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
+pub fn rat_enum<ZZ: IsRing>(max_steps: usize) -> Vec<Vec<i8>> {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
 
@@ -74,7 +74,7 @@ pub fn rat_enum<ZZ: ZZType>(max_steps: usize) -> Vec<Vec<i8>> {
     result
 }
 
-fn rat_enum_step<ZZ: ZZType>(
+fn rat_enum_step<ZZ: IsRing>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
     result: &mut HashSet<Vec<i8>>,
@@ -150,7 +150,7 @@ fn splitting_depth(n_threads: usize, branching: usize) -> usize {
 ///
 /// Polygons that already close at or above `split_depth` are recorded
 /// directly into `closed` -- they have no remaining work to delegate.
-fn collect_seeds<ZZ: ZZType>(
+fn collect_seeds<ZZ: IsRing>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
     split_depth: usize,
@@ -202,7 +202,7 @@ fn collect_seeds<ZZ: ZZType>(
 /// prefixes out to `n_threads` worker threads via a shared atomic
 /// counter. Each worker keeps its own `HashSet` and the main thread
 /// merges the per-worker sets at the end.
-pub fn rat_enum_parallel<ZZ: ZZType>(
+pub fn rat_enum_parallel<ZZ: IsRing>(
     max_steps: usize,
     n_threads: usize,
 ) -> Vec<Vec<i8>> {
@@ -270,13 +270,13 @@ pub fn rat_enum_parallel<ZZ: ZZType>(
     result
 }
 
-fn polygons<ZZ: ZZType>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
+fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
     rats.into_iter()
         .map(|seq| Rat::<ZZ>::from_slice_unchecked(&seq).to_polyline_f64(Turtle::default()))
         .collect()
 }
 
-fn enumerate_dispatch<ZZ: ZZType>(
+fn enumerate_dispatch<ZZ: IsRing>(
     max_steps: usize,
     n_threads: usize,
 ) -> Vec<Vec<i8>> {
