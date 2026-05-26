@@ -84,39 +84,53 @@ fn format_gauss_pair(re: Ratio<i64>, im: Ratio<i64>) -> String {
 ///
 /// Macro emitting the exact `CellFloor` impl for a `HasZZ4` ring.
 ///
-/// The f64 `complex64().floor()` gives an initial guess. Then sign checks
-/// against `T::from((k, 0))` and `T::from((0, k))` verify that `zz` lies
-/// in cell `[k, k+1)` on each axis; loops adjust by ±1 until the
-/// invariants hold. For typical inputs the f64 is already correct and
-/// the loops run zero iterations; f64 boundary cases are corrected
-/// exactly by the sign checks. Output is bit-exact regardless of f64.
+/// f64's `complex64().floor()` is the initial guess. Verification uses
+/// the same primitive as `geometry::point_in_rect` -- the 4-sign
+/// containment query `rect_signs(self, pos_min, pos_max)` -- but with
+/// **half-open** semantics (lower-closed `>= 0`, upper-open `> 0`), so
+/// a point at exactly `(N, N)` lands in cell `(N, N)` rather than
+/// `(N-1, N-1)`. The four signs simultaneously verify the guess and tell
+/// us which axis (if any) needs to adjust by +/-1.
+///
+/// f64 is only a hint; for boundary cases where f64 rounded the wrong
+/// way the loop corrects in 1-2 iterations. Output is bit-exact.
 macro_rules! impl_cell_floor_via_sign_verify {
     ($name:ident) => {
         impl $crate::cyclotomic::CellFloor for $name {
             #[inline]
             fn cell_floor(&self) -> (i64, i64) {
-                use $crate::cyclotomic::{ReImSign, SymNum};
+                use $crate::cyclotomic::SymNum;
+                use $crate::cyclotomic::geometry::rect_signs;
                 let c = self.complex64();
                 let mut cx = c.re.floor() as i64;
                 let mut cy = c.im.floor() as i64;
-
-                // Re axis: ensure cx <= Re(self) < cx+1.
-                while (*self - <$name as From<(i64, i64)>>::from((cx, 0))).re_sign() < 0 {
-                    cx -= 1;
+                loop {
+                    let pos_min = <$name as From<(i64, i64)>>::from((cx, cy));
+                    let pos_max = <$name as From<(i64, i64)>>::from((cx + 1, cy + 1));
+                    let s = rect_signs(self, &pos_min, &pos_max);
+                    // Half-open [cx, cx+1) x [cy, cy+1):
+                    //   s[0] >= 0  (Re(self) >= cx)
+                    //   s[1] >= 0  (Im(self) >= cy)
+                    //   s[2] > 0   (Re(self) <  cx+1)
+                    //   s[3] > 0   (Im(self) <  cy+1)
+                    let re_below = s[0] < 0;
+                    let re_above = s[2] <= 0;
+                    let im_below = s[1] < 0;
+                    let im_above = s[3] <= 0;
+                    if !re_below && !re_above && !im_below && !im_above {
+                        return (cx, cy);
+                    }
+                    if re_below {
+                        cx -= 1;
+                    } else if re_above {
+                        cx += 1;
+                    }
+                    if im_below {
+                        cy -= 1;
+                    } else if im_above {
+                        cy += 1;
+                    }
                 }
-                while (*self - <$name as From<(i64, i64)>>::from((cx + 1, 0))).re_sign() >= 0 {
-                    cx += 1;
-                }
-
-                // Im axis: ensure cy <= Im(self) < cy+1.
-                while (*self - <$name as From<(i64, i64)>>::from((0, cy))).im_sign() < 0 {
-                    cy -= 1;
-                }
-                while (*self - <$name as From<(i64, i64)>>::from((0, cy + 1))).im_sign() >= 0 {
-                    cy += 1;
-                }
-
-                (cx, cy)
             }
         }
     };
@@ -741,15 +755,21 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
 // Emits a sibling `zz12_generic_ring_tests` module of ~25 ring-axiom
 // tests. The ring-specific `mod tests` below stays for ZZ12-only checks
 // (Display format, specific value assertions).
-/// Hand-rolled ZZ12 `CellFloor` for the rat_enum hot path. Skips the
-/// generic-macro ring multiplication + `re_sign` projection and reads
-/// the `(m, n)` components of `Re`/`Im` inline as `(2a+c, b)` /
-/// `(b+2d, c)`, then dispatches to `sign_m_plus_n_sqrt3` directly.
+/// Hand-rolled ZZ12 `CellFloor` for the rat_enum hot path. Same family
+/// as the generic `impl_cell_floor_via_sign_verify!` macro (f64 hint +
+/// exact sign verification), but reads the `(m, n)` components of
+/// `Re`/`Im` inline as `(2a+c, b)` / `(b+2d, c)` and dispatches to
+/// `sign_m_plus_n_sqrt3` directly, bypassing the macro's
+/// `T::from((cx, cy))` ring construction + ring subtraction + K-vector
+/// projection.
 ///
 /// `Re(z) = (re_m + re_n*sqrt(3))/2`, so `floor(Re) = k` iff
-/// `(re_m - 2k) + re_n*sqrt(3) >= 0` and the same with `k+1` is
-/// strictly negative. f64 gives a starting guess; sign helpers correct
-/// it exactly.
+/// `(re_m - 2k) + re_n*sqrt(3) >= 0` and the next integer's same
+/// expression is strictly negative.
+///
+/// Note: per-axis while-loops rather than the macro's unified loop --
+/// LLVM optimizes them slightly better here, and ZZ12 is the
+/// benchmark-blessed ring.
 impl crate::cyclotomic::CellFloor for ZZ12 {
     #[inline]
     fn cell_floor(&self) -> (i64, i64) {
@@ -764,9 +784,7 @@ impl crate::cyclotomic::CellFloor for ZZ12 {
         let mut cx = cf.re.floor() as i64;
         let mut cy = cf.im.floor() as i64;
 
-        // Re axis: ensure cx <= Re(z) < cx+1, i.e.
-        //   (re_m - 2*cx) + re_n*sqrt(3) >= 0
-        //   (re_m - 2*(cx+1)) + re_n*sqrt(3) < 0
+        // Re axis: ensure cx <= Re(z) < cx+1.
         while sign_m_plus_n_sqrt3(re_m - 2 * cx, re_n) < 0 {
             cx -= 1;
         }

@@ -71,15 +71,31 @@ pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
     ZZ::intersect_unit_segments(s1, s2)
 }
 
-/// Return whether a point is inside a rectangle or on its boundary.
-/// If strict is true, will not consider a point on a boundary as inside.
+/// Return the four signs that characterize where `p` sits relative to the
+/// axis-aligned rectangle `[pos_min, pos_max]`:
 ///
-/// Implemented via sign tests on the componentwise differences `p - pos_min`
-/// and `pos_max - p`, so no real-subring intermediate is materialized.
-pub fn point_in_rect<ZZ: IsRing>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
+/// ```text
+///   [ sign(Re(p) - Re(pos_min)),    // -1 left of rect, 0 on left edge, +1 inside re bounds
+///     sign(Im(p) - Im(pos_min)),    // -1 below rect,  0 on bottom edge, +1 inside im bounds
+///     sign(Re(pos_max) - Re(p)),    // -1 right of rect, 0 on right edge, +1 inside re bounds
+///     sign(Im(pos_max) - Im(p)) ]   // -1 above rect, 0 on top edge, +1 inside im bounds
+/// ```
+///
+/// All sign tests stay in pure ring arithmetic via `re_sign`/`im_sign`; no
+/// real-subring intermediate is materialized. The four signs are the
+/// primitive containment query: every callable predicate ("is `p` strictly
+/// inside", "is `p` in the closed rect", "which way is `p` outside")
+/// reduces to a Boolean of these signs.
+pub fn rect_signs<ZZ: IsRing>(p: &ZZ, pos_min: &ZZ, pos_max: &ZZ) -> [i8; 4] {
     let dlo = *p - *pos_min;
     let dhi = *pos_max - *p;
-    let signs = [dlo.re_sign(), dlo.im_sign(), dhi.re_sign(), dhi.im_sign()];
+    [dlo.re_sign(), dlo.im_sign(), dhi.re_sign(), dhi.im_sign()]
+}
+
+/// Return whether a point is inside a rectangle or on its boundary.
+/// If `strict` is true, points on a boundary do not count as inside.
+pub fn point_in_rect<ZZ: IsRing>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: bool) -> bool {
+    let signs = rect_signs(p, pos_min, pos_max);
     if strict {
         signs.iter().all(|&s| s > 0)
     } else {
