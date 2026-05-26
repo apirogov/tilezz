@@ -476,7 +476,11 @@ where
             for ti in 0..tileset.num_tiles() {
                 for mt in mf.valid_matches(wi, ti) {
                     report.matches_checked += 1;
-                    let glued = mt.apply(witness_ts.rats(), tileset.rats());
+                    let glued = crate::intgeom::matchtypes::apply_match(
+                        &mt,
+                        witness_ts.rats(),
+                        tileset.rats(),
+                    );
                     if Snake::<T>::try_from(glued.seq()).is_err() {
                         continue;
                     }
@@ -854,9 +858,9 @@ impl<T: IsRing> Builder<T> {
                         Provenance::Glue {
                             source_rat_id,
                             tile_idx,
-                            start_a: mt.start_a,
-                            start_b: mt.start_b,
-                            len: mt.len,
+                            start_a: mt.a.range.start_offset,
+                            start_b: mt.b.range.start_offset,
+                            len: mt.len(),
                         },
                     ));
                 }

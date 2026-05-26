@@ -1968,8 +1968,9 @@ impl<T: IsRing> GrowingPatch<T> {
 
         for offset in 0..n {
             for cand in match_index.candidates_starting_at(seed_tile_id, offset) {
-                let tile_b = tileset.rat(cand.tile_b);
-                let (ns, len, ne) = seed.get_match((offset as i64, cand.start_b as i64), tile_b);
+                let tile_b = tileset.rat(cand.tile_id);
+                let (ns, len, ne) =
+                    seed.get_match((offset as i64, cand.range.start_offset as i64), tile_b);
                 if len == 0 {
                     continue;
                 }
@@ -1979,13 +1980,13 @@ impl<T: IsRing> GrowingPatch<T> {
                     continue;
                 }
                 if let Ok(_glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
-                    let key = (ns_u, len, ne_u, cand.tile_b);
+                    let key = (ns_u, len, ne_u, cand.tile_id);
                     if seen.insert(key) {
                         matches.push(PatchMatch {
                             start_a: ns_u,
                             len,
                             start_b: ne_u,
-                            tile_id: cand.tile_b,
+                            tile_id: cand.tile_id,
                         });
                     }
                 }
@@ -2131,8 +2132,8 @@ fn append_match_candidate<T: IsRing>(
     seen: &mut FxHashSet<(usize, usize, usize, usize)>,
     result: &mut [Vec<PatchMatch>],
 ) {
-    let tile_b = tileset.rat(cand.tile_b);
-    let (ns, len, ne) = rat.get_match((pos as i64, cand.start_b as i64), tile_b);
+    let tile_b = tileset.rat(cand.tile_id);
+    let (ns, len, ne) = rat.get_match((pos as i64, cand.range.start_offset as i64), tile_b);
     if len == 0 {
         return;
     }
@@ -2141,7 +2142,7 @@ fn append_match_candidate<T: IsRing>(
     if !junction_gap_nonnegative(angles, ns_u, len, tile_b.seq(), ne_u) {
         return;
     }
-    let key = (ns_u, len, ne_u, cand.tile_b);
+    let key = (ns_u, len, ne_u, cand.tile_id);
     if !seen.insert(key) {
         return;
     }
@@ -2153,7 +2154,7 @@ fn append_match_candidate<T: IsRing>(
             start_a: ns_u,
             len,
             start_b: ne_u,
-            tile_id: cand.tile_b,
+            tile_id: cand.tile_id,
         });
     }
 }
