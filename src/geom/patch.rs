@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsRing};
-use crate::matches::{EdgeRange, Segment};
+use crate::geom::matches::{EdgeRange, Segment};
 use crate::geom::angles;
 use crate::geom::glue;
 use crate::geom::glue::junctions_glueable;
@@ -76,7 +76,7 @@ pub(crate) struct TileSegment {
 /// Returned by [`GrowingPatch::get_all_matches`] and consumed by
 /// [`GrowingPatch::add_tile`].
 ///
-/// Type alias for [`crate::matches::PatchMatch`]; layered as
+/// Type alias for [`crate::geom::matches::PatchMatch`]; layered as
 /// `a_range: EdgeRange + b: Segment`. The A side has no `tile_id`
 /// because it's the patch's running boundary, not a tile from the
 /// `TileSet`.
@@ -94,7 +94,7 @@ pub(crate) struct TileSegment {
 /// * `b.tile_id` indexes into the patch's [`TileSet`].
 ///
 /// (Same convention as the lower-level [`TileMatch`](crate::analysis::matchtypes::TileMatch).)
-pub use crate::matches::PatchMatch;
+pub use crate::geom::matches::PatchMatch;
 
 /// An **open** junction vertex: the arrangement of tiles meeting at a
 /// boundary vertex that is *not* fully surrounded.

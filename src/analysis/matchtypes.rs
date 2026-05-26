@@ -24,7 +24,7 @@ use crate::geom::glue::junctions_glueable;
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
-use crate::matches::{EdgeRange, Segment, TileMatch};
+use crate::geom::matches::{EdgeRange, Segment, TileMatch};
 use crate::stringmatch::BitParallelMatcher;
 
 /// Bit-parallel engine state. The B-side masks live in a shared

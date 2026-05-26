@@ -99,7 +99,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsRing};
-use crate::matches::{EdgeRange, Segment};
+use crate::geom::matches::{EdgeRange, Segment};
 use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::geom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::geom::tileset::TileSet;

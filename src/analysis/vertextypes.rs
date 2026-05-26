@@ -1389,7 +1389,7 @@ mod tests {
     use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::geom::tiles;
     use crate::geom::tileset::{self, TileSet};
-    use crate::matches::{EdgeRange, Segment};
+    use crate::geom::matches::{EdgeRange, Segment};
     use std::sync::Arc;
 
     /// End-to-end regression: every recorded transition and the

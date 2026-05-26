@@ -4,7 +4,7 @@
 //!
 //! This is the *operation* side of gluing. The data shapes describing
 //! "where to glue" (positional spec, tile ids, etc.) live in
-//! [`crate::matches`]; pure-sequence angle utilities (revcomp, abs/rel
+//! [`crate::geom::matches`]; pure-sequence angle utilities (revcomp, abs/rel
 //! conversion, normalization) live in [`super::angles`].
 //!
 //! ## Match-interval convention
@@ -15,7 +15,7 @@
 //! *surviving* edge on B. Equivalently, the consumed B-edges run
 //! `[ne - mlen, ne)` cyclically (walked in reverse since B is glued
 //! anti-parallel to A). This matches what `Rat::get_match` returns and
-//! what [`crate::matches::TileMatch`] / [`crate::matches::PatchMatch`]
+//! what [`crate::geom::matches::TileMatch`] / [`crate::geom::matches::PatchMatch`]
 //! store.
 //!
 //! ## Junction angles

@@ -16,6 +16,8 @@ pub mod tiles;
 
 pub mod tileset;
 
+pub mod matches;
+
 pub mod glue;
 
 pub mod patch;

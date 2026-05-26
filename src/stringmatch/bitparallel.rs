@@ -52,7 +52,7 @@
 
 use std::collections::HashMap;
 
-use crate::matches::{EdgeRange, Segment, TileMatch};
+use crate::geom::matches::{EdgeRange, Segment, TileMatch};
 
 /// Fixed-length cyclic bitset over `len` bits, stored as a `Vec<u64>`.
 #[derive(Clone)]

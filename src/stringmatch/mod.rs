@@ -22,4 +22,4 @@ pub use period::repetition_factor;
 // A maximal reverse-complementary match between two cyclic angle sequences
 // is the crate-wide `TileMatch` type; re-exported here for ergonomic
 // `stringmatch::TileMatch` access at the BitParallelMatcher API boundary.
-pub use crate::matches::TileMatch;
+pub use crate::geom::matches::TileMatch;
