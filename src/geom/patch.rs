@@ -422,8 +422,8 @@ fn update_inner_chains(
 ) -> Vec<Vec<EdgeInfo>> {
     let n = old_edges.len();
     let seg_len_old = n - pm.len();
-    let ccw_pos = (pm.start_a() + pm.len()) % n;
-    let cw_end_matched = (pm.start_a() + pm.len() - 1) % n;
+    let ccw_pos = (pm.a_range.start_offset + pm.len()) % n;
+    let cw_end_matched = (pm.a_range.start_offset + pm.len() - 1) % n;
 
     let mut new_inner = vec![Vec::new(); new_n];
 
@@ -438,11 +438,11 @@ fn update_inner_chains(
         chain_ccw.push(old_edges[cw_end_matched]);
     }
 
-    let consumed_ccw_ptid = old_ptids[pm.start_a()];
-    let cw_survivor_ptid = old_ptids[(pm.start_a() + n - 1) % n];
-    let mut chain_cw: Vec<EdgeInfo> = old_inner[pm.start_a()].clone();
+    let consumed_ccw_ptid = old_ptids[pm.a_range.start_offset];
+    let cw_survivor_ptid = old_ptids[(pm.a_range.start_offset + n - 1) % n];
+    let mut chain_cw: Vec<EdgeInfo> = old_inner[pm.a_range.start_offset].clone();
     if consumed_ccw_ptid != cw_survivor_ptid {
-        chain_cw.push(old_edges[pm.start_a()]);
+        chain_cw.push(old_edges[pm.a_range.start_offset]);
     }
 
     // Keystone case: when the petal contributes zero surviving edges
@@ -450,7 +450,7 @@ fn update_inner_chains(
     // CCW match endpoints collapse to a single new boundary vertex at
     // index 0. Both chains apply there; concat with chain_cw first
     // (going CW boundary edge → interior → CCW boundary edge passes
-    // through the pm.start_a()-side first, then the ccw_pos-side).
+    // through the pm.a_range.start_offset-side first, then the ccw_pos-side).
     // The petal's own perimeter contributions are not represented in
     // inner_chains (same convention as the normal-glue path which
     // also only records consumed-adjacency tile edges).
@@ -571,7 +571,7 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
 ///
 /// The returned boundary is **rotated** so that index 0 is the first
 /// surviving old edge immediately CCW of the match (i.e. position
-/// `(pm.start_a() + pm.len()) % old_n` in the old boundary). The layout is:
+/// `(pm.a_range.start_offset + pm.len()) % old_n` in the old boundary). The layout is:
 ///
 /// ```text
 /// new_edges[0 .. old_survivor_len]           = surviving old edges
@@ -585,7 +585,7 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
 /// **Caller consequence.** A position `j` tracked in the *old* boundary
 /// that survives the glue (i.e. lies outside the matched range) maps to
 /// `(j + old_n - ccw_pos) % old_n` in the new boundary, where
-/// `ccw_pos = (pm.start_a() + pm.len()) % old_n`. [`flower_petal_glue`]
+/// `ccw_pos = (pm.a_range.start_offset + pm.len()) % old_n`. [`flower_petal_glue`]
 /// applies this remap automatically for the `prior_juncs` it tracks
 /// across multiple glues; bespoke callers in `neighborhood.rs` use the
 /// returned `new_junc_pos` as their CCW-side anchor and derive other
@@ -604,7 +604,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
     first_step: bool,
     new_tile_id: usize,
 ) -> Option<RawGlueResult> {
-    let tile_seq = tileset.rat(pm.tile_id()).seq();
+    let tile_seq = tileset.rat(pm.b.tile_id).seq();
     let m = tile_seq.len();
     let n = boundary.angles.len();
     let mlen = pm.len();
@@ -641,7 +641,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
     };
 
     let gr =
-        glue::glue_raw_angles::<T>(&boundary.angles, tile_seq, pm.start_a(), pm.len(), pm.start_b())?;
+        glue::glue_raw_angles::<T>(&boundary.angles, tile_seq, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)?;
 
     Some(RawGlueResult {
         boundary: RawBoundary {
@@ -1054,7 +1054,7 @@ impl<T: IsRing> GrowingPatch<T> {
                     &mut tmp_by_start,
                 );
                 for pm in tmp_by_start.into_iter().flatten() {
-                    if cyclic_range_contains(pm.start_a(), pm.len(), target, n) {
+                    if cyclic_range_contains(pm.a_range.start_offset, pm.len(), target, n) {
                         result.push(pm);
                     }
                 }
@@ -1122,7 +1122,7 @@ impl<T: IsRing> GrowingPatch<T> {
                 tileset,
                 &mut global_seen,
                 |_, _| true,
-                |pm| result[pm.start_a()].push(pm),
+                |pm| result[pm.a_range.start_offset].push(pm),
             );
         }
 
@@ -1164,7 +1164,7 @@ impl<T: IsRing> GrowingPatch<T> {
     ) -> impl Iterator<Item = PatchMatch> + '_ {
         self.get_all_matches()
             .into_iter()
-            .filter(move |m| m.tile_id() == tile_id)
+            .filter(move |m| m.b.tile_id == tile_id)
     }
 
     /// All legal `add_tile` candidates whose match touches the boundary
@@ -1177,7 +1177,7 @@ impl<T: IsRing> GrowingPatch<T> {
                 let n = self.match_index.tileset().rat(0).len();
                 cached_matches
                     .iter()
-                    .filter(|pm| cyclic_range_contains(pm.start_a(), pm.len(), vertex_index, n))
+                    .filter(|pm| cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n))
                     .cloned()
                     .collect()
             }
@@ -1209,7 +1209,7 @@ impl<T: IsRing> GrowingPatch<T> {
                 for offset in 0..=k {
                     let start = (vertex_index + n - offset) % n;
                     for pm in &source[start] {
-                        if cyclic_range_contains(pm.start_a(), pm.len(), vertex_index, n) {
+                        if cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n) {
                             result.push(*pm);
                         }
                     }
@@ -1243,7 +1243,7 @@ impl<T: IsRing> GrowingPatch<T> {
         let range_len = (end_edge + n - start_edge) % n + 1;
         self.get_all_matches()
             .into_iter()
-            .filter(|pm| cyclic_arcs_overlap(start_edge, range_len, pm.start_a(), pm.len(), n))
+            .filter(|pm| cyclic_arcs_overlap(start_edge, range_len, pm.a_range.start_offset, pm.len(), n))
             .collect()
     }
 
@@ -1632,8 +1632,8 @@ impl<T: IsRing> GrowingPatch<T> {
     /// [`Self::get_all_matches`], [`Self::get_matches_touching_vertex`],
     /// or — for hand construction — built via [`Rat::get_match`] /
     /// [`forward_match_length`] and the boundary's own angle sequence.
-    /// `add_tile` does **not** validate that `(pm.start_a(), pm.len(),
-    /// pm.start_b())` describes a real match: it only checks ±hturn
+    /// `add_tile` does **not** validate that `(pm.a_range.start_offset, pm.len(),
+    /// pm.b.range.start_offset)` describes a real match: it only checks ±hturn
     /// junction degeneracy and post-glue self-intersection. A bogus
     /// interval that happens to produce a non-self-intersecting
     /// polyline will be silently accepted with a geometrically
@@ -1653,7 +1653,7 @@ impl<T: IsRing> GrowingPatch<T> {
         let tileset = self.match_index.tileset();
         let seed_rat = tileset.rat(seed_id);
         let n = seed_rat.seq().len();
-        let m = tileset.rat(pm.tile_id()).seq().len();
+        let m = tileset.rat(pm.b.tile_id).seq().len();
         let mlen = pm.len();
 
         if mlen == 0 || mlen > n || mlen > m {
@@ -1661,8 +1661,8 @@ impl<T: IsRing> GrowingPatch<T> {
         }
 
         let (_ns, seed_len, _ne) = seed_rat.get_match(
-            (pm.start_a() as i64, pm.start_b() as i64),
-            tileset.rat(pm.tile_id()),
+            (pm.a_range.start_offset as i64, pm.b.range.start_offset as i64),
+            tileset.rat(pm.b.tile_id),
         );
         if seed_len == 0 {
             return false;
@@ -1744,7 +1744,7 @@ impl<T: IsRing> GrowingPatch<T> {
         // `self.state` untouched (no mem::take has happened yet).
         let n = self.boundary_len();
         let mlen = pm.len();
-        let m = self.match_index.tileset().rat(pm.tile_id()).seq().len();
+        let m = self.match_index.tileset().rat(pm.b.tile_id).seq().len();
 
         debug_assert!(
             mlen > 0 && mlen <= n && mlen <= m,
@@ -1821,10 +1821,10 @@ impl<T: IsRing> GrowingPatch<T> {
             _ => return false,
         };
 
-        let ccw_pos = (pm.start_a() + mlen) % n;
+        let ccw_pos = (pm.a_range.start_offset + mlen) % n;
 
         let removed_ids: Vec<usize> = (0..mlen)
-            .map(|i| boundary_edge_ids[(pm.start_a() + i) % n])
+            .map(|i| boundary_edge_ids[(pm.a_range.start_offset + i) % n])
             .collect();
 
         for &id in &removed_ids {
@@ -1833,11 +1833,11 @@ impl<T: IsRing> GrowingPatch<T> {
 
         // Trace the new tile's boundary positions, starting from the CW
         // junction and walking the new-tile half of `new_angles`.
-        let cw_junction = positions[pm.start_a()];
+        let cw_junction = positions[pm.a_range.start_offset];
         let ccw_junction = positions[ccw_pos];
         let initial_dir = {
-            let prev = (pm.start_a() + n - 1) % n;
-            dir_of_edge::<T>(positions[prev], positions[pm.start_a()])
+            let prev = (pm.a_range.start_offset + n - 1) % n;
+            dir_of_edge::<T>(positions[prev], positions[pm.a_range.start_offset])
         };
         let new_tile_positions =
             trace_polyline_from::<T>(cw_junction, initial_dir, &new_angles[seg_len_old..]);
@@ -1995,8 +1995,8 @@ impl<T: IsRing> GrowingPatch<T> {
 /// Build the post-glue `(edges, patch_tile_ids)` vectors.
 ///
 /// Surviving old boundary edges come first (`seg_len_old` entries starting
-/// at `(pm.start_a() + pm.len()) % n`), then the new tile's surviving edges
-/// (`seg_len_new` entries starting at `pm.start_b()`). The new tile's entries
+/// at `(pm.a_range.start_offset + pm.len()) % n`), then the new tile's surviving edges
+/// (`seg_len_new` entries starting at `pm.b.range.start_offset`). The new tile's entries
 /// are tagged with `new_tile_id` in the returned ptid vector.
 fn build_glued_edges(
     old_edges: &[EdgeInfo],
@@ -2009,7 +2009,7 @@ fn build_glued_edges(
     let mlen = pm.len();
     let seg_len_old = n - mlen;
     let seg_len_new = m_tile - mlen;
-    let ccw_pos = (pm.start_a() + mlen) % n;
+    let ccw_pos = (pm.a_range.start_offset + mlen) % n;
     let new_len = seg_len_old + seg_len_new;
 
     let mut new_edges = Vec::with_capacity(new_len);
@@ -2021,18 +2021,18 @@ fn build_glued_edges(
     }
     // Keystone glue (seg_len_new == 0): no surviving petal edges, so
     // do not push any new tile edge. For seg_len_new >= 1 the first
-    // pushed edge has tile_offset = pm.start_b() and subsequent edges
+    // pushed edge has tile_offset = pm.b.range.start_offset and subsequent edges
     // follow in petal-CCW order.
     if seg_len_new > 0 {
         new_edges.push(EdgeInfo {
-            tile_id: pm.tile_id(),
-            tile_offset: pm.start_b(),
+            tile_id: pm.b.tile_id,
+            tile_offset: pm.b.range.start_offset,
         });
         new_ptids.push(new_tile_id);
         for k in 1..seg_len_new {
             new_edges.push(EdgeInfo {
-                tile_id: pm.tile_id(),
-                tile_offset: (pm.start_b() + k) % m_tile,
+                tile_id: pm.b.tile_id,
+                tile_offset: (pm.b.range.start_offset + k) % m_tile,
             });
             new_ptids.push(new_tile_id);
         }
@@ -2254,7 +2254,7 @@ pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n:
     b_in_a || a_in_b
 }
 
-/// Compute the new boundary angles after gluing `pm.tile_id()`'s tile onto
+/// Compute the new boundary angles after gluing `pm.b.tile_id`'s tile onto
 /// the boundary `angles` along the match described by `pm`.
 ///
 /// Wraps [`glue::glue_raw_angles`] and additionally rejects glues that
@@ -2271,7 +2271,7 @@ pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n:
 /// # Caller contract
 ///
 /// Inherits the precondition from [`glue::glue_raw_angles`]: `pm` must
-/// describe a **real** match — `(pm.start_a(), pm.len(), pm.start_b())` must
+/// describe a **real** match — `(pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)` must
 /// satisfy the revcomp relation on the `pm.len() - 1` interior angles.
 /// Obtain `pm` from `GrowingPatch::get_all_matches` /
 /// `GrowingPatch::get_matches_touching_vertex` /
@@ -2284,8 +2284,8 @@ fn compute_glue_angles<T: IsRing>(
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
 ) -> Option<Vec<i8>> {
-    let other_seq = tileset.rat(pm.tile_id()).seq();
-    let gr = glue::glue_raw_angles::<T>(angles, other_seq, pm.start_a(), pm.len(), pm.start_b())?;
+    let other_seq = tileset.rat(pm.b.tile_id).seq();
+    let gr = glue::glue_raw_angles::<T>(angles, other_seq, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)?;
     if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
         if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
             return None;
@@ -2832,13 +2832,13 @@ mod tests {
                     let range_len = (end + n - start) % n + 1;
                     let want: std::collections::BTreeSet<(usize, usize, usize, usize)> = all
                         .iter()
-                        .filter(|pm| cyclic_arcs_overlap(start, range_len, pm.start_a(), pm.len(), n))
-                        .map(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()))
+                        .filter(|pm| cyclic_arcs_overlap(start, range_len, pm.a_range.start_offset, pm.len(), n))
+                        .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
                         .collect();
                     let got: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
                         .get_matches_in_edge_range(start, end)
                         .into_iter()
-                        .map(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()))
+                        .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
                         .collect();
                     assert_eq!(
                         got, want,
@@ -2862,11 +2862,11 @@ mod tests {
         assert!(gp.add_tile(&first));
         let n = gp.boundary_len();
         let mut all: Vec<_> = gp.get_all_matches();
-        all.sort_by_key(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()));
+        all.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
         for start in 0..n {
             let end = (start + n - 1) % n;
             let mut got = gp.get_matches_in_edge_range(start, end);
-            got.sort_by_key(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()));
+            got.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
             assert_eq!(got, all, "full-boundary range from start={start}");
         }
     }
@@ -3100,7 +3100,7 @@ mod tests {
         // None of the new edges should belong to the petal (= no petal
         // edge survives the keystone glue).
         for e in &new_edges {
-            assert_ne!(e.tile_id, pm.tile_id(), "no surviving petal edges");
+            assert_ne!(e.tile_id, pm.b.tile_id, "no surviving petal edges");
         }
     }
 
@@ -3297,8 +3297,8 @@ mod tests {
             let rat = gp2.to_rat();
 
             let seed_rat = ts.rat(0);
-            let new_rat = ts.rat(pm.tile_id());
-            let glued = seed_rat.try_glue((pm.start_a() as i64, pm.start_b() as i64), new_rat);
+            let new_rat = ts.rat(pm.b.tile_id);
+            let glued = seed_rat.try_glue((pm.a_range.start_offset as i64, pm.b.range.start_offset as i64), new_rat);
             match glued {
                 Ok(g) => assert_eq!(rat.seq(), g.seq(), "mismatch for pm {:?}", pm),
                 Err(e) => panic!("glue failed for pm {:?}: {}", pm, e),
@@ -3778,9 +3778,9 @@ mod tests {
             };
             let eager = gp.get_matches_touching_vertex(target);
             let mut lazy_sorted = lazy;
-            lazy_sorted.sort_by_key(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()));
+            lazy_sorted.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
             let mut eager_sorted = eager;
-            eager_sorted.sort_by_key(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()));
+            eager_sorted.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
             assert_eq!(
                 lazy_sorted,
                 eager_sorted,
@@ -3804,7 +3804,7 @@ mod tests {
 
         let all_cands = GrowingPatch::compute_all_candidates(&mi, gp.angles(), gp.edges());
         let n = gp.angles().len();
-        let sort_key = |pm: &PatchMatch| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id());
+        let sort_key = |pm: &PatchMatch| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id);
 
         for target in 0..n {
             let mut covering = GrowingPatch::compute_candidates_covering_position(
@@ -3819,7 +3819,7 @@ mod tests {
             let mut touching_truth: Vec<PatchMatch> = all_cands
                 .iter()
                 .flatten()
-                .filter(|pm| cyclic_range_contains(pm.start_a(), pm.len(), target, n))
+                .filter(|pm| cyclic_range_contains(pm.a_range.start_offset, pm.len(), target, n))
                 .cloned()
                 .collect();
 
@@ -3849,7 +3849,7 @@ mod tests {
                 (pm, ok)
             })
             .collect();
-        results.sort_by_key(|(pm, _)| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()));
+        results.sort_by_key(|(pm, _)| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
         results
     }
 
@@ -4099,7 +4099,7 @@ mod tests {
         let from_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
             .get_all_matches()
             .into_iter()
-            .map(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()))
+            .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
             .collect();
 
         assert_eq!(
@@ -4164,7 +4164,7 @@ mod tests {
         // canonical match).
         let brute_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = brute_matches
             .iter()
-            .map(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()))
+            .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
             .collect();
 
         for target in 0..n {
@@ -4187,7 +4187,7 @@ mod tests {
             let touching_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
                 .get_matches_touching_vertex(target)
                 .into_iter()
-                .map(|pm| (pm.start_a(), pm.len(), pm.start_b(), pm.tile_id()))
+                .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
                 .collect();
             assert_eq!(
                 touching_brute, touching_api,

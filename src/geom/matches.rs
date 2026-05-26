@@ -195,24 +195,6 @@ impl PatchMatch {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
-    // --- transitional flat-name accessors (will be removed once all
-    // consumers are migrated to the nested layout) ---
-
-    #[doc(hidden)]
-    pub fn start_a(&self) -> usize {
-        self.a_range.start_offset
-    }
-
-    #[doc(hidden)]
-    pub fn start_b(&self) -> usize {
-        self.b.range.start_offset
-    }
-
-    #[doc(hidden)]
-    pub fn tile_id(&self) -> usize {
-        self.b.tile_id
-    }
 }
 
 // ============================================================
@@ -256,40 +238,6 @@ impl TileMatch {
     /// See [`Match::swap_sides`] for the convention note.
     pub fn swap_sides(self) -> Self {
         Self { a: self.b, b: self.a }
-    }
-
-    // --- transitional flat-name accessors (will be removed once all
-    // consumers are migrated to the nested layout) ---
-
-    #[doc(hidden)]
-    pub fn tile_a(&self) -> usize {
-        self.a.tile_id
-    }
-
-    #[doc(hidden)]
-    pub fn start_a(&self) -> usize {
-        self.a.range.start_offset
-    }
-
-    #[doc(hidden)]
-    pub fn tile_b(&self) -> usize {
-        self.b.tile_id
-    }
-
-    #[doc(hidden)]
-    pub fn start_b(&self) -> usize {
-        self.b.range.start_offset
-    }
-}
-
-#[doc(hidden)]
-impl Segment {
-    pub fn tile_b(&self) -> usize {
-        self.tile_id
-    }
-
-    pub fn start_b(&self) -> usize {
-        self.range.start_offset
     }
 }
 

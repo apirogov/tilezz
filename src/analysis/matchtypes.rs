@@ -752,16 +752,16 @@ mod tests {
         );
         for (idx, (mf_m, bf_m)) in mf_matches.iter().zip(bf_matches.iter()).enumerate() {
             assert_eq!(
-                (mf_m.start_a(), mf_m.len(), mf_m.start_b()),
-                (bf_m.start_a(), bf_m.len(), bf_m.start_b()),
+                (mf_m.a.range.start_offset, mf_m.len(), mf_m.b.range.start_offset),
+                (bf_m.a.range.start_offset, bf_m.len(), bf_m.b.range.start_offset),
                 "{label}: interval mismatch at index {idx}",
             );
             assert_eq!(
                 apply_match(mf_m, rats_a, rats_b),
                 apply_match(bf_m, rats_a, rats_b),
                 "{label}: result mismatch at ({}, {})",
-                mf_m.start_a(),
-                mf_m.start_b(),
+                mf_m.a.range.start_offset,
+                mf_m.b.range.start_offset,
             );
         }
     }
@@ -817,7 +817,7 @@ mod tests {
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
-                !(m.start_a() == 8 && m.start_b() == 0),
+                !(m.a.range.start_offset == 8 && m.b.range.start_offset == 0),
                 "self-intersecting glue should be filtered"
             );
         }
@@ -840,7 +840,7 @@ mod tests {
         let matches = mf.valid_matches(0, 1);
         for m in &matches {
             assert!(
-                !(m.start_a() == 7 && m.start_b() == 0),
+                !(m.a.range.start_offset == 7 && m.b.range.start_offset == 0),
                 "vertex-touching glue should be filtered"
             );
         }
@@ -853,8 +853,8 @@ mod tests {
         let matches = mf.valid_matches(0, 0);
         for w in matches.windows(2) {
             assert!(
-                w[0].start_a() <= w[1].start_a()
-                    && (w[0].start_a() < w[1].start_a() || w[0].start_b() <= w[1].start_b()),
+                w[0].a.range.start_offset <= w[1].a.range.start_offset
+                    && (w[0].a.range.start_offset < w[1].a.range.start_offset || w[0].b.range.start_offset <= w[1].b.range.start_offset),
                 "matches not in deterministic order"
             );
         }
@@ -869,12 +869,12 @@ mod tests {
         let all = mf.all_valid_matches();
         for w in all.windows(2) {
             assert!(
-                w[0].tile_a() < w[1].tile_a()
-                    || (w[0].tile_a() == w[1].tile_a() && w[0].tile_b() < w[1].tile_b())
-                    || (w[0].tile_a() == w[1].tile_a()
-                        && w[0].tile_b() == w[1].tile_b()
-                        && (w[0].start_a() < w[1].start_a()
-                            || (w[0].start_a() == w[1].start_a() && w[0].start_b() <= w[1].start_b()))),
+                w[0].a.tile_id < w[1].a.tile_id
+                    || (w[0].a.tile_id == w[1].a.tile_id && w[0].b.tile_id < w[1].b.tile_id)
+                    || (w[0].a.tile_id == w[1].a.tile_id
+                        && w[0].b.tile_id == w[1].b.tile_id
+                        && (w[0].a.range.start_offset < w[1].a.range.start_offset
+                            || (w[0].a.range.start_offset == w[1].a.range.start_offset && w[0].b.range.start_offset <= w[1].b.range.start_offset))),
                 "all_valid_matches not sorted"
             );
         }
@@ -1250,8 +1250,8 @@ mod tests {
         );
 
         for m in &matches {
-            assert_eq!(m.tile_a(), 0);
-            assert_eq!(m.tile_b(), 0);
+            assert_eq!(m.a.tile_id, 0);
+            assert_eq!(m.b.tile_id, 0);
         }
     }
 
@@ -1274,8 +1274,8 @@ mod tests {
 
         for (s, c) in self_matches.iter().zip(cross_matches.iter()) {
             assert_eq!(
-                (s.start_a(), s.len(), s.start_b()),
-                (c.start_a(), c.len(), c.start_b()),
+                (s.a.range.start_offset, s.len(), s.b.range.start_offset),
+                (c.a.range.start_offset, c.len(), c.b.range.start_offset),
                 "intervals should match"
             );
         }
@@ -1300,8 +1300,8 @@ mod tests {
         );
 
         for m in &all {
-            assert!(m.tile_a() < 2, "tile_a should index into patches");
-            assert_eq!(m.tile_b(), 0, "tile_b should index into seed");
+            assert!(m.a.tile_id < 2, "tile_a should index into patches");
+            assert_eq!(m.b.tile_id, 0, "tile_b should index into seed");
         }
     }
 
@@ -1321,7 +1321,7 @@ mod tests {
 
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            assert_eq!((mt.tile_a(), mt.tile_b()), (0, 0));
+            assert_eq!((mt.a.tile_id, mt.b.tile_id), (0, 0));
             assert_eq!(mt.len(), 1);
         }
     }
@@ -1340,7 +1340,7 @@ mod tests {
 
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            assert_eq!((mt.tile_a(), mt.tile_b()), (0, 0));
+            assert_eq!((mt.a.tile_id, mt.b.tile_id), (0, 0));
             assert_eq!(mt.len(), 1);
         }
     }
@@ -1367,11 +1367,11 @@ mod tests {
         let mut found_asymmetric = false;
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            if mt.start_a() == mt.start_b() {
+            if mt.a.range.start_offset == mt.b.range.start_offset {
                 continue;
             }
-            let len_a = idx.tileset().rat(mt.tile_a()).len();
-            let len_b = idx.tileset().rat(mt.tile_b()).len();
+            let len_a = idx.tileset().rat(mt.a.tile_id).len();
+            let len_b = idx.tileset().rat(mt.b.tile_id).len();
             let inv = match_involution(&mt, len_a, len_b);
             let sid_fwd = idx.signed_id(&mt).unwrap();
             let sid_inv = idx.signed_id(&inv).unwrap();
@@ -1459,13 +1459,13 @@ mod tests {
         let mut has_cross = false;
         for id in 1..=n {
             let mt = idx.get(id);
-            if mt.tile_a() == 0 && mt.tile_b() == 0 {
+            if mt.a.tile_id == 0 && mt.b.tile_id == 0 {
                 has_self_hex = true;
             }
-            if mt.tile_a() == 1 && mt.tile_b() == 1 {
+            if mt.a.tile_id == 1 && mt.b.tile_id == 1 {
                 has_self_sq = true;
             }
-            if mt.tile_a() != mt.tile_b() {
+            if mt.a.tile_id != mt.b.tile_id {
                 has_cross = true;
             }
         }
@@ -1524,17 +1524,17 @@ mod tests {
 
         let mut checked = 0;
         for mt in &matches {
-            if mt.start_a() == mt.start_b() {
+            if mt.a.range.start_offset == mt.b.range.start_offset {
                 continue;
             }
 
-            let fwd = (mt.start_a() as i64, mt.len(), mt.start_b() as i64);
+            let fwd = (mt.a.range.start_offset as i64, mt.len(), mt.b.range.start_offset as i64);
             let rat_fwd = r
                 .try_glue_precomputed(fwd, &r, true)
                 .expect("forward glue should work");
 
-            let ns = mt.start_a() as i64;
-            let ne = mt.start_b() as i64;
+            let ns = mt.a.range.start_offset as i64;
+            let ne = mt.b.range.start_offset as i64;
             let len = mt.len() as i64;
 
             let candidates: Vec<(&str, (i64, i64))> = vec![
@@ -1629,7 +1629,7 @@ mod tests {
         let cross_ids: Vec<usize> = (1..=idx.num_types())
             .filter(|id| {
                 let mt = idx.get(*id);
-                mt.tile_a() != mt.tile_b()
+                mt.a.tile_id != mt.b.tile_id
             })
             .collect();
 
@@ -1675,9 +1675,9 @@ mod tests {
         let mut cross = 0usize;
         for id in 1..=idx.num_types() {
             let mt = idx.get(id);
-            if mt.tile_a() == hex_idx && mt.tile_b() == hex_idx {
+            if mt.a.tile_id == hex_idx && mt.b.tile_id == hex_idx {
                 hex_self += 1;
-            } else if mt.tile_a() == bisq_idx && mt.tile_b() == bisq_idx {
+            } else if mt.a.tile_id == bisq_idx && mt.b.tile_id == bisq_idx {
                 bisq_self += 1;
             } else {
                 cross += 1;
@@ -1723,7 +1723,7 @@ mod tests {
         let all_inv: Vec<TileMatch> = all_matches
             .iter()
             .flat_map(|mt| {
-                let inv = match_involution(mt, ts.rat(mt.tile_a()).len(), ts.rat(mt.tile_b()).len());
+                let inv = match_involution(mt, ts.rat(mt.a.tile_id).len(), ts.rat(mt.b.tile_id).len());
                 vec![*mt, inv]
             })
             .collect();
@@ -1735,13 +1735,13 @@ mod tests {
 
         for mt in &all_inv {
             let found = idx
-                .candidates_starting_at(mt.tile_a(), mt.start_a())
+                .candidates_starting_at(mt.a.tile_id, mt.a.range.start_offset)
                 .iter()
-                .any(|c| c.tile_b() == mt.tile_b() && c.start_b() == mt.start_b() && c.len() == mt.len());
+                .any(|c| c.tile_id == mt.b.tile_id && c.range.start_offset == mt.b.range.start_offset && c.len() == mt.len());
             assert!(
                 found,
                 "match ({}, {}, {}, {}, {}) not found in secondary index",
-                mt.tile_a(), mt.start_a(), mt.tile_b(), mt.start_b(), mt.len()
+                mt.a.tile_id, mt.a.range.start_offset, mt.b.tile_id, mt.b.range.start_offset, mt.len()
             );
         }
     }
@@ -1772,16 +1772,16 @@ mod tests {
             let all_mf = mf.all_valid_matches();
             let mut mf_sorted = all_mf.clone();
             mf_sorted.sort_by(|x, y| {
-                x.start_a()
-                    .cmp(&y.start_a())
-                    .then_with(|| x.start_b().cmp(&y.start_b()))
+                x.a.range.start_offset
+                    .cmp(&y.a.range.start_offset)
+                    .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
 
             let mut bf_all = bf_matches.clone();
             bf_all.sort_by(|x, y| {
-                x.start_a()
-                    .cmp(&y.start_a())
-                    .then_with(|| x.start_b().cmp(&y.start_b()))
+                x.a.range.start_offset
+                    .cmp(&y.a.range.start_offset)
+                    .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
 
             assert_eq!(
@@ -1795,9 +1795,9 @@ mod tests {
                 idx_all.push(entry.second);
             }
             idx_all.sort_by(|x, y| {
-                x.start_a()
-                    .cmp(&y.start_a())
-                    .then_with(|| x.start_b().cmp(&y.start_b()))
+                x.a.range.start_offset
+                    .cmp(&y.a.range.start_offset)
+                    .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
             idx_all.dedup();
 
@@ -1811,8 +1811,8 @@ mod tests {
 
             for (i, (idx_mt, bf_mt)) in idx_all.iter().zip(bf_all.iter()).enumerate() {
                 assert_eq!(
-                    (idx_mt.start_a(), idx_mt.len(), idx_mt.start_b()),
-                    (bf_mt.start_a(), bf_mt.len(), bf_mt.start_b()),
+                    (idx_mt.a.range.start_offset, idx_mt.len(), idx_mt.b.range.start_offset),
+                    (bf_mt.a.range.start_offset, bf_mt.len(), bf_mt.b.range.start_offset),
                     "{label}: tuple mismatch at index {i}",
                 );
             }
@@ -1820,21 +1820,21 @@ mod tests {
             for offset in 0..rat.len() {
                 for cm in idx.candidates_starting_at(0, offset) {
                     let found_direct = bf_all.iter().any(|mt| {
-                        mt.start_a() == offset
-                            && mt.tile_b() == 0
-                            && mt.start_b() == cm.start_b()
+                        mt.a.range.start_offset == offset
+                            && mt.b.tile_id == 0
+                            && mt.b.range.start_offset == cm.range.start_offset
                             && mt.len() == cm.len()
                     });
                     let found_inv = bf_all.iter().any(|mt| {
-                        mt.start_a() == cm.start_b()
-                            && mt.tile_b() == 0
-                            && mt.start_b() == offset
+                        mt.a.range.start_offset == cm.range.start_offset
+                            && mt.b.tile_id == 0
+                            && mt.b.range.start_offset == offset
                             && mt.len() == cm.len()
                     });
                     assert!(
                         found_direct || found_inv,
                         "{label}: secondary (0,{offset})->(sb={},len={}) not in brute force",
-                        cm.start_b(),
+                        cm.range.start_offset,
                         cm.len(),
                     );
                 }
