@@ -160,6 +160,7 @@ pub const ZZ16_PARAMS: ZZParams = ZZParams {
 /// c [  y ,  xy , 2+x  , 2+2x ]
 /// d [ xy , 2 y , 2+2x , 4+2x ]
 /// where x = sqrt(2), y = sqrt(2+sqrt(2))
+#[allow(dead_code)]
 pub fn zz16_mul<T: IntRing + FromPrimitive>(x: &[T], y: &[T]) -> Vec<T> {
     let int2 = T::from_i64(2).unwrap();
     match [*array_ref!(x, 0, 4), *array_ref!(y, 0, 4)] {

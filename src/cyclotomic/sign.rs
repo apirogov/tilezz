@@ -107,6 +107,55 @@ pub fn signum_sum_sqrt_expr_4<T: IntRing + ZSigned + FromPrimitive>(
     sgn_bc_terms.signum() * (sq_lhs - sq_rhs).signum()
 }
 
+/// Floating-point-free sign of a + b*sqrt(2) + c*sqrt(2+sqrt(2)) + d*sqrt(2*(2+sqrt(2)))
+/// via recursive reduction from Q(sqrt(2), sqrt(2+sqrt(2))) to Q(sqrt(2)).
+///
+/// This is the ZZ16 real subring. Group as z = P + Q*sqrt(y) where
+/// P = a + b*sqrt(2), Q = c + d*sqrt(2), y = 2 + sqrt(2). Then sign(z) is
+/// determined by sign(P), sign(Q), and sign(P^2 - Q^2*y), with
+/// P^2 - Q^2*y in Q(sqrt(2)). Same closed-form shape as the pentagonal
+/// helper below; differs only in `y`.
+pub fn signum_sum_sqrt_expr_4_zz16<T: IntRing + ZSigned + FromPrimitive>(
+    a: T,
+    b: T,
+    c: T,
+    d: T,
+) -> T {
+    let sp = signum_sum_sqrt_expr_2(a, T::one(), b, T::from_i8(2).unwrap());
+    let sq = signum_sum_sqrt_expr_2(c, T::one(), d, T::from_i8(2).unwrap());
+
+    if sp == sq {
+        return sp;
+    }
+    if sq.is_zero() {
+        return sp;
+    }
+    if sp.is_zero() {
+        return sq;
+    }
+
+    let int2 = T::from_i8(2).unwrap();
+    let int4 = T::from_i8(4).unwrap();
+
+    let aa = a * a;
+    let bb = b * b;
+    let cc = c * c;
+    let dd = d * d;
+    let cd = c * d;
+    let ab = a * b;
+
+    // P^2 - Q^2 * (2 + sqrt(2)) in Z[sqrt(2)]:
+    //   P^2     = a^2 + 2*b^2 + 2*a*b*sqrt(2)
+    //   Q^2     = c^2 + 2*d^2 + 2*c*d*sqrt(2)
+    //   Q^2 * y = (2*c^2 + 4*d^2 + 4*c*d) + (c^2 + 2*d^2 + 4*c*d) * sqrt(2)
+    let alpha = aa + int2 * bb - int2 * cc - int4 * dd - int4 * cd;
+    let beta = int2 * ab - cc - int2 * dd - int4 * cd;
+
+    let spq = signum_sum_sqrt_expr_2(alpha, T::one(), beta, int2);
+
+    -sq * spq
+}
+
 /// Floating-point-free sign of a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))
 /// via recursive reduction from Q(sqrt(5), sqrt(10-2*sqrt(5))) to Q(sqrt(5)).
 ///
@@ -197,7 +246,12 @@ pub fn coeffs_real_sign_2_sym(coeffs: &[Ratio<i64>], roots_sqs: &[f64]) -> i8 {
     ratio_to_i8(s)
 }
 
-/// Sign for rings with 4 symbolic roots `{1, sqrt(m), sqrt(n), sqrt(mn)}`: ZZ16, ZZ24.
+/// Sign for rings with 4 symbolic roots `{1, sqrt(m), sqrt(n), sqrt(mn)}`:
+/// legacy ZZ24 path (also used by ZZ16 with approximate `Ratio::from_f64`
+/// for the nested-radical `n` -- ZZ16 now ports to the exact
+/// `signum_sum_sqrt_expr_4_zz16` helper). Unused after the move to
+/// integer-basis storage; kept until step 5.
+#[allow(dead_code)]
 pub fn coeffs_real_sign_4_sym(coeffs: &[Ratio<i64>], roots_sqs: &[f64]) -> i8 {
     debug_assert_eq!(coeffs.len(), 4);
     debug_assert_eq!(roots_sqs.len(), 4);
@@ -322,5 +376,56 @@ mod tests {
         assert_eq!(sign_zz10(3, 0, -1, 0), 1);
         assert_eq!(sign_zz10(1, 0, 0, -2), -1);
         assert_eq!(sign_zz10(-1, 0, 0, 2), 1);
+    }
+
+    #[test]
+    fn test_sum_root_expr_sign_4_zz16() {
+        // sign of a + b*sqrt(2) + c*sqrt(2+sqrt(2)) + d*sqrt(2*(2+sqrt(2)))
+        let sign_zz16 = signum_sum_sqrt_expr_4_zz16::<i64>;
+
+        // Trivial axes.
+        assert_eq!(sign_zz16(0, 0, 0, 0), 0);
+        assert_eq!(sign_zz16(1, 0, 0, 0), 1);
+        assert_eq!(sign_zz16(-1, 0, 0, 0), -1);
+        assert_eq!(sign_zz16(0, 1, 0, 0), 1);
+        assert_eq!(sign_zz16(0, -1, 0, 0), -1);
+        assert_eq!(sign_zz16(0, 0, 1, 0), 1);
+        assert_eq!(sign_zz16(0, 0, -1, 0), -1);
+        assert_eq!(sign_zz16(0, 0, 0, 1), 1);
+        assert_eq!(sign_zz16(0, 0, 0, -1), -1);
+
+        // Same-sign sums.
+        assert_eq!(sign_zz16(1, 1, 0, 0), 1);
+        assert_eq!(sign_zz16(-1, -1, 0, 0), -1);
+        assert_eq!(sign_zz16(0, 0, 1, 1), 1);
+        assert_eq!(sign_zz16(0, 0, -1, -1), -1);
+
+        // Mixed-sign with a definite winner (numerical sanity, exact via
+        // closed-form): with sqrt(2) ~ 1.414, sqrt(2+sqrt(2)) ~ 1.848,
+        // sqrt(2(2+sqrt(2))) ~ 2.613.
+        //   1 + (-1)*sqrt(2) = ~ -0.414       -> -1
+        assert_eq!(sign_zz16(1, -1, 0, 0), -1);
+        //   2 + (-1)*sqrt(2) = ~ 0.586        -> 1
+        assert_eq!(sign_zz16(2, -1, 0, 0), 1);
+        //   1 + (-1)*sqrt(2+sqrt(2)) ~ -0.848 -> -1
+        assert_eq!(sign_zz16(1, 0, -1, 0), -1);
+        //   2 + (-1)*sqrt(2+sqrt(2)) ~ 0.152  -> 1
+        assert_eq!(sign_zz16(2, 0, -1, 0), 1);
+        //   sqrt(2(2+sqrt(2))) ~ 2.613, sqrt(2) ~ 1.414, so 2*sqrt(2) ~ 2.828 > 2.613
+        //   2*sqrt(2) - sqrt(2(2+sqrt(2))) ~ 0.215 > 0
+        assert_eq!(sign_zz16(0, 2, 0, -1), 1);
+        //   sqrt(2) - sqrt(2(2+sqrt(2))) ~ -1.199 -> -1
+        assert_eq!(sign_zz16(0, 1, 0, -1), -1);
+
+        // P ~ 0 cases (sign of Q wins).
+        //   sqrt(2+sqrt(2)) + sqrt(2(2+sqrt(2))) = sqrt(2+sqrt(2)) * (1 + sqrt(2)) > 0
+        assert_eq!(sign_zz16(0, 0, 1, 1), 1);
+        // Q ~ 0 cases (sign of P wins).
+        //   1 + sqrt(2) > 0
+        assert_eq!(sign_zz16(1, 1, 0, 0), 1);
+
+        // P > 0, Q > 0 -> 1; P < 0, Q < 0 -> -1.
+        assert_eq!(sign_zz16(1, 1, 1, 1), 1);
+        assert_eq!(sign_zz16(-1, -1, -1, -1), -1);
     }
 }

@@ -12,7 +12,8 @@ use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
 use crate::cyclotomic::params::{
-    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS, ZZ8_PARAMS,
+    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ16_PARAMS, ZZ16_Y, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS,
+    ZZ8_PARAMS,
 };
 use crate::define_integral_zz;
 
@@ -1052,6 +1053,163 @@ crate::impl_integral_re_im_sign_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 crate::impl_integral_within_radius_via_complex64!(ZZ10);
 crate::zz_integral_ring_tests!(name: ZZ10);
+
+// ----------------
+// ZZ16 -- hex integers Z[zeta_16].
+//
+// `zeta = e^(2*pi*i/16) = cos(22.5) + i*sin(22.5)`, `Phi_16(x) = x^8 + 1`,
+// so `zeta^8 = -1`. Storage: `[i64; 8]` over `{1, zeta, ..., zeta^7}`. The
+// real subring is `Z[sqrt(2), sqrt(2+sqrt(2))]` (K = 4, basis
+// `{1, sqrt(2), b3, b4}` with `b3 = sqrt(2+sqrt(2))`, `b4 = sqrt(2)*b3`)
+// with `/2` implicit denominator.
+//
+// Real-sign extraction is **exact** via `signum_sum_sqrt_expr_4_zz16`
+// (closed-form reduction from `Q(sqrt(2), sqrt(2+sqrt(2)))` to `Q(sqrt(2))`
+// -- same shape as the pentagonal helper, just with `y = 2+sqrt(2)`).
+//
+// Useful identity for the decomposition tables:
+//   sqrt(2 - sqrt(2)) = sqrt(2) * sqrt(2+sqrt(2)) - sqrt(2+sqrt(2))
+//                    = b4 - b3
+// which expresses sin(22.5), cos(67.5), sin(157.5), etc. in the chosen basis.
+
+#[inline]
+fn zz16_complex64(coeffs: &[i64; 8]) -> Complex64 {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let (a, b, c, d, e, f_, g, h) = (
+        a as f64, b as f64, c as f64, d as f64, e as f64, f_ as f64, g as f64, h as f64,
+    );
+    let sqrt2 = std::f64::consts::SQRT_2;
+    let sq_y = ZZ16_Y.sqrt();
+    let sq_2y = (2.0 * ZZ16_Y).sqrt();
+    // Re K-vector (scaled by 2) in basis {1, sqrt(2), b3, b4}.
+    let r0 = 2.0 * a;
+    let r1 = c - g;
+    let r2 = b - d + f_ - h;
+    let r3 = d - f_;
+    let re = (r0 + r1 * sqrt2 + r2 * sq_y + r3 * sq_2y) * 0.5;
+    // Im K-vector (scaled by 2).
+    let i0 = 2.0 * e;
+    let i1 = c + g;
+    let i2 = -b + d + f_ - h;
+    let i3 = b + h;
+    let im = (i0 + i1 * sqrt2 + i2 * sq_y + i3 * sq_2y) * 0.5;
+    Complex64::new(re, im)
+}
+
+const ZZ16_CARTESIAN: [Complex64; 8] = {
+    const COS_22_5: f64 = 0.9238795325112867;
+    const SIN_22_5: f64 = 0.3826834323650898;
+    const HALF_SQRT_2: f64 = std::f64::consts::SQRT_2 * 0.5;
+    [
+        Complex64::new(1.0, 0.0),
+        Complex64::new(COS_22_5, SIN_22_5),
+        Complex64::new(HALF_SQRT_2, HALF_SQRT_2),
+        Complex64::new(SIN_22_5, COS_22_5),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(-SIN_22_5, COS_22_5),
+        Complex64::new(-HALF_SQRT_2, HALF_SQRT_2),
+        Complex64::new(-COS_22_5, SIN_22_5),
+    ]
+};
+
+fn zz16_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b, c, d, e, f_, g, h] = *coeffs;
+    let half = Ratio::<i64>::new_raw(1, 2);
+    // Each c_k = (Re_part + Im_part * i) / 2 where Re_part and Im_part are
+    // the K-vector entries above, scaled by 2.
+    let c0 = GaussInt::new(
+        Ratio::<i64>::from_integer(2 * a) * half,
+        Ratio::<i64>::from_integer(2 * e) * half,
+    );
+    let c1 = GaussInt::new(
+        Ratio::<i64>::from_integer(c - g) * half,
+        Ratio::<i64>::from_integer(c + g) * half,
+    );
+    let c2 = GaussInt::new(
+        Ratio::<i64>::from_integer(b - d + f_ - h) * half,
+        Ratio::<i64>::from_integer(-b + d + f_ - h) * half,
+    );
+    let c3 = GaussInt::new(
+        Ratio::<i64>::from_integer(d - f_) * half,
+        Ratio::<i64>::from_integer(b + h) * half,
+    );
+    format_symbolic(
+        &[c0, c1, c2, c3],
+        &["1", "2", "2+sqrt(2)", "2(2+sqrt(2))"],
+        f,
+    )
+}
+
+/// Sign of `a + b*sqrt(2) + c*sqrt(2+sqrt(2)) + d*sqrt(2*(2+sqrt(2)))`
+/// via the closed-form `signum_sum_sqrt_expr_4_zz16` (recursive reduction
+/// from `Q(sqrt(2), sqrt(2+sqrt(2)))` to `Q(sqrt(2))`).
+#[inline]
+fn zz16_real_sign(x: &[i64; 4]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_zz16::<i64>(x[0], x[1], x[2], x[3]) as i8
+}
+
+define_integral_zz! {
+    name: ZZ16,
+    n: 16,
+    phi: 8,
+    real_dim: 4,
+    // Phi_16(x) = x^8 + 1, so zeta^8 = -1.
+    reduction: [-1i64, 0, 0, 0, 0, 0, 0, 0],
+    // Re(zeta^k) in basis {1, sqrt(2), b3, b4} with implicit /2, where
+    //   b3 = sqrt(2 + sqrt(2)),   b4 = sqrt(2) * b3 = sqrt(2(2+sqrt(2))).
+    //
+    // Identity: sqrt(2 - sqrt(2)) = b4 - b3, so e.g.
+    //   sin(22.5) = sqrt(2-sqrt(2))/2 = (b4 - b3) / 2 -> [0, 0, -1, 1].
+    //
+    //   Re(zeta^0) = 1                  -> [2, 0, 0, 0]
+    //   Re(zeta^1) = cos(22.5) = b3/2   -> [0, 0, 1, 0]
+    //   Re(zeta^2) = cos(45)   = sqrt(2)/2 -> [0, 1, 0, 0]
+    //   Re(zeta^3) = cos(67.5) = sin(22.5) = (b4-b3)/2 -> [0, 0, -1, 1]
+    //   Re(zeta^4) = cos(90)   = 0      -> [0, 0, 0, 0]
+    //   Re(zeta^5) = cos(112.5)= -sin(22.5) = (b3-b4)/2 -> [0, 0, 1, -1]
+    //   Re(zeta^6) = cos(135)  = -sqrt(2)/2 -> [0, -1, 0, 0]
+    //   Re(zeta^7) = cos(157.5)= -cos(22.5) = -b3/2 -> [0, 0, -1, 0]
+    re_decomp: [
+        [2i64, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, -1, 1],
+        [0, 0, 0, 0], [0, 0, 1, -1], [0, -1, 0, 0], [0, 0, -1, 0],
+    ],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0
+    //   Im(zeta^1) = sin(22.5)  = (b4-b3)/2 -> [0, 0, -1, 1]
+    //   Im(zeta^2) = sin(45)    = sqrt(2)/2 -> [0, 1, 0, 0]
+    //   Im(zeta^3) = sin(67.5)  = cos(22.5) = b3/2 -> [0, 0, 1, 0]
+    //   Im(zeta^4) = sin(90)    = 1 -> [2, 0, 0, 0]
+    //   Im(zeta^5) = sin(112.5) = sin(67.5) = b3/2 -> [0, 0, 1, 0]
+    //   Im(zeta^6) = sin(135)   = sqrt(2)/2 -> [0, 1, 0, 0]
+    //   Im(zeta^7) = sin(157.5) = sin(22.5) = (b4-b3)/2 -> [0, 0, -1, 1]
+    im_decomp: [
+        [0i64, 0, 0, 0], [0, 0, -1, 1], [0, 1, 0, 0], [0, 0, 1, 0],
+        [2, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, -1, 1],
+    ],
+    cartesian: ZZ16_CARTESIAN,
+    params: ZZ16_PARAMS,
+    one_in_real_basis: [2i64, 0, 0, 0],
+    display_fn: zz16_display,
+    complex64_fn: zz16_complex64,
+    has: [HasZZ4Impl, HasZZ8Impl],
+}
+
+impl From<(i64, i64)> for ZZ16 {
+    /// `(re, im)` where `i = zeta^4`, so `(a, b) = a + b*i` maps to
+    /// integer-basis coefficients `[a, 0, 0, 0, b, 0, 0, 0]`.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        Self::from_int_coeffs([re, 0, 0, 0, im, 0, 0, 0])
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ16, 16);
+crate::impl_integral_mul_via_basis!(ZZ16, 8);
+crate::impl_integral_conj_via_basis!(ZZ16, 8);
+crate::impl_integral_re_im_sign_via_basis!(ZZ16, 8, 4, zz16_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ16, 8, 4, zz16_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ16);
+crate::zz_integral_ring_tests!(name: ZZ16);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
