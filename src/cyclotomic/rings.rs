@@ -78,10 +78,14 @@ fn format_gauss_pair(re: Ratio<i64>, im: Ratio<i64>) -> String {
     }
 }
 
-/// Output shape matches the legacy macro-generated display:
-///   * "0" when all coefficients are zero
-///   * "<coeff>" for the `sqrt(1)` term
-///   * "<coeff>*sqrt(<lbl>)" for a non-unit sqrt term, with parens around
+/// Render a K-vector of `(re, im)` coefficient pairs against a K-vector
+/// of symbolic root labels (`"1"`, `"3"`, `"2+sqrt(2)"`, ...) as the
+/// canonical sum-of-square-roots string.
+///
+/// Output shape:
+///   * `"0"` when all coefficients are zero
+///   * `"<coeff>"` for the `sqrt(1)` term
+///   * `"<coeff>*sqrt(<lbl>)"` for a non-unit sqrt term, with parens around
 ///     compound coefficient strings.
 fn format_symbolic<const K: usize>(
     coeffs: &[(Ratio<i64>, Ratio<i64>); K],
@@ -214,9 +218,8 @@ const ZZ8_CARTESIAN: [Complex64; 4] = [
     Complex64::new(-HALF_SQRT_2, HALF_SQRT_2),
 ];
 
-/// Display impl for ZZ8: project `(a, b, c, d)` back to `(Ratio, Ratio)`
-/// coefficient pairs of `{sqrt(1), sqrt(2)}` (the symbolic basis the
-/// legacy `impl_symnum_display` consumed).
+/// Display impl for ZZ8: project `(a, b, c, d)` to `(Ratio, Ratio)`
+/// coefficient pairs of `{sqrt(1), sqrt(2)}`.
 ///
 /// ```text
 ///   zeta^0 = 1                        -> c0 += a
@@ -286,7 +289,17 @@ crate::impl_integral_within_radius_via_complex64!(ZZ8);
 crate::zz_integral_ring_tests!(name: ZZ8);
 
 // ----------------
-// ZZ12
+// ZZ12 -- clock integers Z[zeta_12].
+//
+// `zeta = e^(2*pi*i/12) = sqrt(3)/2 + i/2`, `Phi_12(x) = x^4 - x^2 + 1`,
+// so `zeta^4 = zeta^2 - 1`. Storage: `[i64; 4]` over
+// `{1, zeta, zeta^2, zeta^3}`. The real subring is `Z[sqrt(3)]` (K = 2,
+// basis `{1, sqrt(3)}`) with `/2` implicit denominator.
+//
+// ZZ12 is the rat_enum hot path: every helper (Mul, Conj, ReImSign,
+// IntersectUnitSegments, WithinRadius, Units, complex64) is hand-rolled
+// below to bypass the generic engine's K-vector projections and stay in
+// inline `sign_m_plus_n_sqrt3` arithmetic.
 
 /// Hand-rolled `complex64` for ZZ12: inline `Re`/`Im` of `(a, b, c, d)`
 /// in the `{1, zeta, zeta^2, zeta^3}` basis, avoiding the
@@ -321,12 +334,9 @@ const ZZ12_CARTESIAN: [Complex64; 4] = {
     ]
 };
 
-/// Display impl for ZZ12. Matches the legacy hand-written format in
-/// `zz12.rs`: project the integer-basis vector back to symbolic
-/// `{sqrt(1), sqrt(3)}` form and emit the same per-term shape that the
-/// macro-generated rings use.
-///
-/// For `(a, b, c, d)`:
+/// Display impl for ZZ12: project the integer-basis vector to `(Ratio,
+/// Ratio)` coefficient pairs against the symbolic `{sqrt(1), sqrt(3)}`
+/// basis. For `(a, b, c, d)`:
 ///
 /// ```text
 ///   c0 = ((2a + c)/2) + i*((b + 2d)/2)   coefficient of sqrt(1)
@@ -573,10 +583,10 @@ fn re_components(coeffs: &[i64; 4]) -> (i64, i64) {
 
 impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
     /// 3-multiplication pure-i64 fast path that exploits the unit-length
-    /// structure of both input segments. See `zz12.rs` history for the
-    /// full math derivation; the shape is identical to the generic
-    /// `intersect_unit_segments_basis` but inlines `Re`/`Im` component
-    /// extraction off each multiplication result.
+    /// structure of both input segments. Shape-identical to the generic
+    /// `intersect_unit_segments_basis` in `integral_basis.rs`, but
+    /// inlines `Re`/`Im` component extraction off each multiplication
+    /// result (avoiding the K-vector projection).
     #[inline]
     fn intersect_unit_segments(s1: &(ZZ12, ZZ12), s2: &(ZZ12, ZZ12)) -> bool {
         use crate::cyclotomic::Conj;
@@ -708,9 +718,8 @@ const ZZ24_CARTESIAN: [Complex64; 8] = {
     ]
 };
 
-/// Display impl for ZZ24: project `(a..h)` back to `(Ratio, Ratio)` coefficient pairs
-/// of `{sqrt(1), sqrt(2), sqrt(3), sqrt(6)}` (the symbolic basis the legacy
-/// `impl_symnum_display` consumed).
+/// Display impl for ZZ24: project `(a..h)` to `(Ratio, Ratio)` coefficient
+/// pairs of `{sqrt(1), sqrt(2), sqrt(3), sqrt(6)}`.
 fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let [a, b, c, d, e, f_, g, h] = *coeffs;
     let quarter = Ratio::<i64>::new_raw(1, 4);
@@ -822,10 +831,10 @@ crate::zz_integral_ring_tests!(name: ZZ24);
 // `{b2, b3}` subspace.
 
 /// Symbolic-projection `complex64` for ZZ20. Mirrors ZZ24's approach but
-/// reads the per-ring sqrt values from `ZZ10_Y` (the params constant for
-/// `2*(5 - sqrt(5))`), matching the legacy `complex64` path so the
-/// `cyclotomic::constants::tests::test_constants` bit-exact assertions
-/// (sqrt5, half_sqrt_penta) round-trip identically.
+/// reads the inner radical `sqrt(10-2*sqrt(5))` via the `ZZ10_Y` constant
+/// (`= 2*(5 - sqrt(5))`) defined above, so that the bit-exact assertions
+/// in `cyclotomic::constants::tests::test_constants` (`sqrt5`,
+/// `half_sqrt_penta`) round-trip identically.
 #[inline]
 fn zz20_complex64(coeffs: &[i64; 8]) -> Complex64 {
     let [a, b, c, d, e, f_, g, h] = *coeffs;
@@ -874,9 +883,8 @@ const ZZ20_CARTESIAN: [Complex64; 8] = {
     ]
 };
 
-/// Display impl for ZZ20: project `(a..h)` to (Ratio, Ratio) coefficient pairs of
-/// `{sqrt(1), sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}` (the symbolic
-/// labels from the legacy `ZZ20_PARAMS`).
+/// Display impl for ZZ20: project `(a..h)` to `(Ratio, Ratio)` coefficient
+/// pairs of `{sqrt(1), sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}`.
 fn zz20_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let [a, b, c, d, e, f_, g, h] = *coeffs;
     let eighth = Ratio::<i64>::new_raw(1, 8);
@@ -988,11 +996,10 @@ crate::zz_integral_ring_tests!(name: ZZ20);
 //   Im(z) in `Q(sqrt(5)) * sqrt(10-2*sqrt(5))`                  (dim 2)
 //
 // We unify them with `K = 4` over basis `{1, sqrt(5), b2, b3}` where
-// `b2 = sqrt(10 - 2*sqrt(5))` and `b3 = sqrt(5)*b2`, matching the
-// existing legacy `ZZ10_PARAMS.sym_roots_sqs`. The `j2`/`j3` columns of
-// `re_decomp` are always zero, and the `j0`/`j1` columns of `im_decomp`
-// are always zero, but the unified shape lets us reuse the exact
-// `signum_sum_sqrt_expr_4_pentagonal` from ZZ20.
+// `b2 = sqrt(10 - 2*sqrt(5))` and `b3 = sqrt(5)*b2` (same shape as
+// ZZ20). The `j2`/`j3` columns of `re_decomp` are always zero, and the
+// `j0`/`j1` columns of `im_decomp` are always zero, but the unified
+// shape lets us reuse the exact `signum_sum_sqrt_expr_4_pentagonal`.
 
 #[inline]
 fn zz10_complex64(coeffs: &[i64; 4]) -> Complex64 {
@@ -1269,30 +1276,24 @@ crate::zz_integral_ring_tests!(name: ZZ16);
 // The real subring is `Q(sqrt(3), sqrt(5), sqrt(10-2*sqrt(5)))`, dim 8
 // over Q, basis:
 //   {1, sqrt(3), sqrt(5), sqrt(y), sqrt(15), sqrt(3y), sqrt(5y), sqrt(15y)}
-// where `y = 10 - 2*sqrt(5)`, with `/16` implicit denominator (matching
-// the legacy `ZZ60_PARAMS.scaling_fac`).
+// where `y = 10 - 2*sqrt(5)`, with `/16` implicit denominator.
 //
 // Real-sign extraction is **exact** via `signum_sum_sqrt_expr_8_zz60`
 // (closed-form reduction `Q(sqrt(3), sqrt(5), sqrt(y))` -> biquadratic
 // `Q(sqrt(3), sqrt(5))`, where `signum_sum_sqrt_expr_4(_, 1, _, 3, _, 5,
 // _, 15)` applies exactly since `m * n = l` for `m=3, n=5, l=15`).
 //
-// The `re_decomp` / `im_decomp` tables were extracted from the legacy
-// `ZZ60::unit(k)` (which has matching algebraic structure) via the
-// one-shot `codegen_zz60` binary. Their correctness is then verified by
-// the generic `complex64_unit_matches_exp` test in the test suite.
+// The `re_decomp` / `im_decomp` tables are hand-rolled from the
+// half-angle / sum-of-arc identities and verified by the generic
+// `complex64_unit_matches_exp` property test.
 
 #[inline]
 fn zz60_complex64(coeffs: &[i64; 16]) -> Complex64 {
-    // Symbolic-projection complex64. We project the integer-basis vector
-    // to a K-vector in the symbolic basis, then evaluate each component
-    // as `c * sqrt(N)` in f64 and divide by the implicit /16. This is the
-    // same recipe used by the legacy `complex64` path, so its bit-exact
-    // outputs (used by `cyclotomic::constants::tests::test_constants`) are
-    // preserved.
-    //
-    // Internally we just delegate to the generic `re_sign_basis` /
-    // `im_sign_basis`-style projection routed through f64 sqrt(N) terms.
+    // Symbolic-projection: project the integer-basis vector to a
+    // K-vector in the symbolic-roots basis (using `*_DECOMP`), evaluate
+    // each component as `c * sqrt(N)` in f64, then divide by the
+    // implicit `/16` denominator. Keeps the bit-exact f64 round-trip in
+    // `cyclotomic::constants::tests::test_constants`.
     let sq3 = 3.0_f64.sqrt();
     let sq5 = 5.0_f64.sqrt();
     let sq15 = 15.0_f64.sqrt();
@@ -1341,8 +1342,9 @@ const ZZ60_CARTESIAN: [Complex64; 16] = {
     out
 };
 
-// Decomposition tables. Auto-generated from legacy ZZ60 via
-// `src/bin/codegen_zz60.rs`.
+// `Re(zeta^k)` / `Im(zeta^k)` decomposition tables in the symbolic basis
+// {1, sqrt(3), sqrt(5), sqrt(y), sqrt(15), sqrt(3y), sqrt(5y), sqrt(15y)},
+// `/16` implicit. Correctness checked by `complex64_unit_matches_exp`.
 const ZZ60_RE_DECOMP: [[i64; 8]; 16] = [
     [16, 0, 0, 0, 0, 0, 0, 0],
     [0, 2, 0, 2, 2, 0, 0, 0],
@@ -1645,19 +1647,31 @@ crate::impl_integral_within_radius_via_complex64!(ZZ32);
 crate::zz_integral_ring_tests!(name: ZZ32);
 
 // ----------------
-// Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
+// Cross-ring tests not covered by the generic `zz_integral_ring_tests!`
+// suite per-ring above.
+//
+// The generic suite (defined in `integral_basis.rs` and invoked once per
+// ring) covers algebra axioms, conjugation, Re/Im sign vs complex64,
+// power-of-zeta cycles, intersect-unit-segments, and hashability. What
+// remains here is:
+//   * `test_display` -- assertions on the literal `format!()` output of
+//     specific ring values. The per-ring `display_fn` is bespoke and
+//     not exercised by the generic suite.
+//   * a couple of ZZ12-specific identities (zeta^3 = i, zz_units_sum
+//     classification) that don't lift naturally to a generic property.
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cyclotomic::constants::zz_units_sum;
     use crate::cyclotomic::traits::OneImag;
-    use crate::cyclotomic::{Ccw, Conj, ReImSign, SymNum, Units, ZZComplex};
+    use crate::cyclotomic::{Ccw, SymNum, ZZComplex};
     use num_traits::{One, Pow, Zero};
 
-    /// Format-rendering checks across rings -- exercises the per-ring
-    /// `display_fn` projecting integer-basis storage back to the
-    /// symbolic-roots (Ratio, Ratio) shape via `format_symbolic`.
+    /// Exercises each per-ring `display_fn` end-to-end: zero, integer
+    /// constants, a non-trivial sum, and the `zz_units_sum` of ZZ10
+    /// (whose symbolic shape mixes positive and negative coefficients
+    /// across all four basis labels).
     #[test]
     fn test_display() {
         let x = ZZ24::zero();
@@ -1682,99 +1696,23 @@ mod tests {
         );
     }
 
-    type ZZi = ZZ12;
-
+    /// `zeta_12^3 = i`. Exercises the `OneImag` blanket impl on a ring
+    /// that contains `i` at a non-axis-aligned power of `zeta`.
     #[test]
-    fn test_units_periodic() {
-        for k in 0i8..12 {
-            assert_eq!(<ZZi as Units>::unit(k), <ZZi as Units>::unit(k + 12));
-            assert_eq!(<ZZi as Units>::unit(k), <ZZi as Units>::unit(k - 12));
-        }
-    }
-
-    #[test]
-    fn test_units_group() {
-        for a in 0..12 {
-            for b in 0..12 {
-                let lhs = <ZZi as Units>::unit(a) * <ZZi as Units>::unit(b);
-                let rhs = <ZZi as Units>::unit(((a as i16 + b as i16) % 12) as i8);
-                assert_eq!(lhs, rhs, "unit({a})*unit({b})");
-            }
-        }
-    }
-
-    #[test]
-    fn test_zeta_squared() {
-        let z = ZZi::ccw();
-        assert_eq!(z * z, <ZZi as Units>::unit(2));
-    }
-
-    #[test]
-    fn test_zeta_cubed_is_i() {
-        let z = ZZi::ccw();
+    fn test_zz12_zeta_cubed_is_i() {
+        let z = ZZ12::ccw();
         let i = z * z * z;
         assert_eq!(i, ZZ12::one_i());
         assert_eq!(i * i, -ZZ12::one());
     }
 
+    /// `zz_units_sum` for ZZ12 lands at a strictly-complex point (i.e.
+    /// neither real nor imaginary). Sanity check that the
+    /// `ZZComplex::is_complex()` predicate fires correctly on a
+    /// non-trivial value built from `Units::unit` + `scale`.
     #[test]
-    fn test_complex64_roundtrip() {
-        for k in 0..12 {
-            let u = <ZZi as Units>::unit(k);
-            let c = u.complex64();
-            let exp_angle = (k as f64) * std::f64::consts::PI / 6.0;
-            assert!((c.re - exp_angle.cos()).abs() < 1e-12);
-            assert!((c.im - exp_angle.sin()).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn test_conj_round_trip() {
-        for k in 0..12 {
-            let u = <ZZi as Units>::unit(k);
-            assert_eq!(u.conj().conj(), u);
-            // |u|^2 == 1 -> u * conj(u) == 1
-            assert_eq!(u * u.conj(), ZZi::one(), "k={k}");
-        }
-    }
-
-    #[test]
-    fn test_re_im_signs() {
-        for k in 0..12 {
-            let u = <ZZi as Units>::unit(k);
-            let c = u.complex64();
-            let exp_re_sign = if c.re > 1e-9 {
-                1
-            } else if c.re < -1e-9 {
-                -1
-            } else {
-                0
-            };
-            let exp_im_sign = if c.im > 1e-9 {
-                1
-            } else if c.im < -1e-9 {
-                -1
-            } else {
-                0
-            };
-            assert_eq!(u.re_sign(), exp_re_sign, "k={k}");
-            assert_eq!(u.im_sign(), exp_im_sign, "k={k}");
-        }
-    }
-
-    #[test]
-    fn test_basic_arith() {
-        assert_eq!(ZZi::zero() + ZZi::zero(), ZZi::zero());
-        assert_eq!(ZZi::one() + ZZi::zero(), ZZi::one());
-        assert_eq!(ZZi::one() * ZZi::one(), ZZi::one());
-        assert_eq!(-ZZi::one() * -ZZi::one(), ZZi::one());
-        assert_eq!(ZZi::ccw().pow(12u8), ZZi::one());
-        assert_eq!(ZZi::ccw().pow(6u8), -ZZi::one());
-    }
-
-    #[test]
-    fn test_units_sum_complex() {
-        let p: ZZi = zz_units_sum();
+    fn test_zz12_units_sum_is_complex() {
+        let p: ZZ12 = zz_units_sum();
         assert!(p.is_complex());
     }
 }

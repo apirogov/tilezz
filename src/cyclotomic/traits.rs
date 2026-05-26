@@ -239,11 +239,6 @@ pub trait IsRing:
 
 // Future: pub trait IsField: IsRing + Div<Self, Output = Self> {}
 
-/// Marker for the standalone `Z[zeta_n]` rings (today the `ZZn` types).
-/// Structural: a future `QQType` for cyclotomic fields would sit beside
-/// `ZZType` on top of a future `IsField`.
-pub trait ZZType: IsRing {}
-
 // ----------------
 // Subring-containment markers.
 
