@@ -78,7 +78,7 @@ impl CyclicEngine {
 ///
 /// Construct once, then pass to [`MatchFinder::crossing_with_seed`]
 /// for each varying A-side tileset (the typical pattern in
-/// `seq_collect` / `seq_explorer` / `patch_grow` where many patch
+/// `seq_collect` / `seq_explorer` / `patch_enum` where many patch
 /// chunks are matched against a fixed tile alphabet). Cheap to clone
 /// (`Arc` internals).
 pub struct BpSeed<T: IsRing> {
