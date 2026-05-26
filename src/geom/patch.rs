@@ -14,19 +14,6 @@ use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{CoarseJunction, EdgeInfo, OpenVertexType};
 
-/// Auxiliary per-vertex info on a patch boundary.
-///
-/// Each boundary position has an angle and two adjacent edges (cw, ccw).
-/// This is instrumental infrastructure — the interesting structure lives
-/// in [`OpenVertexType`] at actual junction vertices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[allow(dead_code)] // only used in patch.rs tests today; kept as crate-internal API
-pub(crate) struct PatchVertexInfo {
-    pub(crate) angle: i8,
-    pub(crate) cw: EdgeInfo,
-    pub(crate) ccw: EdgeInfo,
-}
-
 /// A maximal contiguous range `[patch_start, patch_end)` of boundary
 /// positions whose edges all come from a single tile instance.
 ///
@@ -960,16 +947,6 @@ impl<T: IsRing> GrowingPatch<T> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get_matches_for_tile(
-        &self,
-        tile_id: usize,
-    ) -> impl Iterator<Item = PatchMatch> + '_ {
-        self.get_all_matches()
-            .into_iter()
-            .filter(move |m| m.b.tile_id == tile_id)
-    }
-
     /// All legal `add_tile` candidates whose match touches the boundary
     /// vertex at `vertex_index`. A match "touches" a vertex if the
     /// vertex lies in the closed range `[start_a, start_a + len]` of
@@ -1050,7 +1027,7 @@ impl<T: IsRing> GrowingPatch<T> {
             .collect()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn ensure_candidates_materialized(&mut self) {
         if let PatchState::Growing {
             angles,
@@ -1263,35 +1240,6 @@ impl<T: IsRing> GrowingPatch<T> {
         rot
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn candidates_by_start(&self) -> &[Vec<PatchMatch>] {
-        match &self.state {
-            PatchState::Growing {
-                candidates_by_start,
-                ..
-            } => candidates_by_start.as_deref().unwrap_or(&[]),
-            _ => &[],
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn vertex_type_at(&self, i: usize) -> Option<PatchVertexInfo> {
-        let n = self.boundary_len();
-        if n == 0 || i >= n {
-            return None;
-        }
-        let edges = match &self.state {
-            PatchState::Growing { edges, .. } => edges,
-            _ => return None,
-        };
-        let angles = self.angles();
-        Some(PatchVertexInfo {
-            angle: angles[i],
-            cw: edges[(i + n - 1) % n],
-            ccw: edges[i],
-        })
-    }
-
     /// Return the junction vertex type at position `i`, or `None` if not a junction.
     pub fn junction_vertex_type_at(&self, i: usize) -> Option<OpenVertexType> {
         let n = self.boundary_len();
@@ -1389,25 +1337,13 @@ impl<T: IsRing> GrowingPatch<T> {
         Some((cw_offset, ccw_offset))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn junction_vertices(&self) -> Vec<(usize, PatchVertexInfo)> {
-        let n = self.boundary_len();
-        let mut result = Vec::new();
-        for i in 0..n {
-            if self.is_junction(i) {
-                result.push((i, self.vertex_type_at(i).unwrap()));
-            }
-        }
-        result
-    }
-
-    /// Partition the boundary into [`TileSegment`]s — maximal contiguous
+    /// Partition the boundary into [`TileSegment`]s -- maximal contiguous
     /// runs of edges from the same tile instance.
     ///
     /// See [`TileSegment`] for the cyclic-vs-linear caveat: when position
     /// 0 is not at a junction, one cyclic tile-instance run is split into
     /// two linear segments at the array seam.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn tile_segments(&self) -> Vec<TileSegment> {
         let edges = match &self.state {
             PatchState::Growing { edges, .. } => edges,
@@ -3038,7 +2974,7 @@ mod tests {
                 "step {step}: edges should not be empty"
             );
             assert!(
-                !gp.junction_vertices().is_empty(),
+                (0..gp.boundary_len()).any(|i| gp.is_junction(i)),
                 "step {step}: should have junction vertices"
             );
             step += 1;
@@ -3998,40 +3934,6 @@ mod tests {
                 "mismatch at target={target}: brute={touching_brute:?} api={touching_api:?}"
             );
         }
-    }
-
-    /// `vertex_type_at(i)` for a `Growing` patch should return
-    /// `Some(PatchVertexInfo { angle: angles[i], cw: edges[i-1], ccw: edges[i] })`
-    /// for every in-range `i`, and `None` for out-of-range / Seed state.
-    #[test]
-    fn vertex_type_at_returns_consistent_info() {
-        let mut gp = hex_patch();
-        let pm = gp
-            .get_all_matches()
-            .into_iter()
-            .find(|p| p.len() == 1)
-            .expect("len-1 hex match");
-        assert!(gp.add_tile(&pm), "fixture");
-
-        let n = gp.boundary_len();
-        let angles = gp.angles().to_vec();
-        let edges = gp.edges().to_vec();
-        for i in 0..n {
-            let info = gp.vertex_type_at(i).expect("Some for in-range i");
-            assert_eq!(info.angle, angles[i], "angle mismatch at {i}");
-            assert_eq!(info.cw, edges[(i + n - 1) % n], "cw edge at {i}");
-            assert_eq!(info.ccw, edges[i], "ccw edge at {i}");
-        }
-        assert!(gp.vertex_type_at(n).is_none(), "out-of-range returns None");
-        assert!(
-            gp.vertex_type_at(n + 7).is_none(),
-            "far out-of-range returns None"
-        );
-
-        // Seed state has no boundary; vertex_type_at always returns None.
-        let seed = hex_patch();
-        assert!(!seed.is_growing());
-        assert!(seed.vertex_type_at(0).is_none(), "seed has no boundary");
     }
 
     /// `neighbor_junction_offsets(pos)` returns offsets into the CW and CCW
