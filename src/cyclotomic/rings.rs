@@ -7,37 +7,90 @@
 //! Cartesian projection, sign function) into the generic engine in
 //! `cyclotomic::integral_basis`.
 
+use std::f64::consts::SQRT_2;
+
 use num_complex::Complex64;
 use num_rational::Ratio;
+use num_traits::{One, Zero};
 
-use crate::cyclotomic::gaussint::GaussInt;
-use crate::cyclotomic::params::{
-    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ16_PARAMS, ZZ16_Y, ZZ20_PARAMS, ZZ24_PARAMS, ZZ32_PARAMS,
-    ZZ32_Z, ZZ4_PARAMS, ZZ60_PARAMS, ZZ8_PARAMS,
-};
 use crate::define_integral_zz;
 
 // ----------------
-// Generic Display helper for integer-basis rings.
+// f64 nested-radical constants used by the per-ring `complex64_fn`
+// projections (the symbolic-basis embeddings of `cos(2*pi*k/n)`,
+// `sin(2*pi*k/n)`).
+
+/// `2 + sqrt(2)`. Used by ZZ16 and ZZ32 (the latter as the inner radical).
+const ZZ16_Y: f64 = 2.0 + SQRT_2;
+
+/// `2 + sqrt(2 + sqrt(2))`. The numeric literal is `sqrt(2 + sqrt(2))` to
+/// f64 precision; used by ZZ32.
+const ZZ32_Z: f64 = 2.0 + 1.847_759_065_022_573_5;
+
+/// `sqrt(5)` to f64 precision. Used by `ZZ10_Y` below.
+const SQRT_5: f64 = 2.236_067_977_499_79;
+
+/// `2 * (5 - sqrt(5)) = 10 - 2*sqrt(5)`. Used by ZZ10, ZZ20, ZZ60.
+/// `pub(crate)` so `constants::tests::test_constants` can compare the
+/// `complex64` projection's `Im` value against the same f64 literal the
+/// per-ring projection uses.
+pub(crate) const ZZ10_Y: f64 = 2.0 * (5.0 - SQRT_5);
+
+// ----------------
+// Generic Display helpers for integer-basis rings.
 //
 // Each per-ring display function projects its integer-basis vector back to
-// a vector of `GaussInt<Ratio<i64>>` coefficients against the symbolic
-// `sqrt(lbl)` basis (the same basis the legacy `impl_symnum_display`
-// expected), then calls this helper to format the symbolic sum.
-//
-// Output shape matches the legacy macro-generated display:
-//   - "0" when all coefficients are zero
-//   - "<coeff>" for the `sqrt(1)` term
-//   - "<coeff>*sqrt(<lbl>)" for a non-unit sqrt term, with parens around
-//     compound coefficient strings.
+// a K-vector of (Ratio<i64>, Ratio<i64>) coefficient pairs against the
+// symbolic `sqrt(lbl)` basis, then calls `format_symbolic` to render the
+// sum.
+
+/// Constructor for a `(real, imag)` Ratio pair. Each per-ring display
+/// function projects integer-basis coefficients to a K-vector of these
+/// pairs and hands the result to `format_symbolic`.
+fn gpair(re: Ratio<i64>, im: Ratio<i64>) -> (Ratio<i64>, Ratio<i64>) {
+    (re, im)
+}
+
+/// Render a single `(re, im)` Ratio pair as a Gauss-integer-style coefficient
+/// string: "0", "a", "bi", "-i", "a+bi", "a-bi", etc.
+fn format_gauss_pair(re: Ratio<i64>, im: Ratio<i64>) -> String {
+    let mut terms: Vec<String> = Vec::new();
+    if !re.is_zero() {
+        terms.push(format!("{re}"));
+    }
+    if !im.is_zero() {
+        terms.push(if im.is_one() {
+            "i".to_string()
+        } else if im == -Ratio::<i64>::one() {
+            "-i".to_string()
+        } else {
+            format!("{im}i")
+        });
+    }
+    if terms.is_empty() {
+        "0".to_string()
+    } else if terms.len() == 2 && im < Ratio::<i64>::zero() {
+        // "a-bi" rather than "a+-bi": the imag term already carries its
+        // own minus sign.
+        terms.join("")
+    } else {
+        terms.join("+")
+    }
+}
+
+/// Output shape matches the legacy macro-generated display:
+///   * "0" when all coefficients are zero
+///   * "<coeff>" for the `sqrt(1)` term
+///   * "<coeff>*sqrt(<lbl>)" for a non-unit sqrt term, with parens around
+///     compound coefficient strings.
 fn format_symbolic<const K: usize>(
-    coeffs: &[GaussInt<Ratio<i64>>; K],
+    coeffs: &[(Ratio<i64>, Ratio<i64>); K],
     labels: &[&'static str; K],
     f: &mut std::fmt::Formatter<'_>,
 ) -> std::fmt::Result {
     let mut parts: Vec<String> = Vec::new();
-    for (coeff, lbl) in coeffs.iter().zip(labels.iter()) {
-        let s = format!("{coeff}");
+    for ((re, im), lbl) in coeffs.iter().zip(labels.iter()) {
+        let s = format_gauss_pair(*re, *im);
         if s == "0" {
             continue;
         }
@@ -56,12 +109,11 @@ fn format_symbolic<const K: usize>(
         }
     }
     let joined = parts.join(" + ");
-    let result = if joined.is_empty() {
-        "0".to_string()
+    if joined.is_empty() {
+        write!(f, "0")
     } else {
-        joined
-    };
-    write!(f, "{result}")
+        write!(f, "{joined}")
+    }
 }
 
 // ----------------
@@ -81,14 +133,16 @@ const ZZ4_CARTESIAN: [Complex64; 2] = [
 ];
 
 fn zz4_display(coeffs: &[i64; 2], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    // Match the legacy GaussInt<Ratio> Display format used by the symbolic
-    // single-root ring shape (only `sqrt(1)` term, so output is just the
-    // GaussInt).
-    let g = GaussInt::new(
-        Ratio::<i64>::from_integer(coeffs[0]),
-        Ratio::<i64>::from_integer(coeffs[1]),
-    );
-    write!(f, "{g}")
+    // ZZ4 has only the `sqrt(1) = 1` term, so output is just the Gauss-style
+    // `a + bi` rendering of the coefficient pair.
+    write!(
+        f,
+        "{}",
+        format_gauss_pair(
+            Ratio::<i64>::from_integer(coeffs[0]),
+            Ratio::<i64>::from_integer(coeffs[1]),
+        )
+    )
 }
 
 /// Sign of an integer K-vector `[m]` against basis `{sqrt(1)}` = `{1}`: just
@@ -110,7 +164,6 @@ define_integral_zz! {
     // Im(zeta^0) = 0, Im(zeta^1) = 1.
     im_decomp: [[0i64], [1]],
     cartesian: ZZ4_CARTESIAN,
-    params: ZZ4_PARAMS,
     one_in_real_basis: [1i64],
     display_fn: zz4_display,
     complex64_fn: zz4_complex64,
@@ -161,9 +214,9 @@ const ZZ8_CARTESIAN: [Complex64; 4] = [
     Complex64::new(-HALF_SQRT_2, HALF_SQRT_2),
 ];
 
-/// Display impl for ZZ8: project `(a, b, c, d)` back to GaussInt-Ratio
-/// coefficients of `{sqrt(1), sqrt(2)}` (the symbolic basis the legacy
-/// `impl_symnum_display` consumed).
+/// Display impl for ZZ8: project `(a, b, c, d)` back to `(Ratio, Ratio)`
+/// coefficient pairs of `{sqrt(1), sqrt(2)}` (the symbolic basis the
+/// legacy `impl_symnum_display` consumed).
 ///
 /// ```text
 ///   zeta^0 = 1                        -> c0 += a
@@ -174,8 +227,8 @@ const ZZ8_CARTESIAN: [Complex64; 4] = [
 fn zz8_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let [a, b, c, d] = *coeffs;
     let half = Ratio::<i64>::new_raw(1, 2);
-    let c0 = GaussInt::new(Ratio::<i64>::from_integer(a), Ratio::<i64>::from_integer(c));
-    let c1 = GaussInt::new(
+    let c0 = gpair(Ratio::<i64>::from_integer(a), Ratio::<i64>::from_integer(c));
+    let c1 = gpair(
         Ratio::<i64>::from_integer(b - d) * half,
         Ratio::<i64>::from_integer(b + d) * half,
     );
@@ -208,7 +261,6 @@ define_integral_zz! {
     //   Im(zeta^3) = sqrt(2)/2    -> [0, 1] / 2
     im_decomp: [[0i64, 0], [0, 1], [2, 0], [0, 1]],
     cartesian: ZZ8_CARTESIAN,
-    params: ZZ8_PARAMS,
     // `1` in basis {1, sqrt(2)} with /2 denominator: [2, 0].
     one_in_real_basis: [2i64, 0],
     display_fn: zz8_display,
@@ -283,11 +335,11 @@ const ZZ12_CARTESIAN: [Complex64; 4] = {
 fn zz12_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let [a, b, c, d] = *coeffs;
     let half = Ratio::<i64>::new_raw(1, 2);
-    let c0 = GaussInt::new(
+    let c0 = gpair(
         Ratio::<i64>::from_integer(2 * a + c) * half,
         Ratio::<i64>::from_integer(b + 2 * d) * half,
     );
-    let c1 = GaussInt::new(
+    let c1 = gpair(
         Ratio::<i64>::from_integer(b) * half,
         Ratio::<i64>::from_integer(c) * half,
     );
@@ -314,7 +366,6 @@ define_integral_zz! {
     //   Im(zeta^3) = 1            -> [2, 0] / 2
     im_decomp: [[0i64, 0], [1, 0], [0, 1], [2, 0]],
     cartesian: ZZ12_CARTESIAN,
-    params: ZZ12_PARAMS,
     // The real-subring element `1` against {sqrt(1), sqrt(3)} with the
     // implicit /2 denominator: 1 = (2 + 0*sqrt(3)) / 2, so the K-vector
     // before the /2 normalization is [2, 0].
@@ -657,7 +708,7 @@ const ZZ24_CARTESIAN: [Complex64; 8] = {
     ]
 };
 
-/// Display impl for ZZ24: project `(a..h)` back to GaussInt-Ratio coefficients
+/// Display impl for ZZ24: project `(a..h)` back to `(Ratio, Ratio)` coefficient pairs
 /// of `{sqrt(1), sqrt(2), sqrt(3), sqrt(6)}` (the symbolic basis the legacy
 /// `impl_symnum_display` consumed).
 fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -665,19 +716,19 @@ fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     let quarter = Ratio::<i64>::new_raw(1, 4);
     // Coeffs of sqrt(1), sqrt(2), sqrt(3), sqrt(6), each with real and imag
     // parts (everything scaled by 4 to share the implicit denominator).
-    let c0 = GaussInt::new(
+    let c0 = gpair(
         Ratio::<i64>::from_integer(4 * a + 2 * e) * quarter,
         Ratio::<i64>::from_integer(2 * c + 4 * g) * quarter,
     );
-    let c1 = GaussInt::new(
+    let c1 = gpair(
         Ratio::<i64>::from_integer(b + 2 * d - f_ + h) * quarter,
         Ratio::<i64>::from_integer(-b + 2 * d + f_ + h) * quarter,
     );
-    let c2 = GaussInt::new(
+    let c2 = gpair(
         Ratio::<i64>::from_integer(2 * c) * quarter,
         Ratio::<i64>::from_integer(2 * e) * quarter,
     );
-    let c3 = GaussInt::new(
+    let c3 = gpair(
         Ratio::<i64>::from_integer(b + f_ - h) * quarter,
         Ratio::<i64>::from_integer(b + f_ + h) * quarter,
     );
@@ -726,7 +777,6 @@ define_integral_zz! {
         [0, 0, 2, 0], [0, 1, 0, 1], [4, 0, 0, 0], [0, 1, 0, 1],
     ],
     cartesian: ZZ24_CARTESIAN,
-    params: ZZ24_PARAMS,
     // `1` in basis {1, sqrt(2), sqrt(3), sqrt(6)} with /4 denominator.
     one_in_real_basis: [4i64, 0, 0, 0],
     display_fn: zz24_display,
@@ -824,25 +874,25 @@ const ZZ20_CARTESIAN: [Complex64; 8] = {
     ]
 };
 
-/// Display impl for ZZ20: project `(a..h)` to GaussInt-Ratio coefficients of
+/// Display impl for ZZ20: project `(a..h)` to (Ratio, Ratio) coefficient pairs of
 /// `{sqrt(1), sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}` (the symbolic
 /// labels from the legacy `ZZ20_PARAMS`).
 fn zz20_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let [a, b, c, d, e, f_, g, h] = *coeffs;
     let eighth = Ratio::<i64>::new_raw(1, 8);
-    let c0 = GaussInt::new(
+    let c0 = gpair(
         Ratio::<i64>::from_integer(8 * a + 2 * c - 2 * e + 2 * g) * eighth,
         Ratio::<i64>::from_integer(-2 * b + 2 * d + 8 * f_ + 2 * h) * eighth,
     );
-    let c1 = GaussInt::new(
+    let c1 = gpair(
         Ratio::<i64>::from_integer(2 * c + 2 * e - 2 * g) * eighth,
         Ratio::<i64>::from_integer(2 * b + 2 * d + 2 * h) * eighth,
     );
-    let c2 = GaussInt::new(
+    let c2 = gpair(
         Ratio::<i64>::from_integer(b + 2 * d - 2 * h) * eighth,
         Ratio::<i64>::from_integer(2 * c + e + g) * eighth,
     );
-    let c3 = GaussInt::new(
+    let c3 = gpair(
         Ratio::<i64>::from_integer(b) * eighth,
         Ratio::<i64>::from_integer(e + g) * eighth,
     );
@@ -900,7 +950,6 @@ define_integral_zz! {
         [0, 0, 1, 1], [8, 0, 0, 0], [0, 0, 1, 1], [2, 2, 0, 0],
     ],
     cartesian: ZZ20_CARTESIAN,
-    params: ZZ20_PARAMS,
     // `1` in basis {1, sqrt(5), b2, b3} with /8 denominator.
     one_in_real_basis: [8i64, 0, 0, 0],
     display_fn: zz20_display,
@@ -982,19 +1031,19 @@ fn zz10_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     let [a, b, c, d] = *coeffs;
     let eighth = Ratio::<i64>::new_raw(1, 8);
     // Each c_k = (Re_part + Im_part * i) / 8.
-    let c0 = GaussInt::new(
+    let c0 = gpair(
         Ratio::<i64>::from_integer(8 * a + 2 * b - 2 * c + 2 * d) * eighth,
         Ratio::<i64>::from_integer(0) * eighth,
     );
-    let c1 = GaussInt::new(
+    let c1 = gpair(
         Ratio::<i64>::from_integer(2 * b + 2 * c - 2 * d) * eighth,
         Ratio::<i64>::from_integer(0) * eighth,
     );
-    let c2 = GaussInt::new(
+    let c2 = gpair(
         Ratio::<i64>::from_integer(0) * eighth,
         Ratio::<i64>::from_integer(2 * b + c + d) * eighth,
     );
-    let c3 = GaussInt::new(
+    let c3 = gpair(
         Ratio::<i64>::from_integer(0) * eighth,
         Ratio::<i64>::from_integer(c + d) * eighth,
     );
@@ -1039,7 +1088,6 @@ define_integral_zz! {
         [0i64, 0, 0, 0], [0, 0, 2, 0], [0, 0, 1, 1], [0, 0, 1, 1],
     ],
     cartesian: ZZ10_CARTESIAN,
-    params: ZZ10_PARAMS,
     one_in_real_basis: [8i64, 0, 0, 0],
     display_fn: zz10_display,
     complex64_fn: zz10_complex64,
@@ -1117,19 +1165,19 @@ fn zz16_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     let half = Ratio::<i64>::new_raw(1, 2);
     // Each c_k = (Re_part + Im_part * i) / 2 where Re_part and Im_part are
     // the K-vector entries above, scaled by 2.
-    let c0 = GaussInt::new(
+    let c0 = gpair(
         Ratio::<i64>::from_integer(2 * a) * half,
         Ratio::<i64>::from_integer(2 * e) * half,
     );
-    let c1 = GaussInt::new(
+    let c1 = gpair(
         Ratio::<i64>::from_integer(c - g) * half,
         Ratio::<i64>::from_integer(c + g) * half,
     );
-    let c2 = GaussInt::new(
+    let c2 = gpair(
         Ratio::<i64>::from_integer(b - d + f_ - h) * half,
         Ratio::<i64>::from_integer(-b + d + f_ - h) * half,
     );
-    let c3 = GaussInt::new(
+    let c3 = gpair(
         Ratio::<i64>::from_integer(d - f_) * half,
         Ratio::<i64>::from_integer(b + h) * half,
     );
@@ -1187,7 +1235,6 @@ define_integral_zz! {
         [2, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, -1, 1],
     ],
     cartesian: ZZ16_CARTESIAN,
-    params: ZZ16_PARAMS,
     one_in_real_basis: [2i64, 0, 0, 0],
     display_fn: zz16_display,
     complex64_fn: zz16_complex64,
@@ -1336,9 +1383,9 @@ const ZZ60_IM_DECOMP: [[i64; 8]; 16] = [
 
 fn zz60_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let sixteenth = Ratio::<i64>::new_raw(1, 16);
-    // Project to GaussInt-Ratio coefficients of the symbolic basis, each
+    // Project to (Ratio, Ratio) coefficient pairs of the symbolic basis, each
     // with the implicit /16 folded in.
-    let mut k_coeffs: [GaussInt<Ratio<i64>>; 8] = [GaussInt::new(
+    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] = [gpair(
         Ratio::<i64>::from_integer(0),
         Ratio::<i64>::from_integer(0),
     ); 8];
@@ -1349,7 +1396,7 @@ fn zz60_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt
             re_acc += coeffs[k] * ZZ60_RE_DECOMP[k][j];
             im_acc += coeffs[k] * ZZ60_IM_DECOMP[k][j];
         }
-        k_coeffs[j] = GaussInt::new(
+        k_coeffs[j] = gpair(
             Ratio::<i64>::from_integer(re_acc) * sixteenth,
             Ratio::<i64>::from_integer(im_acc) * sixteenth,
         );
@@ -1390,7 +1437,6 @@ define_integral_zz! {
     re_decomp: ZZ60_RE_DECOMP,
     im_decomp: ZZ60_IM_DECOMP,
     cartesian: ZZ60_CARTESIAN,
-    params: ZZ60_PARAMS,
     one_in_real_basis: [16i64, 0, 0, 0, 0, 0, 0, 0],
     display_fn: zz60_display,
     complex64_fn: zz60_complex64,
@@ -1523,7 +1569,7 @@ const ZZ32_IM_DECOMP: [[i64; 8]; 16] = [
 
 fn zz32_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let half = Ratio::<i64>::new_raw(1, 2);
-    let mut k_coeffs: [GaussInt<Ratio<i64>>; 8] = [GaussInt::new(
+    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] = [gpair(
         Ratio::<i64>::from_integer(0),
         Ratio::<i64>::from_integer(0),
     ); 8];
@@ -1534,7 +1580,7 @@ fn zz32_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt
             re_acc += coeffs[k] * ZZ32_RE_DECOMP[k][j];
             im_acc += coeffs[k] * ZZ32_IM_DECOMP[k][j];
         }
-        k_coeffs[j] = GaussInt::new(
+        k_coeffs[j] = gpair(
             Ratio::<i64>::from_integer(re_acc) * half,
             Ratio::<i64>::from_integer(im_acc) * half,
         );
@@ -1572,7 +1618,6 @@ define_integral_zz! {
     re_decomp: ZZ32_RE_DECOMP,
     im_decomp: ZZ32_IM_DECOMP,
     cartesian: ZZ32_CARTESIAN,
-    params: ZZ32_PARAMS,
     one_in_real_basis: [2i64, 0, 0, 0, 0, 0, 0, 0],
     display_fn: zz32_display,
     complex64_fn: zz32_complex64,
@@ -1606,13 +1651,13 @@ crate::zz_integral_ring_tests!(name: ZZ32);
 mod tests {
     use super::*;
     use crate::cyclotomic::constants::zz_units_sum;
-    use crate::cyclotomic::numtraits::OneImag;
+    use crate::cyclotomic::traits::OneImag;
     use crate::cyclotomic::{Ccw, Conj, ReImSign, SymNum, Units, ZZComplex};
     use num_traits::{One, Pow, Zero};
 
     /// Format-rendering checks across rings -- exercises the per-ring
     /// `display_fn` projecting integer-basis storage back to the
-    /// symbolic-roots GaussInt-Ratio shape via `format_symbolic`.
+    /// symbolic-roots (Ratio, Ratio) shape via `format_symbolic`.
     #[test]
     fn test_display() {
         let x = ZZ24::zero();

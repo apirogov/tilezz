@@ -1,5 +1,5 @@
 //! Core linear algebra utils
-use super::numtraits::{Conj, ReImSign};
+use super::traits::{Conj, ReImSign};
 use super::traits::IsRingOrField;
 
 /// Sign of the wedge product of `p1` and `p2`.
@@ -51,9 +51,8 @@ pub fn is_ccw<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -
 mod tests {
     use num_traits::{One, Zero};
 
-    use super::super::symnum::SymNum;
     use super::super::rings::ZZ12;
-    use super::super::units::Units;
+    use super::super::traits::{SymNum, Units};
     use super::*;
 
     type ZZi = ZZ12;

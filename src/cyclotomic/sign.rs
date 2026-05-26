@@ -615,4 +615,79 @@ mod tests {
         //   P = 3, Q = -1: z = 3 - 1.962 > 0 -> 1.
         assert_eq!(s(3, 0, 0, -1, 0, 0, 0, 0), 1);
     }
+
+    // ----------------
+    // Exhaustive f64-reference stress tests for the inner helpers
+    // `signum_sum_sqrt_expr_2/4/4_pentagonal`. They verify the closed-form
+    // helpers agree with the f64 evaluation on a dense parameter grid.
+    //
+    // The outer helpers (zz16/zz32/zz60) are not stress-tested against
+    // f64 here -- their algebraic structure makes a small-coeff exhaustive
+    // grid impractical, and the hand-picked cases above already exercise
+    // every recursion branch.
+
+    fn sign_f64(x: f64) -> i64 {
+        if x == 0.0 {
+            0
+        } else if x > 0.0 {
+            1
+        } else {
+            -1
+        }
+    }
+
+    #[test]
+    fn stress_signum_sum_sqrt_expr_2_matches_f64() {
+        for a in -10..=10 {
+            for b in -10..=10 {
+                for (m, n) in [(2f64, 3f64), (2f64, 5f64), (3f64, 7f64)] {
+                    let got = signum_sum_sqrt_expr_2(a, m as i64, b, n as i64);
+                    let exp = sign_f64((a as f64) * m.sqrt() + (b as f64) * n.sqrt());
+                    assert_eq!(got, exp, "a={a} b={b} m={m} n={n}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stress_signum_sum_sqrt_expr_4_matches_f64() {
+        // ZZ24 basis: {1, sqrt(2), sqrt(3), sqrt(6)}.
+        for a in -6..=6 {
+            for b in -6..=6 {
+                for c in -6..=6 {
+                    for d in -6..=6 {
+                        let got = signum_sum_sqrt_expr_4(a, 1, b, 2, c, 3, d, 6);
+                        let val = (a as f64)
+                            + (b as f64) * 2f64.sqrt()
+                            + (c as f64) * 3f64.sqrt()
+                            + (d as f64) * 6f64.sqrt();
+                        let exp = sign_f64(val);
+                        assert_eq!(got, exp, "a={a} b={b} c={c} d={d}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stress_signum_sum_sqrt_expr_4_pentagonal_matches_f64() {
+        // ZZ10/ZZ20 basis: {1, sqrt(5), sqrt(10-2sqrt(5)), sqrt(5(10-2sqrt(5)))}.
+        let sqrt5: f64 = 2.236_067_977_499_79;
+        let y: f64 = 10.0 - 2.0 * sqrt5;
+        for a in -6..=6 {
+            for b in -6..=6 {
+                for c in -6..=6 {
+                    for d in -6..=6 {
+                        let got = signum_sum_sqrt_expr_4_pentagonal(a, b, c, d);
+                        let val = (a as f64)
+                            + (b as f64) * sqrt5
+                            + (c as f64) * y.sqrt()
+                            + (d as f64) * (5.0 * y).sqrt();
+                        let exp = sign_f64(val);
+                        assert_eq!(got, exp, "a={a} b={b} c={c} d={d}");
+                    }
+                }
+            }
+        }
+    }
 }

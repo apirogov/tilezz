@@ -1,7 +1,6 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
-use super::numtraits::{Conj, IntersectUnitSegments, OneImag, ReImSign};
-use super::symnum::IntT;
+use super::traits::{Conj, IntersectUnitSegments, IntT, OneImag, ReImSign};
 use super::traits::{HasZZ4, IsRingOrField};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
@@ -157,9 +156,8 @@ where
 mod tests {
     use num_traits::{One, Zero};
 
-    use super::super::numtraits::{Ccw, OneImag};
     use super::super::rings::ZZ12;
-    use super::super::units::Units;
+    use super::super::traits::{Ccw, OneImag, Units};
     use super::*;
 
     type ZZi = ZZ12;
