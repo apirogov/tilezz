@@ -103,58 +103,65 @@ pub fn point_in_rect<ZZ: IsRing>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ), strict: 
     }
 }
 
-/// Return number modulo rect by repeated addition or subtraction of the x/y components.
+/// Return `p` modulo an axis-aligned rectangle of integer dimensions
+/// `(width, height)` anchored at `anchor`, by repeated lattice shifts.
 ///
-/// The rectangle must be a lattice rectangle: `pos_max - pos_min` must be
-/// of the form `width + height*i` for integer `width, height >= 0`. This
-/// is true when `pos_min` and `pos_max` are built from `From<(i64, i64)>`.
-/// `LatticePair::to_lattice_pair` extracts the integer width/height in
-/// exact ring arithmetic (debug-asserts the difference is a lattice
-/// point).
+/// `anchor` is the lower-left corner; `width` shifts along the real axis,
+/// `height` along the imaginary axis. Result lands in
+/// `[anchor.re, anchor.re + width] x [anchor.im, anchor.im + height]`
+/// (closed upper bound, matching the prior `mod_bound` semantics).
 ///
-/// Mods `p` into the half-open box `[pos_min, pos_max)` by repeated
-/// lattice shifts of `width` along the real axis and `height` along the
-/// imaginary axis, matching the prior `mod_bound`-on-closed-range
-/// semantics.
-pub fn point_mod_rect<ZZ>(p: &ZZ, (pos_min, pos_max): &(ZZ, ZZ)) -> ZZ
-where
-    ZZ: HasZZ4,
-{
-    // Extract integer width and height in exact ring arithmetic.
-    let (width, height) = (*pos_max - *pos_min).to_lattice_pair();
-
-    // Build lattice shift steps as ZZ values: w_step = width * 1, h_step = height * i.
+/// Restricted to `HasZZ4` rings because the lattice shifts use
+/// `ZZ::one_i()` (imaginary unit must be in the ring).
+pub fn point_mod_rect<ZZ: HasZZ4>(p: &ZZ, anchor: &ZZ, (width, height): (i64, i64)) -> ZZ {
     let w_step: ZZ = ZZ::from(width);
     let h_step: ZZ = ZZ::one_i() * ZZ::from(height);
+    let upper: ZZ = *anchor + w_step + h_step;
 
     let mut ret = *p;
 
-    // Real axis: bring ret.re into [pos_min.re, pos_max.re), matching the
-    // closed-range mod_bound semantics (< 0 vs > 0 sign tests).
+    // Real axis: bring ret.re into [anchor.re, anchor.re + width].
     let mut was_less = false;
-    while (ret - *pos_min).re_sign() < 0 {
+    while (ret - *anchor).re_sign() < 0 {
         was_less = true;
         ret = ret + w_step;
     }
     if !was_less {
-        while (*pos_max - ret).re_sign() < 0 {
+        while (upper - ret).re_sign() < 0 {
             ret = ret - w_step;
         }
     }
 
     // Imaginary axis: same shape, using h_step and im_sign.
     let mut was_less = false;
-    while (ret - *pos_min).im_sign() < 0 {
+    while (ret - *anchor).im_sign() < 0 {
         was_less = true;
         ret = ret + h_step;
     }
     if !was_less {
-        while (*pos_max - ret).im_sign() < 0 {
+        while (upper - ret).im_sign() < 0 {
             ret = ret - h_step;
         }
     }
 
     ret
+}
+
+/// Return whether `p` lies in the half-open integer-bounded box
+/// `[x_min, x_max) x [y_min, y_max)`.
+///
+/// Works for every ring (no `HasZZ4` requirement). The point's cell in
+/// the unit square grid is computed via the ring's `CellFloor` impl
+/// (exact for blessed rings), then the bounding-box test is a plain
+/// integer compare. Half-open semantics match `cell_floor`'s natural
+/// `[cx, cx+1) x [cy, cy+1)` cell shape.
+pub fn point_in_int_bbox<ZZ: IsRing>(
+    p: &ZZ,
+    (x_min, y_min): (i64, i64),
+    (x_max, y_max): (i64, i64),
+) -> bool {
+    let (cx, cy) = p.cell_floor();
+    x_min <= cx && cx < x_max && y_min <= cy && cy < y_max
 }
 
 #[cfg(test)]

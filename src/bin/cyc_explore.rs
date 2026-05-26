@@ -39,7 +39,7 @@ where
     let mut round_pts: Vec<Vec<ZZ>> = Vec::new();
     round_pts.push(start_pts.to_vec());
 
-    let unit_square: (ZZ, ZZ) = ((0, 0).into(), (1, 1).into());
+    let anchor: ZZ = ZZ::zero();
     // in each round, we go one unit step in every possible direction
     for i in 1..=n {
         let last = round_pts.last().unwrap();
@@ -60,7 +60,7 @@ where
                             let mut p_dest: ZZ = *p + <ZZ as Units>::unit(i);
                             if mod_unit_square {
                                 // normalize back into unit square (if enabled)
-                                p_dest = point_mod_rect(&p_dest, &unit_square);
+                                p_dest = point_mod_rect(&p_dest, &anchor, (1, 1));
                             }
                             let p_dest = p_dest;
 

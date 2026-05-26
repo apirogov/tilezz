@@ -238,15 +238,6 @@ impl From<(i64, i64)> for ZZ4 {
     }
 }
 
-impl crate::cyclotomic::LatticePair for ZZ4 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        // ZZ4 storage *is* (re, im) -- no auxiliary slots to check.
-        let c = self.int_coeffs();
-        (c[0], c[1])
-    }
-}
-
 crate::impl_integral_units_via_basis!(ZZ4, 4);
 crate::impl_integral_mul_via_basis!(ZZ4, 2);
 crate::impl_integral_conj_via_basis!(ZZ4, 2);
@@ -351,19 +342,6 @@ impl From<(i64, i64)> for ZZ8 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, im, 0])
-    }
-}
-
-impl crate::cyclotomic::LatticePair for ZZ8 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        debug_assert_eq!(
-            [c[1], c[3]],
-            [0, 0],
-            "ZZ8::to_lattice_pair on non-lattice value: zeta/zeta^3 slots non-zero",
-        );
-        (c[0], c[2])
     }
 }
 
@@ -478,19 +456,6 @@ impl From<(i64, i64)> for ZZ12 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, 0, im])
-    }
-}
-
-impl crate::cyclotomic::LatticePair for ZZ12 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        debug_assert_eq!(
-            [c[1], c[2]],
-            [0, 0],
-            "ZZ12::to_lattice_pair on non-lattice value: zeta/zeta^2 slots non-zero",
-        );
-        (c[0], c[3])
     }
 }
 
@@ -954,19 +919,6 @@ impl From<(i64, i64)> for ZZ24 {
     }
 }
 
-impl crate::cyclotomic::LatticePair for ZZ24 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        debug_assert_eq!(
-            [c[1], c[2], c[3], c[4], c[5], c[7]],
-            [0, 0, 0, 0, 0, 0],
-            "ZZ24::to_lattice_pair on non-lattice value: non-axis slots non-zero",
-        );
-        (c[0], c[6])
-    }
-}
-
 crate::impl_integral_units_via_basis!(ZZ24, 24);
 crate::impl_integral_mul_via_basis!(ZZ24, 8);
 crate::impl_integral_conj_via_basis!(ZZ24, 8);
@@ -1147,18 +1099,6 @@ impl From<(i64, i64)> for ZZ20 {
     }
 }
 
-impl crate::cyclotomic::LatticePair for ZZ20 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        debug_assert_eq!(
-            [c[1], c[2], c[3], c[4], c[6], c[7]],
-            [0, 0, 0, 0, 0, 0],
-            "ZZ20::to_lattice_pair on non-lattice value: non-axis slots non-zero",
-        );
-        (c[0], c[5])
-    }
-}
 
 crate::impl_integral_units_via_basis!(ZZ20, 20);
 crate::impl_integral_mul_via_basis!(ZZ20, 8);
@@ -1248,21 +1188,6 @@ fn zz10_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     )
 }
 
-/// Sign of `a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(5*(10-2*sqrt(5)))`
-/// via the closed-form `signum_sum_sqrt_expr_4_pentagonal` (same exact
-/// reduction as ZZ20). For ZZ10 the `c`/`d` (or `a`/`b`) entries are zero
-/// depending on whether the K-vector is from `re_decomp` or `im_decomp`,
-/// but the function handles those cases trivially.
-#[inline]
-fn zz10_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(
-        x[0] as i128,
-        x[1] as i128,
-        x[2] as i128,
-        x[3] as i128,
-    ) as i8
-}
-
 define_integral_zz! {
     name: ZZ10,
     n: 10,
@@ -1293,24 +1218,371 @@ define_integral_zz! {
     has: [HasZZ10Impl],
 }
 
-crate::impl_integral_units_via_basis!(ZZ10, 10);
-crate::impl_integral_mul_via_basis!(ZZ10, 4);
-crate::impl_integral_conj_via_basis!(ZZ10, 4);
-crate::impl_integral_re_im_sign_via_basis!(ZZ10, 4, 4, zz10_real_sign);
-crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
-crate::impl_integral_within_radius_via_norm_sq!(ZZ10);
+// ----------------
+// Hand-rolled ZZ10 hot-path overrides.
+//
+// ZZ10 is the pentagonal/Penrose blessed ring. Like ZZ12 it has K=4
+// storage; the seven overrides below (Mul, Conj, Units, ReImSign,
+// WithinRadius, IntersectUnitSegments, CellFloor) cover the full
+// rat_enum hot path with closed-form pure-i64 (i128 for squaring)
+// sign primitives, skipping the recursive `signum_sum_sqrt_expr_4_*`
+// helpers and the K-vector projection machinery of the generic macros.
+//
+// Two sign primitives carry the algebra:
+//   * `sign_m_plus_n_sqrt5(m, n)` -- sign of `m + n*sqrt(5)` (used for
+//     Re-sign and `WithinRadius`, since `|z|^2 in Z[sqrt(5)]`).
+//   * `sign_p_b2_plus_q_b3(p, q)` -- sign of
+//     `p*sqrt(10-2*sqrt(5)) + q*sqrt(10+2*sqrt(5))` (used for Im-sign).
+//     Mixed-sign case reduces in closed form (no recursive squaring) to
+//     `sign(p) * sign(p^4 - 3*p^2*q^2 + q^4)` when `p^2 > q^2`, else
+//     `-sign(p)`. Derivation: squaring out `sqrt(5)` from the inequality
+//     `p^2*(10-2*sqrt(5)) > q^2*(10+2*sqrt(5))` gives a polynomial in
+//     `p^2, q^2` whose roots are at `p^2 = golden^2 * q^2` (irrational),
+//     so integer inputs never hit poly == 0 outside the trivial cases.
 
-// CellFloor: ZZ10 doesn't contain `i`, so we can't construct `k*i` as a
-// ZZ10 element to verify the imag-axis floor via the exact-sign trick.
-// Falls back to f64. The grid concept inherently assumes axis-aligned
-// cells (a `HasZZ4` notion); for ZZ10 this is at best a heuristic
-// bucketing, with rare f64 boundary-rounding artifacts.
+/// Sign of `m + n*sqrt(5)` for integers `m, n`. Returns -1, 0, or 1.
+///
+/// Cheap cases (one zero, both same sign) resolve without
+/// multiplication; mixed-sign case compares `m^2` vs `5*n^2` in i128
+/// to absorb the squaring step (i64 inputs can have products up to
+/// ~5*2^126).
+#[inline]
+fn sign_m_plus_n_sqrt5(m: i64, n: i64) -> i8 {
+    if m == 0 && n == 0 {
+        return 0;
+    }
+    if m >= 0 && n >= 0 {
+        return 1;
+    }
+    if m <= 0 && n <= 0 {
+        return -1;
+    }
+    let m_sq = (m as i128) * (m as i128);
+    let n_sq = (n as i128) * (n as i128);
+    let five_n_sq = 5i128 * n_sq;
+    if m > 0 {
+        // sign of |m| - sqrt(5)*|n|
+        match m_sq.cmp(&five_n_sq) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    } else {
+        // sign of -|m| + sqrt(5)*|n|
+        match five_n_sq.cmp(&m_sq) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+}
+
+/// Sign of `p * sqrt(10 - 2*sqrt(5)) + q * sqrt(10 + 2*sqrt(5))` for
+/// integers `p, q`. Returns -1, 0, or 1.
+///
+/// See module-level comment above for the closed-form derivation.
+#[inline]
+fn sign_p_b2_plus_q_b3(p: i64, q: i64) -> i8 {
+    if p == 0 && q == 0 {
+        return 0;
+    }
+    if p >= 0 && q >= 0 {
+        return 1;
+    }
+    if p <= 0 && q <= 0 {
+        return -1;
+    }
+    // Mixed signs.
+    let p_sq = (p as i128) * (p as i128);
+    let q_sq = (q as i128) * (q as i128);
+    if p_sq <= q_sq {
+        // |q|*sqrt(beta) dominates (since beta > alpha and |q| >= |p|),
+        // so the result has sign(q) = -sign(p).
+        return if p > 0 { -1 } else { 1 };
+    }
+    // p^2 > q^2: closed-form discriminant for `|p|*sqrt(alpha) > |q|*sqrt(beta)`.
+    let poly = p_sq * p_sq - 3 * p_sq * q_sq + q_sq * q_sq;
+    if poly > 0 {
+        if p > 0 { 1 } else { -1 }
+    } else {
+        // poly < 0 (poly == 0 is unreachable for integer mixed-sign inputs:
+        // it would require p^2 = (3 +/- sqrt(5))/2 * q^2, irrational ratio).
+        if p > 0 { -1 } else { 1 }
+    }
+}
+
+/// Sign of `p*sqrt(10-2*sqrt(5)) + q*sqrt(10+2*sqrt(5)) - big_k` for
+/// integers `p, q, big_k`. Returns -1, 0, or 1.
+///
+/// Used by `CellFloor` to verify Im-axis cell membership exactly
+/// (`big_k = 4*cy`, since `Im(z) = (p*sqrt(α) + q*sqrt(β))/4`).
+///
+/// Closed form: let `B = p*sqrt(α) + q*sqrt(β)`, `A = big_k`. If their
+/// signs differ or either is zero, the answer is trivial. Same-sign:
+/// compare magnitudes via `B^2 - A^2 = M + N*sqrt(5)` with
+///     M = 10*(p^2 + q^2) - big_k^2
+///     N = 2*(q^2 - p^2 + 4*p*q)
+/// (derivation: `sqrt(α*β) = sqrt(80) = 4*sqrt(5)`, so the cross term
+/// `2*p*q*sqrt(α*β)` lands in `Z[sqrt(5)]`). Then
+/// `sign(B-A) = sign(A) * sign(B^2 - A^2)`.
+#[inline]
+fn sign_p_b2_plus_q_b3_minus_k(p: i64, q: i64, big_k: i64) -> i8 {
+    let sign_b = sign_p_b2_plus_q_b3(p, q);
+    let sign_a = big_k.signum() as i8;
+    if sign_a == 0 {
+        return sign_b;
+    }
+    if sign_b == 0 {
+        return -sign_a;
+    }
+    if sign_a != sign_b {
+        return sign_b;
+    }
+    // Same sign: compare magnitudes by squaring.
+    let p_sq = p * p;
+    let q_sq = q * q;
+    let k_sq = big_k * big_k;
+    let m = 10 * (p_sq + q_sq) - k_sq;
+    let n = 2 * (q_sq - p_sq + 4 * p * q);
+    let sign_diff = sign_m_plus_n_sqrt5(m, n);
+    if sign_a > 0 { sign_diff } else { -sign_diff }
+}
+
+/// Re-part components of `z = (a, b, c, d)` in basis `{1, zeta, zeta^2, zeta^3}`:
+/// `Re(z) = (re_m + re_n * sqrt(5)) / 4` where
+/// `re_m = 4a + b - c + d`, `re_n = b + c - d`.
+#[inline]
+fn re_components_zz10(coeffs: &[i64; 4]) -> (i64, i64) {
+    let [a, b, c, d] = *coeffs;
+    (4 * a + b - c + d, b + c - d)
+}
+
+/// Im-part components of `z = (a, b, c, d)`:
+/// `Im(z) = (im_p * sqrt(10 - 2*sqrt(5)) + im_q * sqrt(10 + 2*sqrt(5))) / 4`
+/// where `im_p = b`, `im_q = c + d`.
+#[inline]
+fn im_components_zz10(coeffs: &[i64; 4]) -> (i64, i64) {
+    let [_, b, c, d] = *coeffs;
+    (b, c + d)
+}
+
+impl std::ops::Mul<ZZ10> for ZZ10 {
+    type Output = Self;
+    /// Multiplication in the integral basis `{1, zeta, zeta^2, zeta^3}`,
+    /// using `Phi_10(x) = x^4 - x^3 + x^2 - x + 1`, so
+    /// `zeta^4 = zeta^3 - zeta^2 + zeta - 1`, `zeta^5 = -1`,
+    /// `zeta^6 = -zeta`.
+    ///
+    /// For `x = (a, b, c, d)` and `y = (e, f, g, h)`:
+    ///
+    /// ```text
+    ///   result_0 = ae - bh - cg - df - ch - dg
+    ///   result_1 = af + be + bh + cg + df - dh
+    ///   result_2 = ag + bf + ce - bh - cg - df
+    ///   result_3 = ah + bg + cf + de + bh + cg + df
+    /// ```
+    #[inline]
+    fn mul(self, other: Self) -> Self {
+        let [a, b, c, d] = self.int_coeffs();
+        let [e, f, g, h] = other.int_coeffs();
+        // Common subexpression shared across r0, r1, r2, r3.
+        let p4 = b * h + c * g + d * f;
+        let r0 = a * e - p4 - c * h - d * g;
+        let r1 = a * f + b * e + p4 - d * h;
+        let r2 = a * g + b * f + c * e - p4;
+        let r3 = a * h + b * g + c * f + d * e + p4;
+        Self::from_int_coeffs([r0, r1, r2, r3])
+    }
+}
+
+impl crate::cyclotomic::Conj for ZZ10 {
+    /// Conjugation in `{1, zeta, zeta^2, zeta^3}`. With `zeta^5 = -1`:
+    ///
+    /// `conj(zeta)   = zeta^9 = -zeta^4 = 1 - zeta + zeta^2 - zeta^3`
+    ///                                            -> `(1, -1, 1, -1)`
+    /// `conj(zeta^2) = zeta^8 = -zeta^3`          -> `(0, 0, 0, -1)`
+    /// `conj(zeta^3) = zeta^7 = -zeta^2`          -> `(0, 0, -1, 0)`
+    ///
+    /// So `conj((a, b, c, d)) = (a + b, -b, b - d, -b - c)`.
+    #[inline]
+    fn conj(&self) -> Self {
+        let [a, b, c, d] = self.int_coeffs();
+        Self::from_int_coeffs([a + b, -b, b - d, -b - c])
+    }
+}
+
+impl crate::cyclotomic::Units for ZZ10 {
+    /// Static-baked `zeta^k` lookup for `k` in `0..10`. Avoids the
+    /// OnceLock + Vec indirection of the generic `derive_units_lookup`.
+    #[inline]
+    fn unit(angle: i8) -> Self {
+        static UNIT_TABLE: [[i64; 4]; 10] = [
+            [1, 0, 0, 0],     // 1
+            [0, 1, 0, 0],     // zeta
+            [0, 0, 1, 0],     // zeta^2
+            [0, 0, 0, 1],     // zeta^3
+            [-1, 1, -1, 1],   // zeta^4 = zeta^3 - zeta^2 + zeta - 1
+            [-1, 0, 0, 0],    // zeta^5 = -1
+            [0, -1, 0, 0],    // zeta^6 = -zeta
+            [0, 0, -1, 0],    // zeta^7 = -zeta^2
+            [0, 0, 0, -1],    // zeta^8 = -zeta^3
+            [1, -1, 1, -1],   // zeta^9 = -zeta^4
+        ];
+        let idx = angle.rem_euclid(10) as usize;
+        Self::from_int_coeffs(UNIT_TABLE[idx])
+    }
+}
+
+impl crate::cyclotomic::WithinRadius for ZZ10 {
+    /// Pure-i64 squared-norm comparison.
+    ///
+    /// For `z = (a, b, c, d)` in basis `{1, zeta, zeta^2, zeta^3}`:
+    ///   `Re(z) = (M_re + N_re*sqrt(5)) / 4` with
+    ///       M_re = 4a + b - c + d
+    ///       N_re = b + c - d
+    ///   `Im(z)` involves nested radicals, but the squared norm
+    ///   collapses back to `Z[sqrt(5)]`:
+    ///       |z|^2 = (A + B*sqrt(5)) / 16  with
+    ///       A = M_re^2 + 5*N_re^2 + 10*(b^2 + (c+d)^2)
+    ///       B = 2*M_re*N_re + 2*((c+d)^2 - b^2 + 4*b*(c+d))
+    ///
+    /// `|z|^2 <= r^2` iff `sign_m_plus_n_sqrt5(A - 16*r^2, B) <= 0`.
+    #[inline]
+    fn within_radius(&self, radius: i64) -> bool {
+        let [a, b, c, d] = self.int_coeffs();
+        let m_re = 4 * a + b - c + d;
+        let n_re = b + c - d;
+        let s = c + d;
+        let a_part = m_re * m_re + 5 * n_re * n_re + 10 * (b * b + s * s);
+        let b_part = 2 * m_re * n_re + 2 * (s * s - b * b + 4 * b * s);
+        let sixteen_r_sq = 16 * radius * radius;
+        sign_m_plus_n_sqrt5(a_part - sixteen_r_sq, b_part) <= 0
+    }
+}
+
+impl crate::cyclotomic::ReImSign for ZZ10 {
+    /// `Re(z) = (re_m + re_n*sqrt(5)) / 4`, denominator positive, so the
+    /// sign reduces to `sign_m_plus_n_sqrt5(re_m, re_n)`.
+    #[inline]
+    fn re_sign(&self) -> i8 {
+        let (m, n) = re_components_zz10(&self.int_coeffs());
+        sign_m_plus_n_sqrt5(m, n)
+    }
+
+    /// `Im(z) = (im_p*sqrt(10-2*sqrt(5)) + im_q*sqrt(10+2*sqrt(5)))/4`.
+    #[inline]
+    fn im_sign(&self) -> i8 {
+        let (p, q) = im_components_zz10(&self.int_coeffs());
+        sign_p_b2_plus_q_b3(p, q)
+    }
+}
+
+impl crate::cyclotomic::IntersectUnitSegments for ZZ10 {
+    /// 3-multiplication pure-i64 (i128 squaring) fast path that exploits
+    /// the unit-length structure of both input segments. Shape-identical
+    /// to ZZ12's hand-rolled version, but uses the pentagonal sign
+    /// primitives `sign_m_plus_n_sqrt5` (Re) and `sign_p_b2_plus_q_b3` (Im).
+    #[inline]
+    fn intersect_unit_segments(s1: &(ZZ10, ZZ10), s2: &(ZZ10, ZZ10)) -> bool {
+        use crate::cyclotomic::Conj;
+
+        let (a, b) = *s1;
+        let (c, d) = *s2;
+
+        // Touching endpoints do not count as a proper intersection.
+        if a == c || a == d || b == c || b == d {
+            return false;
+        }
+
+        let u_a = b - a;
+        let u_b = d - c;
+        let delta = c - a;
+
+        // Mul #1: K = wedge(uA, uB).
+        let k_z = u_a.conj() * u_b;
+        let (k_p, k_q) = im_components_zz10(&k_z.int_coeffs());
+        let sign_k = sign_p_b2_plus_q_b3(k_p, k_q);
+
+        // Mul #2: V = wedge(uA, delta). We also reuse Re(v_z) for the
+        // collinear-overlap test below.
+        let v_z = u_a.conj() * delta;
+        let (v_p, v_q) = im_components_zz10(&v_z.int_coeffs());
+        let sign_v = sign_p_b2_plus_q_b3(v_p, v_q);
+
+        if sign_k == 0 {
+            if sign_v != 0 {
+                return false;
+            }
+            // Collinear. T = Re(v_z) = dot(uA, delta).
+            let (t_m, t_n) = re_components_zz10(&v_z.int_coeffs());
+            let k_coeffs = k_z.int_coeffs();
+            debug_assert_eq!([k_coeffs[1], k_coeffs[2], k_coeffs[3]], [0, 0, 0]);
+            // `1` in ZZ10's `(M, N)` form is `(4, 0)` (since Re(1) = (4+0*sqrt(5))/4).
+            if k_coeffs[0] == 1 {
+                // uA == uB. Interior overlap iff -1 < T < 1, i.e.,
+                // `t_m + 4 + t_n*sqrt(5) > 0` and `t_m - 4 + t_n*sqrt(5) < 0`.
+                return sign_m_plus_n_sqrt5(t_m + 4, t_n) > 0
+                    && sign_m_plus_n_sqrt5(t_m - 4, t_n) < 0;
+            } else {
+                debug_assert_eq!(k_coeffs[0], -1);
+                // uA == -uB. Interior overlap iff 0 < T < 2, i.e.,
+                // `t_m + t_n*sqrt(5) > 0` and `t_m - 8 + t_n*sqrt(5) < 0`.
+                return sign_m_plus_n_sqrt5(t_m, t_n) > 0
+                    && sign_m_plus_n_sqrt5(t_m - 8, t_n) < 0;
+            }
+        }
+
+        // Non-colinear case.
+        let sign_v_plus_k = sign_p_b2_plus_q_b3(v_p + k_p, v_q + k_q);
+        if (sign_v > 0) == (sign_v_plus_k > 0) {
+            return false;
+        }
+
+        // Mul #3: W = wedge(delta, uB).
+        let w_z = delta.conj() * u_b;
+        let (w_p, w_q) = im_components_zz10(&w_z.int_coeffs());
+        let sign_w = sign_p_b2_plus_q_b3(w_p, w_q);
+        let sign_w_minus_k = sign_p_b2_plus_q_b3(w_p - k_p, w_q - k_q);
+        (sign_w > 0) != (sign_w_minus_k > 0)
+    }
+}
+
+/// Exact `CellFloor` for ZZ10. Same f64-hint-plus-verify pattern as the
+/// `impl_cell_floor_via_sign_verify!` macro, but per-axis rather than
+/// constructing the corner as a `cx + cy*i` ring element (ZZ10 has no
+/// `i`, so `From<(i64, i64)>` is unavailable).
+///
+/// Re axis verify: `sign(Re(z) - cx) = sign_m_plus_n_sqrt5(re_m - 4*cx, re_n)`.
+/// Im axis verify: `sign(Im(z) - cy) = sign_p_b2_plus_q_b3_minus_k(im_p, im_q, 4*cy)`.
 impl crate::cyclotomic::CellFloor for ZZ10 {
     #[inline]
     fn cell_floor(&self) -> (i64, i64) {
         use crate::cyclotomic::SymNum;
-        let c = self.complex64();
-        (c.re.floor() as i64, c.im.floor() as i64)
+        let coeffs = self.int_coeffs();
+        let (re_m, re_n) = re_components_zz10(&coeffs);
+        let (im_p, im_q) = im_components_zz10(&coeffs);
+
+        let cf = self.complex64();
+        let mut cx = cf.re.floor() as i64;
+        let mut cy = cf.im.floor() as i64;
+
+        // Re axis: ensure cx <= Re(z) < cx+1.
+        while sign_m_plus_n_sqrt5(re_m - 4 * cx, re_n) < 0 {
+            cx -= 1;
+        }
+        while sign_m_plus_n_sqrt5(re_m - 4 * (cx + 1), re_n) >= 0 {
+            cx += 1;
+        }
+
+        // Im axis: ensure cy <= Im(z) < cy+1.
+        while sign_p_b2_plus_q_b3_minus_k(im_p, im_q, 4 * cy) < 0 {
+            cy -= 1;
+        }
+        while sign_p_b2_plus_q_b3_minus_k(im_p, im_q, 4 * (cy + 1)) >= 0 {
+            cy += 1;
+        }
+
+        (cx, cy)
     }
 }
 
@@ -1466,19 +1738,6 @@ impl From<(i64, i64)> for ZZ16 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, 0, 0, im, 0, 0, 0])
-    }
-}
-
-impl crate::cyclotomic::LatticePair for ZZ16 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        debug_assert_eq!(
-            [c[1], c[2], c[3], c[5], c[6], c[7]],
-            [0, 0, 0, 0, 0, 0],
-            "ZZ16::to_lattice_pair on non-lattice value: non-axis slots non-zero",
-        );
-        (c[0], c[4])
     }
 }
 
@@ -1693,19 +1952,6 @@ impl From<(i64, i64)> for ZZ60 {
     }
 }
 
-impl crate::cyclotomic::LatticePair for ZZ60 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        // Lattice point: only c[0] and c[15] non-zero.
-        debug_assert!(
-            (1..15).all(|i| c[i] == 0),
-            "ZZ60::to_lattice_pair on non-lattice value: middle slots non-zero",
-        );
-        (c[0], c[15])
-    }
-}
-
 crate::impl_integral_units_via_basis!(ZZ60, 60);
 crate::impl_integral_mul_via_basis!(ZZ60, 16);
 crate::impl_integral_conj_via_basis!(ZZ60, 16);
@@ -1895,19 +2141,6 @@ impl From<(i64, i64)> for ZZ32 {
         c[0] = re;
         c[8] = im;
         Self::from_int_coeffs(c)
-    }
-}
-
-impl crate::cyclotomic::LatticePair for ZZ32 {
-    #[inline]
-    fn to_lattice_pair(&self) -> (i64, i64) {
-        let c = self.int_coeffs();
-        // Lattice point: only c[0] and c[8] non-zero.
-        debug_assert!(
-            (1..8).chain(9..16).all(|i| c[i] == 0),
-            "ZZ32::to_lattice_pair on non-lattice value: middle slots non-zero",
-        );
-        (c[0], c[8])
     }
 }
 
