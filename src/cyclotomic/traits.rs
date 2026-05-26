@@ -167,7 +167,7 @@ pub trait SymNum: Clone + Copy + PartialEq + Eq + Hash + Debug + Display {
     /// impls that call this.
     fn zz_pow(&self, i: u8) -> Self
     where
-        Self: IsRingOrField,
+        Self: IsRing,
     {
         let mut base = *self;
         let mut exp = i;
@@ -211,16 +211,17 @@ pub trait Units: Copy + One + Ccw {
     fn unit(angle: i8) -> Self;
 }
 
-/// Single "this is a cyclotomic ring" bound. Every concrete `ZZn`
-/// implements **all** of these, so downstream callers only need to write
-/// `T: IsRingOrField` (plus any subring-containment marker like `HasZZ4`)
-/// rather than spelling out every individual capability.
+/// **The cyclotomic-ring bound.** Every concrete `ZZn` ring implements
+/// this catch-all collection, so downstream callers only need to write
+/// `T: IsRing` (plus any subring-containment marker like `HasZZ4`) rather
+/// than spelling out every individual capability.
 ///
-/// A future `IsField` would also be an `IsRingOrField` and add a
-/// `Div<Self, Output = Self>` bound, hence the name `IsRingOrField`
-/// rather than just `IsRing` -- we want room for that distinction without
-/// disturbing every existing call site.
-pub trait IsRingOrField:
+/// In math, a field is a ring with division. The hierarchy here mirrors
+/// that: a future `IsField` would be `IsRing + Div<Self, Output = Self>`,
+/// so a function written against `T: IsRing` automatically accepts a
+/// field too. Functions that actually require division ask for
+/// `T: IsField` (when that exists).
+pub trait IsRing:
     SymNum
     + Ccw
     + Conj
@@ -236,19 +237,11 @@ pub trait IsRingOrField:
 {
 }
 
-/// Integer ring (no division). Every current `ZZn` implements this.
-///
-/// Today this is structurally equivalent to `IsRingOrField`. Kept as a
-/// distinct trait so a future `IsField: IsRingOrField + Div<...>` can
-/// share the `IsRingOrField` umbrella without disturbing existing call
-/// sites that use `T: IsRing` to mean "no division".
-pub trait IsRing: IsRingOrField {}
-
-// Future: pub trait IsField: IsRingOrField + Div<Self, Output = Self> {}
+// Future: pub trait IsField: IsRing + Div<Self, Output = Self> {}
 
 /// Marker for the standalone `Z[zeta_n]` rings (today the `ZZn` types).
 /// Structural: a future `QQType` for cyclotomic fields would sit beside
-/// `ZZType` on top of `IsField`.
+/// `ZZType` on top of a future `IsField`.
 pub trait ZZType: IsRing {}
 
 // ----------------
@@ -259,33 +252,34 @@ pub trait ZZType: IsRing {}
 /// implements this.
 pub trait IsZZ4Impl {}
 
-/// Rings containing `ZZ4`.
+/// Rings containing `ZZ4`. Implies `IsRing` plus the lattice-pair
+/// constructor `From<(i64, i64)>` since `i = unit(qturn)` is in the ring.
 pub trait HasZZ4Impl {}
-pub trait HasZZ4: IsRingOrField + HasZZ4Impl + From<(IntT, IntT)> {}
-impl<T: IsRingOrField + HasZZ4Impl + From<(IntT, IntT)>> HasZZ4 for T {}
+pub trait HasZZ4: IsRing + HasZZ4Impl + From<(IntT, IntT)> {}
+impl<T: IsRing + HasZZ4Impl + From<(IntT, IntT)>> HasZZ4 for T {}
 
-pub trait IsZZ4: IsRingOrField + IsZZ4Impl {}
-impl<T: IsRingOrField + IsZZ4Impl> IsZZ4 for T {}
+pub trait IsZZ4: IsRing + IsZZ4Impl {}
+impl<T: IsRing + IsZZ4Impl> IsZZ4 for T {}
 
 /// Rings containing `ZZ6`.
 pub trait HasZZ6Impl {}
-pub trait HasZZ6: IsRingOrField + HasZZ6Impl {}
-impl<T: IsRingOrField + HasZZ6Impl> HasZZ6 for T {}
+pub trait HasZZ6: IsRing + HasZZ6Impl {}
+impl<T: IsRing + HasZZ6Impl> HasZZ6 for T {}
 
 /// Rings containing `ZZ8`.
 pub trait HasZZ8Impl {}
-pub trait HasZZ8: IsRingOrField + HasZZ8Impl {}
-impl<T: IsRingOrField + HasZZ8Impl> HasZZ8 for T {}
+pub trait HasZZ8: IsRing + HasZZ8Impl {}
+impl<T: IsRing + HasZZ8Impl> HasZZ8 for T {}
 
 /// Rings containing `ZZ10`.
 pub trait HasZZ10Impl {}
-pub trait HasZZ10: IsRingOrField + HasZZ10Impl {}
-impl<T: IsRingOrField + HasZZ10Impl> HasZZ10 for T {}
+pub trait HasZZ10: IsRing + HasZZ10Impl {}
+impl<T: IsRing + HasZZ10Impl> HasZZ10 for T {}
 
 /// Rings containing `ZZ12`.
 pub trait HasZZ12Impl {}
-pub trait HasZZ12: IsRingOrField + HasZZ12Impl {}
-impl<T: IsRingOrField + HasZZ12Impl> HasZZ12 for T {}
+pub trait HasZZ12: IsRing + HasZZ12Impl {}
+impl<T: IsRing + HasZZ12Impl> HasZZ12 for T {}
 
 impl<T: HasZZ4> OneImag for T {
     fn one_i() -> Self {

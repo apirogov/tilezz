@@ -1,7 +1,7 @@
 //! Foundational numeric traits that are *not* cyclotomic-specific.
 //!
 //! Cyclotomic-ring traits (`SymNum`, `Ccw`, `Conj`, `OneImag`, `ReImSign`,
-//! `IntersectUnitSegments`, `WithinRadius`, `Units`, `IsRingOrField`, ...)
+//! `IntersectUnitSegments`, `WithinRadius`, `Units`, `IsRing`, ...)
 //! live in `traits.rs`. This file holds only the building blocks that are
 //! sensible for general scalar types (i32, i64, Ratio<T>).
 

@@ -13,7 +13,7 @@
 //! * `traits.rs`          -- cyclotomic-ring trait surface (`SymNum`,
 //!                           `Ccw`, `Conj`, `OneImag`, `ReImSign`,
 //!                           `IntersectUnitSegments`, `WithinRadius`,
-//!                           `Units`, the `IsRingOrField` hierarchy, the
+//!                           `Units`, the `IsRing` hierarchy, the
 //!                           `HasZZk` subring markers).
 //! * `sign.rs`            -- exact-sign helpers `signum_sum_sqrt_expr_*`.
 //! * `integral_basis.rs`  -- the generic engine: free helpers and the
@@ -47,8 +47,8 @@ pub use num_traits::{One, Pow, Zero};
 pub use numtraits::{IntField, IntRing};
 
 pub use traits::{
-    Ccw, Conj, HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8, IntersectUnitSegments, IsRing,
-    IsRingOrField, IsZZ4, OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex, ZZType,
+    Ccw, Conj, HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8, IntersectUnitSegments, IsRing, IsZZ4,
+    OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex, ZZType,
 };
 
 pub use rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
