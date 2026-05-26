@@ -3,7 +3,7 @@
 use num_traits::One;
 
 use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRingOrField};
-use super::types::{ZZ10, ZZ20};
+use super::rings::{ZZ10, ZZ20};
 use super::units::Units;
 
 // Returns the sum of all units of a complex integer ring.
@@ -51,7 +51,7 @@ pub fn zz20_half_sqrt_penta() -> ZZ20 {
 mod tests {
     use super::super::params::ZZ10_Y;
     use super::super::symnum::SymNum;
-    use super::super::types::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
+    use super::super::rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
     use super::*;
 
     #[test]

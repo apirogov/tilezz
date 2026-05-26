@@ -15,7 +15,6 @@ edition = "2021"
 exclude = ["examples/*"]
 
 [dependencies]
-arrayref = "0.3.8"
 num-complex = "0.4.6"
 num-integer = "0.1.46"
 num-rational = "0.4.2"

@@ -1610,6 +1610,33 @@ mod tests {
     use crate::cyclotomic::{Ccw, Conj, ReImSign, SymNum, Units, ZZComplex};
     use num_traits::{One, Pow, Zero};
 
+    /// Format-rendering checks across rings -- exercises the per-ring
+    /// `display_fn` projecting integer-basis storage back to the
+    /// symbolic-roots GaussInt-Ratio shape via `format_symbolic`.
+    #[test]
+    fn test_display() {
+        let x = ZZ24::zero();
+        assert_eq!(format!("{x}"), "0");
+
+        let x = ZZ24::one();
+        assert_eq!(format!("{x}"), "1");
+
+        let x = ZZ24::one() + ZZ24::one();
+        assert_eq!(format!("{x}"), "2");
+
+        let x = -ZZ24::one();
+        assert_eq!(format!("{x}"), "-1");
+
+        let x = ZZ24::one() + (ZZ24::ccw()).pow(2i8);
+        assert_eq!(format!("{x}"), "1+1/2i + (1/2)*sqrt(3)");
+
+        let x: ZZ10 = zz_units_sum();
+        assert_eq!(
+            format!("{x}"),
+            "-5 + (-15/4i)*sqrt(2(5-sqrt(5))) + (-5/4i)*sqrt(10(5-sqrt(5)))"
+        );
+    }
+
     type ZZi = ZZ12;
 
     #[test]

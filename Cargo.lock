@@ -1125,7 +1125,6 @@ dependencies = [
 name = "tilezz"
 version = "0.0.3"
 dependencies = [
- "arrayref",
  "bincode",
  "clap",
  "crossbeam",

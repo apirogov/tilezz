@@ -129,57 +129,6 @@ pub trait ReImSign {
     fn im_sign(&self) -> i8;
 }
 
-/// Default `ReImSign` implementation: any complex-valued ring with
-/// `ZSigned` real components can extract signs via `re_im()` + `ZSigned`
-/// predicates.
-///
-/// This is semantically a no-op vs the previous direct usage of `is_positive`
-/// / `is_negative` / `is_zero` on the projected real parts. Per-ring
-/// overrides can specialize this for storage formats that admit a cheaper
-/// sign query (notably ZZ12 with its `[i64; 4]` integral-basis storage).
-///
-/// This is **not** a blanket impl on every cyclotomic ring: that would
-/// block per-ring overrides on stable Rust (no specialization). Instead we
-/// expose a macro that generates the impl for each ring type, and any type
-/// that wants a custom impl simply opts out by not invoking the macro.
-///
-/// The macro takes the ring type plus a per-ring `coeffs_real_sign_*`
-/// function from `cyclotomic::sign` whose shape is
-/// `fn(&[Ratio<i64>], &[f64]) -> i8`. Real-sign feeds it the `.real` halves
-/// of the GaussInt coefficient array, imag-sign the `.imag` halves.
-#[macro_export]
-macro_rules! impl_re_im_sign_via_proj {
-    ($t:ty, $sign_func:path) => {
-        impl $crate::cyclotomic::ReImSign for $t {
-            fn re_sign(&self) -> i8 {
-                use $crate::cyclotomic::SymNum;
-                let cs = <$t as SymNum>::zz_coeffs(self);
-                let n = cs.len();
-                // Stack-friendly: ZZ rings have at most 8 symbolic roots.
-                let mut buf: [num_rational::Ratio<i64>; 8] =
-                    [num_rational::Ratio::<i64>::new_raw(0, 1); 8];
-                for (i, c) in cs.iter().enumerate() {
-                    buf[i] = c.real;
-                }
-                let roots = <$t as SymNum>::zz_params().sym_roots_sqs;
-                $sign_func(&buf[..n], roots)
-            }
-            fn im_sign(&self) -> i8 {
-                use $crate::cyclotomic::SymNum;
-                let cs = <$t as SymNum>::zz_coeffs(self);
-                let n = cs.len();
-                let mut buf: [num_rational::Ratio<i64>; 8] =
-                    [num_rational::Ratio::<i64>::new_raw(0, 1); 8];
-                for (i, c) in cs.iter().enumerate() {
-                    buf[i] = c.imag;
-                }
-                let roots = <$t as SymNum>::zz_params().sym_roots_sqs;
-                $sign_func(&buf[..n], roots)
-            }
-        }
-    };
-}
-
 /// Per-ring specialization hook for the unit-length segment intersection test.
 ///
 /// `intersect_unit_segments(s1, s2)` is semantically equivalent to the generic
@@ -187,72 +136,28 @@ macro_rules! impl_re_im_sign_via_proj {
 /// have unit length (i.e. `s1.1 - s1.0` and `s2.1 - s2.0` are unit vectors of
 /// the ring's CCW unit group).
 ///
-/// The hot-path implementation lives in ZZ12 and uses a 3-multiplication
-/// pure-i64 fast path that exploits the unit-length structure. Every other
-/// ring defers to the generic `intersect` via `impl_intersect_unit_segments_via_general!`.
+/// Each ring's `impl IntersectUnitSegments` comes from
+/// `impl_integral_intersect_unit_segments_via_basis!` (in `integral_basis`)
+/// for the generic path, or a hand-rolled per-ring fast path -- ZZ12 uses
+/// the latter via a 3-multiplication pure-i64 fast path.
 pub trait IntersectUnitSegments: Sized {
     /// Return whether the unit-length segments `s1` and `s2` intersect.
     /// Touching only in endpoints does **not** count as intersection.
     fn intersect_unit_segments(s1: &(Self, Self), s2: &(Self, Self)) -> bool;
 }
 
-/// Default `IntersectUnitSegments` impl: just call the generic `intersect`.
-///
-/// Per-ring overrides (notably ZZ12) opt out by not invoking this macro and
-/// providing a specialized impl directly.
-#[macro_export]
-macro_rules! impl_intersect_unit_segments_via_general {
-    ($t:ty) => {
-        impl $crate::cyclotomic::IntersectUnitSegments for $t {
-            #[inline]
-            fn intersect_unit_segments(
-                s1: &($t, $t),
-                s2: &($t, $t),
-            ) -> bool {
-                $crate::cyclotomic::geometry::intersect::<$t>(s1, s2)
-            }
-        }
-    };
-}
-
 /// Predicate "this point is within Euclidean radius `r` of the origin".
 ///
 /// Equivalent to `|self|^2 <= r * r`, with `r >= 0`. Exists so that the DFS
 /// reachability heuristic in `rat_enum` does not have to materialize a
-/// real-subring intermediate value -- per-ring overrides can stay in
-/// pure-i64 arithmetic.
+/// real-subring intermediate value -- per-ring overrides (notably ZZ12)
+/// stay in pure-i64 arithmetic.
 ///
-/// Per-ring overrides should compute the squared norm in pure i64 arithmetic
-/// where possible. The default-via-complex64 macro is provided for rings
-/// that don't yet have a direct fast path.
+/// Each ring's `impl WithinRadius` comes from
+/// `impl_integral_within_radius_via_complex64!` (the f64 default with a
+/// 1e-9 epsilon bias toward "inside"; safe for DFS pruning because the
+/// search is monotone in inclusions) or a hand-rolled override.
 pub trait WithinRadius {
     /// `true` iff `|self|^2 <= radius * radius`. `radius` must be `>= 0`.
     fn within_radius(&self, radius: i64) -> bool;
-}
-
-/// Default `WithinRadius` impl via `complex64()` magnitude with a small
-/// epsilon to tolerate float rounding around the boundary.
-///
-/// This is only the slow fallback path for rings without a pure-i64
-/// specialization (currently every ring except ZZ12 uses this). The DFS
-/// pruning in `rat_enum` is monotone -- false-positives only widen the
-/// search, never compromise correctness -- so a small epsilon bias toward
-/// "inside" is safe.
-#[macro_export]
-macro_rules! impl_within_radius_via_norm_sq {
-    ($t:ty) => {
-        impl $crate::cyclotomic::WithinRadius for $t {
-            fn within_radius(&self, radius: i64) -> bool {
-                use $crate::cyclotomic::SymNum;
-                let c = <$t as SymNum>::complex64(self);
-                let norm_sq = c.re * c.re + c.im * c.im;
-                let r_sq = (radius as f64) * (radius as f64);
-                // 1e-9 tolerance: well below the resolution of any
-                // representable lattice point in any ring of practical
-                // interest, but enough to absorb f64 rounding for very
-                // dense rings like ZZ60.
-                norm_sq <= r_sq + 1e-9
-            }
-        }
-    };
 }
