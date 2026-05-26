@@ -2172,7 +2172,7 @@ mod tests {
     use super::*;
     use crate::cyclotomic::constants::zz_units_sum;
     use crate::cyclotomic::traits::OneImag;
-    use crate::cyclotomic::{Ccw, SymNum, ZZComplex};
+    use crate::cyclotomic::{Ccw, ZZComplex};
     use num_traits::{One, Pow, Zero};
 
     /// Exercises each per-ring `display_fn` end-to-end: zero, integer

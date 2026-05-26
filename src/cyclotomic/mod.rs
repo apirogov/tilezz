@@ -1,3 +1,4 @@
+#![allow(clippy::doc_overindented_list_items)]
 //! Cyclotomic rings.
 //!
 //! Every `ZZn` ring lives on the **integer-basis** representation in
