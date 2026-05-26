@@ -1,6 +1,6 @@
 //! Angle-related utilities
 
-use crate::cyclotomic::SymNum;
+use crate::cyclotomic::IsRingOrField;
 
 /// Get complement of an angle sequence, i.e. with flipped sign.
 pub fn comp(angles: &[i8]) -> Vec<i8> {
@@ -14,7 +14,7 @@ pub fn revcomp(angles: &[i8]) -> Vec<i8> {
 }
 
 /// Convert a fraction of a turn into the corresponding unit index.
-pub fn unit_idx<T: SymNum>(angle: i8) -> i8 {
+pub fn unit_idx<T: IsRingOrField>(angle: i8) -> i8 {
     let a = normalize_angle::<T>(angle);
     let half = T::hturn();
     if a == 0 {
@@ -33,7 +33,7 @@ pub fn unit_idx<T: SymNum>(angle: i8) -> i8 {
 ///
 /// The directions are in ccw order starting from the pos real line,
 /// the other half-circle has the the dual opposite directions.
-pub fn to_abs_seq<T: SymNum>(angles: &[i8]) -> Vec<i8> {
+pub fn to_abs_seq<T: IsRingOrField>(angles: &[i8]) -> Vec<i8> {
     let mut currdir: i8 = 0;
     let mut result: Vec<i8> = Vec::new();
     for a in angles {
@@ -46,7 +46,7 @@ pub fn to_abs_seq<T: SymNum>(angles: &[i8]) -> Vec<i8> {
 /// Normalize an angle to the closed interval `[-H, H]`, where `H` is the
 /// half-turn of the ring. This is used to have a unique symbolic snake
 /// representation.
-pub fn normalize_angle<T: SymNum>(angle: i8) -> i8 {
+pub fn normalize_angle<T: IsRingOrField>(angle: i8) -> i8 {
     let a = angle % T::turn();
     if a.abs() <= T::hturn() {
         a
@@ -126,7 +126,7 @@ pub struct GlueResult {
 ///
 /// `Some(GlueResult)` on success; `None` if the surviving boundary would
 /// be empty.
-pub fn glue_raw_angles<T: SymNum>(
+pub fn glue_raw_angles<T: IsRingOrField>(
     self_angles: &[i8],
     other_angles: &[i8],
     start_a: usize,
@@ -231,7 +231,7 @@ pub fn glue_raw_angles<T: SymNum>(
 
 /// Rescale the angle sequence from one complex integer ring to another.
 /// Assumes that the target ring contains the original ring of the sequence.
-pub fn upscale_angles<T: SymNum>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
+pub fn upscale_angles<T: IsRingOrField>(src_ring: i8, angles: &[i8]) -> Vec<i8> {
     // NOTE: using assertion here because using
     // incompatible rings here is an implementation error.
     assert_eq!(T::turn() % src_ring, 0);

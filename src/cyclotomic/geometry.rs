@@ -1,13 +1,12 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
-use super::traits::{Conj, IntersectUnitSegments, IntT, OneImag, ReImSign};
-use super::traits::{HasZZ4, IsRingOrField};
+use super::traits::{HasZZ4, IntersectUnitSegments, IntT, IsRingOrField, OneImag};
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
 /// Uses the identity `wedge(b - a, p - a) == 0` (i.e. the imaginary part of
 /// `conj(b - a) * (p - a)` is zero), so no `ZZ::Real` value is materialized.
-pub fn is_colinear<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
+pub fn is_colinear<ZZ: IsRingOrField>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
     wedge_sign(&(*b - *a), &(*p - *a)) == 0
 }
 
@@ -15,7 +14,7 @@ pub fn is_colinear<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, a: &ZZ, b: &ZZ) 
 /// (which includes colinearity).
 ///
 /// Uses the identity `wedge(b - a, d - c) == 0`.
-pub fn lines_parallel<ZZ: IsRingOrField + Conj + ReImSign>(
+pub fn lines_parallel<ZZ: IsRingOrField>(
     (a, b): (&ZZ, &ZZ),
     (c, d): (&ZZ, &ZZ),
 ) -> bool {
@@ -25,7 +24,7 @@ pub fn lines_parallel<ZZ: IsRingOrField + Conj + ReImSign>(
 /// Return whether the line through `(a, b)` is perpendicular to the line through `(c, d)`.
 ///
 /// Uses the identity `dot(b - a, d - c) == 0`.
-pub fn lines_perp<ZZ: IsRingOrField + Conj + ReImSign>(
+pub fn lines_perp<ZZ: IsRingOrField>(
     (a, b): (&ZZ, &ZZ),
     (c, d): (&ZZ, &ZZ),
 ) -> bool {
@@ -35,7 +34,7 @@ pub fn lines_perp<ZZ: IsRingOrField + Conj + ReImSign>(
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: IsRingOrField + Conj + ReImSign + PartialEq>(
+pub fn intersect<ZZ: IsRingOrField + PartialEq>(
     &(a, b): &(ZZ, ZZ),
     &(c, d): &(ZZ, ZZ),
 ) -> bool {

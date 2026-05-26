@@ -1,5 +1,4 @@
 //! Core linear algebra utils
-use super::traits::{Conj, ReImSign};
 use super::traits::IsRingOrField;
 
 /// Sign of the wedge product of `p1` and `p2`.
@@ -8,7 +7,7 @@ use super::traits::IsRingOrField;
 /// the sign of the imaginary component of `conj(p1) * p2`. Returns -1, 0, or 1.
 ///
 /// Stays inside `ZZ` for the multiplication and only extracts a sign at the end.
-pub fn wedge_sign<ZZ: IsRingOrField + Conj + ReImSign>(p1: &ZZ, p2: &ZZ) -> i8 {
+pub fn wedge_sign<ZZ: IsRingOrField>(p1: &ZZ, p2: &ZZ) -> i8 {
     (p1.conj() * *p2).im_sign()
 }
 
@@ -18,21 +17,21 @@ pub fn wedge_sign<ZZ: IsRingOrField + Conj + ReImSign>(p1: &ZZ, p2: &ZZ) -> i8 {
 /// the sign of the real component of `conj(p1) * p2`. Returns -1, 0, or 1.
 ///
 /// Stays inside `ZZ` for the multiplication and only extracts a sign at the end.
-pub fn dot_sign<ZZ: IsRingOrField + Conj + ReImSign>(p1: &ZZ, p2: &ZZ) -> i8 {
+pub fn dot_sign<ZZ: IsRingOrField>(p1: &ZZ, p2: &ZZ) -> i8 {
     (p1.conj() * *p2).re_sign()
 }
 
 /// Return true if angle (wrt. positive real line) is in closed interval `[a,b]`,
 /// assuming that a and b are in counterclockwise order and their ccw angle
 /// is less than a half turn.
-pub fn angle_between<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn angle_between<ZZ: IsRingOrField>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     wedge_sign(a, p) >= 0 && wedge_sign(p, b) >= 0
 }
 
 /// Return whether this point is strictly between the other two.
 ///
 /// NOTE: we already assume all three involved points are colinear.
-pub fn is_between<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn is_between<ZZ: IsRingOrField>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     // wedge(a - p, p - b) == 0 AND dot(a - p, p - b) > 0
     let v = *a - *p;
     let w = *p - *b;
@@ -41,7 +40,7 @@ pub fn is_between<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, (a, b): (&ZZ, &ZZ
 
 /// Return whether the segments pa and pb (in that order) have a ccw angle,
 /// i.e. b is ccw of a with respect to rotation around p.
-pub fn is_ccw<ZZ: IsRingOrField + Conj + ReImSign>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
+pub fn is_ccw<ZZ: IsRingOrField>(p: &ZZ, (a, b): (&ZZ, &ZZ)) -> bool {
     // wedge(a - p, b - p) > 0
     wedge_sign(&(*a - *p), &(*b - *p)) > 0
     // NOTE: wedge(*a - *p, *p - *b).is_zero() is subexp. of is_between... interesting symmetry
