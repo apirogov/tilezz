@@ -221,7 +221,7 @@ fn junction_angle<T: IsRing>(angle_a: i8, angle_b: i8) -> i8 {
 ///
 /// - [`crate::geom::snake::Snake::try_from`] on the returned `angles`
 ///   (used by `Rat::try_glue` and `GrowingPatch::init_from_first_add`);
-/// - incremental grid-segment checks (`check_segment_clear`) used by
+/// - incremental grid-segment checks (`check_edge_clear`) used by
 ///   `GrowingPatch::add_tile_growing`;
 /// - upstream canonical enumeration (`forward_match_length` chains in
 ///   `flower_petal_glue`) which guarantees the result is a valid simple
