@@ -211,7 +211,10 @@ pub fn coeffs_real_sign_4_sym(coeffs: &[Ratio<i64>], roots_sqs: &[f64]) -> i8 {
 }
 
 /// Sign for rings with the pentagonal 4-root layout
-/// `{1, sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}`: ZZ10, ZZ20.
+/// `{1, sqrt(5), sqrt(2(5-sqrt(5))), sqrt(10(5-sqrt(5)))}`: legacy ZZ10/ZZ20
+/// path. Unused after both rings moved to integer-basis storage; kept until
+/// step 5 deletes the legacy GaussInt<Ratio> infrastructure.
+#[allow(dead_code)]
 pub fn coeffs_real_sign_4_pentagonal(coeffs: &[Ratio<i64>], _roots_sqs: &[f64]) -> i8 {
     debug_assert_eq!(coeffs.len(), 4);
     let (a, b, c, d) = (coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
