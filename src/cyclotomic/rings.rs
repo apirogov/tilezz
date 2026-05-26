@@ -184,6 +184,15 @@ impl From<(i64, i64)> for ZZ4 {
     }
 }
 
+impl crate::cyclotomic::LatticePair for ZZ4 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        // ZZ4 storage *is* (re, im) -- no auxiliary slots to check.
+        let c = self.int_coeffs();
+        (c[0], c[1])
+    }
+}
+
 crate::impl_integral_units_via_basis!(ZZ4, 4);
 crate::impl_integral_mul_via_basis!(ZZ4, 2);
 crate::impl_integral_conj_via_basis!(ZZ4, 2);
@@ -287,6 +296,19 @@ impl From<(i64, i64)> for ZZ8 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, im, 0])
+    }
+}
+
+impl crate::cyclotomic::LatticePair for ZZ8 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        debug_assert_eq!(
+            [c[1], c[3]],
+            [0, 0],
+            "ZZ8::to_lattice_pair on non-lattice value: zeta/zeta^3 slots non-zero",
+        );
+        (c[0], c[2])
     }
 }
 
@@ -400,6 +422,19 @@ impl From<(i64, i64)> for ZZ12 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, 0, im])
+    }
+}
+
+impl crate::cyclotomic::LatticePair for ZZ12 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        debug_assert_eq!(
+            [c[1], c[2]],
+            [0, 0],
+            "ZZ12::to_lattice_pair on non-lattice value: zeta/zeta^2 slots non-zero",
+        );
+        (c[0], c[3])
     }
 }
 
@@ -814,6 +849,19 @@ impl From<(i64, i64)> for ZZ24 {
     }
 }
 
+impl crate::cyclotomic::LatticePair for ZZ24 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        debug_assert_eq!(
+            [c[1], c[2], c[3], c[4], c[5], c[7]],
+            [0, 0, 0, 0, 0, 0],
+            "ZZ24::to_lattice_pair on non-lattice value: non-axis slots non-zero",
+        );
+        (c[0], c[6])
+    }
+}
+
 crate::impl_integral_units_via_basis!(ZZ24, 24);
 crate::impl_integral_mul_via_basis!(ZZ24, 8);
 crate::impl_integral_conj_via_basis!(ZZ24, 8);
@@ -990,6 +1038,19 @@ impl From<(i64, i64)> for ZZ20 {
     #[inline]
     fn from((re, im): (i64, i64)) -> Self {
         Self::from_int_coeffs([re, 0, 0, 0, 0, im, 0, 0])
+    }
+}
+
+impl crate::cyclotomic::LatticePair for ZZ20 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        debug_assert_eq!(
+            [c[1], c[2], c[3], c[4], c[6], c[7]],
+            [0, 0, 0, 0, 0, 0],
+            "ZZ20::to_lattice_pair on non-lattice value: non-axis slots non-zero",
+        );
+        (c[0], c[5])
     }
 }
 
@@ -1286,6 +1347,19 @@ impl From<(i64, i64)> for ZZ16 {
     }
 }
 
+impl crate::cyclotomic::LatticePair for ZZ16 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        debug_assert_eq!(
+            [c[1], c[2], c[3], c[5], c[6], c[7]],
+            [0, 0, 0, 0, 0, 0],
+            "ZZ16::to_lattice_pair on non-lattice value: non-axis slots non-zero",
+        );
+        (c[0], c[4])
+    }
+}
+
 crate::impl_integral_units_via_basis!(ZZ16, 16);
 crate::impl_integral_mul_via_basis!(ZZ16, 8);
 crate::impl_integral_conj_via_basis!(ZZ16, 8);
@@ -1496,6 +1570,19 @@ impl From<(i64, i64)> for ZZ60 {
     }
 }
 
+impl crate::cyclotomic::LatticePair for ZZ60 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        // Lattice point: only c[0] and c[15] non-zero.
+        debug_assert!(
+            (1..15).all(|i| c[i] == 0),
+            "ZZ60::to_lattice_pair on non-lattice value: middle slots non-zero",
+        );
+        (c[0], c[15])
+    }
+}
+
 crate::impl_integral_units_via_basis!(ZZ60, 60);
 crate::impl_integral_mul_via_basis!(ZZ60, 16);
 crate::impl_integral_conj_via_basis!(ZZ60, 16);
@@ -1684,6 +1771,19 @@ impl From<(i64, i64)> for ZZ32 {
         c[0] = re;
         c[8] = im;
         Self::from_int_coeffs(c)
+    }
+}
+
+impl crate::cyclotomic::LatticePair for ZZ32 {
+    #[inline]
+    fn to_lattice_pair(&self) -> (i64, i64) {
+        let c = self.int_coeffs();
+        // Lattice point: only c[0] and c[8] non-zero.
+        debug_assert!(
+            (1..8).chain(9..16).all(|i| c[i] == 0),
+            "ZZ32::to_lattice_pair on non-lattice value: middle slots non-zero",
+        );
+        (c[0], c[8])
     }
 }
 

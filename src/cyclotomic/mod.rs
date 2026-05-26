@@ -48,7 +48,7 @@ pub use numtraits::{IntField, IntRing};
 
 pub use traits::{
     Ccw, Conj, HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8, IntersectUnitSegments, IsRing, IsZZ4,
-    OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex,
+    LatticePair, OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex,
 };
 
 pub use rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
