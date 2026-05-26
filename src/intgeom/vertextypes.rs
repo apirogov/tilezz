@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::cyclotomic::{IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField};
 use crate::intgeom::patch::{
     ClosedVertexType, EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide,
 };
@@ -251,7 +251,7 @@ pub struct OpenVertexTypeIndex<T: IsRingOrField> {
     closed_reverse: HashMap<ClosedVertexType, usize>,
 }
 
-impl<T: IsRingOrField + Units> OpenVertexTypeIndex<T> {
+impl<T: IsRingOrField> OpenVertexTypeIndex<T> {
     /// Enumerate all open vertex types reachable from `tileset` and
     /// classify each.
     ///
@@ -514,7 +514,7 @@ impl<T: IsRingOrField> Default for BfsState<T> {
 /// Phase 1: extract every junction VT from every legal first-glue of
 /// every seed tile. Each discovered VT records a representative
 /// witness patch (the 2-tile patch that contains it).
-fn seed_phase<T: IsRingOrField + Units>(
+fn seed_phase<T: IsRingOrField>(
     state: &mut BfsState<T>,
     tileset: &Arc<TileSet<T>>,
 ) {
@@ -548,7 +548,7 @@ fn seed_phase<T: IsRingOrField + Units>(
 /// Phase 2: process every VT in the queue. For each, enumerate
 /// touching matches and emit raw transitions; also discover any new
 /// VTs exposed by the glues and enqueue them.
-fn bfs_phase<T: IsRingOrField + Units>(
+fn bfs_phase<T: IsRingOrField>(
     state: &mut BfsState<T>,
     tileset: &Arc<TileSet<T>>,
 ) {
@@ -775,7 +775,7 @@ fn build_transition_arrays(
 
 /// Phase 5: assemble per-VT [`OpenVertexTypeInfo`] records, classifying
 /// each as Dead / Undead / Blessed / Free from the fixpoint results.
-fn classify_and_finalize<T: IsRingOrField + Units>(
+fn classify_and_finalize<T: IsRingOrField>(
     vt_list: Vec<OpenVertexType>,
     has_any_realized: &[bool],
     mut witness_store: HashMap<OpenVertexType, (GrowingPatch<T>, usize, i8)>,
@@ -1068,7 +1068,7 @@ impl Collection {
     /// Snapshot a built [`OpenVertexTypeIndex`], tagged with `ring`.
     pub fn from_index<T>(idx: &OpenVertexTypeIndex<T>, ring: impl Into<String>) -> Self
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let tile_angles = idx
             .tileset()
@@ -1132,7 +1132,7 @@ impl Collection {
         tile_ts: &Arc<TileSet<T>>,
     ) -> Result<HashMap<usize, GrowingPatch<T>>, String>
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(tile_ts)));
         let mut out = HashMap::with_capacity(self.vtypes.len());
@@ -1174,7 +1174,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> Vec<(usize, String)>
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let mut errors = Vec::new();
         for v in &self.vtypes {
@@ -1217,7 +1217,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> Vec<((usize, usize), String)>
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let mut errors = Vec::new();
         let known_ids: std::collections::BTreeSet<usize> =
@@ -1330,7 +1330,7 @@ impl Collection {
         witnesses: &HashMap<usize, GrowingPatch<T>>,
     ) -> CompletenessReport
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let mut missing: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         let mut matches_checked = 0usize;
@@ -1601,7 +1601,7 @@ mod tests {
     /// `witness.junction_vertex_type_at(pos) == Some(vt)`.)
     fn assert_catalog_validity<T>(idx: &OpenVertexTypeIndex<T>)
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         for info in idx.entries() {
             let observed = info.witness().junction_vertex_type_at(info.witness_pos());
@@ -1647,7 +1647,7 @@ mod tests {
     /// enumerate canonical matches here.
     fn assert_catalog_complete_brute<T>(idx: &OpenVertexTypeIndex<T>)
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let ts = idx.tileset();
         for info in idx.entries() {

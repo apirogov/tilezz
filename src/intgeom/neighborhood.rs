@@ -98,7 +98,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use crate::cyclotomic::{IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField};
 use crate::intgeom::matchtypes::MatchTypeIndex;
 use crate::intgeom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::intgeom::tileset::TileSet;
@@ -226,7 +226,7 @@ impl SurroundedTile {
     /// - `num_tile_instances` equals `max(patch_tile_ids) + 1` (= the
     ///   dense-renumbering output of [`GrowingPatch::normalize`]).
     /// - `open_vertex_pos < angles.len()` when `!is_closed`.
-    pub fn to_patch<T: IsRingOrField + Units>(
+    pub fn to_patch<T: IsRingOrField>(
         &self,
         match_index: Arc<MatchTypeIndex<T>>,
     ) -> Option<GrowingPatch<T>> {
@@ -329,7 +329,7 @@ pub struct NeighborhoodIndex<T: IsRingOrField> {
     transitions: Vec<NtTransition>,
 }
 
-impl<T: IsRingOrField + Units> NeighborhoodIndex<T> {
+impl<T: IsRingOrField> NeighborhoodIndex<T> {
     /// Build the full open-NT catalog for `tileset` by BFS over the
     /// neighborhood-transition graph.
     ///
@@ -719,7 +719,7 @@ struct BfsState {
 /// Phase 1: enumerate every two-tile patch from `MatchTypeIndex`, try
 /// every third-tile glue against it, and accept each successful glue
 /// as a seed NT (after a self-consistency check via [`nt_is_valid`]).
-fn seed_phase<T: IsRingOrField + Units>(
+fn seed_phase<T: IsRingOrField>(
     state: &mut BfsState,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) {
@@ -781,7 +781,7 @@ fn seed_phase<T: IsRingOrField + Units>(
 /// Construct a candidate seed NT from `third_pm`'s glue position on a
 /// two-tile patch. Returns `None` if no junction is incident with the
 /// match (= the central tile shares no junction with the patch).
-fn build_seed_nt<T: IsRingOrField + Units>(
+fn build_seed_nt<T: IsRingOrField>(
     third_pm: &PatchMatch,
     patch_n: usize,
     all_juncs: &[(usize, OpenVertexType)],
@@ -836,7 +836,7 @@ fn build_seed_nt<T: IsRingOrField + Units>(
 /// into `entries` but not into the BFS queue — they are terminal.
 /// [`NeighborhoodIndex::classify_all`] recognises them directly as
 /// Blessed escape destinations.
-fn bfs_phase<T: IsRingOrField + Units>(
+fn bfs_phase<T: IsRingOrField>(
     state: &mut BfsState,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) {
@@ -922,7 +922,7 @@ struct AttachedContext<T: IsRingOrField> {
     aug_n: usize,
 }
 
-fn build_attached_context<T: IsRingOrField + Units>(
+fn build_attached_context<T: IsRingOrField>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Option<AttachedContext<T>> {
@@ -992,7 +992,7 @@ fn build_attached_context<T: IsRingOrField + Units>(
     })
 }
 
-fn explore_phase1<T: IsRingOrField + Units>(
+fn explore_phase1<T: IsRingOrField>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Vec<ExploreOutcome> {
@@ -1031,7 +1031,7 @@ fn explore_phase1<T: IsRingOrField + Units>(
 /// `is_closed` on the result is true iff the petal's match absorbed
 /// both edges incident to the old open vertex (= the petal seals the
 /// angle around it).
-fn explore_phase2<T: IsRingOrField + Units>(
+fn explore_phase2<T: IsRingOrField>(
     st: &SurroundedTile,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> Vec<ExploreOutcome> {
@@ -1093,7 +1093,7 @@ fn explore_phase2<T: IsRingOrField + Units>(
 /// its boundary state directly. For open entries, maps the original
 /// open-vertex position into the normalized boundary via the rotation
 /// offset that `normalize` reports.
-fn build_surrounded_tile_from_trial<T: IsRingOrField + Units>(
+fn build_surrounded_tile_from_trial<T: IsRingOrField>(
     mut trial: GrowingPatch<T>,
     central_tile_id: usize,
     is_closed: bool,
@@ -1143,7 +1143,7 @@ fn match_absorbs_edge(pm: &PatchMatch, target_edge: usize, n: usize) -> bool {
 
 /// Try to apply a CCW petal to `nt` via the candidate `petal_pm`. Returns
 /// `None` if the glue collides or the resulting vt_seq doesn't reconstruct.
-fn try_step_ccw<T: IsRingOrField + Units>(
+fn try_step_ccw<T: IsRingOrField>(
     nt: &NeighborhoodType,
     ac: &AttachedContext<T>,
     petal_pm: PatchMatch,
@@ -1243,7 +1243,7 @@ fn try_step_ccw<T: IsRingOrField + Units>(
 /// `junction_vertex_type_at`. The resulting vt_seq is canonical — it
 /// matches what `seed_gen` would have produced for the same geometric
 /// state, regardless of which path the BFS took to reach it.
-fn canonicalize_vt_seq_on_ctx<T: IsRingOrField + Units>(
+fn canonicalize_vt_seq_on_ctx<T: IsRingOrField>(
     ctx: &GrowingPatch<T>,
     cw_anchor_pos: usize,
     ccw_anchor_pos: usize,
@@ -1274,7 +1274,7 @@ fn canonicalize_vt_seq_on_ctx<T: IsRingOrField + Units>(
 /// so that BFS dedup uses a canonical encoding regardless of how the NT
 /// was assembled. Returns None if reconstruction fails, the match length
 /// is 0, the match closes the central, or the central glue collides.
-fn try_construct_nt_from_cw<T: IsRingOrField + Units>(
+fn try_construct_nt_from_cw<T: IsRingOrField>(
     central_tile_id: usize,
     cw_anchor_on_central: usize,
     cw_anchor_on_context: usize,
@@ -1331,7 +1331,7 @@ fn try_construct_nt_from_cw<T: IsRingOrField + Units>(
 /// geometry implies. Used as a post-hoc validator (see
 /// [`NeighborhoodIndex::validate`]) and as a seed-acceptance filter
 /// during BFS construction.
-fn nt_is_valid<T: IsRingOrField + Units>(
+fn nt_is_valid<T: IsRingOrField>(
     nt: &NeighborhoodType,
     match_index: &Arc<MatchTypeIndex<T>>,
 ) -> bool {
@@ -1390,7 +1390,7 @@ mod tests {
     /// closed_transitions)` exactly. Catches silent drift in
     /// seed generation, BFS exploration, or classification.
     #[allow(clippy::too_many_arguments)]
-    fn assert_counts<T: IsRingOrField + Units>(
+    fn assert_counts<T: IsRingOrField>(
         idx: &NeighborhoodIndex<T>,
         expected_types: usize,
         expected_transitions: usize,
@@ -1523,7 +1523,7 @@ mod tests {
         }
     }
 
-    fn assert_roundtrip<T: IsRingOrField + Units>(idx: &NeighborhoodIndex<T>) {
+    fn assert_roundtrip<T: IsRingOrField>(idx: &NeighborhoodIndex<T>) {
         let collection = idx.to_collection("ZZ12");
         let json = serde_json::to_string(&collection).expect("serialize");
         let restored: Collection = serde_json::from_str(&json).expect("deserialize");
@@ -1703,7 +1703,7 @@ mod tests {
     /// Used by the brute-force completeness + correctness tests as
     /// an independent canonical form for comparing trial patches to
     /// catalog entries.
-    fn aug_boundary_fingerprint<T: IsRingOrField + Units>(
+    fn aug_boundary_fingerprint<T: IsRingOrField>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
     ) -> Option<(usize, usize, Vec<i8>)> {
@@ -1818,7 +1818,7 @@ mod tests {
     /// padding alone — i.e., the deeper ctx doesn't matter. Verified
     /// on spectre: 0 mixed-kind classes across 4 522 distinct phase-1
     /// windows.
-    fn extended_match_window_fingerprint<T: IsRingOrField + Units>(
+    fn extended_match_window_fingerprint<T: IsRingOrField>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
     ) -> Option<(usize, usize, Vec<i8>, usize)> {
@@ -1885,7 +1885,7 @@ mod tests {
     /// cw_anchor_on_central, canonical_aug_angles, cw_anchor_in_canon)`.
     type CanonicalClassFp = (usize, usize, Vec<i8>, usize);
 
-    fn canonical_class_fingerprint<T: IsRingOrField + Units>(
+    fn canonical_class_fingerprint<T: IsRingOrField>(
         nt: &NeighborhoodType,
         mi: &Arc<MatchTypeIndex<T>>,
     ) -> Option<CanonicalClassFp> {
@@ -1911,7 +1911,7 @@ mod tests {
     /// Count catalog entries that share a canonical-class fingerprint
     /// but disagree on kind. Returns `(violations, first_violation,
     /// total_classes)`.
-    fn count_canonical_class_kind_violations<T: IsRingOrField + Units>(
+    fn count_canonical_class_kind_violations<T: IsRingOrField>(
         idx: &NeighborhoodIndex<T>,
     ) -> (usize, Option<String>, usize) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
@@ -2177,7 +2177,7 @@ mod tests {
     /// pure brute force.
     fn assert_brute_completeness_and_transition_correctness<T>(idx: &NeighborhoodIndex<T>)
     where
-        T: IsRingOrField + Units,
+        T: IsRingOrField,
     {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         // fp_set: set of canonical fingerprints in the catalog.
@@ -2343,7 +2343,7 @@ mod tests {
     ///
     /// Catches the V2b shape (closing-as-escape blindspot) AND the
     /// "Free is the trash bucket" shape where Free becomes vacuous.
-    fn assert_classify_invariants<T: IsRingOrField + Units>(
+    fn assert_classify_invariants<T: IsRingOrField>(
         idx: &NeighborhoodIndex<T>,
     ) {
         let kinds = idx.classify_all();
@@ -2481,7 +2481,7 @@ mod tests {
         }
     }
 
-    fn validate_seeds<T: IsRingOrField + Units>(
+    fn validate_seeds<T: IsRingOrField>(
         idx: &NeighborhoodIndex<T>,
     ) -> Vec<String> {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
@@ -2552,7 +2552,7 @@ mod tests {
 
     /// Generic over the tileset: build_attached_context succeeds for
     /// every seed, the gap is non-empty, and gap_start is in range.
-    fn assert_seed_geometry<T: IsRingOrField + Units>(idx: &NeighborhoodIndex<T>) {
+    fn assert_seed_geometry<T: IsRingOrField>(idx: &NeighborhoodIndex<T>) {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         for (i, entry) in idx.entries().iter().enumerate() {
             let Some(nt) = entry.as_phase1() else {
@@ -2609,7 +2609,7 @@ mod tests {
     /// seed phase would silently under-produce, and downstream
     /// closure tests (which iterate over existing entries) couldn't
     /// recover the missing seeds.
-    fn assert_seeds_match_brute<T: IsRingOrField + Units>(
+    fn assert_seeds_match_brute<T: IsRingOrField>(
         tileset: Arc<TileSet<T>>,
         idx: &NeighborhoodIndex<T>,
     ) {

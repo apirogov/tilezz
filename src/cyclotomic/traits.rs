@@ -198,31 +198,7 @@ pub trait ZZComplex {
 }
 
 // ----------------
-// Composite ring traits and `Units`.
-
-/// Sub-bag of trait obligations: the trio composed by `IsRingOrField`.
-pub trait ComplexTraits: Ccw + ZZComplex {}
-
-pub trait RingTraits:
-    InnerIntType + IntRing + Conj + From<IntT> + From<<Self as InnerIntType>::IntType>
-{
-}
-
-pub trait IsSymNum: SymNum + RingTraits {}
-impl<T: SymNum + RingTraits> IsSymNum for T {}
-
-/// Catch-all "this is a cyclotomic ring or field" bound. Today every
-/// implementing type is a ring; a future `IsField` would also implement
-/// `IsRingOrField` and add a `Div<Self, Output = Self>` bound.
-pub trait IsRingOrField: IsSymNum + ComplexTraits + ReImSign + IntersectUnitSegments {}
-
-/// Integer ring (no division). Every current `ZZn` implements this.
-pub trait IsRing: IsRingOrField {}
-
-// Future: pub trait IsField: IsRingOrField + Div<Self, Output = Self> {}
-
-/// Marker for the standalone `Z[zeta_n]` rings (today the `ZZn` types).
-pub trait ZZType: IsRing {}
+// Catch-all ring bound and structural marker traits.
 
 /// Cached lookup of roots of unity for a concrete ring.
 ///
@@ -230,18 +206,50 @@ pub trait ZZType: IsRing {}
 /// `OnceLock`-cached unit table built from `derive_units_lookup`) or by a
 /// hand-rolled per-ring `static UNIT_TABLE: [[i64; PHI]; N] = [...]` for
 /// hot-path rings (ZZ12).
-pub trait Units: Copy + One + Ccw + IsRingOrField {
+pub trait Units: Copy + One + Ccw {
     /// Unit-length vector pointing in direction of `angle`.
     fn unit(angle: i8) -> Self;
-
-    /// Build the full unit table of size `turn()` by walking `ccw()^k`.
-    /// Used by helpers that need to iterate over all roots of unity.
-    #[inline]
-    fn build_unit_table() -> Vec<Self> {
-        let n = Self::turn();
-        (0..n).map(|k| Self::ccw().zz_pow(k as u8)).collect()
-    }
 }
+
+/// Single "this is a cyclotomic ring" bound. Every concrete `ZZn`
+/// implements **all** of these, so downstream callers only need to write
+/// `T: IsRingOrField` (plus any subring-containment marker like `HasZZ4`)
+/// rather than spelling out every individual capability.
+///
+/// A future `IsField` would also be an `IsRingOrField` and add a
+/// `Div<Self, Output = Self>` bound, hence the name `IsRingOrField`
+/// rather than just `IsRing` -- we want room for that distinction without
+/// disturbing every existing call site.
+pub trait IsRingOrField:
+    SymNum
+    + Ccw
+    + Conj
+    + ZZComplex
+    + ReImSign
+    + IntersectUnitSegments
+    + WithinRadius
+    + Units
+    + InnerIntType
+    + IntRing
+    + From<IntT>
+    + From<<Self as InnerIntType>::IntType>
+{
+}
+
+/// Integer ring (no division). Every current `ZZn` implements this.
+///
+/// Today this is structurally equivalent to `IsRingOrField`. Kept as a
+/// distinct trait so a future `IsField: IsRingOrField + Div<...>` can
+/// share the `IsRingOrField` umbrella without disturbing existing call
+/// sites that use `T: IsRing` to mean "no division".
+pub trait IsRing: IsRingOrField {}
+
+// Future: pub trait IsField: IsRingOrField + Div<Self, Output = Self> {}
+
+/// Marker for the standalone `Z[zeta_n]` rings (today the `ZZn` types).
+/// Structural: a future `QQType` for cyclotomic fields would sit beside
+/// `ZZType` on top of `IsField`.
+pub trait ZZType: IsRing {}
 
 // ----------------
 // Subring-containment markers.
@@ -279,7 +287,7 @@ pub trait HasZZ12Impl {}
 pub trait HasZZ12: IsRingOrField + HasZZ12Impl {}
 impl<T: IsRingOrField + HasZZ12Impl> HasZZ12 for T {}
 
-impl<T: HasZZ4 + Units> OneImag for T {
+impl<T: HasZZ4> OneImag for T {
     fn one_i() -> Self {
         <Self as Units>::unit(Self::qturn())
     }

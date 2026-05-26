@@ -5,7 +5,7 @@ use std::time::Instant;
 use clap::Parser;
 use rustc_hash::FxHashSet;
 
-use tilezz::cyclotomic::{IsRingOrField, Units, ZZ12, ZZ4};
+use tilezz::cyclotomic::{IsRingOrField, ZZ12, ZZ4};
 use tilezz::intgeom::rat::Rat;
 use tilezz::intgeom::tileset::{self, TileSet};
 use tilezz::misc::patch_grow::grow_patches;
@@ -78,7 +78,7 @@ fn brute_force_grow<T>(
     max_size: usize,
 ) -> BTreeMap<usize, FxHashSet<Rat<T>>>
 where
-    T: IsRingOrField + Units,
+    T: IsRingOrField,
 {
     let mut results: BTreeMap<usize, FxHashSet<Rat<T>>> = BTreeMap::new();
     if max_size == 0 || tileset.num_tiles() == 0 {
@@ -107,7 +107,7 @@ where
 
 fn run<T>(tileset: Arc<TileSet<T>>, max_size: usize, validate: bool, label: &str)
 where
-    T: IsRingOrField + Units,
+    T: IsRingOrField,
 {
     eprintln!(
         "tileset: {label} ({} tile{}), max_size: {max_size}, validate: {validate}",

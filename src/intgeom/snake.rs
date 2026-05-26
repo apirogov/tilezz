@@ -121,7 +121,7 @@ pub struct Snake<T: IsRingOrField> {
     saved_angle_0: Option<i8>,
 }
 
-impl<I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
+impl<I: ToPrimitive, T: IsRingOrField> TryFrom<&[I]> for Snake<T> {
     type Error = &'static str;
 
     /// Create a snake from an angle sequence.
@@ -134,7 +134,7 @@ impl<I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I]> for Snake<T> {
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I; N]>
+impl<const N: usize, I: ToPrimitive, T: IsRingOrField> TryFrom<&[I; N]>
     for Snake<T>
 {
     type Error = &'static str;
@@ -144,13 +144,13 @@ impl<const N: usize, I: ToPrimitive, T: IsRingOrField + Units> TryFrom<&[I; N]>
     }
 }
 
-impl<T: IsRingOrField + Units> Default for Snake<T> {
+impl<T: IsRingOrField> Default for Snake<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: IsRingOrField + Units> Snake<T> {
+impl<T: IsRingOrField> Snake<T> {
     /// Return a new empty snake that is guaranteed to be free of self-intersections.
     pub fn new() -> Self {
         let mut grid = UnitSquareGrid::new();
@@ -805,7 +805,7 @@ mod tests {
 
     /// Snapshot of every externally-observable Snake field, used by
     /// the round-trip pop tests below.
-    fn snapshot<T: IsRingOrField + Units>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
+    fn snapshot<T: IsRingOrField>(s: &Snake<T>) -> (Vec<i8>, i64, bool, T, i8) {
         (
             s.angles().to_vec(),
             s.angle_sum(),

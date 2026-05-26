@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 
-use crate::cyclotomic::{IsRingOrField, Units};
+use crate::cyclotomic::{IsRingOrField};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
@@ -95,7 +95,7 @@ impl<T: IsRingOrField> Clone for BpSeed<T> {
     }
 }
 
-impl<T: IsRingOrField + Units> BpSeed<T> {
+impl<T: IsRingOrField> BpSeed<T> {
     /// Pre-compute the bit-parallel state for the given seed tileset.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
@@ -142,7 +142,7 @@ impl MatchType {
     /// resulting boundary as a `Rat`. Assumes the match has been
     /// previously validated (e.g. it came from a `MatchFinder`); will
     /// panic otherwise.
-    pub fn apply<T: IsRingOrField + Units>(
+    pub fn apply<T: IsRingOrField>(
         &self,
         rats_a: &[Rat<T>],
         rats_b: &[Rat<T>],
@@ -198,7 +198,7 @@ pub struct MatchFinder<T: IsRingOrField> {
     engine: CyclicEngine,
 }
 
-impl<T: IsRingOrField + Units> MatchFinder<T> {
+impl<T: IsRingOrField> MatchFinder<T> {
     /// Build a `MatchFinder` that enumerates self-matches within a
     /// single tileset (`set_a == set_b == tileset`).
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
@@ -314,7 +314,7 @@ impl<T: IsRingOrField + Units> MatchFinder<T> {
     }
 }
 
-impl<T: IsRingOrField + Units> MatchFinder<T> {
+impl<T: IsRingOrField> MatchFinder<T> {
     /// Like [`Self::valid_matches_with_rats`] but only considers
     /// matches that touch at least one "active" position on the A-side
     /// boundary. `active[k]` selects edge `k` of tile `i`. Useful when
@@ -590,7 +590,7 @@ pub struct MatchTypeIndex<T: IsRingOrField> {
     by_start: Vec<Vec<Vec<CandidateMatch>>>,
 }
 
-impl<T: IsRingOrField + Units> MatchTypeIndex<T> {
+impl<T: IsRingOrField> MatchTypeIndex<T> {
     /// Build the index by enumerating all legal self-matches and
     /// indexing them by `(tile_a, start_a)`.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
@@ -787,7 +787,7 @@ mod tests {
         0, 2, -3, 2, 3, -2, 3, -2, 3, 2, -3, 2, 0, 2, -3, 2, 3, 2, -3, 2,
     ];
 
-    fn brute_force_valid_matches<T: IsRingOrField + Units>(
+    fn brute_force_valid_matches<T: IsRingOrField>(
         a: &Rat<T>,
         b: &Rat<T>,
         i: usize,
@@ -820,7 +820,7 @@ mod tests {
         results
     }
 
-    fn assert_match_sets_match<T: IsRingOrField + Units>(
+    fn assert_match_sets_match<T: IsRingOrField>(
         mf_matches: &[MatchType],
         bf_matches: &[MatchType],
         rats_a: &[Rat<T>],
