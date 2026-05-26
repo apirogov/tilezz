@@ -52,7 +52,7 @@ mod tests {
     use num_traits::{One, Zero};
 
     use super::super::symnum::SymNum;
-    use super::super::types::ZZ12;
+    use super::super::rings::ZZ12;
     use super::super::units::Units;
     use super::*;
 

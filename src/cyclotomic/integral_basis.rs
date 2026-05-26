@@ -825,39 +825,8 @@ macro_rules! define_integral_zz {
             }
 
             #[inline]
-            fn zz_params() -> &'static $crate::cyclotomic::symnum::ZZParams<'static> {
+            fn zz_params() -> &'static $crate::cyclotomic::symnum::ZZParams {
                 &$params
-            }
-
-            #[inline]
-            fn zz_mul_arrays(
-                _x: &[Self::Scalar],
-                _y: &[Self::Scalar],
-            ) -> Vec<Self::Scalar> {
-                unreachable!(
-                    "{}: multiplication uses direct Mul impl, not zz_mul_arrays",
-                    stringify!($name),
-                )
-            }
-
-            #[inline]
-            fn zz_mul_scalar(x: &[Self::Scalar], scalar: i64) -> Vec<Self::Scalar> {
-                x.iter().map(|c| *c * scalar).collect()
-            }
-
-            fn new(coeffs: &[Self::Scalar]) -> Self {
-                assert_eq!(
-                    coeffs.len(),
-                    $phi,
-                    concat!(stringify!($name), "::new expects ", stringify!($phi), " integral-basis coefficients")
-                );
-                let mut out = [0i64; $phi];
-                let mut i = 0;
-                while i < $phi {
-                    out[i] = coeffs[i];
-                    i += 1;
-                }
-                Self { coeffs: out }
             }
 
             #[inline]
