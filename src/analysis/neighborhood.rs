@@ -100,7 +100,7 @@ use rustc_hash::FxHashMap;
 
 use crate::cyclotomic::{IsRing};
 use crate::matches::{EdgeRange, Segment};
-use crate::geom::matchtypes::MatchTypeIndex;
+use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::geom::patch::{EdgeInfo, GrowingPatch, OpenVertexType, PatchMatch, TransitionSide};
 use crate::geom::tileset::TileSet;
 
@@ -1348,7 +1348,7 @@ fn nt_is_valid<T: IsRing>(
 mod tests {
     use super::*;
     use crate::cyclotomic::ZZ12;
-    use crate::geom::matchtypes::MatchTypeIndex;
+    use crate::analysis::matchtypes::MatchTypeIndex;
     use crate::geom::patch::GrowingPatch;
     use crate::geom::tileset;
     use std::sync::OnceLock;

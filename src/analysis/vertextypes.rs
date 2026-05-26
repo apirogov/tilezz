@@ -963,7 +963,7 @@ fn compute_has_closing(n: usize, transitions: &[TransitionInfo]) -> Vec<bool> {
 // vertex-type cross-check, transition cross-check, completeness scan).
 // =====================================================================
 
-use crate::geom::matchtypes::MatchTypeIndex;
+use crate::analysis::matchtypes::MatchTypeIndex;
 use serde::{Deserialize, Serialize};
 
 /// Sentinel destination id for transitions that seal the focus vertex
@@ -1958,7 +1958,7 @@ mod tests {
         }
 
         // Probe what MatchTypeIndex actually indexed for (tile=0, offset=0).
-        let mti = crate::geom::matchtypes::MatchTypeIndex::new(Arc::clone(&ts));
+        let mti = crate::analysis::matchtypes::MatchTypeIndex::new(Arc::clone(&ts));
         let cands = mti.candidates_starting_at(0, 0);
         eprintln!(
             "  MatchTypeIndex.by_start[0][0] = {} candidates",
@@ -2003,7 +2003,7 @@ mod tests {
 
         // Compare: what does compute_all_candidates produce at result[25]?
         let result = crate::geom::patch::GrowingPatch::<ZZ12>::compute_all_candidates(
-            &Arc::new(crate::geom::matchtypes::MatchTypeIndex::new(Arc::clone(
+            &Arc::new(crate::analysis::matchtypes::MatchTypeIndex::new(Arc::clone(
                 &ts,
             ))),
             witness.angles(),

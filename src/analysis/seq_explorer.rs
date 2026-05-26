@@ -75,7 +75,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::cyclotomic::{IsRing};
-use crate::geom::matchtypes::{BpSeed, MatchFinder};
+use crate::analysis::matchtypes::{BpSeed, MatchFinder};
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
@@ -476,7 +476,7 @@ where
             for ti in 0..tileset.num_tiles() {
                 for mt in mf.valid_matches(wi, ti) {
                     report.matches_checked += 1;
-                    let glued = crate::geom::matchtypes::apply_match(
+                    let glued = crate::analysis::matchtypes::apply_match(
                         &mt,
                         witness_ts.rats(),
                         tileset.rats(),
