@@ -12,8 +12,8 @@ use num_rational::Ratio;
 
 use crate::cyclotomic::gaussint::GaussInt;
 use crate::cyclotomic::params::{
-    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ16_PARAMS, ZZ16_Y, ZZ20_PARAMS, ZZ24_PARAMS, ZZ4_PARAMS,
-    ZZ60_PARAMS, ZZ8_PARAMS,
+    ZZ10_PARAMS, ZZ10_Y, ZZ12_PARAMS, ZZ16_PARAMS, ZZ16_Y, ZZ20_PARAMS, ZZ24_PARAMS, ZZ32_PARAMS,
+    ZZ32_Z, ZZ4_PARAMS, ZZ60_PARAMS, ZZ8_PARAMS,
 };
 use crate::define_integral_zz;
 
@@ -1416,6 +1416,188 @@ crate::impl_integral_re_im_sign_via_basis!(ZZ60, 16, 8, zz60_real_sign);
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ60, 16, 8, zz60_real_sign);
 crate::impl_integral_within_radius_via_complex64!(ZZ60);
 crate::zz_integral_ring_tests!(name: ZZ60);
+
+// ----------------
+// ZZ32 -- Z[zeta_32].
+//
+// `zeta = e^(2*pi*i/32) = cos(11.25) + i*sin(11.25)`, `Phi_32(x) = x^16 + 1`,
+// so `zeta^16 = -1`. Storage: `[i64; 16]` over `{1, zeta, ..., zeta^15}`.
+//
+// The real subring is `Q(sqrt(2), sqrt(2+sqrt(2)), sqrt(2+sqrt(2+sqrt(2))))`,
+// dim 8, basis:
+//   {1, sqrt(2), sqrt(2+sqrt(2)), sqrt(2+sqrt(2+sqrt(2))),
+//    sqrt(2(2+sqrt(2))), sqrt(2(2+sqrt(2+sqrt(2)))),
+//    sqrt((2+sqrt(2))(2+sqrt(2+sqrt(2)))),
+//    sqrt(2(2+sqrt(2))(2+sqrt(2+sqrt(2))))}
+// with `/2` implicit denominator.
+//
+// Real-sign extraction is **exact** via `signum_sum_sqrt_expr_8_zz32`
+// (two-level recursive reduction `Q(sqrt(2), sqrt(2+sqrt(2)), sqrt(...))`
+// -> `Q(sqrt(2), sqrt(2+sqrt(2)))` (the ZZ16 real subring, with its
+// own exact sign helper) -> `Q(sqrt(2))`).
+//
+// Decomp tables generated via `src/bin/codegen_zz32.rs`.
+
+#[inline]
+fn zz32_complex64(coeffs: &[i64; 16]) -> Complex64 {
+    let sq2 = std::f64::consts::SQRT_2;
+    let sq_y = ZZ16_Y.sqrt(); // sqrt(2+sqrt(2))
+    let sq_z = ZZ32_Z.sqrt(); // sqrt(2+sqrt(2+sqrt(2)))
+    let sq_2y = (2.0 * ZZ16_Y).sqrt();
+    let sq_2z = (2.0 * ZZ32_Z).sqrt();
+    let sq_yz = (ZZ16_Y * ZZ32_Z).sqrt();
+    let sq_2yz = (2.0 * ZZ16_Y * ZZ32_Z).sqrt();
+
+    let proj = |table: &[[i64; 8]; 16]| -> f64 {
+        let mut acc = [0i64; 8];
+        for k in 0..16 {
+            let ck = coeffs[k];
+            if ck == 0 {
+                continue;
+            }
+            for j in 0..8 {
+                acc[j] += ck * table[k][j];
+            }
+        }
+        (acc[0] as f64
+            + (acc[1] as f64) * sq2
+            + (acc[2] as f64) * sq_y
+            + (acc[3] as f64) * sq_z
+            + (acc[4] as f64) * sq_2y
+            + (acc[5] as f64) * sq_2z
+            + (acc[6] as f64) * sq_yz
+            + (acc[7] as f64) * sq_2yz)
+            * 0.5
+    };
+    let re = proj(&ZZ32_RE_DECOMP);
+    let im = proj(&ZZ32_IM_DECOMP);
+    Complex64::new(re, im)
+}
+
+const ZZ32_CARTESIAN: [Complex64; 16] = {
+    // Placeholder (macro requires a const). Real values come from the
+    // hand-rolled `complex64_fn` above.
+    let mut out = [Complex64::new(0.0, 0.0); 16];
+    out[0] = Complex64::new(1.0, 0.0);
+    out
+};
+
+// Decomposition tables. Auto-generated via `src/bin/codegen_zz32.rs`.
+const ZZ32_RE_DECOMP: [[i64; 8]; 16] = [
+    [2, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, -1, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 1, -1, 0],
+    [0, 0, -1, 0, 1, 0, 0, 0],
+    [0, 0, 0, -1, 0, -1, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 1, 0, -1],
+    [0, 0, 1, 0, -1, 0, 0, 0],
+    [0, 0, 0, -1, 0, -1, 1, 0],
+    [0, -1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, -1, 0],
+    [0, 0, -1, 0, 0, 0, 0, 0],
+    [0, 0, 0, -1, 0, 0, 0, 0],
+];
+
+const ZZ32_IM_DECOMP: [[i64; 8]; 16] = [
+    [0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, -1, 0, -1, 0, 1],
+    [0, 0, -1, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 1, -1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, -1, 0, 0, 1, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0],
+    [2, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, -1, 0, 0, 1, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 1, -1, 0],
+    [0, 0, -1, 0, 1, 0, 0, 0],
+    [0, 0, 0, -1, 0, -1, 0, 1],
+];
+
+fn zz32_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let half = Ratio::<i64>::new_raw(1, 2);
+    let mut k_coeffs: [GaussInt<Ratio<i64>>; 8] = [GaussInt::new(
+        Ratio::<i64>::from_integer(0),
+        Ratio::<i64>::from_integer(0),
+    ); 8];
+    for j in 0..8 {
+        let mut re_acc: i64 = 0;
+        let mut im_acc: i64 = 0;
+        for k in 0..16 {
+            re_acc += coeffs[k] * ZZ32_RE_DECOMP[k][j];
+            im_acc += coeffs[k] * ZZ32_IM_DECOMP[k][j];
+        }
+        k_coeffs[j] = GaussInt::new(
+            Ratio::<i64>::from_integer(re_acc) * half,
+            Ratio::<i64>::from_integer(im_acc) * half,
+        );
+    }
+    format_symbolic(
+        &k_coeffs,
+        &[
+            "1",
+            "2",
+            "2+sqrt(2)",
+            "2+sqrt(2+sqrt(2))",
+            "2(2+sqrt(2))",
+            "2(2+sqrt(2+sqrt(2)))",
+            "(2+sqrt(2))(2+sqrt(2+sqrt(2)))",
+            "2(2+sqrt(2))(2+sqrt(2+sqrt(2)))",
+        ],
+        f,
+    )
+}
+
+#[inline]
+fn zz32_real_sign(x: &[i64; 8]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_8_zz32::<i64>(
+        x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7],
+    ) as i8
+}
+
+define_integral_zz! {
+    name: ZZ32,
+    n: 32,
+    phi: 16,
+    real_dim: 8,
+    // Phi_32(x) = x^16 + 1, so zeta^16 = -1.
+    reduction: [-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    re_decomp: ZZ32_RE_DECOMP,
+    im_decomp: ZZ32_IM_DECOMP,
+    cartesian: ZZ32_CARTESIAN,
+    params: ZZ32_PARAMS,
+    one_in_real_basis: [2i64, 0, 0, 0, 0, 0, 0, 0],
+    display_fn: zz32_display,
+    complex64_fn: zz32_complex64,
+    has: [HasZZ4Impl, HasZZ8Impl],
+}
+
+impl From<(i64, i64)> for ZZ32 {
+    /// `(re, im)` where `i = zeta^8`, so `(a, b) = a + b*i` maps with
+    /// `b` at position 8.
+    #[inline]
+    fn from((re, im): (i64, i64)) -> Self {
+        let mut c = [0i64; 16];
+        c[0] = re;
+        c[8] = im;
+        Self::from_int_coeffs(c)
+    }
+}
+
+crate::impl_integral_units_via_basis!(ZZ32, 32);
+crate::impl_integral_mul_via_basis!(ZZ32, 16);
+crate::impl_integral_conj_via_basis!(ZZ32, 16);
+crate::impl_integral_re_im_sign_via_basis!(ZZ32, 16, 8, zz32_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ32, 16, 8, zz32_real_sign);
+crate::impl_integral_within_radius_via_complex64!(ZZ32);
+crate::zz_integral_ring_tests!(name: ZZ32);
 
 // ----------------
 // Ring-specific tests for ZZ12 (carried over from the old `zz12.rs`).
