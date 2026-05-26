@@ -12,13 +12,13 @@ use tilezz::misc::patch_grow::grow_patches;
 
 #[derive(Parser)]
 #[command(
-    name = "patch_growth",
+    name = "patch_enum",
     about = "Enumerate tile patches by incremental growth"
 )]
 struct Args {
     /// Tileset to grow patches from.
     #[arg(long, value_enum, default_value = "hex")]
-    tile: TileSetKind,
+    tileset: TileSetKind,
 
     /// Maximum patch size (number of tile copies).
     #[arg(long, default_value_t = 6)]
@@ -32,6 +32,10 @@ struct Args {
     /// Slow for `max_size > 4`.
     #[arg(long)]
     validate: bool,
+
+    /// Flamegraph output path (requires --features pprof).
+    #[arg(long)]
+    pprof: Option<String>,
 }
 
 #[derive(Clone, Debug, clap::ValueEnum)]
@@ -173,9 +177,13 @@ fn main() {
         eprintln!("note: --validate with max_size > 4 may be very slow");
     }
 
-    let label = format!("{:?}", args.tile);
+    let profile = tilezz::misc::profile::ProfileGuard::start(args.pprof.as_deref());
+
+    let label = format!("{:?}", args.tileset);
     match args.ring {
-        RingChoice::ZZ4 => run(ts_zz4(&args.tile), args.max_size, args.validate, &label),
-        RingChoice::ZZ12 => run(ts_zz12(&args.tile), args.max_size, args.validate, &label),
+        RingChoice::ZZ4 => run(ts_zz4(&args.tileset), args.max_size, args.validate, &label),
+        RingChoice::ZZ12 => run(ts_zz12(&args.tileset), args.max_size, args.validate, &label),
     }
+
+    profile.finish();
 }
