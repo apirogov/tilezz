@@ -23,7 +23,8 @@ use crate::cyclotomic::{IsRing};
 use crate::intgeom::rat::Rat;
 use crate::intgeom::snake::Snake;
 use crate::intgeom::tileset::TileSet;
-use crate::stringmatch::{BitParallelMatcher, CyclicMatch};
+use crate::matches::TileMatch;
+use crate::stringmatch::BitParallelMatcher;
 
 /// Bit-parallel engine state. The B-side masks live in a shared
 /// `BitParallelMatcher`; the A-side angle sequences are kept raw and
@@ -38,11 +39,11 @@ struct CyclicEngine {
 }
 
 impl CyclicEngine {
-    fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<CyclicMatch> {
+    fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<TileMatch> {
         let b_idx = j - self.offset_b;
         let mut matches = self.b_matcher.stream_boundary(&self.a_sequences[i], b_idx);
         for m in &mut matches {
-            m.tile_a = i;
+            m.a.tile_id = i;
         }
         matches
     }
@@ -52,7 +53,7 @@ impl CyclicEngine {
         i: usize,
         j: usize,
         positions: &[usize],
-    ) -> Vec<CyclicMatch> {
+    ) -> Vec<TileMatch> {
         if positions.is_empty() {
             return vec![];
         }
@@ -66,9 +67,9 @@ impl CyclicEngine {
             }
         }
         let mut matches = self.b_matcher.stream_boundary(boundary, b_idx);
-        matches.retain(|m| keep[m.pos_a]);
+        matches.retain(|m| keep[m.a.range.start_offset]);
         for m in &mut matches {
-            m.tile_a = i;
+            m.a.tile_id = i;
         }
         matches
     }
@@ -288,7 +289,7 @@ impl<T: IsRing> MatchFinder<T> {
     /// shared between tile `i` (A-side) and tile `j` (B-side).
     /// Includes raw matches that haven't yet been validated as legal
     /// glues (e.g. they might cause self-intersection).
-    pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<crate::stringmatch::CyclicMatch> {
+    pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<TileMatch> {
         self.engine.maximal_rc_matches(i, self.offset_b + j)
     }
 
@@ -354,7 +355,7 @@ impl<T: IsRing> MatchFinder<T> {
             .engine
             .maximal_rc_matches_at_positions(i, cmi_j, &scan_positions);
         for m in &cmi_matches {
-            let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
+            let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
             if len <= 1 {
                 continue;
             }
@@ -452,7 +453,7 @@ impl<T: IsRing> MatchFinder<T> {
 
         let cmi_matches = self.engine.maximal_rc_matches(i, cmi_j);
         for m in &cmi_matches {
-            let (ns, len, ne) = a.get_match((m.pos_a as i64, m.pos_b as i64), b);
+            let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
             if len <= 1 {
                 continue;
             }
@@ -1199,7 +1200,7 @@ mod tests {
             !self_bounds.is_empty(),
             "spectre self should have RC matches",
         );
-        let max_len = self_bounds.iter().map(|m| m.len).max().unwrap();
+        let max_len = self_bounds.iter().map(|m| m.len()).max().unwrap();
         assert_eq!(max_len, 3, "spectre max RC self-match should be 3");
     }
 

@@ -19,27 +19,7 @@ pub use bitparallel::BitParallelMatcher;
 pub use cyclic::cyclic_contains;
 pub use period::repetition_factor;
 
-/// A maximal reverse-complementary match between two cyclic angle sequences.
-///
-/// Represents a shared boundary segment between two polygonal tiles:
-/// tile A's subsequence starting at `pos_a` matches tile B's subsequence
-/// traced in reverse (CW direction) starting at `pos_b`, for `len` edges.
-///
-/// The match is maximal: it cannot be extended in either direction cyclically.
-pub struct CyclicMatch {
-    pub tile_a: usize,
-    pub pos_a: usize,
-    pub tile_b: usize,
-    pub pos_b: usize,
-    pub len: usize,
-}
-
-impl std::fmt::Debug for CyclicMatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "CyclicMatch(tile_a={}, pos_a={}, tile_b={}, pos_b={}, len={})",
-            self.tile_a, self.pos_a, self.tile_b, self.pos_b, self.len
-        )
-    }
-}
+// A maximal reverse-complementary match between two cyclic angle sequences
+// is the crate-wide `TileMatch` type; re-exported here for ergonomic
+// `stringmatch::TileMatch` access at the BitParallelMatcher API boundary.
+pub use crate::matches::TileMatch;

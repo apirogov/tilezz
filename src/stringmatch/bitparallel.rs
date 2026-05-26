@@ -52,7 +52,7 @@
 
 use std::collections::HashMap;
 
-use crate::stringmatch::CyclicMatch;
+use crate::matches::{EdgeRange, Segment, TileMatch};
 
 /// Fixed-length cyclic bitset over `len` bits, stored as a `Vec<u64>`.
 #[derive(Clone)]
@@ -221,23 +221,23 @@ impl BitParallelMatcher {
     /// All maximal cyclic RC matches between tile `i` and tile `j`,
     /// including length-1 matches. Caller is responsible for any
     /// downstream geometric filtering (e.g. single-edge angle checks).
-    pub fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<CyclicMatch> {
+    pub fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<TileMatch> {
         let boundary = self.tiles[i].clone();
         let mut matches = self.stream_boundary(&boundary, j);
         for m in &mut matches {
-            m.tile_a = i;
+            m.a.tile_id = i;
         }
         matches
     }
 
     /// Same as [`Self::maximal_rc_matches`] but restricted to matches
-    /// whose A-side starting position (`pos_a`) is in `positions`.
+    /// whose A-side starting position is in `positions`.
     pub fn maximal_rc_matches_at_positions(
         &self,
         i: usize,
         j: usize,
         positions: &[usize],
-    ) -> Vec<CyclicMatch> {
+    ) -> Vec<TileMatch> {
         if positions.is_empty() {
             return vec![];
         }
@@ -250,7 +250,7 @@ impl BitParallelMatcher {
         }
         self.maximal_rc_matches(i, j)
             .into_iter()
-            .filter(|m| keep[m.pos_a])
+            .filter(|m| keep[m.a.range.start_offset])
             .collect()
     }
 
@@ -261,9 +261,9 @@ impl BitParallelMatcher {
     /// setup, allocation, and the boundary-char lookup across all
     /// `n_tiles` tiles, instead of paying those costs `n_tiles` times.
     ///
-    /// `CyclicMatch::tile_a` is set to 0; callers can override (the
+    /// `TileMatch::tile_a` is set to 0; callers can override (the
     /// boundary is opaque to the matcher).
-    pub fn stream_boundary_all_tiles(&self, boundary: &[i8]) -> Vec<CyclicMatch> {
+    pub fn stream_boundary_all_tiles(&self, boundary: &[i8]) -> Vec<TileMatch> {
         let n_a = boundary.len();
         let n_tiles = self.tiles.len();
         if n_a == 0 || n_tiles == 0 {
@@ -354,12 +354,12 @@ impl BitParallelMatcher {
 
         // Convert emissions per tile (with left-maximality + dedup,
         // same as `stream_boundary`).
-        let mut out: Vec<CyclicMatch> = Vec::new();
+        let mut out: Vec<TileMatch> = Vec::new();
         for (tile_j, ts) in state.into_iter().enumerate() {
             let n_p = ts.n_b;
             let cap = ts.cap;
             let tile_b_seq: &[i8] = &self.tiles[tile_j];
-            let mut matches: Vec<CyclicMatch> = ts
+            let mut matches: Vec<TileMatch> = ts
                 .emissions
                 .into_iter()
                 .filter_map(|(b_end, ep, l)| {
@@ -376,23 +376,24 @@ impl BitParallelMatcher {
                             return None;
                         }
                     }
-                    Some(CyclicMatch {
-                        tile_a: 0,
-                        pos_a,
-                        tile_b: tile_j,
-                        pos_b,
-                        len: l,
-                    })
+                    Some(TileMatch::new(
+                        Segment::new(0, EdgeRange::new(pos_a, l)),
+                        Segment::new(tile_j, EdgeRange::new(pos_b, l)),
+                    ))
                 })
                 .collect();
 
             matches.sort_by(|a, b| {
-                a.pos_a
-                    .cmp(&b.pos_a)
-                    .then_with(|| a.pos_b.cmp(&b.pos_b))
-                    .then_with(|| b.len.cmp(&a.len))
+                a.a.range
+                    .start_offset
+                    .cmp(&b.a.range.start_offset)
+                    .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
+                    .then_with(|| b.len().cmp(&a.len()))
             });
-            matches.dedup_by(|a, b| a.pos_a == b.pos_a && a.pos_b == b.pos_b);
+            matches.dedup_by(|a, b| {
+                a.a.range.start_offset == b.a.range.start_offset
+                    && a.b.range.start_offset == b.b.range.start_offset
+            });
             out.extend(matches);
         }
         out
@@ -400,9 +401,9 @@ impl BitParallelMatcher {
 
     /// Stream an arbitrary cyclic boundary against tile `j` and return
     /// all maximal cyclic RC matches (length ≥ 1). The returned
-    /// `CyclicMatch::tile_a` is set to 0 — callers that need a specific
+    /// `TileMatch::tile_a` is set to 0 — callers that need a specific
     /// tile_a should set it after the call.
-    pub fn stream_boundary(&self, boundary: &[i8], tile_j: usize) -> Vec<CyclicMatch> {
+    pub fn stream_boundary(&self, boundary: &[i8], tile_j: usize) -> Vec<TileMatch> {
         let n_a = boundary.len();
         let n_b = self.tiles[tile_j].len();
         if n_a == 0 || n_b == 0 {
@@ -471,7 +472,7 @@ impl BitParallelMatcher {
 
         let n_p = n_b;
         let tile_b_seq: &[i8] = &self.tiles[tile_j];
-        let mut matches: Vec<CyclicMatch> = emissions
+        let mut matches: Vec<TileMatch> = emissions
             .into_iter()
             .filter_map(|(b_end, ep, l)| {
                 if l == 0 || l > cap {
@@ -492,23 +493,24 @@ impl BitParallelMatcher {
                         return None;
                     }
                 }
-                Some(CyclicMatch {
-                    tile_a: 0,
-                    pos_a,
-                    tile_b: tile_j,
-                    pos_b,
-                    len: l,
-                })
+                Some(TileMatch::new(
+                    Segment::new(0, EdgeRange::new(pos_a, l)),
+                    Segment::new(tile_j, EdgeRange::new(pos_b, l)),
+                ))
             })
             .collect();
 
         matches.sort_by(|a, b| {
-            a.pos_a
-                .cmp(&b.pos_a)
-                .then_with(|| a.pos_b.cmp(&b.pos_b))
-                .then_with(|| b.len.cmp(&a.len))
+            a.a.range
+                .start_offset
+                .cmp(&b.a.range.start_offset)
+                .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
+                .then_with(|| b.len().cmp(&a.len()))
         });
-        matches.dedup_by(|a, b| a.pos_a == b.pos_a && a.pos_b == b.pos_b);
+        matches.dedup_by(|a, b| {
+            a.a.range.start_offset == b.a.range.start_offset
+                && a.b.range.start_offset == b.b.range.start_offset
+        });
 
         // Silence unused warning if `is_empty` is unused outside debug.
         let _ = CyclicBitset::is_empty;
@@ -571,7 +573,7 @@ mod tests {
         let expected = naive_cyclic_rc_matches(&strings[i], &strings[j]);
 
         let mut got: Vec<(usize, usize, usize)> =
-            matches.iter().map(|m| (m.pos_a, m.pos_b, m.len)).collect();
+            matches.iter().map(|m| (m.a.range.start_offset, m.b.range.start_offset, m.len())).collect();
         got.sort();
         got.dedup();
 
@@ -614,12 +616,12 @@ mod tests {
         let bp = BitParallelMatcher::new(strings);
         let matches = bp.maximal_rc_matches(i, j);
         for m in &matches {
-            assert_eq!(m.tile_a, i);
-            assert_eq!(m.tile_b, j);
-            assert!(m.pos_a < strings[i].len());
-            assert!(m.pos_b < strings[j].len());
-            assert!(m.len > 0);
-            verify_rc_content(&strings[i], &strings[j], m.pos_a, m.pos_b, m.len);
+            assert_eq!(m.a.tile_id, i);
+            assert_eq!(m.b.tile_id, j);
+            assert!(m.a.range.start_offset < strings[i].len());
+            assert!(m.b.range.start_offset < strings[j].len());
+            assert!(m.len() > 0);
+            verify_rc_content(&strings[i], &strings[j], m.a.range.start_offset, m.b.range.start_offset, m.len());
         }
     }
 
@@ -697,7 +699,7 @@ mod tests {
         let bp = BitParallelMatcher::new(&tiles);
         let matches = bp.maximal_rc_matches(0, 1);
         assert!(!matches.is_empty(), "spectre should have self-matches");
-        let max_len = matches.iter().map(|m| m.len).max().unwrap();
+        let max_len = matches.iter().map(|m| m.len()).max().unwrap();
         assert_eq!(max_len, 3, "spectre max RC self-match should be 3");
     }
 
@@ -900,7 +902,7 @@ mod tests {
     #[test]
     fn sweep_matches_per_pair_across_fixtures() {
         // For every fixture we use elsewhere, assert that one sweep of
-        // `stream_boundary_all_tiles` yields the same CyclicMatch set
+        // `stream_boundary_all_tiles` yields the same TileMatch set
         // (modulo tile_a labelling) as calling `stream_boundary` per
         // tile and unioning.
         type Fixture = (&'static str, Vec<Vec<i8>>, Vec<Vec<i8>>);
@@ -956,17 +958,17 @@ mod tests {
             let bp = BitParallelMatcher::new(&tiles);
             for boundary in &boundaries {
                 let sweep = bp.stream_boundary_all_tiles(boundary);
-                let mut per_pair: Vec<CyclicMatch> = (0..tiles.len())
+                let mut per_pair: Vec<TileMatch> = (0..tiles.len())
                     .flat_map(|j| bp.stream_boundary(boundary, j))
                     .collect();
 
                 let mut sweep_tuples: Vec<(usize, usize, usize, usize)> = sweep
                     .iter()
-                    .map(|m| (m.tile_b, m.pos_a, m.pos_b, m.len))
+                    .map(|m| (m.b.tile_id, m.a.range.start_offset, m.b.range.start_offset, m.len()))
                     .collect();
                 let mut pair_tuples: Vec<(usize, usize, usize, usize)> = per_pair
                     .iter_mut()
-                    .map(|m| (m.tile_b, m.pos_a, m.pos_b, m.len))
+                    .map(|m| (m.b.tile_id, m.a.range.start_offset, m.b.range.start_offset, m.len()))
                     .collect();
                 sweep_tuples.sort();
                 pair_tuples.sort();
@@ -1001,11 +1003,11 @@ mod tests {
 
             let mut a: Vec<(usize, usize, usize)> = from_stream
                 .iter()
-                .map(|m| (m.pos_a, m.pos_b, m.len))
+                .map(|m| (m.a.range.start_offset, m.b.range.start_offset, m.len()))
                 .collect();
             let mut b: Vec<(usize, usize, usize)> = from_pair
                 .iter()
-                .map(|m| (m.pos_a, m.pos_b, m.len))
+                .map(|m| (m.a.range.start_offset, m.b.range.start_offset, m.len()))
                 .collect();
             a.sort();
             a.dedup();
