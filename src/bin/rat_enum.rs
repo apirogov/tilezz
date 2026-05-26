@@ -295,6 +295,7 @@ fn run_rat_enum_polylines(ring: u8, max_steps: usize, n_threads: usize) -> Vec<V
         16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, n_threads)),
         20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, n_threads)),
         24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, n_threads)),
+        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, n_threads)),
         60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, n_threads)),
         _ => panic!("invalid ring selected"),
     }
@@ -359,6 +360,7 @@ fn run_rat_enum_seqs(ring: u8, max_steps: usize, n_threads: usize) -> Vec<Vec<i8
         16 => enumerate_dispatch::<ZZ16>,
         20 => enumerate_dispatch::<ZZ20>,
         24 => enumerate_dispatch::<ZZ24>,
+        32 => enumerate_dispatch::<ZZ32>,
         60 => enumerate_dispatch::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
