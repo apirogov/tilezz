@@ -80,20 +80,52 @@ pub trait IntersectUnitSegments: Sized {
 /// Integer cell coordinates `(floor(Re(self)), floor(Im(self)))` for
 /// spatial bucketing in `intgeom::grid::UnitSquareGrid`.
 ///
-/// Implementation strategy per ring:
+/// Two entry points:
+///
+/// * [`cell_floor`](Self::cell_floor) -- the fast path. Returns the
+///   f64-only floor of `complex64()`. In debug builds it cross-checks
+///   against `cell_floor_exact` via `debug_assert_eq!`. This is what
+///   the grid uses in the hot path (spatial bucketing only needs
+///   deterministic answers, not bit-exact ones at boundary points).
+///
+/// * [`cell_floor_exact`](Self::cell_floor_exact) -- the slow path,
+///   ~20% of `patch_enum`/`rat_enum` runtime when called per insertion.
+///   Per-ring impls use the f64 floor as a hint, then verify each axis
+///   via integer ring arithmetic + `re_sign`/`im_sign` checks. f64 is
+///   only a hint; output is bit-exact.
+///
+/// Per-ring exact implementation strategy:
 ///
 /// * For rings containing `i` (`HasZZ4`-style: ZZ4, ZZ8, ZZ12, ZZ16,
-///   ZZ20, ZZ24, ZZ32, ZZ60): use `complex64().floor()` as an f64 guess
-///   then verify exactly via integer ring arithmetic + `re_sign`/
-///   `im_sign` checks. f64 is only a hint -- the output is bit-exact.
-/// * For rings without `i` (today: ZZ10): we can't construct `k * i` as
-///   a ring element to verify the imaginary axis exactly, so we fall
-///   back to the unverified f64 path. The grid concept itself implies
-///   axis-aligned cells, which is most natural for `HasZZ4` rings;
-///   non-`HasZZ4` rings would only land in pathological boundary cases
-///   if the trace happens to graze an integer line.
-pub trait CellFloor {
-    fn cell_floor(&self) -> (i64, i64);
+///   ZZ20, ZZ24, ZZ32, ZZ60): cell-corner construction goes through
+///   `From<(i64, i64)>` and verification through the `rect_signs`
+///   primitive.
+/// * For rings without `i` (today: ZZ10): per-axis sign verification
+///   using ring-specific shifted-sign primitives (no `i` needed).
+pub trait CellFloor: SymNum {
+    /// Exact `(floor(Re), floor(Im))`. Bit-exact at every point; can
+    /// disagree with the fast `cell_floor` only on the measure-zero
+    /// set of points exactly on a half-integer grid line.
+    fn cell_floor_exact(&self) -> (i64, i64);
+
+    /// Fast `(floor(Re), floor(Im))` via f64. In debug builds,
+    /// `debug_assert_eq!`s against `cell_floor_exact` so any
+    /// boundary-case divergence shows up in tests.
+    ///
+    /// Canonical ring elements with small integer coefficients
+    /// essentially never land exactly on a half-integer line, so the
+    /// fast path matches the exact path in practice.
+    #[inline]
+    fn cell_floor(&self) -> (i64, i64) {
+        let c = self.complex64();
+        let fast = (c.re.floor() as i64, c.im.floor() as i64);
+        debug_assert_eq!(
+            fast,
+            self.cell_floor_exact(),
+            "fast cell_floor disagrees with cell_floor_exact",
+        );
+        fast
+    }
 }
 
 /// Predicate "this point is within Euclidean radius `r` of the origin",

@@ -98,7 +98,7 @@ macro_rules! impl_cell_floor_via_sign_verify {
     ($name:ident) => {
         impl $crate::cyclotomic::CellFloor for $name {
             #[inline]
-            fn cell_floor(&self) -> (i64, i64) {
+            fn cell_floor_exact(&self) -> (i64, i64) {
                 use $crate::cyclotomic::SymNum;
                 use $crate::cyclotomic::geometry::rect_signs;
                 let c = self.complex64();
@@ -737,7 +737,7 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
 /// benchmark-blessed ring.
 impl crate::cyclotomic::CellFloor for ZZ12 {
     #[inline]
-    fn cell_floor(&self) -> (i64, i64) {
+    fn cell_floor_exact(&self) -> (i64, i64) {
         use crate::cyclotomic::SymNum;
         let [a, b, c, d] = self.int_coeffs();
         let re_m = 2 * a + c;
@@ -1556,7 +1556,7 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ10 {
 /// Im axis verify: `sign(Im(z) - cy) = sign_p_b2_plus_q_b3_minus_k(im_p, im_q, 4*cy)`.
 impl crate::cyclotomic::CellFloor for ZZ10 {
     #[inline]
-    fn cell_floor(&self) -> (i64, i64) {
+    fn cell_floor_exact(&self) -> (i64, i64) {
         use crate::cyclotomic::SymNum;
         let coeffs = self.int_coeffs();
         let (re_m, re_n) = re_components_zz10(&coeffs);
