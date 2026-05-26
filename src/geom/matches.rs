@@ -158,6 +158,66 @@ impl Segment {
     }
 }
 
+/// A maximal contiguous range of edges on a **patch boundary**,
+/// anchored to the tile-segment that occupies it.
+///
+/// Where [`Segment`] is "a range of edges on a tile" (anchored by
+/// `tile_id` to a tile in some `TileSet`), `PatchSegment` is the
+/// analogous patch-side concept: "a range of edges on the patch's
+/// boundary, identified with the tile-segment whose edges occupy
+/// those positions".
+///
+/// # Convention
+///
+/// Within the patch range, position `k` (counting from
+/// `range.start_offset`) corresponds to tile-offset
+/// `(tile_seg.range.start_offset + k) mod tile_len`. Forward
+/// identification on both sides -- the patch edge at the given
+/// position **is** that tile edge (same edge in space, not glued).
+/// Contrast [`PatchMatch`] (same shape but different semantic: the
+/// edges *would* match anti-parallel under a glue, not currently
+/// identical).
+///
+/// # Cyclic-vs-linear caveat
+///
+/// The patch boundary is cyclic but `PatchSegment`s are typically
+/// produced from the linear array `[0, n)`. If position 0 is not a
+/// junction, a single cyclic tile-instance run that straddles
+/// position 0 is split into two linear `PatchSegment`s -- one at
+/// the start and one at the end. Both have the same
+/// `tile_seg.tile_id`, and their tile-offsets are cyclically
+/// continuous. Callers that need true cyclic runs must stitch these
+/// two halves themselves.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+)]
+pub struct PatchSegment {
+    /// Range on the patch boundary.
+    pub range: EdgeRange,
+    /// The tile-segment whose edges occupy those patch positions.
+    /// `tile_seg.range.len` equals `range.len` by construction.
+    pub tile_seg: Segment,
+}
+
+impl PatchSegment {
+    pub fn new(range: EdgeRange, tile_seg: Segment) -> Self {
+        debug_assert_eq!(
+            range.len, tile_seg.range.len,
+            "PatchSegment: range and tile_seg.range must have equal length",
+        );
+        Self { range, tile_seg }
+    }
+
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.range.len, self.tile_seg.range.len);
+        self.range.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
 /// Match with a tile id only on the B side. The A side is anonymous
 /// because it's typically a patch's running boundary, not a tile drawn
 /// from a `TileSet`.
