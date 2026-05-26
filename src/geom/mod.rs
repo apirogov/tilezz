@@ -1,4 +1,8 @@
 //! Data structures for intrinsic, integer-based geometry.
+//!
+//! Tiles, patches, snakes, rats, glue mechanics, and the angle / edge
+//! primitives they're built on. Higher-level enumeration / classification
+//! over these shapes lives in [`crate::analysis`].
 
 pub mod angles;
 
@@ -14,10 +18,4 @@ pub mod tileset;
 
 pub mod glue;
 
-pub mod matchtypes;
-
-pub mod vertextypes;
-
 pub mod patch;
-
-pub mod neighborhood;

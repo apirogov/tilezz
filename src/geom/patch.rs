@@ -8,7 +8,7 @@ use crate::geom::angles;
 use crate::geom::glue;
 use crate::geom::glue::junctions_glueable;
 use crate::geom::grid::UnitSquareGrid;
-use crate::geom::matchtypes::MatchTypeIndex;
+use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
@@ -93,7 +93,7 @@ pub(crate) struct TileSegment {
 ///   (modulo `tile_len`).
 /// * `b.tile_id` indexes into the patch's [`TileSet`].
 ///
-/// (Same convention as the lower-level [`TileMatch`](crate::geom::matchtypes::TileMatch).)
+/// (Same convention as the lower-level [`TileMatch`](crate::analysis::matchtypes::TileMatch).)
 pub use crate::matches::PatchMatch;
 
 /// An **open** junction vertex: the arrangement of tiles meeting at a
@@ -2423,7 +2423,7 @@ fn dir_of_edge<T: IsRing>(from: T, to: T) -> i8 {
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
-    use crate::geom::matchtypes::MatchTypeIndex;
+    use crate::analysis::matchtypes::MatchTypeIndex;
     use crate::geom::snake::Snake;
     use crate::geom::tiles;
     use std::collections::BTreeMap;

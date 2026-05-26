@@ -18,12 +18,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12};
-use tilezz::geom::neighborhood::{self, NeighborhoodIndex};
+use tilezz::analysis::neighborhood::{self, NeighborhoodIndex};
 use tilezz::geom::rat::Rat;
 use tilezz::geom::tileset::{self, TileSet};
-use tilezz::geom::vertextypes::{self, OpenVertexTypeIndex};
+use tilezz::analysis::vertextypes::{self, OpenVertexTypeIndex};
 use tilezz::misc::profile::ProfileGuard;
-use tilezz::misc::seq_explorer::{self, check_fixed_point, SeqExplorer};
+use tilezz::analysis::seq_explorer::{self, check_fixed_point, SeqExplorer};
 
 #[derive(Parser)]
 #[command(
