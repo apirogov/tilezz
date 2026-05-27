@@ -244,8 +244,13 @@ impl BitParallelMatcher {
         matches
     }
 
-    /// Same as [`Self::maximal_rc_matches`] but restricted to matches
-    /// whose A-side starting position is in `positions`.
+    /// Same as [`Self::maximal_rc_matches`] but **post-filtered** to
+    /// keep only matches whose A-side starting position is in
+    /// `positions`. The cost is unchanged from `maximal_rc_matches` --
+    /// the matcher still does a full sweep, the filter only shrinks
+    /// the returned `Vec`. Callers with very small `positions` against
+    /// large tiles won't see a speedup; this exists purely for
+    /// caller convenience.
     pub fn maximal_rc_matches_at_positions(
         &self,
         i: usize,
