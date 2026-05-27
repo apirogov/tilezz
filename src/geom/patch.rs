@@ -64,7 +64,7 @@ pub use crate::geom::matches::PatchMatch;
 /// These invariants are upheld by [`GrowingPatch::add_tile`] (geometric
 /// collision check via the spatial grid, plus the angle-matching
 /// constraints) and by [`GrowingPatch::construct_witness_from_vt_sequence`]
-/// (which additionally rejects ±hturn boundary junctions). Several
+/// (which additionally rejects +/-hturn boundary junctions). Several
 /// pieces of internal code rely on hole-freeness for correctness; the
 /// relevant comments cite this invariant where it matters.
 /// A patch *before* the first glue: just a seed tile plus a cache of
@@ -186,13 +186,12 @@ fn update_inner_chains(
     // (`seg_len_new == 0`, hence `new_n == seg_len_old`), its CW and
     // CCW match endpoints collapse to a single new boundary vertex at
     // index 0. Both chains apply there; concat with chain_cw first
-    // (going CW boundary edge → interior → CCW boundary edge passes
+    // (going CW boundary edge -> interior -> CCW boundary edge passes
     // through the pm.a_range.start_offset-side first, then the ccw_pos-side).
     // The petal's own perimeter contributions are not represented in
     // inner_chains (same convention as the normal-glue path which
     // also only records consumed-adjacency tile edges).
     if new_n == seg_len_old {
-        debug_assert_eq!(seg_len_old, new_n, "keystone glue invariant");
         let mut merged = chain_cw;
         merged.extend(chain_ccw);
         new_inner[0] = merged;
@@ -207,7 +206,7 @@ fn update_inner_chains(
 /// Raw boundary representation used during witness construction.
 ///
 /// Like [`GrowingPatch`], a `RawBoundary` describes the outline of a
-/// hole-free, edge-to-edge tiling — it carries the same per-position
+/// hole-free, edge-to-edge tiling -- it carries the same per-position
 /// angle / edge / inner-chain / patch-tile-id data, but without the
 /// spatial-grid bookkeeping needed for incremental glue checks. The
 /// hole-free invariant applies here too: code that consumes a
@@ -223,7 +222,7 @@ struct RawBoundary {
 /// Result of [`glue_match_to_raw_boundary`].
 ///
 /// `new_junc_pos` is the index, in the resulting `boundary`, of the
-/// junction at the CCW end of the match — i.e. the first new-tile edge.
+/// junction at the CCW end of the match -- i.e. the first new-tile edge.
 /// Equivalently, it equals `old_survivor_len` (see the **rotation
 /// convention** documented on [`glue_match_to_raw_boundary`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -274,7 +273,7 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
 /// [`glue_tile_to_raw_boundary`] satisfies this by computing
 /// `pm.len() = forward_match_length(...)` (canonical max) before
 /// constructing the `PatchMatch`. Callers passing `pm` directly are
-/// responsible for ensuring the same invariant — there is no
+/// responsible for ensuring the same invariant -- there is no
 /// post-glue Snake/grid check on this path (the result is a
 /// `RawBoundary` consumed by [`GrowingPatch::from_parts`], which
 /// trusts the caller).
@@ -304,10 +303,10 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
 /// positions relative to it, so they don't need an explicit remap.
 ///
 /// This rotation is mandatory in some form because the boundary length
-/// changes (`old_n → old_n - pm.len() + new_tile_seg_len`); positions in
+/// changes (`old_n -> old_n - pm.len() + new_tile_seg_len`); positions in
 /// the new array necessarily differ from positions in the old one. The
-/// "anchor at CCW survivor" choice keeps the formula uniform — a single
-/// modular subtraction — and matches what's most natural for callers
+/// "anchor at CCW survivor" choice keeps the formula uniform -- a single
+/// modular subtraction -- and matches what's most natural for callers
 /// that just glued at a junction and want the next junction's index.
 fn glue_match_to_raw_boundary<T: IsRing>(
     boundary: &RawBoundary,
@@ -326,24 +325,19 @@ fn glue_match_to_raw_boundary<T: IsRing>(
     }
 
     // Pre-check the caller contract from the doc comment: `pm` must
-    // describe a real match. Verifying this here keeps misuse from
-    // silently passing through `glue_raw_angles` to a nonsensical
-    // boundary downstream.
-    debug_assert_eq!(
+    // describe a real match. `forward_match_length` returns the
+    // canonical-max k such that the first k edges from (start_a,
+    // start_b) all satisfy the revcomp relation -- any claim of
+    // mlen <= k is a valid (canonical or prefix) match.
+    debug_assert!(
         forward_match_length(
             &boundary.angles,
             pm.a_range.start_offset,
             tile_seq,
             pm.b.range.start_offset,
-        )
-        .min({
-            // forward_match_length stops at first mismatch; cap at the
-            // claimed mlen so we accept the canonical-or-prefix case.
-            mlen
-        }),
-        mlen,
-        "glue_match_to_raw_boundary: pm must describe a real match \
-         (a_range.start_offset={}, b.range.start_offset={}, len={})",
+        ) >= mlen,
+        "glue_match_to_raw_boundary: pm does not describe a real match \
+         (a_range.start_offset={}, b.range.start_offset={}, mlen={})",
         pm.a_range.start_offset,
         pm.b.range.start_offset,
         mlen,
@@ -402,7 +396,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
 /// are stacked CCW from the CW side.
 ///
 /// Returns a vector of length `1 + |inner| + 1` where:
-///  * `result[0]` is the boundary angle with only the CW tile present —
+///  * `result[0]` is the boundary angle with only the CW tile present --
 ///    that is, the internal angle of `vtype.cw`'s tile at the junction
 ///    vertex (the corner just CCW of `cw.tile_offset`).
 ///  * Each subsequent entry is the new boundary angle after adding one
@@ -410,7 +404,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
 ///    Geometrically: each petal eats away `hturn - petal_angle` from the
 ///    remaining boundary angle.
 ///  * `result.last()` is the boundary angle once all petals (inner +
-///    ccw) are in place — this is what the witness boundary should show
+///    ccw) are in place -- this is what the witness boundary should show
 ///    at the junction position.
 ///
 /// For convex tiles (positive internal angles), the sequence is
@@ -575,9 +569,9 @@ impl<T: IsRing> GrowingPatch<T> {
     /// [`OpenVertexType`] at one of its boundary junction positions.
     ///
     /// Returns the resulting patch and the junction position `wpos` within
-    /// it. Returns `None` if the witness cannot be realised — including
+    /// it. Returns `None` if the witness cannot be realised -- including
     /// the case where the requested vertex would close into a degenerate
-    /// (±hturn / pinched) boundary, which would violate the open-VT
+    /// (+/-hturn / pinched) boundary, which would violate the open-VT
     /// contract.
     pub fn construct_minimal_witness(
         vtype: &OpenVertexType,
@@ -595,8 +589,8 @@ impl<T: IsRing> GrowingPatch<T> {
     /// `vtypes` order.
     ///
     /// Returns `None` if any of the requested junctions cannot be realised
-    /// as an open boundary vertex — specifically, if a construction step
-    /// would produce a ±hturn (pinched / degenerate) boundary angle at a
+    /// as an open boundary vertex -- specifically, if a construction step
+    /// would produce a +/-hturn (pinched / degenerate) boundary angle at a
     /// tracked junction position. Since the function's contract is to
     /// deliver a chain of *open* boundary junctions, such a configuration
     /// is rejected rather than returned silently.
@@ -614,7 +608,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// For example: the 6 outer-corner junctions of a 7-hex full corona
     /// form a cyclic boundary trace (= they describe the full closed
     /// outer perimeter). Passing those 6 vtypes to this function does
-    /// **not** rebuild the corona's 18-edge boundary — it produces a
+    /// **not** rebuild the corona's 18-edge boundary -- it produces a
     /// 30-edge self-intersecting spiral of 7 tiles, with the 7th tile
     /// overlapping the seed.
     ///
@@ -626,16 +620,16 @@ impl<T: IsRing> GrowingPatch<T> {
     /// Each [`OpenVertexType`] carries the tile edges meeting at one
     /// boundary junction via its `cw`, `inner`, and `ccw` fields. This
     /// covers every tile *incident with the boundary* at that vertex.
-    /// **Tiles that are fully interior to the patch — i.e., have no
+    /// **Tiles that are fully interior to the patch -- i.e., have no
     /// vertex on the boundary, so they appear in no junction's `inner`
-    /// field — are not captured by any vtype and will not be placed by
+    /// field -- are not captured by any vtype and will not be placed by
     /// this function.**
     ///
     /// For the 7-hex full corona, this also bites: the central hex is
     /// fully interior with respect to the outer boundary and is in no
     /// outer junction's `inner`. Without the central's geometric
     /// constraint, `flower_petal_glue` lays the outer hexes out as a
-    /// curving chain rather than a corona — the chain spirals inward
+    /// curving chain rather than a corona -- the chain spirals inward
     /// instead of maintaining the spacing the central would force.
     ///
     /// # Summary of caller obligations
@@ -702,8 +696,8 @@ impl<T: IsRing> GrowingPatch<T> {
             &mut next_tile_id,
             &mut junc_positions,
         )?;
-        // Open-VT invariant: the reconstructed junction must not be ±hturn.
-        // A ±hturn boundary angle means the boundary doubles back at this
+        // Open-VT invariant: the reconstructed junction must not be +/-hturn.
+        // A +/-hturn boundary angle means the boundary doubles back at this
         // vertex (the vertex is closed/degenerate), which contradicts the
         // input being a sequence of open boundary junctions.
         if new_raw.angles[new_junc].abs() == T::hturn() {
@@ -1124,7 +1118,7 @@ impl<T: IsRing> GrowingPatch<T> {
         })
     }
 
-    /// `true` if boundary position `i` is a junction vertex — i.e.
+    /// `true` if boundary position `i` is a junction vertex -- i.e.
     /// the boundary angle there differs from the local tile's natural
     /// internal angle, meaning multiple tiles meet at this vertex.
     pub fn is_junction(&self, i: usize) -> bool {
@@ -1179,7 +1173,7 @@ impl<T: IsRing> GrowingPatch<T> {
 
     /// Attempt to glue the tile described by `pm` onto the current
     /// boundary. Returns `true` on success; `false` if the glue is
-    /// rejected (geometric collision, ±hturn junction, or invalid
+    /// rejected (geometric collision, +/-hturn junction, or invalid
     /// match dimensions). On failure the patch state is unchanged.
     ///
     /// # Caller contract
@@ -1189,7 +1183,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// or -- for hand construction -- built via [`Rat::get_match`] /
     /// [`forward_match_length`] and the boundary's own angle sequence.
     /// `add_tile` does **not** validate that `(pm.a_range.start_offset, pm.len(),
-    /// pm.b.range.start_offset)` describes a real match: it only checks ±hturn
+    /// pm.b.range.start_offset)` describes a real match: it only checks +/-hturn
     /// junction degeneracy and post-glue self-intersection. A bogus
     /// interval that happens to produce a non-self-intersecting
     /// polyline will be silently accepted with a geometrically
@@ -1286,7 +1280,7 @@ impl<T: IsRing> GrowingPatch<T> {
         //
         // Paths 1, 2, 4 are invariant violations that legitimate callers
         // (i.e. `get_all_matches`) never produce: bounds (1) are enforced by
-        // `forward_match_length`, the ±hturn rejection (2) is already done
+        // `forward_match_length`, the +/-hturn rejection (2) is already done
         // by `try_glue_precomputed` inside `get_all_matches`, and full
         // closure (4) is geometrically impossible since the patch interior
         // is already filled. The `debug_assert!`s catch any bugs in tests;
@@ -1312,7 +1306,7 @@ impl<T: IsRing> GrowingPatch<T> {
                     debug_assert!(
                         false,
                         "compute_glue_angles returned None; get_all_matches() \
-                         should already filter ±hturn glues via try_glue_precomputed"
+                         should already filter +/-hturn glues via try_glue_precomputed"
                     );
                     return false;
                 }
@@ -1323,7 +1317,7 @@ impl<T: IsRing> GrowingPatch<T> {
         let new_len = seg_len_old + seg_len_new;
         debug_assert!(
             new_len > 0,
-            "add_tile_growing: new_len == 0 is geometrically impossible — \
+            "add_tile_growing: new_len == 0 is geometrically impossible -- \
              would require placing the new tile entirely inside the existing patch"
         );
         if new_len == 0 {
@@ -1648,7 +1642,7 @@ fn enumerate_junction_candidates_at<T: IsRing>(
 /// # Caller contract
 ///
 /// Inherits the precondition from [`glue::glue_raw_angles`]: `pm` must
-/// describe a **real** match — `(pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)` must
+/// describe a **real** match -- `(pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)` must
 /// satisfy the revcomp relation on the `pm.len() - 1` interior angles.
 /// Obtain `pm` from `GrowingPatch::get_all_matches` /
 /// `GrowingPatch::get_matches_touching_vertex` /
@@ -1788,7 +1782,7 @@ impl<T: IsRing> BoundaryGrid<T> {
 /// `to - from` is a unit vector in the cyclotomic ring. This is enforced
 /// upstream by [`trace_boundary_positions`] and the live patch growth
 /// path (every boundary edge is constructed as a single unit step). A
-/// failure here means upstream broke the unit-edge invariant — an
+/// failure here means upstream broke the unit-edge invariant -- an
 /// internal bug, not bad input.
 fn dir_of_edge<T: IsRing>(from: T, to: T) -> i8 {
     let d = to - from;
@@ -1929,11 +1923,11 @@ mod tests {
 
     /// User-suggested hollow-ring construction: build a curving chain
     /// of hexagons by always gluing the latest hex's edge 1 to the
-    /// new hex's edge 5 (= a 60° wedge angle, so the chain curves
+    /// new hex's edge 5 (= a 60 deg wedge angle, so the chain curves
     /// inward). The first 4 glues succeed and produce a 5-hex C
     /// around an empty hex-shaped center. The 5th glue (= closing
     /// into a 6-hex hollow ring around the empty center) would
-    /// produce a non-simply-connected patch with a hole — which
+    /// produce a non-simply-connected patch with a hole -- which
     /// `GrowingPatch::add_tile` correctly rejects.
     ///
     /// At each step the latest hex's edge 1 sits at boundary position
@@ -2002,7 +1996,7 @@ mod tests {
 
     /// Build a 7-hex full corona (1 central + 6 ring tiles) via the
     /// user-suggested approach: glue the central as the FIRST chain
-    /// step, then continue the same curving "edge 1 → edge 5"
+    /// step, then continue the same curving "edge 1 -> edge 5"
     /// pattern. Returns the patch.
     ///
     /// Step 1 glues central to hex_0's edge 0 (`start_a = 0`,
@@ -2057,7 +2051,7 @@ mod tests {
     /// User-flagged invariant (2): the 7-hex full corona's outer
     /// boundary has 18 edges and 6 junctions. Feeding that vt_seq
     /// to `construct_witness_from_vt_sequence` does NOT produce the
-    /// 7-hex full corona — it produces a 7-hex CHAIN with boundary
+    /// 7-hex full corona -- it produces a 7-hex CHAIN with boundary
     /// length 30 (= 6 adjacencies, no closure). The vt_seq encodes a
     /// chain of 6 junctions but doesn't enforce the closing
     /// adjacency that would form the ring.
@@ -2065,7 +2059,7 @@ mod tests {
     /// So neither "hollow ring" (= 6 hexes around empty center) nor
     /// "full corona" (= 7 hexes around central) is produced by
     /// minimal-witness reconstruction. The function returns a chain
-    /// — a different geometric shape that also realizes 6 junctions.
+    /// -- a different geometric shape that also realizes 6 junctions.
     ///
     /// This documents the actual current behavior. It means closed
     /// SurroundedTile entries (which carry the corona's outer
@@ -2100,7 +2094,7 @@ mod tests {
         for vt in &vt_seq {
             assert!(
                 vt.inner.is_empty(),
-                "outer-corner junctions have empty inner — central not captured"
+                "outer-corner junctions have empty inner -- central not captured"
             );
         }
         let mi = Arc::clone(gp.match_index());
@@ -2110,12 +2104,12 @@ mod tests {
             rebuilt.boundary_len(),
             30,
             "reconstruction places 7 tiles in a spiral (wrong) instead of 6 \
-             corona tiles around the central — the central's constraint is \
+             corona tiles around the central -- the central's constraint is \
              missing from the vt_seq."
         );
         assert!(
             Snake::<ZZ12>::try_from(rebuilt.angles()).is_err(),
-            "the spiral self-intersects — Snake rejects, but \
+            "the spiral self-intersects -- Snake rejects, but \
              construct_witness_from_vt_sequence does not validate."
         );
     }
@@ -2123,7 +2117,7 @@ mod tests {
     /// Pure unit tests for [`cyclic_range_contains`]. Computed via the
     /// brute reference "which vertices does a `len`-edge match anchored
     /// at `start` touch on a cyclic boundary of length `n`?":
-    /// vertices `{start, start+1, …, start+len}` modulo `n` (i.e.
+    /// vertices `{start, start+1, ..., start+len}` modulo `n` (i.e.
     /// `len + 1` vertices).
     ///
     /// Regression: the previous implementation had a wrap-around bug
@@ -2136,7 +2130,7 @@ mod tests {
     /// `start + len == n` exact-fit boundary case.
     #[test]
     fn cyclic_range_contains_unit() {
-        // (start, len, n) → set of vertex indices the match touches.
+        // (start, len, n) -> set of vertex indices the match touches.
         fn brute(start: usize, len: usize, n: usize) -> std::collections::BTreeSet<usize> {
             if len == 0 || n == 0 {
                 return std::collections::BTreeSet::new();
@@ -2168,8 +2162,8 @@ mod tests {
         }
 
         // Edge cases.
-        assert!(!cyclic_range_contains(0, 0, 0, 10), "len=0 → false");
-        assert!(!cyclic_range_contains(0, 5, 0, 0), "n=0 → false");
+        assert!(!cyclic_range_contains(0, 0, 0, 10), "len=0 -> false");
+        assert!(!cyclic_range_contains(0, 5, 0, 0), "n=0 -> false");
     }
 
     /// Pure unit test for [`cyclic_arcs_overlap`]. Exhaustively
@@ -2218,7 +2212,7 @@ mod tests {
             !cyclic_arcs_overlap(0, 5, 0, 0, 10),
             "empty arc never overlaps (other side)"
         );
-        assert!(!cyclic_arcs_overlap(0, 5, 0, 5, 0), "n=0 → false");
+        assert!(!cyclic_arcs_overlap(0, 5, 0, 5, 0), "n=0 -> false");
         assert!(
             cyclic_arcs_overlap(0, 10, 5, 1, 10),
             "full-cycle A vs any non-empty B"
@@ -2337,7 +2331,7 @@ mod tests {
     /// `normalize()` on trial patches for speed.
     ///
     /// Rationale: `OpenVertexType` is built from `cw`, `inner`, and
-    /// `ccw` fields, all `EdgeInfo` (= `tile_id` + `tile_offset`) —
+    /// `ccw` fields, all `EdgeInfo` (= `tile_id` + `tile_offset`) --
     /// never `patch_tile_id`. And the set of consecutive pairs on a
     /// cyclic boundary is rotation-invariant. So normalize, which
     /// only rotates the boundary and renumbers `patch_tile_id`s,
@@ -2428,26 +2422,26 @@ mod tests {
         // pinned. Each step keeps the cumulative patch simply
         // connected. Pinning the literals avoids the brute search.
         let glues = [
-            // boundary 4 → 6: attach a strip-mate to the seed square.
+            // boundary 4 -> 6: attach a strip-mate to the seed square.
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(0, 1))),
-            // boundary 6 → 8: extend the row.
+            // boundary 6 -> 8: extend the row.
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
-            // boundary 8 → 10: extend again to make a 1×3 row.
+            // boundary 8 -> 10: extend again to make a 1x3 row.
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
-            // boundary 10 → 12: turn upward, starting the right column.
+            // boundary 10 -> 12: turn upward, starting the right column.
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
-            // boundary 12 → 12: continue upward.
+            // boundary 12 -> 12: continue upward.
             PatchMatch::new(EdgeRange::new(2, 2), Segment::new(0, EdgeRange::new(1, 2))),
-            // boundary 12 → 12: wrap left along the top.
+            // boundary 12 -> 12: wrap left along the top.
             PatchMatch::new(EdgeRange::new(1, 2), Segment::new(0, EdgeRange::new(1, 2))),
-            // boundary 12 → 12: drop into the inner tile (1, 1).
+            // boundary 12 -> 12: drop into the inner tile (1, 1).
             PatchMatch::new(EdgeRange::new(1, 2), Segment::new(0, EdgeRange::new(1, 2))),
         ];
         build_from_glues(square_seed(), &glues, "3x3-minus-corner fixture")
     }
 
     /// User-suggested scenario: 8 unit squares forming a 3x3 grid
-    /// minus the top-left corner — a simply-connected patch with a
+    /// minus the top-left corner -- a simply-connected patch with a
     /// concave notch where the missing tile would be. Extract the
     /// boundary's vt_seq (7 junctions: 6 "straight" tile-tile
     /// boundaries + 1 concave-notch corner) and feed it into
@@ -2455,7 +2449,7 @@ mod tests {
     ///
     /// `construct_witness_from_vt_sequence` glues tiles one at a
     /// time around the seq, which on this input does NOT need the
-    /// inner tile (1, 1) — the minimal witness for these 7 junctions
+    /// inner tile (1, 1) -- the minimal witness for these 7 junctions
     /// is the 7-tile ring of corner+edge tiles around the notch. The
     /// reconstruction therefore succeeds without ever hitting a
     /// seg_len_new == 0 keystone glue. Pin: rebuilt.boundary_len ==
@@ -3029,7 +3023,7 @@ mod tests {
 
             // For these fixtures (bi-hex and bi-square), the brute patch
             // *is* the minimum-witness shape, so witness and brute should
-            // describe the same closed shape — same boundary up to
+            // describe the same closed shape -- same boundary up to
             // cyclic rotation.
             assert_same_cyclic_shape(
                 witness.angles(),
@@ -3395,7 +3389,7 @@ mod tests {
     /// Snapshot of externally observable patch state plus a probe of the
     /// internal spatial grid via candidate accept/reject classification.
     /// Two patches with equal snapshots behave identically against further
-    /// `add_tile` attempts — grid corruption would show up as a different
+    /// `add_tile` attempts -- grid corruption would show up as a different
     /// reject set even when angles/edges/etc. are still equal.
     fn classify_candidates<T: IsRing>(gp: &GrowingPatch<T>) -> Vec<(PatchMatch, bool)> {
         let mut results: Vec<(PatchMatch, bool)> = gp
@@ -3444,7 +3438,7 @@ mod tests {
     }
 
     /// The only legitimate rejection path in `add_tile_growing` is the
-    /// geometric collision check (`check_edge_clear`) — paths 1, 2, 4
+    /// geometric collision check (`check_edge_clear`) -- paths 1, 2, 4
     /// are invariants that legitimate callers (`get_all_matches`) never
     /// violate. This test exercises path 3 against a 2-spectre patch and
     /// asserts that the full patch state (plus a grid probe via candidate
@@ -3524,9 +3518,9 @@ mod tests {
     /// but compose it differently. They must agree on accept/reject for
     /// every candidate.
     ///
-    /// Skips candidates that would produce ±hturn (Snake panics on hturn,
+    /// Skips candidates that would produce +/-hturn (Snake panics on hturn,
     /// and `compute_glue_angles` would have already rejected them at the
-    /// add_tile level — the two paths trivially agree there).
+    /// add_tile level -- the two paths trivially agree there).
     #[test]
     fn add_tile_decision_agrees_with_snake_on_spectre() {
         let ts: Arc<TileSet<ZZ12>> =
@@ -3566,7 +3560,7 @@ mod tests {
 
     /// After every successful `add_tile`, the resulting boundary should
     /// be a valid (non-self-intersecting) closed Snake polygon. Spectre
-    /// is the right fixture because it has a non-convex shape — most of
+    /// is the right fixture because it has a non-convex shape -- most of
     /// the candidate boundaries are non-trivial.
     #[test]
     fn growing_patch_boundary_validates_as_snake_through_growth() {
@@ -3742,8 +3736,8 @@ mod tests {
             // otherwise this cross-check is circular (a bug in
             // `cyclic_range_contains` would affect both sides
             // identically and pass). We instead use an explicit
-            // "vertex `target` is in `{start, start+1, …, start+len}`
-            // mod n" check via modular arithmetic — independent of the
+            // "vertex `target` is in `{start, start+1, ..., start+len}`
+            // mod n" check via modular arithmetic -- independent of the
             // function under test.
             let touching_brute: std::collections::BTreeSet<(usize, usize, usize, usize)> =
                 brute_set
@@ -3889,7 +3883,7 @@ mod tests {
             segs.iter().map(|s| s.range.start_offset).collect();
         assert_eq!(
             actual_starts, expected_starts,
-            "segment starts must equal {{0}} ∪ junctions"
+            "segment starts must equal {{0}} union junctions"
         );
     }
 
@@ -4020,7 +4014,7 @@ mod tests {
     /// 18 boundary edges and 6 junctions arranged symmetrically.
     ///
     /// Construction picks each glue by *resulting boundary length*:
-    /// start with a bi-hex (10 edges), then grow to 14 → 16 → 18.
+    /// start with a bi-hex (10 edges), then grow to 14 -> 16 -> 18.
     /// `five_hex_cross_structure` verifies the boundary symmetry,
     /// junction count, and tile-id pattern.
     ///
@@ -4029,7 +4023,7 @@ mod tests {
     /// returned first by `get_all_matches()` for each target
     /// boundary_len; if two pms produced the same length and the
     /// iteration order changed, we'd silently build a different
-    /// (equally-shaped) cross — caught by the structure test, but
+    /// (equally-shaped) cross -- caught by the structure test, but
     /// avoidable with a direct geometry-based fixture.
     fn five_hex_cross() -> GrowingPatch<ZZ12> {
         // Five hexagons arranged as a cross: one central hex with four
@@ -4240,7 +4234,7 @@ mod tests {
         rat.seq().to_vec()
     }
 
-    /// Build the T-tetromino — 4 unit squares in a T shape:
+    /// Build the T-tetromino -- 4 unit squares in a T shape:
     ///
     /// ```text
     ///     +---+
@@ -4262,7 +4256,7 @@ mod tests {
     fn t_tetromino() -> GrowingPatch<ZZ4> {
         // T-tetromino built incrementally as a chain of 4 unit
         // squares: pin each glue's PatchMatch directly. Boundary
-        // length grows 4 → 6 → 8 → 10.
+        // length grows 4 -> 6 -> 8 -> 10.
         let glues = [
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(0, 1))),
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
