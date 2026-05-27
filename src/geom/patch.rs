@@ -84,17 +84,15 @@ pub struct PatchSeed<T: IsRing> {
     cached_matches: Vec<PatchMatch>,
 }
 
-/// An incrementally grown, edge-to-edge tiling of a connected,
-/// hole-free region of the plane, after at least one tile has been
-/// glued. See module-level docstring for the topological invariants.
+/// Spatial collision-detection state for the boundary of a
+/// [`GrowingPatch`]. Bundles the polyline vertex positions, the
+/// `UnitSquareGrid` index, and the edge-id <-> endpoint bookkeeping
+/// used by the incremental `check_edge_clear` path.
 ///
-/// Construct via [`PatchSeed::grow`] (the seed-plus-first-glue path)
-/// or [`GrowingPatch::from_parts`] (restore from boundary data).
+/// # Stable edge IDs
 ///
-/// # Grid bookkeeping
-///
-/// The spatial grid uses **stable edge IDs** so incremental glue
-/// updates only touch the changed edges:
+/// The grid is keyed by **stable edge IDs** so glue splices only
+/// touch the changed edges:
 ///
 /// * `edge_data[id] -> (p1, p2)` for each edge ever created.
 /// * `boundary_edge_ids[pos] -> id` for the current boundary.
@@ -109,9 +107,27 @@ pub struct PatchSeed<T: IsRing> {
 /// patches in BFS enumeration; small handwritten fixtures) the
 /// overhead is small. For long-lived patches grown over many glues,
 /// pass through [`GrowingPatch::from_parts`] to rebuild the grid
-/// from `angles`/`edges`/`inner_chains`/`patch_tile_ids` --
-/// `from_parts` re-traces positions, builds a fresh grid, and
-/// resets `boundary_edge_ids` to `(0..n)`, dropping all tombstones.
+/// from scratch -- `from_parts` re-traces positions, builds a fresh
+/// grid, and resets `boundary_edge_ids` to `(0..n)`, dropping all
+/// tombstones.
+#[derive(Clone, Default)]
+struct BoundaryGrid<T: IsRing> {
+    /// Polyline vertex positions. Length = `boundary_len + 1`; the
+    /// closing vertex (`positions[0]`) is repeated at the end so
+    /// each edge `i` has endpoints `positions[i]`, `positions[i+1]`.
+    positions: Vec<T>,
+    grid: UnitSquareGrid,
+    edge_data: Vec<(T, T)>,
+    boundary_edge_ids: Vec<usize>,
+    next_edge_id: usize,
+}
+
+/// An incrementally grown, edge-to-edge tiling of a connected,
+/// hole-free region of the plane, after at least one tile has been
+/// glued. See module-level docstring for the topological invariants.
+///
+/// Construct via [`PatchSeed::grow`] (the seed-plus-first-glue path)
+/// or [`GrowingPatch::from_parts`] (restore from boundary data).
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsRing> {
     match_index: Arc<MatchTypeIndex<T>>,
@@ -119,11 +135,7 @@ pub struct GrowingPatch<T: IsRing> {
     edges: Vec<EdgeInfo>,
     candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
     inner_chains: Vec<Vec<EdgeInfo>>,
-    positions: Vec<T>,
-    grid: UnitSquareGrid,
-    edge_data: Vec<(T, T)>,
-    boundary_edge_ids: Vec<usize>,
-    next_edge_id: usize,
+    boundary: BoundaryGrid<T>,
     patch_tile_ids: Vec<usize>,
     next_tile_id: usize,
 }
@@ -511,9 +523,8 @@ impl<T: IsRing> GrowingPatch<T> {
     /// `patch_tile_ids`).
     ///
     /// **Caveats -- derived state is rebuilt, not restored.** This
-    /// constructor recomputes the spatial grid (`grid`, `edge_data`,
-    /// `boundary_edge_ids`, `next_edge_id`) from `angles` via
-    /// `trace_boundary_positions` + `build_boundary_grid`. Specifically:
+    /// constructor recomputes the spatial [`BoundaryGrid`] from
+    /// `angles` via [`BoundaryGrid::from_angles`]. Specifically:
     /// `boundary_edge_ids` is set to `(0..n).collect()` regardless of
     /// any pre-existing identification scheme, and `candidates_by_start`
     /// is left as `None` (will be filled on demand). Use this when you
@@ -534,21 +545,14 @@ impl<T: IsRing> GrowingPatch<T> {
         {
             return None;
         }
-        let n = angles.len();
-        let positions = trace_boundary_positions::<T>(&angles);
-        let (grid, edge_data, boundary_edge_ids, next_edge_id) =
-            build_boundary_grid::<T>(&positions, n);
+        let boundary = BoundaryGrid::<T>::from_angles(&angles);
         Some(GrowingPatch {
             match_index,
             angles,
             edges,
             candidates_by_start: None,
             inner_chains,
-            positions,
-            grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
+            boundary,
             patch_tile_ids,
             next_tile_id,
         })
@@ -1052,14 +1056,14 @@ impl<T: IsRing> GrowingPatch<T> {
             self.edges.rotate_left(rot);
             self.inner_chains.rotate_left(rot);
             self.patch_tile_ids.rotate_left(rot);
-            self.boundary_edge_ids.rotate_left(rot);
+            self.boundary.boundary_edge_ids.rotate_left(rot);
             // `positions` has n + 1 entries (closing vertex repeated). Rotate
             // only the first n; the closing entry is always positions[0].
-            let last_idx = self.positions.len() - 1;
-            self.positions.truncate(last_idx);
-            self.positions.rotate_left(rot);
-            let first = self.positions[0];
-            self.positions.push(first);
+            let last_idx = self.boundary.positions.len() - 1;
+            self.boundary.positions.truncate(last_idx);
+            self.boundary.positions.rotate_left(rot);
+            let first = self.boundary.positions[0];
+            self.boundary.positions.push(first);
         }
 
         let mut remap: rustc_hash::FxHashMap<usize, usize> = rustc_hash::FxHashMap::default();
@@ -1234,9 +1238,7 @@ impl<T: IsRing> GrowingPatch<T> {
             return None;
         }
 
-        let positions = trace_boundary_positions::<T>(&new_angles);
-        let (grid, edge_data, boundary_edge_ids, next_edge_id) =
-            build_boundary_grid::<T>(&positions, new_len);
+        let boundary = BoundaryGrid::<T>::from_angles(&new_angles);
 
         // Synthesize the seed's "old edges" so we can share build_glued_edges
         // with the growing path. The seed occupies patch_tile_id 0; the
@@ -1260,11 +1262,7 @@ impl<T: IsRing> GrowingPatch<T> {
             edges,
             candidates_by_start: None,
             inner_chains,
-            positions,
-            grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
+            boundary,
             patch_tile_ids,
             next_tile_id: 2,
         })
@@ -1319,36 +1317,29 @@ impl<T: IsRing> GrowingPatch<T> {
             return false;
         }
 
-        // === Take state. Path 3 (geometric collision) is the only remaining
-        // rollback path; it mutates `grid`, so we must restore on failure. ===
-        let old_angles = std::mem::take(&mut self.angles);
-        let edges = std::mem::take(&mut self.edges);
-        let old_inner = std::mem::take(&mut self.inner_chains);
-        let positions = std::mem::take(&mut self.positions);
-        let mut grid = std::mem::take(&mut self.grid);
-        let edge_data = std::mem::take(&mut self.edge_data);
-        let boundary_edge_ids = std::mem::take(&mut self.boundary_edge_ids);
-        let next_edge_id = self.next_edge_id;
-        let patch_tile_ids = std::mem::take(&mut self.patch_tile_ids);
-        let next_tile_id = self.next_tile_id;
-
+        // Path 3 (geometric collision) is the only remaining rollback
+        // path. We unregister the matched edges from `self.boundary.grid`
+        // up front; on collision we re-register them and bail out, leaving
+        // every other field unchanged.
         let ccw_pos = (pm.a_range.start_offset + mlen) % n;
-
         let removed_ids: Vec<usize> = (0..mlen)
-            .map(|i| boundary_edge_ids[(pm.a_range.start_offset + i) % n])
+            .map(|i| self.boundary.boundary_edge_ids[(pm.a_range.start_offset + i) % n])
             .collect();
 
         for &id in &removed_ids {
-            unregister_edge::<T>(&mut grid, &edge_data, id);
+            self.boundary.unregister_edge(id);
         }
 
         // Trace the new tile's boundary positions, starting from the CW
         // junction and walking the new-tile half of `new_angles`.
-        let cw_junction = positions[pm.a_range.start_offset];
-        let ccw_junction = positions[ccw_pos];
+        let cw_junction = self.boundary.positions[pm.a_range.start_offset];
+        let ccw_junction = self.boundary.positions[ccw_pos];
         let initial_dir = {
             let prev = (pm.a_range.start_offset + n - 1) % n;
-            dir_of_edge::<T>(positions[prev], positions[pm.a_range.start_offset])
+            dir_of_edge::<T>(
+                self.boundary.positions[prev],
+                self.boundary.positions[pm.a_range.start_offset],
+            )
         };
         let new_tile_positions =
             trace_polyline_from::<T>(cw_junction, initial_dir, &new_angles[seg_len_old..]);
@@ -1362,100 +1353,64 @@ impl<T: IsRing> GrowingPatch<T> {
         // segments don't cross any surviving boundary segment. The new
         // tile's final endpoint is allowed to coincide with `ccw_junction`
         // (that's where it rejoins the existing boundary).
-        let all_clear = edges_all_clear::<T>(&grid, &edge_data, &new_tile_positions, ccw_junction);
-
-        if !all_clear {
+        if !self
+            .boundary
+            .polyline_all_clear(&new_tile_positions, ccw_junction)
+        {
+            // Rollback: put the matched edges back in the grid index.
             for &id in &removed_ids {
-                let (p1, p2) = edge_data[id];
-                register_edge::<T>(&mut grid, p1, p2, id);
+                let (p1, p2) = self.boundary.edge_data[id];
+                self.boundary.register_edge(p1, p2, id);
             }
-            self.restore_growing(
-                old_angles,
-                edges,
-                old_inner,
-                positions,
-                grid,
-                edge_data,
-                boundary_edge_ids,
-                next_edge_id,
-                patch_tile_ids,
-                next_tile_id,
-            );
             return false;
         }
 
+        // === Commit: from here on we mutate `self` to install the new
+        // boundary; no further rollback is needed. ===
         let mut new_positions = Vec::with_capacity(new_len + 1);
         for i in 0..=seg_len_old {
-            new_positions.push(positions[(ccw_pos + i) % n]);
+            new_positions.push(self.boundary.positions[(ccw_pos + i) % n]);
         }
         for p in new_tile_positions.iter().take(seg_len_new + 1).skip(1) {
             new_positions.push(*p);
         }
 
         let mut new_boundary_edge_ids = Vec::with_capacity(new_len);
-        let mut new_seg_data = edge_data;
-        let mut next_id = next_edge_id;
-
         for i in 0..seg_len_old {
-            new_boundary_edge_ids.push(boundary_edge_ids[(ccw_pos + i) % n]);
+            new_boundary_edge_ids.push(self.boundary.boundary_edge_ids[(ccw_pos + i) % n]);
         }
-
         for i in 0..seg_len_new {
-            let id = next_id;
-            next_id += 1;
+            let id = self.boundary.next_edge_id;
+            self.boundary.next_edge_id += 1;
             new_boundary_edge_ids.push(id);
             let p1 = new_tile_positions[i];
             let p2 = new_tile_positions[i + 1];
-            new_seg_data.push((p1, p2));
-            register_edge::<T>(&mut grid, p1, p2, id);
+            self.boundary.edge_data.push((p1, p2));
+            self.boundary.register_edge(p1, p2, id);
         }
 
         let (new_edges, new_patch_tile_ids) =
-            build_glued_edges(&edges, &patch_tile_ids, pm, m, next_tile_id);
+            build_glued_edges(&self.edges, &self.patch_tile_ids, pm, m, self.next_tile_id);
         debug_assert_eq!(new_edges.len(), new_len);
 
-        let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len, &patch_tile_ids);
+        let new_inner = update_inner_chains(
+            &self.inner_chains,
+            &self.edges,
+            pm,
+            new_len,
+            &self.patch_tile_ids,
+        );
 
         self.angles = new_angles;
         self.edges = new_edges;
         self.candidates_by_start = None;
         self.inner_chains = new_inner;
-        self.positions = new_positions;
-        self.grid = grid;
-        self.edge_data = new_seg_data;
-        self.boundary_edge_ids = new_boundary_edge_ids;
-        self.next_edge_id = next_id;
+        self.boundary.positions = new_positions;
+        self.boundary.boundary_edge_ids = new_boundary_edge_ids;
         self.patch_tile_ids = new_patch_tile_ids;
-        self.next_tile_id = next_tile_id + 1;
+        self.next_tile_id += 1;
 
         true
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn restore_growing(
-        &mut self,
-        angles: Vec<i8>,
-        edges: Vec<EdgeInfo>,
-        inner_chains: Vec<Vec<EdgeInfo>>,
-        positions: Vec<T>,
-        grid: UnitSquareGrid,
-        edge_data: Vec<(T, T)>,
-        boundary_edge_ids: Vec<usize>,
-        next_edge_id: usize,
-        patch_tile_ids: Vec<usize>,
-        next_tile_id: usize,
-    ) {
-        self.angles = angles;
-        self.edges = edges;
-        self.candidates_by_start = None;
-        self.inner_chains = inner_chains;
-        self.positions = positions;
-        self.grid = grid;
-        self.edge_data = edge_data;
-        self.boundary_edge_ids = boundary_edge_ids;
-        self.next_edge_id = next_edge_id;
-        self.patch_tile_ids = patch_tile_ids;
-        self.next_tile_id = next_tile_id;
     }
 }
 
@@ -1722,77 +1677,88 @@ fn trace_boundary_positions<T: IsRing>(angles: &[i8]) -> Vec<T> {
     trace_polyline_from(T::zero(), 0, angles)
 }
 
-fn build_boundary_grid<T: IsRing>(
-    positions: &[T],
-    n: usize,
-) -> (UnitSquareGrid, Vec<(T, T)>, Vec<usize>, usize) {
-    let mut grid = UnitSquareGrid::new();
-    let mut edge_data = Vec::with_capacity(n);
-    let boundary_edge_ids: Vec<usize> = (0..n).collect();
-    for i in 0..n {
-        let p1 = positions[i];
-        let p2 = positions[i + 1];
-        edge_data.push((p1, p2));
+impl<T: IsRing> BoundaryGrid<T> {
+    /// Build a fresh `BoundaryGrid` from an angle sequence. Edges are
+    /// numbered `0..n` in boundary order; `next_edge_id` is set past
+    /// the last live ID, so subsequent inserts get fresh IDs and old
+    /// tombstones (none here) never collide.
+    fn from_angles(angles: &[i8]) -> Self {
+        let positions = trace_boundary_positions::<T>(angles);
+        let n = angles.len();
+        let mut grid = UnitSquareGrid::new();
+        let mut edge_data = Vec::with_capacity(n);
+        let boundary_edge_ids: Vec<usize> = (0..n).collect();
+        for i in 0..n {
+            let p1 = positions[i];
+            let p2 = positions[i + 1];
+            edge_data.push((p1, p2));
+            for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
+                grid.add(cell, i);
+            }
+        }
+        Self {
+            positions,
+            grid,
+            edge_data,
+            boundary_edge_ids,
+            next_edge_id: n,
+        }
+    }
+
+    /// Add a new edge `(p1, p2)` with the given stable `id` to the
+    /// grid index (does NOT touch `edge_data` or `boundary_edge_ids`
+    /// -- the caller is in the middle of a splice and bookkeeps those
+    /// fields by hand).
+    fn register_edge(&mut self, p1: T, p2: T, id: usize) {
         for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
-            grid.add(cell, i);
+            self.grid.add(cell, id);
         }
     }
-    (grid, edge_data, boundary_edge_ids, n)
-}
 
-fn register_edge<T: IsRing>(grid: &mut UnitSquareGrid, p1: T, p2: T, id: usize) {
-    for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
-        grid.add(cell, id);
+    /// Remove edge `id` from the grid index. `edge_data[id]` is
+    /// preserved (tombstone semantics).
+    fn unregister_edge(&mut self, id: usize) {
+        let (p1, p2) = self.edge_data[id];
+        for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
+            self.grid.remove(cell, id);
+        }
     }
-}
 
-fn unregister_edge<T: IsRing>(grid: &mut UnitSquareGrid, edge_data: &[(T, T)], id: usize) {
-    let (p1, p2) = edge_data[id];
-    for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
-        grid.remove(cell, id);
-    }
-}
-
-fn check_edge_clear<T: IsRing>(
-    grid: &UnitSquareGrid,
-    edge_data: &[(T, T)],
-    p1: T,
-    p2: T,
-    allowed_endpoint: Option<T>,
-) -> bool {
-    let is_allowed = allowed_endpoint == Some(p2);
-    for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
-        for &id in grid.get(cell) {
-            let (x, y) = edge_data[id];
-            if !is_allowed && (p2 == x || p2 == y) {
-                return false;
-            }
-            if intersect_unit_segments(&(p1, p2), &(x, y)) {
-                return false;
+    /// Check that segment `(p1, p2)` does not collide with any live
+    /// edge in the grid. `allowed_endpoint == Some(p2)` lets the
+    /// segment's CCW endpoint touch the existing boundary at that
+    /// vertex (= the rejoin point of a new tile).
+    fn check_edge_clear(&self, p1: T, p2: T, allowed_endpoint: Option<T>) -> bool {
+        let is_allowed = allowed_endpoint == Some(p2);
+        for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
+            for &id in self.grid.get(cell) {
+                let (x, y) = self.edge_data[id];
+                if !is_allowed && (p2 == x || p2 == y) {
+                    return false;
+                }
+                if intersect_unit_segments(&(p1, p2), &(x, y)) {
+                    return false;
+                }
             }
         }
+        true
     }
-    true
-}
 
-/// Walk consecutive segments of a polyline, checking each against the
-/// boundary grid via [`check_edge_clear`]. The last segment's CCW
-/// endpoint is permitted to coincide with `allowed_last_endpoint` (this
-/// is where the new tile rejoins the existing boundary).
-fn edges_all_clear<T: IsRing>(
-    grid: &UnitSquareGrid,
-    edge_data: &[(T, T)],
-    positions: &[T],
-    allowed_last_endpoint: T,
-) -> bool {
-    let n_edges = positions.len().saturating_sub(1);
-    for i in 0..n_edges {
-        let allowed = (i == n_edges - 1).then_some(allowed_last_endpoint);
-        if !check_edge_clear::<T>(grid, edge_data, positions[i], positions[i + 1], allowed) {
-            return false;
+    /// Walk consecutive segments of a polyline, checking each against
+    /// the boundary grid via [`Self::check_edge_clear`]. The last
+    /// segment's CCW endpoint is permitted to coincide with
+    /// `allowed_last_endpoint` (= where the new tile rejoins the
+    /// existing boundary).
+    fn polyline_all_clear(&self, positions: &[T], allowed_last_endpoint: T) -> bool {
+        let n_edges = positions.len().saturating_sub(1);
+        for i in 0..n_edges {
+            let allowed = (i == n_edges - 1).then_some(allowed_last_endpoint);
+            if !self.check_edge_clear(positions[i], positions[i + 1], allowed) {
+                return false;
+            }
         }
+        true
     }
-    true
 }
 
 /// Find the direction `dir` such that `from + T::unit(dir) == to`.
