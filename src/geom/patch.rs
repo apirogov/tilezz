@@ -2673,6 +2673,151 @@ mod tests {
         assert_eq!(new_inner.len(), new_n);
     }
 
+    /// Helper: contiguous edges from a single tile, used as old_edges.
+    fn shape_edges(tile_id: usize, n: usize) -> Vec<EdgeInfo> {
+        (0..n).map(|i| ei(tile_id, i)).collect()
+    }
+
+    /// Normal glue, all old edges from the same tile instance (= all
+    /// ptids equal). No matched edge ever crosses a tile-instance
+    /// boundary, so neither junction's inner-chain absorbs any old edge.
+    /// Surviving inner-chains shift into place untouched.
+    #[test]
+    fn update_inner_chains_normal_no_crossings_passes_old_through() {
+        let n = 6;
+        let old_edges = shape_edges(0, n);
+        // Plant a marker in each old inner chain so we can check who
+        // moved where.
+        let old_inner: Vec<Vec<EdgeInfo>> = (0..n).map(|i| vec![ei(99, i)]).collect();
+        let old_ptids = vec![7usize; n]; // all same instance.
+
+        // Match [start_a=2, len=2). seg_len_old = 4, ccw_pos = 4,
+        // cw_end_matched = 3. Petal m_tile = 4 -> new_n = 4 + 2 = 6.
+        let pm = PatchMatch::new(
+            EdgeRange::new(2, 2),
+            Segment::new(1, EdgeRange::new(0, 2)),
+        );
+        let m_tile = 4;
+        let seg_len_old = n - pm.len();
+        let new_n = seg_len_old + (m_tile - pm.len());
+
+        let got = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
+
+        assert_eq!(got.len(), new_n);
+        // CCW junction at new[0] inherits old_inner[ccw_pos=4]; no edge pushed.
+        assert_eq!(got[0], vec![ei(99, 4)]);
+        // Interior survivors at new[1..seg_len_old] come from old_inner[(ccw_pos + i) % n].
+        assert_eq!(got[1], vec![ei(99, 5)]);
+        assert_eq!(got[2], vec![ei(99, 0)]);
+        assert_eq!(got[3], vec![ei(99, 1)]);
+        // CW junction at new[seg_len_old=4] inherits old_inner[start_a=2]; no edge pushed.
+        assert_eq!(got[4], vec![ei(99, 2)]);
+        // Petal-side new positions (>= seg_len_old + 1) stay empty;
+        // `update_inner_chains` only sets the boundary side.
+        assert_eq!(got[5], Vec::<EdgeInfo>::new());
+    }
+
+    /// Normal glue where matched edges sit in a different tile
+    /// instance than their immediate survivors. Both junctions should
+    /// absorb their incident matched edge into their inner chain.
+    #[test]
+    fn update_inner_chains_normal_with_crossings_pushes_matched_edges() {
+        let n = 6;
+        let old_edges = shape_edges(0, n);
+        let old_inner: Vec<Vec<EdgeInfo>> = vec![Vec::new(); n];
+        // ptids: matched edges at positions 2..4 are instance #1, the
+        // rest are instance #0. Both junctions therefore cross an
+        // instance boundary.
+        let old_ptids = vec![0, 0, 1, 1, 0, 0];
+
+        let pm = PatchMatch::new(
+            EdgeRange::new(2, 2),
+            Segment::new(1, EdgeRange::new(0, 2)),
+        );
+        let m_tile = 4;
+        let seg_len_old = n - pm.len();
+        let new_n = seg_len_old + (m_tile - pm.len());
+
+        let got = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
+
+        // CCW junction at new[0] absorbs the CW-end matched edge,
+        // i.e. old_edges[(start_a + L - 1) % n] = old_edges[3].
+        assert_eq!(got[0], vec![ei(0, 3)]);
+        // Interior survivors are empty (old_inner was all empty).
+        for i in 1..seg_len_old {
+            assert!(got[i].is_empty(), "interior position {i}");
+        }
+        // CW junction at new[seg_len_old] absorbs the CCW-end matched
+        // edge, i.e. old_edges[start_a] = old_edges[2].
+        assert_eq!(got[seg_len_old], vec![ei(0, 2)]);
+    }
+
+    /// Keystone glue (`seg_len_new == 0`, so `new_n == seg_len_old`):
+    /// both junctions collapse to new[0] and the merged inner chain is
+    /// `chain_cw` followed by `chain_ccw`.
+    #[test]
+    fn update_inner_chains_keystone_merges_cw_then_ccw() {
+        let n = 6;
+        let old_edges = shape_edges(0, n);
+        let old_inner: Vec<Vec<EdgeInfo>> = vec![Vec::new(); n];
+        let old_ptids = vec![0, 0, 1, 1, 0, 0];
+
+        // Keystone: petal of size 2 fully absorbed by the L=2 match.
+        let pm = PatchMatch::new(
+            EdgeRange::new(2, 2),
+            Segment::new(1, EdgeRange::new(0, 2)),
+        );
+        let m_tile = 2;
+        let seg_len_old = n - pm.len();
+        let new_n = seg_len_old + (m_tile - pm.len());
+        assert_eq!(new_n, seg_len_old, "keystone precondition");
+
+        let got = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
+
+        // new[0] = chain_cw ++ chain_ccw. With all old_inner empty and
+        // both junctions crossing the instance boundary, that's
+        // [old_edges[start_a], old_edges[cw_end_matched]]
+        // = [old_edges[2], old_edges[3]].
+        assert_eq!(got[0], vec![ei(0, 2), ei(0, 3)]);
+        // Interior positions retain shifted old_inner (empty here).
+        for i in 1..new_n {
+            assert!(got[i].is_empty(), "interior position {i}");
+        }
+    }
+
+    /// Matched range wraps the array seam (`start_a + len > n`).
+    /// Indexing must be cyclic; otherwise the CW-end-matched lookup
+    /// goes out of bounds.
+    #[test]
+    fn update_inner_chains_wraps_array_seam() {
+        let n = 6;
+        let old_edges = shape_edges(0, n);
+        let old_inner: Vec<Vec<EdgeInfo>> = vec![Vec::new(); n];
+        // Match runs from position 5 across the seam to position 0
+        // (= edges {5, 0}). Both matched positions are in instance #1.
+        let old_ptids = vec![1, 0, 0, 0, 0, 1];
+
+        let pm = PatchMatch::new(
+            EdgeRange::new(5, 2),
+            Segment::new(1, EdgeRange::new(0, 2)),
+        );
+        let m_tile = 3;
+        let seg_len_old = n - pm.len();
+        let new_n = seg_len_old + (m_tile - pm.len());
+
+        let got = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
+
+        // ccw_pos = (5 + 2) % 6 = 1; cw_end_matched = (5 + 2 - 1) % 6 = 0.
+        // CCW junction at new[0] absorbs old_edges[cw_end_matched=0].
+        assert_eq!(got[0], vec![ei(0, 0)]);
+        // CW junction at new[seg_len_old=4] absorbs old_edges[start_a=5].
+        assert_eq!(got[seg_len_old], vec![ei(0, 5)]);
+        // Interior positions are empty here.
+        for i in 1..seg_len_old {
+            assert!(got[i].is_empty(), "interior position {i}");
+        }
+    }
+
     /// Verify [`glue::glue_raw_angles`] handles `mlen == m` (= the
     /// keystone case, `y_raw_len == 1`) by:
     /// - Returning a result of the correct length (`seg_len_old`).
