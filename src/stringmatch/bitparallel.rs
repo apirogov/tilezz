@@ -350,13 +350,7 @@ impl BitParallelMatcher {
     /// `self.sym_to_idx`, or `None` if the character is foreign to the
     /// matcher's alphabet (then no `P_j` position can match this char,
     /// so every live bit dies).
-    fn step_tile(
-        &self,
-        ts: &mut TileState,
-        tile_j: usize,
-        k: usize,
-        sym_idx: Option<usize>,
-    ) {
+    fn step_tile(&self, ts: &mut TileState, tile_j: usize, k: usize, sym_idx: Option<usize>) {
         // `alive_curr`: bits of `P_j` that match the current boundary
         // char. When `sym_idx` is `None` we borrow `ts.empty` so the
         // remainder of the algorithm uniformly works against a
@@ -599,8 +593,10 @@ mod tests {
         let matches = idx.maximal_rc_matches(i, j);
         let expected = naive_cyclic_rc_matches(&strings[i], &strings[j]);
 
-        let mut got: Vec<(usize, usize, usize)> =
-            matches.iter().map(|m| (m.a.range.start_offset, m.b.range.start_offset, m.len())).collect();
+        let mut got: Vec<(usize, usize, usize)> = matches
+            .iter()
+            .map(|m| (m.a.range.start_offset, m.b.range.start_offset, m.len()))
+            .collect();
         got.sort();
         got.dedup();
 
@@ -648,7 +644,13 @@ mod tests {
             assert!(m.a.range.start_offset < strings[i].len());
             assert!(m.b.range.start_offset < strings[j].len());
             assert!(!m.is_empty());
-            verify_rc_content(&strings[i], &strings[j], m.a.range.start_offset, m.b.range.start_offset, m.len());
+            verify_rc_content(
+                &strings[i],
+                &strings[j],
+                m.a.range.start_offset,
+                m.b.range.start_offset,
+                m.len(),
+            );
         }
     }
 
@@ -991,11 +993,25 @@ mod tests {
 
                 let mut sweep_tuples: Vec<(usize, usize, usize, usize)> = sweep
                     .iter()
-                    .map(|m| (m.b.tile_id, m.a.range.start_offset, m.b.range.start_offset, m.len()))
+                    .map(|m| {
+                        (
+                            m.b.tile_id,
+                            m.a.range.start_offset,
+                            m.b.range.start_offset,
+                            m.len(),
+                        )
+                    })
                     .collect();
                 let mut pair_tuples: Vec<(usize, usize, usize, usize)> = per_pair
                     .iter_mut()
-                    .map(|m| (m.b.tile_id, m.a.range.start_offset, m.b.range.start_offset, m.len()))
+                    .map(|m| {
+                        (
+                            m.b.tile_id,
+                            m.a.range.start_offset,
+                            m.b.range.start_offset,
+                            m.len(),
+                        )
+                    })
                     .collect();
                 sweep_tuples.sort();
                 pair_tuples.sort();

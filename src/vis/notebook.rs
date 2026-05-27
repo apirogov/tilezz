@@ -110,8 +110,7 @@ impl Scene {
 /// notebook PNG-display payload.
 #[cfg(feature = "raster")]
 fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHA: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -137,7 +136,7 @@ fn encode_base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vis::scene::{Color, Item, MarkerShape, Fill};
+    use crate::vis::scene::{Color, Fill, Item, MarkerShape};
 
     fn simple_scene() -> Scene {
         let mut s = Scene::new().with_background(Color::WHITE);

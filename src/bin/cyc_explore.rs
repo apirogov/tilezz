@@ -12,9 +12,7 @@ use tilezz::cyclotomic::*;
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::rainbow;
 use tilezz::vis::plotutils::{points_bounds, P64, R64};
-use tilezz::vis::scene::{
-    Color, Fill, Item, MarkerShape, Scene, Stroke, Viewport,
-};
+use tilezz::vis::scene::{Color, Fill, Item, MarkerShape, Scene, Stroke, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
@@ -346,14 +344,9 @@ fn render_vis(
             let total_w = cols as f64 * cell_w + (cols.saturating_sub(1)) as f64 * gap;
             let total_h = rows as f64 * cell_h + (rows.saturating_sub(1)) as f64 * gap;
             let total_w_px = img_dims.0;
-            let total_h_px =
-                ((total_h / total_w) * total_w_px as f64).round().max(1.0) as u32;
-            let vp = Viewport::rect_for(
-                total_w_px,
-                total_h_px,
-                ((0.0, 0.0), (total_w, total_h)),
-                16,
-            );
+            let total_h_px = ((total_h / total_w) * total_w_px as f64).round().max(1.0) as u32;
+            let vp =
+                Viewport::rect_for(total_w_px, total_h_px, ((0.0, 0.0), (total_w, total_h)), 16);
             let png = scene.to_png(&vp).expect("render PNG");
             std::fs::write(filename, png).expect("write PNG");
         }
@@ -364,16 +357,18 @@ fn render_vis(
             let mut frames: Vec<Scene> = Vec::with_capacity(n);
             for (i, pts) in points.iter().enumerate() {
                 let mut frame = Scene::new().with_background(Color::WHITE);
-                add_cell(&mut frame, pts, bounds, (-mn_x, -mn_y), marker_size, palette[i]);
+                add_cell(
+                    &mut frame,
+                    pts,
+                    bounds,
+                    (-mn_x, -mn_y),
+                    marker_size,
+                    palette[i],
+                );
                 frames.push(frame);
             }
-            let vp = Viewport::square_for(
-                img_dims.0,
-                ((0.0, 0.0), (cell_w, cell_h)),
-                16,
-            );
-            let gif_bytes =
-                render_gif(&frames, &vp, delay_ms as u16).expect("render GIF");
+            let vp = Viewport::square_for(img_dims.0, ((0.0, 0.0), (cell_w, cell_h)), 16);
+            let gif_bytes = render_gif(&frames, &vp, delay_ms as u16).expect("render GIF");
             std::fs::write(filename, gif_bytes).expect("write GIF");
         }
     }

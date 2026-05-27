@@ -1,25 +1,24 @@
 use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
-use crate::cyclotomic::geometry::intersect_unit_segments;
-use crate::cyclotomic::{IsRing};
 use crate::analysis::matchtypes::MatchTypeIndex;
+use crate::cyclotomic::geometry::intersect_unit_segments;
+use crate::cyclotomic::IsRing;
 use crate::geom::angles;
 use crate::geom::cyclic::{cyclic_arcs_overlap, cyclic_range_contains};
 use crate::geom::glue;
 use crate::geom::glue::junctions_glueable;
 use crate::geom::grid::UnitSquareGrid;
-use crate::geom::matches::{EdgeRange, Segment};
 #[cfg(test)]
 use crate::geom::matches::PatchSegment;
+use crate::geom::matches::{EdgeRange, Segment};
 use crate::geom::rat::Rat;
-use crate::stringmatch::forward_match_length;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{
-    compute_junctions, compute_segments, is_junction_at, CoarseJunction, EdgeInfo,
-    OpenVertexType,
+    compute_junctions, compute_segments, is_junction_at, CoarseJunction, EdgeInfo, OpenVertexType,
 };
+use crate::stringmatch::forward_match_length;
 
 /// A description of a candidate glue between the current patch
 /// boundary and a new tile.
@@ -190,11 +189,7 @@ struct RawBoundary {
 }
 
 #[cfg(test)]
-fn raw_is_junction<T: IsRing>(
-    boundary: &RawBoundary,
-    tileset: &TileSet<T>,
-    pos: usize,
-) -> bool {
+fn raw_is_junction<T: IsRing>(boundary: &RawBoundary, tileset: &TileSet<T>, pos: usize) -> bool {
     is_junction_at(&boundary.angles, &boundary.edges, tileset, pos)
 }
 
@@ -250,9 +245,9 @@ fn glue_tile_to_raw_boundary<T: IsRing>(
     glue_match_to_raw_boundary::<T>(
         boundary,
         &PatchMatch::new(
-                            EdgeRange::new(junc_pos, mlen),
-                            Segment::new(target.tile_id, EdgeRange::new(tile_junc, mlen)),
-                        ),
+            EdgeRange::new(junc_pos, mlen),
+            Segment::new(target.tile_id, EdgeRange::new(tile_junc, mlen)),
+        ),
         tileset,
         first_step,
         new_tile_id,
@@ -346,8 +341,13 @@ fn glue_match_to_raw_boundary<T: IsRing>(
         )
     };
 
-    let gr =
-        glue::glue_raw_angles::<T>(&boundary.angles, tile_seq, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)?;
+    let gr = glue::glue_raw_angles::<T>(
+        &boundary.angles,
+        tile_seq,
+        pm.a_range.start_offset,
+        pm.len(),
+        pm.b.range.start_offset,
+    )?;
 
     Some(RawGlueResult {
         boundary: RawBoundary {
@@ -381,10 +381,7 @@ fn glue_match_to_raw_boundary<T: IsRing>(
 /// For convex tiles (positive internal angles), the sequence is
 /// monotonically non-increasing. This is asserted by
 /// `assert_junction_angle_sequence_valid` in tests.
-fn junction_angle_sequence<T: IsRing>(
-    vtype: &OpenVertexType,
-    tileset: &TileSet<T>,
-) -> Vec<i8> {
+fn junction_angle_sequence<T: IsRing>(vtype: &OpenVertexType, tileset: &TileSet<T>) -> Vec<i8> {
     let seed_seq = tileset.rat(vtype.cw.tile_id).seq();
     let n_seed = seed_seq.len();
     let junc_vertex = (vtype.cw.tile_offset + 1) % n_seed;
@@ -739,9 +736,10 @@ impl<T: IsRing> GrowingPatch<T> {
         for offset in 0..max_tile_len.min(n) {
             let pos = (target + n - offset) % n;
 
-            if let Some(segment) = segments.iter().find(|s| {
-                pos >= s.range.start_offset && pos < s.range.start_offset + s.range.len
-            }) {
+            if let Some(segment) = segments
+                .iter()
+                .find(|s| pos >= s.range.start_offset && pos < s.range.start_offset + s.range.len)
+            {
                 let tile_id = segment.tile_seg.tile_id;
                 let tile_offset = (segment.tile_seg.range.start_offset
                     + (pos - segment.range.start_offset))
@@ -874,7 +872,9 @@ impl<T: IsRing> GrowingPatch<T> {
                 let n = self.match_index.tileset().rat(0).len();
                 cached_matches
                     .iter()
-                    .filter(|pm| cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n))
+                    .filter(|pm| {
+                        cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n)
+                    })
                     .cloned()
                     .collect()
             }
@@ -906,7 +906,8 @@ impl<T: IsRing> GrowingPatch<T> {
                 for offset in 0..=k {
                     let start = (vertex_index + n - offset) % n;
                     for pm in &source[start] {
-                        if cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n) {
+                        if cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n)
+                        {
                             result.push(*pm);
                         }
                     }
@@ -940,7 +941,9 @@ impl<T: IsRing> GrowingPatch<T> {
         let range_len = (end_edge + n - start_edge) % n + 1;
         self.get_all_matches()
             .into_iter()
-            .filter(|pm| cyclic_arcs_overlap(start_edge, range_len, pm.a_range.start_offset, pm.len(), n))
+            .filter(|pm| {
+                cyclic_arcs_overlap(start_edge, range_len, pm.a_range.start_offset, pm.len(), n)
+            })
             .collect()
     }
 
@@ -1317,7 +1320,10 @@ impl<T: IsRing> GrowingPatch<T> {
         }
 
         let (_ns, seed_len, _ne) = seed_rat.get_match(
-            (pm.a_range.start_offset as i64, pm.b.range.start_offset as i64),
+            (
+                pm.a_range.start_offset as i64,
+                pm.b.range.start_offset as i64,
+            ),
             tileset.rat(pm.b.tile_id),
         );
         if seed_len == 0 {
@@ -1507,8 +1513,7 @@ impl<T: IsRing> GrowingPatch<T> {
         // segments don't cross any surviving boundary segment. The new
         // tile's final endpoint is allowed to coincide with `ccw_junction`
         // (that's where it rejoins the existing boundary).
-        let all_clear =
-            edges_all_clear::<T>(&grid, &edge_data, &new_tile_positions, ccw_junction);
+        let all_clear = edges_all_clear::<T>(&grid, &edge_data, &new_tile_positions, ccw_junction);
 
         if !all_clear {
             for &id in &removed_ids {
@@ -1636,9 +1641,9 @@ impl<T: IsRing> GrowingPatch<T> {
                     let key = (ns_u, len, ne_u, cand.tile_id);
                     if seen.insert(key) {
                         matches.push(PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
-));
+                            EdgeRange::new(ns_u, len),
+                            Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
+                        ));
                     }
                 }
             }
@@ -1744,9 +1749,9 @@ fn append_match_candidate<T: IsRing>(
         .is_ok()
     {
         result[ns_u].push(PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
-));
+            EdgeRange::new(ns_u, len),
+            Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
+        ));
     }
 }
 
@@ -1792,9 +1797,9 @@ fn enumerate_junction_candidates_at<T: IsRing>(
                 .is_ok()
             {
                 emit(PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
-));
+                    EdgeRange::new(ns_u, len),
+                    Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
+                ));
             }
         }
     }
@@ -1831,7 +1836,13 @@ fn compute_glue_angles<T: IsRing>(
     tileset: &Arc<TileSet<T>>,
 ) -> Option<Vec<i8>> {
     let other_seq = tileset.rat(pm.b.tile_id).seq();
-    let gr = glue::glue_raw_angles::<T>(angles, other_seq, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset)?;
+    let gr = glue::glue_raw_angles::<T>(
+        angles,
+        other_seq,
+        pm.a_range.start_offset,
+        pm.len(),
+        pm.b.range.start_offset,
+    )?;
     if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
         if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
             return None;
@@ -1845,11 +1856,7 @@ fn compute_glue_angles<T: IsRing>(
 ///
 /// Returns `angles.len() + 1` positions (the starting vertex plus one
 /// after each edge).
-fn trace_polyline_from<T: IsRing>(
-    start: T,
-    initial_dir: i8,
-    angles: &[i8],
-) -> Vec<T> {
+fn trace_polyline_from<T: IsRing>(start: T, initial_dir: i8, angles: &[i8]) -> Vec<T> {
     let mut positions = Vec::with_capacity(angles.len() + 1);
     positions.push(start);
     let mut dir = initial_dir;
@@ -1883,22 +1890,13 @@ fn build_boundary_grid<T: IsRing>(
     (grid, edge_data, boundary_edge_ids, n)
 }
 
-fn register_edge<T: IsRing>(
-    grid: &mut UnitSquareGrid,
-    p1: T,
-    p2: T,
-    id: usize,
-) {
+fn register_edge<T: IsRing>(grid: &mut UnitSquareGrid, p1: T, p2: T, id: usize) {
     for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
         grid.add(cell, id);
     }
 }
 
-fn unregister_edge<T: IsRing>(
-    grid: &mut UnitSquareGrid,
-    edge_data: &[(T, T)],
-    id: usize,
-) {
+fn unregister_edge<T: IsRing>(grid: &mut UnitSquareGrid, edge_data: &[(T, T)], id: usize) {
     let (p1, p2) = edge_data[id];
     for cell in UnitSquareGrid::edge_neighborhood_of(p1, p2) {
         grid.remove(cell, id);
@@ -1968,8 +1966,8 @@ fn dir_of_edge<T: IsRing>(from: T, to: T) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::analysis::matchtypes::MatchTypeIndex;
+    use crate::cyclotomic::{ZZ12, ZZ4};
     use crate::geom::snake::Snake;
     use crate::geom::tiles;
     use crate::geom::vertices::{vertex_type_raw_from, ClosedVertexType};
@@ -2061,10 +2059,7 @@ mod tests {
         // First glue: hex_0's edge 1 → hex_1's edge 5 (start_a=1 on
         // the seed's notional boundary, len=1, start_b=0 so the
         // matched petal edge is start_b-1 = 5 mod 6).
-        let first = PatchMatch::new(
-                            EdgeRange::new(1, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        );
+        let first = PatchMatch::new(EdgeRange::new(1, 1), Segment::new(0, EdgeRange::new(0, 1)));
         assert!(gp.add_tile(&first), "first glue should succeed");
         // Glues 2-4: continue the chain. start_a is tracked from
         // the post-glue boundary's "second surviving edge of latest
@@ -2072,9 +2067,9 @@ mod tests {
         for step in 2..=4 {
             let start_a = gp.boundary_len() - 4;
             let pm = PatchMatch::new(
-    EdgeRange::new(start_a, 1),
-    Segment::new(0, EdgeRange::new(0, 1)),
-);
+                EdgeRange::new(start_a, 1),
+                Segment::new(0, EdgeRange::new(0, 1)),
+            );
             assert!(
                 gp.add_tile(&pm),
                 "step {} glue (pm={:?}) should succeed",
@@ -2098,9 +2093,9 @@ mod tests {
         // endpoint positions.
         let start_a = gp.boundary_len() - 4;
         let closing_pm = PatchMatch::new(
-    EdgeRange::new(start_a, 1),
-    Segment::new(0, EdgeRange::new(0, 1)),
-);
+            EdgeRange::new(start_a, 1),
+            Segment::new(0, EdgeRange::new(0, 1)),
+        );
         let ok = gp.add_tile(&closing_pm);
         assert!(
             !ok,
@@ -2137,17 +2132,14 @@ mod tests {
         //   3. Close (1 glue): 6th corona at the remaining wedge via
         //      mlen=3 (matching the 3 wedge-facing edges).
         let mut gp = hex_patch();
-        let first = PatchMatch::new(
-                            EdgeRange::new(1, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        );
+        let first = PatchMatch::new(EdgeRange::new(1, 1), Segment::new(0, EdgeRange::new(0, 1)));
         assert!(gp.add_tile(&first), "chain glue 1");
         for _ in 2..=4 {
             let start_a = gp.boundary_len() - 4;
             let pm = PatchMatch::new(
-    EdgeRange::new(start_a, 1),
-    Segment::new(0, EdgeRange::new(0, 1)),
-);
+                EdgeRange::new(start_a, 1),
+                Segment::new(0, EdgeRange::new(0, 1)),
+            );
             assert!(gp.add_tile(&pm), "chain glue {:?}", pm);
         }
         // Brute-force pick: a match with mlen=5 fills central.
@@ -2379,13 +2371,35 @@ mod tests {
                     let range_len = (end + n - start) % n + 1;
                     let want: std::collections::BTreeSet<(usize, usize, usize, usize)> = all
                         .iter()
-                        .filter(|pm| cyclic_arcs_overlap(start, range_len, pm.a_range.start_offset, pm.len(), n))
-                        .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
+                        .filter(|pm| {
+                            cyclic_arcs_overlap(
+                                start,
+                                range_len,
+                                pm.a_range.start_offset,
+                                pm.len(),
+                                n,
+                            )
+                        })
+                        .map(|pm| {
+                            (
+                                pm.a_range.start_offset,
+                                pm.len(),
+                                pm.b.range.start_offset,
+                                pm.b.tile_id,
+                            )
+                        })
                         .collect();
                     let got: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
                         .get_matches_in_edge_range(start, end)
                         .into_iter()
-                        .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
+                        .map(|pm| {
+                            (
+                                pm.a_range.start_offset,
+                                pm.len(),
+                                pm.b.range.start_offset,
+                                pm.b.tile_id,
+                            )
+                        })
                         .collect();
                     assert_eq!(
                         got, want,
@@ -2409,11 +2423,25 @@ mod tests {
         assert!(gp.add_tile(&first));
         let n = gp.boundary_len();
         let mut all: Vec<_> = gp.get_all_matches();
-        all.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
+        all.sort_by_key(|pm| {
+            (
+                pm.a_range.start_offset,
+                pm.len(),
+                pm.b.range.start_offset,
+                pm.b.tile_id,
+            )
+        });
         for start in 0..n {
             let end = (start + n - 1) % n;
             let mut got = gp.get_matches_in_edge_range(start, end);
-            got.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
+            got.sort_by_key(|pm| {
+                (
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                    pm.b.tile_id,
+                )
+            });
             assert_eq!(got, all, "full-boundary range from start={start}");
         }
     }
@@ -2537,40 +2565,19 @@ mod tests {
         // connected. Pinning the literals avoids the brute search.
         let glues = [
             // boundary 4 → 6: attach a strip-mate to the seed square.
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(0, 1))),
             // boundary 6 → 8: extend the row.
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
             // boundary 8 → 10: extend again to make a 1×3 row.
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
             // boundary 10 → 12: turn upward, starting the right column.
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
             // boundary 12 → 12: continue upward.
-            PatchMatch::new(
-                            EdgeRange::new(2, 2),
-                            Segment::new(0, EdgeRange::new(1, 2)),
-                        ),
+            PatchMatch::new(EdgeRange::new(2, 2), Segment::new(0, EdgeRange::new(1, 2))),
             // boundary 12 → 12: wrap left along the top.
-            PatchMatch::new(
-                            EdgeRange::new(1, 2),
-                            Segment::new(0, EdgeRange::new(1, 2)),
-                        ),
+            PatchMatch::new(EdgeRange::new(1, 2), Segment::new(0, EdgeRange::new(1, 2))),
             // boundary 12 → 12: drop into the inner tile (1, 1).
-            PatchMatch::new(
-                            EdgeRange::new(1, 2),
-                            Segment::new(0, EdgeRange::new(1, 2)),
-                        ),
+            PatchMatch::new(EdgeRange::new(1, 2), Segment::new(0, EdgeRange::new(1, 2))),
         ];
         let mut gp = square_patch();
         for (i, pm) in glues.iter().enumerate() {
@@ -2635,10 +2642,7 @@ mod tests {
             .collect();
         let old_ptids = vec![0usize; 8];
         // Keystone: petal of m_tile = 4 fully absorbed (pm.len() = 4 = m_tile).
-        let pm = PatchMatch::new(
-                            EdgeRange::new(2, 4),
-                            Segment::new(1, EdgeRange::new(0, 4)),
-                        );
+        let pm = PatchMatch::new(EdgeRange::new(2, 4), Segment::new(1, EdgeRange::new(0, 4)));
         let m_tile = 4;
         let (new_edges, new_ptids) = build_glued_edges(&old_edges, &old_ptids, &pm, m_tile, 99);
         // new_len = seg_len_old + seg_len_new = (8-4) + (4-4) = 4 + 0 = 4.
@@ -2662,10 +2666,7 @@ mod tests {
             .collect();
         let old_inner: Vec<Vec<EdgeInfo>> = vec![Vec::new(); 8];
         let old_ptids = vec![0usize; 8];
-        let pm = PatchMatch::new(
-                            EdgeRange::new(2, 4),
-                            Segment::new(1, EdgeRange::new(0, 4)),
-                        );
+        let pm = PatchMatch::new(EdgeRange::new(2, 4), Segment::new(1, EdgeRange::new(0, 4)));
         let new_n = 4; // seg_len_old + seg_len_new = 4 + 0.
         let new_inner = update_inner_chains(&old_inner, &old_edges, &pm, new_n, &old_ptids);
         // The pre-fix code would have panicked here. Just verify
@@ -2693,10 +2694,7 @@ mod tests {
 
         // Match [start_a=2, len=2). seg_len_old = 4, ccw_pos = 4,
         // cw_end_matched = 3. Petal m_tile = 4 -> new_n = 4 + 2 = 6.
-        let pm = PatchMatch::new(
-            EdgeRange::new(2, 2),
-            Segment::new(1, EdgeRange::new(0, 2)),
-        );
+        let pm = PatchMatch::new(EdgeRange::new(2, 2), Segment::new(1, EdgeRange::new(0, 2)));
         let m_tile = 4;
         let seg_len_old = n - pm.len();
         let new_n = seg_len_old + (m_tile - pm.len());
@@ -2730,10 +2728,7 @@ mod tests {
         // instance boundary.
         let old_ptids = vec![0, 0, 1, 1, 0, 0];
 
-        let pm = PatchMatch::new(
-            EdgeRange::new(2, 2),
-            Segment::new(1, EdgeRange::new(0, 2)),
-        );
+        let pm = PatchMatch::new(EdgeRange::new(2, 2), Segment::new(1, EdgeRange::new(0, 2)));
         let m_tile = 4;
         let seg_len_old = n - pm.len();
         let new_n = seg_len_old + (m_tile - pm.len());
@@ -2744,8 +2739,8 @@ mod tests {
         // i.e. old_edges[(start_a + L - 1) % n] = old_edges[3].
         assert_eq!(got[0], vec![ei(0, 3)]);
         // Interior survivors are empty (old_inner was all empty).
-        for i in 1..seg_len_old {
-            assert!(got[i].is_empty(), "interior position {i}");
+        for (i, chain) in got.iter().enumerate().take(seg_len_old).skip(1) {
+            assert!(chain.is_empty(), "interior position {i}");
         }
         // CW junction at new[seg_len_old] absorbs the CCW-end matched
         // edge, i.e. old_edges[start_a] = old_edges[2].
@@ -2763,10 +2758,7 @@ mod tests {
         let old_ptids = vec![0, 0, 1, 1, 0, 0];
 
         // Keystone: petal of size 2 fully absorbed by the L=2 match.
-        let pm = PatchMatch::new(
-            EdgeRange::new(2, 2),
-            Segment::new(1, EdgeRange::new(0, 2)),
-        );
+        let pm = PatchMatch::new(EdgeRange::new(2, 2), Segment::new(1, EdgeRange::new(0, 2)));
         let m_tile = 2;
         let seg_len_old = n - pm.len();
         let new_n = seg_len_old + (m_tile - pm.len());
@@ -2780,8 +2772,8 @@ mod tests {
         // = [old_edges[2], old_edges[3]].
         assert_eq!(got[0], vec![ei(0, 2), ei(0, 3)]);
         // Interior positions retain shifted old_inner (empty here).
-        for i in 1..new_n {
-            assert!(got[i].is_empty(), "interior position {i}");
+        for (i, chain) in got.iter().enumerate().skip(1) {
+            assert!(chain.is_empty(), "interior position {i}");
         }
     }
 
@@ -2797,10 +2789,7 @@ mod tests {
         // (= edges {5, 0}). Both matched positions are in instance #1.
         let old_ptids = vec![1, 0, 0, 0, 0, 1];
 
-        let pm = PatchMatch::new(
-            EdgeRange::new(5, 2),
-            Segment::new(1, EdgeRange::new(0, 2)),
-        );
+        let pm = PatchMatch::new(EdgeRange::new(5, 2), Segment::new(1, EdgeRange::new(0, 2)));
         let m_tile = 3;
         let seg_len_old = n - pm.len();
         let new_n = seg_len_old + (m_tile - pm.len());
@@ -2813,8 +2802,8 @@ mod tests {
         // CW junction at new[seg_len_old=4] absorbs old_edges[start_a=5].
         assert_eq!(got[seg_len_old], vec![ei(0, 5)]);
         // Interior positions are empty here.
-        for i in 1..seg_len_old {
-            assert!(got[i].is_empty(), "interior position {i}");
+        for (i, chain) in got.iter().enumerate().take(seg_len_old).skip(1) {
+            assert!(chain.is_empty(), "interior position {i}");
         }
     }
 
@@ -2990,7 +2979,13 @@ mod tests {
 
             let seed_rat = ts.rat(0);
             let new_rat = ts.rat(pm.b.tile_id);
-            let glued = seed_rat.try_glue((pm.a_range.start_offset as i64, pm.b.range.start_offset as i64), new_rat);
+            let glued = seed_rat.try_glue(
+                (
+                    pm.a_range.start_offset as i64,
+                    pm.b.range.start_offset as i64,
+                ),
+                new_rat,
+            );
             match glued {
                 Ok(g) => assert_eq!(rat.seq(), g.seq(), "mismatch for pm {:?}", pm),
                 Err(e) => panic!("glue failed for pm {:?}: {}", pm, e),
@@ -3470,9 +3465,23 @@ mod tests {
             };
             let eager = gp.get_matches_touching_vertex(target);
             let mut lazy_sorted = lazy;
-            lazy_sorted.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
+            lazy_sorted.sort_by_key(|pm| {
+                (
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                    pm.b.tile_id,
+                )
+            });
             let mut eager_sorted = eager;
-            eager_sorted.sort_by_key(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
+            eager_sorted.sort_by_key(|pm| {
+                (
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                    pm.b.tile_id,
+                )
+            });
             assert_eq!(
                 lazy_sorted,
                 eager_sorted,
@@ -3496,7 +3505,14 @@ mod tests {
 
         let all_cands = GrowingPatch::compute_all_candidates(&mi, gp.angles(), gp.edges());
         let n = gp.angles().len();
-        let sort_key = |pm: &PatchMatch| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id);
+        let sort_key = |pm: &PatchMatch| {
+            (
+                pm.a_range.start_offset,
+                pm.len(),
+                pm.b.range.start_offset,
+                pm.b.tile_id,
+            )
+        };
 
         for target in 0..n {
             let mut covering = GrowingPatch::compute_candidates_covering_position(
@@ -3529,9 +3545,7 @@ mod tests {
     /// Two patches with equal snapshots behave identically against further
     /// `add_tile` attempts — grid corruption would show up as a different
     /// reject set even when angles/edges/etc. are still equal.
-    fn classify_candidates<T: IsRing>(
-        gp: &GrowingPatch<T>,
-    ) -> Vec<(PatchMatch, bool)> {
+    fn classify_candidates<T: IsRing>(gp: &GrowingPatch<T>) -> Vec<(PatchMatch, bool)> {
         let mut results: Vec<(PatchMatch, bool)> = gp
             .get_all_matches()
             .into_iter()
@@ -3541,7 +3555,14 @@ mod tests {
                 (pm, ok)
             })
             .collect();
-        results.sort_by_key(|(pm, _)| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id));
+        results.sort_by_key(|(pm, _)| {
+            (
+                pm.a_range.start_offset,
+                pm.len(),
+                pm.b.range.start_offset,
+                pm.b.tile_id,
+            )
+        });
         results
     }
 
@@ -3769,13 +3790,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::geom::glue::junctions_glueable(
-                        gp.angles(),
-                        ns_u,
-                        len,
-                        b_seq,
-                        ne_u,
-                    ) {
+                    if !crate::geom::glue::junctions_glueable(gp.angles(), ns_u, len, b_seq, ne_u) {
                         continue;
                     }
                     if rat
@@ -3791,7 +3806,14 @@ mod tests {
         let from_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
             .get_all_matches()
             .into_iter()
-            .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
+            .map(|pm| {
+                (
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                    pm.b.tile_id,
+                )
+            })
             .collect();
 
         assert_eq!(
@@ -3831,13 +3853,7 @@ mod tests {
                     }
                     let ns_u = ns.rem_euclid(n as i64) as usize;
                     let ne_u = ne.rem_euclid(m_tile as i64) as usize;
-                    if !crate::geom::glue::junctions_glueable(
-                        gp.angles(),
-                        ns_u,
-                        len,
-                        b_seq,
-                        ne_u,
-                    ) {
+                    if !crate::geom::glue::junctions_glueable(gp.angles(), ns_u, len, b_seq, ne_u) {
                         continue;
                     }
                     if rat
@@ -3845,9 +3861,9 @@ mod tests {
                         .is_ok()
                     {
                         brute_matches.push(PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
-));
+                            EdgeRange::new(ns_u, len),
+                            Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
+                        ));
                     }
                 }
             }
@@ -3856,7 +3872,14 @@ mod tests {
         // canonical match).
         let brute_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = brute_matches
             .iter()
-            .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
+            .map(|pm| {
+                (
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                    pm.b.tile_id,
+                )
+            })
             .collect();
 
         for target in 0..n {
@@ -3879,7 +3902,14 @@ mod tests {
             let touching_api: std::collections::BTreeSet<(usize, usize, usize, usize)> = gp
                 .get_matches_touching_vertex(target)
                 .into_iter()
-                .map(|pm| (pm.a_range.start_offset, pm.len(), pm.b.range.start_offset, pm.b.tile_id))
+                .map(|pm| {
+                    (
+                        pm.a_range.start_offset,
+                        pm.len(),
+                        pm.b.range.start_offset,
+                        pm.b.tile_id,
+                    )
+                })
                 .collect();
             assert_eq!(
                 touching_brute, touching_api,
@@ -4162,22 +4192,10 @@ mod tests {
         // PatchMatch values for reproducibility; targeted boundary
         // lengths after each step are 10, 14, 16, 18.
         let glues = [
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        ),
-            PatchMatch::new(
-                            EdgeRange::new(1, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
-            PatchMatch::new(
-                            EdgeRange::new(2, 2),
-                            Segment::new(0, EdgeRange::new(1, 2)),
-                        ),
-            PatchMatch::new(
-                            EdgeRange::new(9, 2),
-                            Segment::new(0, EdgeRange::new(1, 2)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(0, 1))),
+            PatchMatch::new(EdgeRange::new(1, 1), Segment::new(0, EdgeRange::new(1, 1))),
+            PatchMatch::new(EdgeRange::new(2, 2), Segment::new(0, EdgeRange::new(1, 2))),
+            PatchMatch::new(EdgeRange::new(9, 2), Segment::new(0, EdgeRange::new(1, 2))),
         ];
         let mut gp = hex_patch();
         for (i, pm) in glues.iter().enumerate() {
@@ -4411,18 +4429,9 @@ mod tests {
         // squares: pin each glue's PatchMatch directly. Boundary
         // length grows 4 → 6 → 8 → 10.
         let glues = [
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        ),
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
-            PatchMatch::new(
-                            EdgeRange::new(0, 1),
-                            Segment::new(0, EdgeRange::new(1, 1)),
-                        ),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(0, 1))),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
+            PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
         ];
         let mut gp = square_patch();
         for (i, pm) in glues.iter().enumerate() {

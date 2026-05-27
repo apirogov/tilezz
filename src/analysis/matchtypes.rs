@@ -29,11 +29,7 @@ use crate::analysis::matchfinder::MatchFinder;
 /// Realise a `TileMatch` against the two tilesets, producing the
 /// resulting boundary as a `Rat`. Assumes the match has been previously
 /// validated (e.g. it came from a `MatchFinder`); will panic otherwise.
-pub fn apply_match<T: IsRing>(
-    m: &TileMatch,
-    rats_a: &[Rat<T>],
-    rats_b: &[Rat<T>],
-) -> Rat<T> {
+pub fn apply_match<T: IsRing>(m: &TileMatch, rats_a: &[Rat<T>], rats_b: &[Rat<T>]) -> Rat<T> {
     rats_a[m.a.tile_id]
         .try_glue_precomputed(
             (
@@ -104,12 +100,16 @@ impl<T: IsRing> MatchTypeIndex<T> {
             by_start[ti] = vec![vec![]; rats[ti].len()];
         }
         for mt in &all_matches {
-            let cm = Segment::new(mt.b.tile_id, EdgeRange::new(mt.b.range.start_offset, mt.len()));
+            let cm = Segment::new(
+                mt.b.tile_id,
+                EdgeRange::new(mt.b.range.start_offset, mt.len()),
+            );
             by_start[mt.a.tile_id][mt.a.range.start_offset].push(cm);
-            let inv =
-                mt.involution(rats[mt.a.tile_id].len(), rats[mt.b.tile_id].len());
-            let cm_inv =
-                Segment::new(inv.b.tile_id, EdgeRange::new(inv.b.range.start_offset, inv.len()));
+            let inv = mt.involution(rats[mt.a.tile_id].len(), rats[mt.b.tile_id].len());
+            let cm_inv = Segment::new(
+                inv.b.tile_id,
+                EdgeRange::new(inv.b.range.start_offset, inv.len()),
+            );
             by_start[inv.a.tile_id][inv.a.range.start_offset].push(cm_inv);
         }
 
@@ -250,8 +250,16 @@ mod tests {
         );
         for (idx, (mf_m, bf_m)) in mf_matches.iter().zip(bf_matches.iter()).enumerate() {
             assert_eq!(
-                (mf_m.a.range.start_offset, mf_m.len(), mf_m.b.range.start_offset),
-                (bf_m.a.range.start_offset, bf_m.len(), bf_m.b.range.start_offset),
+                (
+                    mf_m.a.range.start_offset,
+                    mf_m.len(),
+                    mf_m.b.range.start_offset
+                ),
+                (
+                    bf_m.a.range.start_offset,
+                    bf_m.len(),
+                    bf_m.b.range.start_offset
+                ),
                 "{label}: interval mismatch at index {idx}",
             );
             assert_eq!(
@@ -352,7 +360,8 @@ mod tests {
         for w in matches.windows(2) {
             assert!(
                 w[0].a.range.start_offset <= w[1].a.range.start_offset
-                    && (w[0].a.range.start_offset < w[1].a.range.start_offset || w[0].b.range.start_offset <= w[1].b.range.start_offset),
+                    && (w[0].a.range.start_offset < w[1].a.range.start_offset
+                        || w[0].b.range.start_offset <= w[1].b.range.start_offset),
                 "matches not in deterministic order"
             );
         }
@@ -372,7 +381,8 @@ mod tests {
                     || (w[0].a.tile_id == w[1].a.tile_id
                         && w[0].b.tile_id == w[1].b.tile_id
                         && (w[0].a.range.start_offset < w[1].a.range.start_offset
-                            || (w[0].a.range.start_offset == w[1].a.range.start_offset && w[0].b.range.start_offset <= w[1].b.range.start_offset))),
+                            || (w[0].a.range.start_offset == w[1].a.range.start_offset
+                                && w[0].b.range.start_offset <= w[1].b.range.start_offset))),
                 "all_valid_matches not sorted"
             );
         }
@@ -1026,7 +1036,11 @@ mod tests {
                 continue;
             }
 
-            let fwd = (mt.a.range.start_offset as i64, mt.len(), mt.b.range.start_offset as i64);
+            let fwd = (
+                mt.a.range.start_offset as i64,
+                mt.len(),
+                mt.b.range.start_offset as i64,
+            );
             let rat_fwd = r
                 .try_glue_precomputed(fwd, &r, true)
                 .expect("forward glue should work");
@@ -1055,7 +1069,13 @@ mod tests {
                     if rat_rev == rat_fwd {
                         eprintln!(
                             "  MATCH {} works: fwd=({},{},{}) rev=({},{},{}) rat_fwd==rat_rev",
-                            label, ns, mt.len(), ne, ns2, len2, ne2
+                            label,
+                            ns,
+                            mt.len(),
+                            ne,
+                            ns2,
+                            len2,
+                            ne2
                         );
                         found = true;
 
@@ -1235,11 +1255,19 @@ mod tests {
             let found = idx
                 .candidates_starting_at(mt.a.tile_id, mt.a.range.start_offset)
                 .iter()
-                .any(|c| c.tile_id == mt.b.tile_id && c.range.start_offset == mt.b.range.start_offset && c.len() == mt.len());
+                .any(|c| {
+                    c.tile_id == mt.b.tile_id
+                        && c.range.start_offset == mt.b.range.start_offset
+                        && c.len() == mt.len()
+                });
             assert!(
                 found,
                 "match ({}, {}, {}, {}, {}) not found in secondary index",
-                mt.a.tile_id, mt.a.range.start_offset, mt.b.tile_id, mt.b.range.start_offset, mt.len()
+                mt.a.tile_id,
+                mt.a.range.start_offset,
+                mt.b.tile_id,
+                mt.b.range.start_offset,
+                mt.len()
             );
         }
     }
@@ -1270,14 +1298,16 @@ mod tests {
             let all_mf = mf.all_valid_matches();
             let mut mf_sorted = all_mf.clone();
             mf_sorted.sort_by(|x, y| {
-                x.a.range.start_offset
+                x.a.range
+                    .start_offset
                     .cmp(&y.a.range.start_offset)
                     .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
 
             let mut bf_all = bf_matches.clone();
             bf_all.sort_by(|x, y| {
-                x.a.range.start_offset
+                x.a.range
+                    .start_offset
                     .cmp(&y.a.range.start_offset)
                     .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
@@ -1293,7 +1323,8 @@ mod tests {
                 idx_all.push(entry.second);
             }
             idx_all.sort_by(|x, y| {
-                x.a.range.start_offset
+                x.a.range
+                    .start_offset
                     .cmp(&y.a.range.start_offset)
                     .then_with(|| x.b.range.start_offset.cmp(&y.b.range.start_offset))
             });
@@ -1309,8 +1340,16 @@ mod tests {
 
             for (i, (idx_mt, bf_mt)) in idx_all.iter().zip(bf_all.iter()).enumerate() {
                 assert_eq!(
-                    (idx_mt.a.range.start_offset, idx_mt.len(), idx_mt.b.range.start_offset),
-                    (bf_mt.a.range.start_offset, bf_mt.len(), bf_mt.b.range.start_offset),
+                    (
+                        idx_mt.a.range.start_offset,
+                        idx_mt.len(),
+                        idx_mt.b.range.start_offset
+                    ),
+                    (
+                        bf_mt.a.range.start_offset,
+                        bf_mt.len(),
+                        bf_mt.b.range.start_offset
+                    ),
                     "{label}: tuple mismatch at index {i}",
                 );
             }

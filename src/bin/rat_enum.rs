@@ -35,7 +35,11 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
     let base = prefix.len();
     let d = base + 1;
     let get = |i: usize| -> i8 {
-        if i < base { prefix[i] } else { new }
+        if i < base {
+            prefix[i]
+        } else {
+            new
+        }
     };
     for k in 1..d {
         for i in 0..(d - k) {
@@ -215,11 +219,7 @@ fn collect_seeds<ZZ: IsRing>(
 /// prefixes out to `n_threads` worker threads via a shared atomic
 /// counter. Each worker keeps its own `HashSet` and the main thread
 /// merges the per-worker sets at the end.
-pub fn rat_enum_parallel<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-) -> Vec<Vec<i8>> {
+pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
     // Effective branching with `step`: directions in `[-(hturn-1), hturn-1]`
     // that are multiples of `step`, i.e. `2 * floor((hturn-1)/step) + 1`.
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
@@ -227,9 +227,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(
     let split_depth = splitting_depth(n_threads, branching);
 
     println!("-------- enumeration started --------");
-    println!(
-        "parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}"
-    );
+    println!("parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}");
 
     let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
     let mut seeds: Vec<Vec<i8>> = Vec::new();
@@ -292,11 +290,7 @@ fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
         .collect()
 }
 
-fn enumerate_dispatch<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-) -> Vec<Vec<i8>> {
+fn enumerate_dispatch<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
     if n_threads <= 1 {
         rat_enum::<ZZ>(max_steps, step)
     } else {
@@ -520,10 +514,7 @@ fn main() {
                 Fill::solid(Color::YELLOW.with_alpha(80)),
                 Stroke::solid(Color::BLACK, 0.01 * r),
             )
-            .with_vertex_marker(MarkerStyle::filled_circle(
-                0.06 * r,
-                Color::RED,
-            ))
+            .with_vertex_marker(MarkerStyle::filled_circle(0.06 * r, Color::RED))
             .with_vertex_labels(TextStyle::new(0.04 * r, Color::WHITE).bold());
 
             let frames: Vec<Scene> = rats

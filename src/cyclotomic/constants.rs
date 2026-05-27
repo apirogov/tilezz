@@ -64,7 +64,7 @@ pub fn zz20_half_sqrt_penta() -> ZZ20 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rings::{ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8, ZZ10_Y};
+    use super::super::rings::{ZZ10, ZZ10_Y, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
     use super::super::traits::SymNum;
     use super::*;
 

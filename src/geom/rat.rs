@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use num_traits::ToPrimitive;
 
-use crate::cyclotomic::{IsRing};
+use crate::cyclotomic::IsRing;
 use crate::stringmatch::match_length;
 
 use super::angles::{comp, revcomp};
@@ -98,9 +98,7 @@ impl<I: ToPrimitive, T: IsRing> TryFrom<&[I]> for Rat<T> {
         Snake::try_from(value).and_then(|s| Rat::try_from(&s))
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsRing> TryFrom<&[I; N]>
-    for Rat<T>
-{
+impl<const N: usize, I: ToPrimitive, T: IsRing> TryFrom<&[I; N]> for Rat<T> {
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {
@@ -262,19 +260,22 @@ impl<T: IsRing> Rat<T> {
     /// # Input: seed vertex pair, asymmetrically named
     ///
     /// The two arguments name the **same** boundary vertex on the two
-    /// tiles — the point where the matched edges coincide when the
+    /// tiles -- the point where the matched edges coincide when the
     /// glue is applied. Because the glue is **anti-parallel** (this
     /// side traversed CCW, `other` traversed CW), that single shared
     /// vertex sits at *different* ends of the matched range on the two
     /// tiles:
-    ///   - on `self`: at the CW endpoint of the matched range (tile-forward
-    ///     **start**), hence the name `self_start`,
-    ///   - on `other`: at the CCW endpoint of the matched range (tile-forward
-    ///     **end**), hence the name `other_end`.
-    /// The asymmetric naming reflects the anti-parallel geometry; you cannot
-    /// pass "first matched edge" on both sides because under anti-parallel
-    /// gluing those edges sit at opposite ends and you'd need `len` to
-    /// relate them (and `len` is the output, not the input).
+    ///
+    ///   - on `self`: at the CW endpoint of the matched range
+    ///     (tile-forward **start**), hence the name `self_start`,
+    ///   - on `other`: at the CCW endpoint of the matched range
+    ///     (tile-forward **end**), hence the name `other_end`.
+    ///
+    /// The asymmetric naming reflects the anti-parallel geometry; you
+    /// cannot pass "first matched edge" on both sides because under
+    /// anti-parallel gluing those edges sit at opposite ends and you'd
+    /// need `len` to relate them (and `len` is the output, not the
+    /// input).
     ///
     /// # Output: `(a_start, len, b_end)`
     ///

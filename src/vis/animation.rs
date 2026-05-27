@@ -61,11 +61,8 @@ pub fn render_gif(
     for scene in scenes {
         let pixmap = render_to_pixmap(scene, vp, &opt)?;
         let mut rgba = pixmap.data().to_vec();
-        let mut frame = gif::Frame::from_rgba(
-            vp.width_px as u16,
-            vp.height_px as u16,
-            rgba.as_mut_slice(),
-        );
+        let mut frame =
+            gif::Frame::from_rgba(vp.width_px as u16, vp.height_px as u16, rgba.as_mut_slice());
         frame.delay = delay_cs;
         encoder
             .write_frame(&frame)
@@ -115,7 +112,11 @@ mod tests {
         assert_eq!((w, h), (64, 64));
         // A 2-frame GIF should be larger than a 1-frame GIF; here
         // we just check it's not a header-only stub.
-        assert!(bytes.len() > 200, "GIF suspiciously small ({} bytes)", bytes.len());
+        assert!(
+            bytes.len() > 200,
+            "GIF suspiciously small ({} bytes)",
+            bytes.len()
+        );
     }
 
     #[test]

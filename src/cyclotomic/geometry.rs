@@ -14,30 +14,21 @@ pub fn is_colinear<ZZ: IsRing>(p: &ZZ, a: &ZZ, b: &ZZ) -> bool {
 /// (which includes colinearity).
 ///
 /// Uses the identity `wedge(b - a, d - c) == 0`.
-pub fn lines_parallel<ZZ: IsRing>(
-    (a, b): (&ZZ, &ZZ),
-    (c, d): (&ZZ, &ZZ),
-) -> bool {
+pub fn lines_parallel<ZZ: IsRing>((a, b): (&ZZ, &ZZ), (c, d): (&ZZ, &ZZ)) -> bool {
     wedge_sign(&(*b - *a), &(*d - *c)) == 0
 }
 
 /// Return whether the line through `(a, b)` is perpendicular to the line through `(c, d)`.
 ///
 /// Uses the identity `dot(b - a, d - c) == 0`.
-pub fn lines_perp<ZZ: IsRing>(
-    (a, b): (&ZZ, &ZZ),
-    (c, d): (&ZZ, &ZZ),
-) -> bool {
+pub fn lines_perp<ZZ: IsRing>((a, b): (&ZZ, &ZZ), (c, d): (&ZZ, &ZZ)) -> bool {
     dot_sign(&(*b - *a), &(*d - *c)) == 0
 }
 
 /// Return whether line segments AB and CD intersect.
 /// Note that touching in only endpoints does not count as intersection.
 /// Based on: <https://stackoverflow.com/a/9997374/432908>
-pub fn intersect<ZZ: IsRing + PartialEq>(
-    &(a, b): &(ZZ, ZZ),
-    &(c, d): &(ZZ, ZZ),
-) -> bool {
+pub fn intersect<ZZ: IsRing + PartialEq>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
         // we ignore touching endpoints
         // (not counting it as proper intersection of _disjoint_ segments)
@@ -64,10 +55,7 @@ pub fn intersect<ZZ: IsRing + PartialEq>(
 /// Per-ring overrides may exploit the unit-length precondition for speed
 /// (see `IntersectUnitSegments` and the ZZ12 specialization).
 #[inline]
-pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(
-    s1: &(ZZ, ZZ),
-    s2: &(ZZ, ZZ),
-) -> bool {
+pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(s1: &(ZZ, ZZ), s2: &(ZZ, ZZ)) -> bool {
     ZZ::intersect_unit_segments(s1, s2)
 }
 

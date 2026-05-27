@@ -5,10 +5,10 @@ use std::time::Instant;
 use clap::Parser;
 use rustc_hash::FxHashSet;
 
+use tilezz::analysis::patch_enum::enum_patches;
 use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4};
 use tilezz::geom::rat::Rat;
 use tilezz::geom::tileset::{self, TileSet};
-use tilezz::analysis::patch_enum::enum_patches;
 
 #[derive(Parser)]
 #[command(
@@ -112,8 +112,7 @@ where
                             let tile = tileset.rat(tile_idx);
                             for ia in 0..patch.len() {
                                 for ib in 0..tile.len() {
-                                    if let Ok(glued) =
-                                        patch.try_glue((ia as i64, ib as i64), tile)
+                                    if let Ok(glued) = patch.try_glue((ia as i64, ib as i64), tile)
                                     {
                                         local.insert(glued);
                                     }

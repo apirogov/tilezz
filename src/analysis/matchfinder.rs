@@ -91,7 +91,6 @@ impl<T: IsRing> BpSeed<T> {
     }
 }
 
-
 /// Enumerates legal glue matches between two tilesets (or one tileset
 /// against itself).
 ///
@@ -138,8 +137,7 @@ impl<T: IsRing> MatchFinder<T> {
     /// into the same `tileset.rats()`. Use this for the pairwise
     /// "which tiles glue to which" enumeration over one set.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let sequences: Vec<Vec<i8>> =
-            tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
+        let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let b_matcher = Arc::new(BitParallelMatcher::new(&sequences));
         MatchFinder {
             set_a: Arc::clone(&tileset),
@@ -323,7 +321,10 @@ impl<T: IsRing> MatchFinder<T> {
 
         let cmi_matches = self.maximal_rc_matches_at_positions(i, j, &scan_positions);
         for m in &cmi_matches {
-            let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
+            let (ns, len, ne) = a.get_match(
+                (m.a.range.start_offset as i64, m.b.range.start_offset as i64),
+                b,
+            );
             if len <= 1 {
                 continue;
             }
@@ -365,7 +366,10 @@ impl<T: IsRing> MatchFinder<T> {
                         glued,
                         TileMatch::new(
                             Segment::new(i, EdgeRange::new(ns_u, len)),
-                            Segment::new(j, EdgeRange::new(ne.rem_euclid(n_b as i64) as usize, len)),
+                            Segment::new(
+                                j,
+                                EdgeRange::new(ne.rem_euclid(n_b as i64) as usize, len),
+                            ),
                         ),
                     ));
                 }
@@ -414,7 +418,10 @@ impl<T: IsRing> MatchFinder<T> {
 
         let cmi_matches = self.maximal_rc_matches(i, j);
         for m in &cmi_matches {
-            let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
+            let (ns, len, ne) = a.get_match(
+                (m.a.range.start_offset as i64, m.b.range.start_offset as i64),
+                b,
+            );
             if len <= 1 {
                 continue;
             }

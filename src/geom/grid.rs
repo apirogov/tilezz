@@ -11,23 +11,95 @@ use crate::cyclotomic::IsRing;
 /// have `(dx, dy)` in this range -- no boundary cases.
 static NEIGHBOR_OFFSETS: [&[(i64, i64)]; 9] = [
     // (dx=-1, dy=-1): p2 down-left of p1
-    &[(-2, -1), (-1, -2), (-1, -1), (-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)],
+    &[
+        (-2, -1),
+        (-1, -2),
+        (-1, -1),
+        (-1, 0),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, 0),
+    ],
     // (dx=-1, dy=0): p2 left of p1
-    &[(-2, 0), (-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (1, 0)],
+    &[
+        (-2, 0),
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, 0),
+    ],
     // (dx=-1, dy=1): p2 up-left of p1
-    &[(-2, 1), (-1, 0), (-1, 1), (-1, 2), (0, -1), (0, 0), (0, 1), (1, 0)],
+    &[
+        (-2, 1),
+        (-1, 0),
+        (-1, 1),
+        (-1, 2),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, 0),
+    ],
     // (dx=0, dy=-1): p2 below p1
-    &[(-1, -1), (-1, 0), (0, -2), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0)],
+    &[
+        (-1, -1),
+        (-1, 0),
+        (0, -2),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+    ],
     // (dx=0, dy=0): same cell, single 5-cell cross
     &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0)],
     // (dx=0, dy=1): p2 above p1
-    &[(-1, 0), (-1, 1), (0, -1), (0, 0), (0, 1), (0, 2), (1, 0), (1, 1)],
+    &[
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (0, 2),
+        (1, 0),
+        (1, 1),
+    ],
     // (dx=1, dy=-1): p2 down-right of p1
-    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, -2), (1, -1), (1, 0), (2, -1)],
+    &[
+        (-1, 0),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, -2),
+        (1, -1),
+        (1, 0),
+        (2, -1),
+    ],
     // (dx=1, dy=0): p2 right of p1
-    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0), (1, 1), (2, 0)],
+    &[
+        (-1, 0),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+        (2, 0),
+    ],
     // (dx=1, dy=1): p2 up-right of p1
-    &[(-1, 0), (0, -1), (0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
+    &[
+        (-1, 0),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, 0),
+        (1, 1),
+        (1, 2),
+        (2, 1),
+    ],
 ];
 
 /// Spatial hash from integer unit-square cells to a list of `usize` IDs
@@ -122,10 +194,7 @@ impl UnitSquareGrid {
     /// Panics in debug if `(dx, dy)` escapes `{-1, 0, 1}^2` (which would
     /// indicate non-unit input or a `cell_of` rounding bug).
     #[inline]
-    pub fn edge_neighborhood_of<T: IsRing>(
-        p1: T,
-        p2: T,
-    ) -> impl Iterator<Item = (i64, i64)> {
+    pub fn edge_neighborhood_of<T: IsRing>(p1: T, p2: T) -> impl Iterator<Item = (i64, i64)> {
         let (cx, cy) = Self::cell_of(p1);
         let (cx2, cy2) = Self::cell_of(p2);
         let dx = cx2 - cx;
@@ -349,8 +418,7 @@ mod tests {
                             // boundary positions.
                             let p1: ZZ12 = ZZ12::from((ax, ay))
                                 + <ZZ12 as Units>::unit(2).scale(bx)
-                                + <ZZ12 as Units>::unit(2).scale(by)
-                                    * <ZZ12 as Units>::unit(3);
+                                + <ZZ12 as Units>::unit(2).scale(by) * <ZZ12 as Units>::unit(3);
                             let p2 = p1 + <ZZ12 as Units>::unit(dir);
                             let mut from_table: Vec<(i64, i64)> =
                                 UnitSquareGrid::edge_neighborhood_of(p1, p2).collect();
@@ -360,13 +428,7 @@ mod tests {
                             // centered on each endpoint's cell.
                             let cross = |p: ZZ12| -> [(i64, i64); 5] {
                                 let (x, y) = UnitSquareGrid::cell_of(p);
-                                [
-                                    (x - 1, y),
-                                    (x, y - 1),
-                                    (x, y),
-                                    (x, y + 1),
-                                    (x + 1, y),
-                                ]
+                                [(x - 1, y), (x, y - 1), (x, y), (x, y + 1), (x + 1, y)]
                             };
                             let mut reference: Vec<(i64, i64)> = Vec::with_capacity(10);
                             reference.extend_from_slice(&cross(p1));
@@ -391,7 +453,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(diffs, 0, "{diffs} (p1, dir) cases disagree with the reference");
+        assert_eq!(
+            diffs, 0,
+            "{diffs} (p1, dir) cases disagree with the reference"
+        );
     }
 
     #[test]

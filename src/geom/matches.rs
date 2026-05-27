@@ -45,9 +45,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Indices wrap modulo the boundary length when the consumer is cyclic;
 /// this type itself makes no assumption about wrap-around.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EdgeRange {
     pub start_offset: usize,
     pub len: usize,
@@ -68,9 +66,7 @@ impl EdgeRange {
 /// "Line up" means the consumer treats the `len` edges in `a` and the
 /// `len` edges in `b` as compatible (e.g. revcomp-equivalent for gluing).
 /// No tile ids, no ring information.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Match {
     pub a: EdgeRange,
     pub b: EdgeRange,
@@ -131,8 +127,14 @@ impl Match {
     /// Attach tile ids on both sides, lifting to a [`TileMatch`].
     pub fn with_tiles(self, a_tile: usize, b_tile: usize) -> TileMatch {
         TileMatch {
-            a: Segment { tile_id: a_tile, range: self.a },
-            b: Segment { tile_id: b_tile, range: self.b },
+            a: Segment {
+                tile_id: a_tile,
+                range: self.a,
+            },
+            b: Segment {
+                tile_id: b_tile,
+                range: self.b,
+            },
         }
     }
 
@@ -141,7 +143,10 @@ impl Match {
     pub fn with_b_tile(self, b_tile: usize) -> PatchMatch {
         PatchMatch {
             a_range: self.a,
-            b: Segment { tile_id: b_tile, range: self.b },
+            b: Segment {
+                tile_id: b_tile,
+                range: self.b,
+            },
         }
     }
 }
@@ -154,9 +159,7 @@ impl Match {
 ///
 /// `tile_id` is meaningful relative to some `TileSet` the caller knows
 /// about; this type does not name the tileset.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Segment {
     pub tile_id: usize,
     pub range: EdgeRange,
@@ -206,9 +209,7 @@ impl Segment {
 /// `tile_seg.tile_id`, and their tile-offsets are cyclically
 /// continuous. Callers that need true cyclic runs must stitch these
 /// two halves themselves.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PatchSegment {
     /// Range on the patch boundary.
     pub range: EdgeRange,
@@ -296,9 +297,7 @@ impl PatchSegment {
 /// `spectre_old_encoding_*` regression) from the storage convention.
 /// They are orthogonal. The tile_offset encoding was fixed without
 /// touching `start_offset` semantics.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PatchMatch {
     pub a_range: EdgeRange,
     pub b: Segment,
@@ -334,9 +333,7 @@ impl PatchMatch {
 
 /// Match with tile ids on both sides. Used when both endpoints are
 /// tiles drawn from (one or two related) `TileSet`s.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TileMatch {
     pub a: Segment,
     pub b: Segment,
@@ -373,8 +370,14 @@ impl TileMatch {
     pub fn involution(self, len_a: usize, len_b: usize) -> Self {
         let inv = self.spec().involution(len_a, len_b);
         TileMatch {
-            a: Segment { tile_id: self.b.tile_id, range: inv.a },
-            b: Segment { tile_id: self.a.tile_id, range: inv.b },
+            a: Segment {
+                tile_id: self.b.tile_id,
+                range: inv.a,
+            },
+            b: Segment {
+                tile_id: self.a.tile_id,
+                range: inv.b,
+            },
         }
     }
 }
@@ -500,10 +503,7 @@ mod tests {
 
     #[test]
     fn patch_match_spec_strips_b_tile_id() {
-        let pm = PatchMatch::new(
-            EdgeRange::new(1, 2),
-            Segment::new(5, EdgeRange::new(9, 2)),
-        );
+        let pm = PatchMatch::new(EdgeRange::new(1, 2), Segment::new(5, EdgeRange::new(9, 2)));
         let m = pm.spec();
         assert_eq!(m.a, EdgeRange::new(1, 2));
         assert_eq!(m.b, EdgeRange::new(9, 2));
@@ -514,10 +514,7 @@ mod tests {
     #[should_panic(expected = "equal length")]
     #[cfg(debug_assertions)]
     fn patch_match_unequal_len_panics() {
-        let _pm = PatchMatch::new(
-            EdgeRange::new(1, 3),
-            Segment::new(5, EdgeRange::new(9, 2)),
-        );
+        let _pm = PatchMatch::new(EdgeRange::new(1, 3), Segment::new(5, EdgeRange::new(9, 2)));
     }
 
     #[test]

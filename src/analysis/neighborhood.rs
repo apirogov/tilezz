@@ -98,12 +98,12 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use crate::cyclotomic::{IsRing};
-use crate::geom::matches::{EdgeRange, Segment};
 use crate::analysis::matchtypes::MatchTypeIndex;
+use crate::cyclotomic::IsRing;
+use crate::geom::matches::{EdgeRange, Segment};
 use crate::geom::patch::{GrowingPatch, PatchMatch};
-use crate::geom::vertices::{EdgeInfo, OpenVertexType, TransitionSide};
 use crate::geom::tileset::TileSet;
+use crate::geom::vertices::{EdgeInfo, OpenVertexType, TransitionSide};
 
 /// One catalog entry of a local **interface** between a tile and any
 /// legal context patch sharing one contiguous matched edge run with
@@ -721,17 +721,17 @@ struct BfsState {
 /// Phase 1: enumerate every two-tile patch from `MatchTypeIndex`, try
 /// every third-tile glue against it, and accept each successful glue
 /// as a seed NT (after a self-consistency check via [`nt_is_valid`]).
-fn seed_phase<T: IsRing>(
-    state: &mut BfsState,
-    match_index: &Arc<MatchTypeIndex<T>>,
-) {
+fn seed_phase<T: IsRing>(state: &mut BfsState, match_index: &Arc<MatchTypeIndex<T>>) {
     for id in 1..=match_index.num_types() {
         let mt = match_index.get(id);
         let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.a.tile_id);
         let pm = PatchMatch::new(
-                            EdgeRange::new(mt.a.range.start_offset, mt.len()),
-                            Segment::new(mt.b.tile_id, EdgeRange::new(mt.b.range.start_offset, mt.len())),
-                        );
+            EdgeRange::new(mt.a.range.start_offset, mt.len()),
+            Segment::new(
+                mt.b.tile_id,
+                EdgeRange::new(mt.b.range.start_offset, mt.len()),
+            ),
+        );
         if !patch.add_tile(&pm) {
             continue;
         }
@@ -800,7 +800,9 @@ fn build_seed_nt<T: IsRing>(
     // from the anchor is at most match_len.
     let filtered: Vec<&(usize, OpenVertexType)> = all_juncs
         .iter()
-        .filter(|(pos, _)| (pos + patch_n - third_pm.a_range.start_offset) % patch_n <= third_pm.len())
+        .filter(|(pos, _)| {
+            (pos + patch_n - third_pm.a_range.start_offset) % patch_n <= third_pm.len()
+        })
         .collect();
     if filtered.is_empty() {
         return None;
@@ -836,10 +838,7 @@ fn build_seed_nt<T: IsRing>(
 /// into `entries` but not into the BFS queue — they are terminal.
 /// [`NeighborhoodIndex::classify_all`] recognises them directly as
 /// Blessed escape destinations.
-fn bfs_phase<T: IsRing>(
-    state: &mut BfsState,
-    match_index: &Arc<MatchTypeIndex<T>>,
-) {
+fn bfs_phase<T: IsRing>(state: &mut BfsState, match_index: &Arc<MatchTypeIndex<T>>) {
     while let Some(src_id) = state.queue.pop_front() {
         let entry = state.entries[src_id - 1].clone();
         let outcomes = match &entry {
@@ -953,9 +952,12 @@ fn build_attached_context<T: IsRing>(
     let last_covered_ctx_edge = ctx.edges()[(anchor_pos + match_len - 1) % ctx_n];
 
     let central_pm = PatchMatch::new(
-                            EdgeRange::new(anchor_pos, match_len),
-                            Segment::new(nt.central_tile_id, EdgeRange::new(nt.cw_anchor_on_central, match_len)),
-                        );
+        EdgeRange::new(anchor_pos, match_len),
+        Segment::new(
+            nt.central_tile_id,
+            EdgeRange::new(nt.cw_anchor_on_central, match_len),
+        ),
+    );
     let mut aug = ctx.clone();
     if !aug.add_tile(&central_pm) {
         return None;
@@ -1305,9 +1307,12 @@ fn try_construct_nt_from_cw<T: IsRing>(
     let (canon_vt_seq, canon_cw_on_ctx, canon_ccw_on_ctx) =
         canonicalize_vt_seq_on_ctx(&ctx, cw_anchor_pos, ccw_anchor_pos, ctx_n)?;
     let pm = PatchMatch::new(
-                            EdgeRange::new(cw_anchor_pos, match_len),
-                            Segment::new(central_tile_id, EdgeRange::new(cw_anchor_on_central, match_len)),
-                        );
+        EdgeRange::new(cw_anchor_pos, match_len),
+        Segment::new(
+            central_tile_id,
+            EdgeRange::new(cw_anchor_on_central, match_len),
+        ),
+    );
     if !ctx.add_tile(&pm) {
         return None;
     }
@@ -1327,10 +1332,7 @@ fn try_construct_nt_from_cw<T: IsRing>(
 /// geometry implies. Used as a post-hoc validator (see
 /// [`NeighborhoodIndex::validate`]) and as a seed-acceptance filter
 /// during BFS construction.
-fn nt_is_valid<T: IsRing>(
-    nt: &NeighborhoodType,
-    match_index: &Arc<MatchTypeIndex<T>>,
-) -> bool {
+fn nt_is_valid<T: IsRing>(nt: &NeighborhoodType, match_index: &Arc<MatchTypeIndex<T>>) -> bool {
     let Some(reconstructed) = try_construct_nt_from_cw(
         nt.central_tile_id,
         nt.cw_anchor_on_central,
@@ -1348,8 +1350,8 @@ fn nt_is_valid<T: IsRing>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::ZZ12;
     use crate::analysis::matchtypes::MatchTypeIndex;
+    use crate::cyclotomic::ZZ12;
     use crate::geom::patch::GrowingPatch;
     use crate::geom::tileset;
     use std::sync::OnceLock;
@@ -1600,9 +1602,9 @@ mod tests {
                 for len in 0..=n {
                     for target in 0..n {
                         let pm = PatchMatch::new(
-    EdgeRange::new(start, len),
-    Segment::new(0, EdgeRange::new(0, len)),
-);
+                            EdgeRange::new(start, len),
+                            Segment::new(0, EdgeRange::new(0, len)),
+                        );
                         let got = match_absorbs_edge(&pm, target, n);
                         let want = brute(start, len, target, n);
                         assert_eq!(got, want, "n={n} start={start} len={len} target={target}");
@@ -1612,19 +1614,13 @@ mod tests {
         }
 
         // Pin the wrap regression case directly: edge n-1, len 1.
-        let pm = PatchMatch::new(
-                            EdgeRange::new(25, 1),
-                            Segment::new(0, EdgeRange::new(0, 1)),
-                        );
+        let pm = PatchMatch::new(EdgeRange::new(25, 1), Segment::new(0, EdgeRange::new(0, 1)));
         assert!(match_absorbs_edge(&pm, 25, 26));
         assert!(!match_absorbs_edge(&pm, 0, 26));
 
         // Pin the wrap-spanning case: starts at n-1, len 2, covers
         // edges n-1 and 0.
-        let pm = PatchMatch::new(
-                            EdgeRange::new(25, 2),
-                            Segment::new(0, EdgeRange::new(0, 2)),
-                        );
+        let pm = PatchMatch::new(EdgeRange::new(25, 2), Segment::new(0, EdgeRange::new(0, 2)));
         assert!(match_absorbs_edge(&pm, 25, 26));
         assert!(match_absorbs_edge(&pm, 0, 26));
         assert!(!match_absorbs_edge(&pm, 1, 26));
@@ -1703,13 +1699,22 @@ mod tests {
         let first_junc = *jp.first()?;
         let cw_anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
         let pm = PatchMatch::new(
-                            EdgeRange::new(cw_anchor_pos, (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
-                - nt.ccw_anchor_on_central)
-                % mi.tileset().rat(nt.central_tile_id).seq().len()),
-                            Segment::new(nt.central_tile_id, EdgeRange::new(nt.cw_anchor_on_central, (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
-                - nt.ccw_anchor_on_central)
-                % mi.tileset().rat(nt.central_tile_id).seq().len())),
-                        );
+            EdgeRange::new(
+                cw_anchor_pos,
+                (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
+                    - nt.ccw_anchor_on_central)
+                    % mi.tileset().rat(nt.central_tile_id).seq().len(),
+            ),
+            Segment::new(
+                nt.central_tile_id,
+                EdgeRange::new(
+                    nt.cw_anchor_on_central,
+                    (nt.cw_anchor_on_central + mi.tileset().rat(nt.central_tile_id).seq().len()
+                        - nt.ccw_anchor_on_central)
+                        % mi.tileset().rat(nt.central_tile_id).seq().len(),
+                ),
+            ),
+        );
         if !ctx.add_tile(&pm) {
             return None;
         }
@@ -2231,9 +2236,9 @@ mod tests {
                         let ns_u = ns.rem_euclid(n_aug as i64) as usize;
                         let ne_u = ne.rem_euclid(n_b as i64) as usize;
                         let pm = PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(tile_b, EdgeRange::new(ne_u, len)),
-);
+                            EdgeRange::new(ns_u, len),
+                            Segment::new(tile_b, EdgeRange::new(ne_u, len)),
+                        );
                         if !match_absorbs_edge(&pm, target_edge, n_aug) {
                             continue;
                         }
@@ -2331,9 +2336,7 @@ mod tests {
     ///
     /// Catches the V2b shape (closing-as-escape blindspot) AND the
     /// "Free is the trash bucket" shape where Free becomes vacuous.
-    fn assert_classify_invariants<T: IsRing>(
-        idx: &NeighborhoodIndex<T>,
-    ) {
+    fn assert_classify_invariants<T: IsRing>(idx: &NeighborhoodIndex<T>) {
         let kinds = idx.classify_all();
         let n = idx.num_types();
 
@@ -2469,9 +2472,7 @@ mod tests {
         }
     }
 
-    fn validate_seeds<T: IsRing>(
-        idx: &NeighborhoodIndex<T>,
-    ) -> Vec<String> {
+    fn validate_seeds<T: IsRing>(idx: &NeighborhoodIndex<T>) -> Vec<String> {
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(idx.tileset())));
         let mut errors = Vec::new();
         for entry in idx.entries() {
@@ -2517,10 +2518,7 @@ mod tests {
                     errors.push(format!(
                         "nt c={} ac={} ax={}: ambiguous reconstruction \
                          ({} PatchMatches share the recorded anchor)",
-                        nt.central_tile_id,
-                        nt.cw_anchor_on_central,
-                        nt.cw_anchor_on_context,
-                        k
+                        nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context, k
                     ));
                     continue;
                 }
@@ -2620,10 +2618,7 @@ mod tests {
     /// seed phase would silently under-produce, and downstream
     /// closure tests (which iterate over existing entries) couldn't
     /// recover the missing seeds.
-    fn assert_seeds_match_brute<T: IsRing>(
-        tileset: Arc<TileSet<T>>,
-        idx: &NeighborhoodIndex<T>,
-    ) {
+    fn assert_seeds_match_brute<T: IsRing>(tileset: Arc<TileSet<T>>, idx: &NeighborhoodIndex<T>) {
         type Class = (usize, usize, Vec<i8>, usize);
         let mi = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
 
@@ -2668,16 +2663,15 @@ mod tests {
                         // Build the 2-tile patch.
                         let mut patch = GrowingPatch::new(Arc::clone(&tileset), a);
                         let pm1 = PatchMatch::new(
-    EdgeRange::new(ns_u, len),
-    Segment::new(b, EdgeRange::new(ne_u, len)),
-);
+                            EdgeRange::new(ns_u, len),
+                            Segment::new(b, EdgeRange::new(ne_u, len)),
+                        );
                         if !patch.add_tile(&pm1) {
                             continue;
                         }
                         patch.normalize();
                         let patch_n = patch.boundary_len();
-                        let patch_rat =
-                            crate::geom::rat::Rat::from_slice_unchecked(patch.angles());
+                        let patch_rat = crate::geom::rat::Rat::from_slice_unchecked(patch.angles());
 
                         // Brute third-tile candidates over the 2-tile boundary.
                         let mut seen_third: FxHashMap<(usize, usize, usize, usize), ()> =
@@ -2699,9 +2693,9 @@ mod tests {
                                     }
                                     seen_third.insert((ns3_u, len3, ne3_u, c), ());
                                     let pm3 = PatchMatch::new(
-                            EdgeRange::new(ns3_u, len3),
-                            Segment::new(c, EdgeRange::new(ne3_u, len3)),
-                        );
+                                        EdgeRange::new(ns3_u, len3),
+                                        Segment::new(c, EdgeRange::new(ne3_u, len3)),
+                                    );
                                     let mut trial = patch.clone();
                                     if !trial.add_tile(&pm3) {
                                         continue;
