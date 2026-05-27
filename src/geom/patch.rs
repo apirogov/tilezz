@@ -12,7 +12,8 @@ use crate::geom::grid::UnitSquareGrid;
 use crate::geom::matches::{EdgeRange, Segment};
 #[cfg(test)]
 use crate::geom::matches::PatchSegment;
-use crate::geom::rat::{forward_match_length, Rat};
+use crate::geom::rat::Rat;
+use crate::stringmatch::forward_match_length;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{

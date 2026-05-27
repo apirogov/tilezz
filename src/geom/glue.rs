@@ -201,7 +201,7 @@ fn junction_angle<T: IsRing>(angle_a: i8, angle_b: i8) -> i8 {
 ///    `a[(ns + i) % n] == -b[(ne + m - i) % m]` for every
 ///    `i ∈ 1..mlen`. The canonical way to obtain such a tuple is
 ///    [`crate::geom::rat::Rat::get_match`] or
-///    [`crate::geom::rat::forward_match_length`] /
+///    [`crate::stringmatch::forward_match_length`] /
 ///    [`crate::geom::patch::GrowingPatch::get_all_matches`].
 ///    A `debug_assert!` enforces this in test builds; in release,
 ///    `glue_raw_angles` is unchecked and may produce a geometrically
