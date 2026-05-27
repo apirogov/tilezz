@@ -193,7 +193,6 @@ impl<T: IsRing> MatchTypeIndex<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analysis::matchfinder::BpSeed;
     use crate::cyclotomic::ZZ12;
     use crate::geom::glue::junctions_glueable;
     use crate::geom::snake::Snake;
