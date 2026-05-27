@@ -74,8 +74,8 @@ use std::time::Instant;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
-use crate::cyclotomic::{IsRing};
 use crate::analysis::matchfinder::{BpSeed, MatchFinder};
+use crate::cyclotomic::IsRing;
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
@@ -297,10 +297,7 @@ impl Provenance {
     /// just returns the tile rat; for [`Self::Glue`] re-applies the
     /// match. Returns `Err` on a malformed Glue (shouldn't happen
     /// for provenances produced by a SeqExplorer).
-    pub fn apply<T: IsRing>(
-        &self,
-        explorer: &SeqExplorer<T>,
-    ) -> Result<Rat<T>, String> {
+    pub fn apply<T: IsRing>(&self, explorer: &SeqExplorer<T>) -> Result<Rat<T>, String> {
         match self {
             Self::Seed { tile_idx } => Ok(explorer.tileset().rat(*tile_idx).clone()),
             Self::Glue {

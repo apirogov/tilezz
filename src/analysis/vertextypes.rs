@@ -1,11 +1,11 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
-use crate::cyclotomic::{IsRing};
+use crate::cyclotomic::IsRing;
 use crate::geom::patch::{GrowingPatch, PatchMatch};
-use crate::geom::vertices::{ClosedVertexType, EdgeInfo, OpenVertexType, TransitionSide};
 use crate::geom::rat::Rat;
 use crate::geom::tileset::TileSet;
+use crate::geom::vertices::{ClosedVertexType, EdgeInfo, OpenVertexType, TransitionSide};
 
 /// Reachability classification of an open vertex type within the
 /// VT transition graph.
@@ -513,10 +513,7 @@ impl<T: IsRing> Default for BfsState<T> {
 /// Phase 1: extract every junction VT from every legal first-glue of
 /// every seed tile. Each discovered VT records a representative
 /// witness patch (the 2-tile patch that contains it).
-fn seed_phase<T: IsRing>(
-    state: &mut BfsState<T>,
-    tileset: &Arc<TileSet<T>>,
-) {
+fn seed_phase<T: IsRing>(state: &mut BfsState<T>, tileset: &Arc<TileSet<T>>) {
     for seed_id in 0..tileset.num_tiles() {
         let seed = GrowingPatch::new(Arc::clone(tileset), seed_id);
         for pm in seed.get_all_matches() {
@@ -547,10 +544,7 @@ fn seed_phase<T: IsRing>(
 /// Phase 2: process every VT in the queue. For each, enumerate
 /// touching matches and emit raw transitions; also discover any new
 /// VTs exposed by the glues and enqueue them.
-fn bfs_phase<T: IsRing>(
-    state: &mut BfsState<T>,
-    tileset: &Arc<TileSet<T>>,
-) {
+fn bfs_phase<T: IsRing>(state: &mut BfsState<T>, tileset: &Arc<TileSet<T>>) {
     while let Some(vt) = state.queue.pop_front() {
         let (touching, n) = {
             let (gp, pos, _gap) = &state.witness_store[&vt];
@@ -586,7 +580,8 @@ fn bfs_phase<T: IsRing>(
             // edge match on the CW edge has vertex range [pos-1, pos]
             // touching both pos-1 and pos without consuming the CCW
             // edge of pos.)
-            let edge_in_match = |edge: usize| -> bool { (edge + n - pm.a_range.start_offset) % n < pm.len() };
+            let edge_in_match =
+                |edge: usize| -> bool { (edge + n - pm.a_range.start_offset) % n < pm.len() };
             let consumes_cw_edge = edge_in_match((pos + n - 1) % n);
             let consumes_ccw_edge = edge_in_match(pos);
 
@@ -631,9 +626,7 @@ fn bfs_phase<T: IsRing>(
             // distinct geometric glues with `b1 + 2*L1 == b2 + 2*L2`
             // to share a `tile_offset` value -- merging them in the
             // catalog. See `spectre_old_encoding_*` regression test.
-            let tile_offset = (pm.b.range.start_offset as i64
-                - 1
-                - offset_in_match as i64)
+            let tile_offset = (pm.b.range.start_offset as i64 - 1 - offset_in_match as i64)
                 .rem_euclid(m as i64) as usize;
 
             // Where is the focus's new junction (if any) in the
@@ -648,7 +641,11 @@ fn bfs_phase<T: IsRing>(
             //     match lives at new index 0.
             //   - side == Both: focus vertex is sealed; no junction
             //     position.
-            let junction_pos = if pm.a_range.start_offset == pos { n - pm.len() } else { 0 };
+            let junction_pos = if pm.a_range.start_offset == pos {
+                n - pm.len()
+            } else {
+                0
+            };
 
             if matches!(side, TransitionSide::Both) {
                 // Compute the closed VT realised at the focus. The
@@ -1271,8 +1268,9 @@ impl Collection {
             // would over-accept matches that only touch the focus
             // vertex without consuming its incident edge — the bug
             // the old binary's `validate_common` had.
-            let edge_consumed =
-                |pm: &PatchMatch, edge: usize| -> bool { (edge + n - pm.a_range.start_offset) % n < pm.len() };
+            let edge_consumed = |pm: &PatchMatch, edge: usize| -> bool {
+                (edge + n - pm.a_range.start_offset) % n < pm.len()
+            };
             let tile_len = tile_ts.rat(t.tile_id).len();
             let mut found = false;
             for pm in gp.get_all_matches() {
@@ -1282,14 +1280,12 @@ impl Collection {
                 if !edge_consumed(&pm, edge_pos) {
                     continue;
                 }
-                let offset_in_match =
-                    (edge_pos as i64 - pm.a_range.start_offset as i64).rem_euclid(n as i64) as usize;
+                let offset_in_match = (edge_pos as i64 - pm.a_range.start_offset as i64)
+                    .rem_euclid(n as i64) as usize;
                 // Must match the formula used in `bfs_phase` when
                 // emitting the transition: the matched B-edge glued
                 // anti-parallel to A's canonical edge.
-                let computed_offset = (pm.b.range.start_offset as i64
-                    - 1
-                    - offset_in_match as i64)
+                let computed_offset = (pm.b.range.start_offset as i64 - 1 - offset_in_match as i64)
                     .rem_euclid(tile_len as i64) as usize;
                 if computed_offset != t.tile_offset {
                     continue;
@@ -1316,7 +1312,11 @@ impl Collection {
                     found = true;
                     break;
                 }
-                let junction_pos = if pm.a_range.start_offset == pos { n - pm.len() } else { 0 };
+                let junction_pos = if pm.a_range.start_offset == pos {
+                    n - pm.len()
+                } else {
+                    0
+                };
                 if let Some(actual) = gp2.junction_vertex_type_at(junction_pos) {
                     let Some(dst_gp) = witnesses.get(&t.dst_id) else {
                         continue;
@@ -1374,7 +1374,11 @@ impl Collection {
                 if !gp2.add_tile(&pm) || !gp2.is_growing() {
                     continue;
                 }
-                let junction_pos = if pm.a_range.start_offset == pos { old_n - pm.len() } else { 0 };
+                let junction_pos = if pm.a_range.start_offset == pos {
+                    old_n - pm.len()
+                } else {
+                    0
+                };
                 let consumes_ccw = edge_consumed(&pm, pos);
                 let consumes_cw = edge_consumed(&pm, (pos + old_n - 1) % old_n);
                 if consumes_cw && consumes_ccw {
@@ -1406,9 +1410,9 @@ impl Collection {
 mod tests {
     use super::*;
     use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::geom::matches::{EdgeRange, Segment};
     use crate::geom::tiles;
     use crate::geom::tileset::{self, TileSet};
-    use crate::geom::matches::{EdgeRange, Segment};
     use std::sync::Arc;
 
     /// End-to-end regression: every recorded transition and the
@@ -1711,9 +1715,9 @@ mod tests {
                     continue;
                 }
                 let pm = PatchMatch::new(
-    EdgeRange::new(ext_start, len),
-    Segment::new(tile_id, EdgeRange::new(ext_end, len)),
-);
+                    EdgeRange::new(ext_start, len),
+                    Segment::new(tile_id, EdgeRange::new(ext_end, len)),
+                );
                 let mut gp2 = witness.clone();
                 if !gp2.add_tile(&pm) || !gp2.is_growing() {
                     continue;
@@ -1844,7 +1848,14 @@ mod tests {
             let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = witness
                 .get_matches_touching_vertex(pos)
                 .into_iter()
-                .map(|pm| (pm.b.tile_id, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset))
+                .map(|pm| {
+                    (
+                        pm.b.tile_id,
+                        pm.a_range.start_offset,
+                        pm.len(),
+                        pm.b.range.start_offset,
+                    )
+                })
                 .collect();
 
             assert_eq!(
@@ -1922,7 +1933,14 @@ mod tests {
         let api_set: std::collections::BTreeSet<(usize, usize, usize, usize)> = witness
             .get_matches_touching_vertex(pos)
             .into_iter()
-            .map(|pm| (pm.b.tile_id, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset))
+            .map(|pm| {
+                (
+                    pm.b.tile_id,
+                    pm.a_range.start_offset,
+                    pm.len(),
+                    pm.b.range.start_offset,
+                )
+            })
             .collect();
 
         eprintln!(
@@ -2022,9 +2040,9 @@ mod tests {
 
         // Compare: what does compute_all_candidates produce at result[25]?
         let result = crate::geom::patch::GrowingPatch::<ZZ12>::compute_all_candidates(
-            &Arc::new(crate::analysis::matchtypes::MatchTypeIndex::new(Arc::clone(
-                &ts,
-            ))),
+            &Arc::new(crate::analysis::matchtypes::MatchTypeIndex::new(
+                Arc::clone(&ts),
+            )),
             witness.angles(),
             witness.edges(),
         );
@@ -2032,7 +2050,10 @@ mod tests {
         for pm in &result[25] {
             eprintln!(
                 "    cac: tile={} start_a={} len={} start_b={}",
-                pm.b.tile_id, pm.a_range.start_offset, pm.len(), pm.b.range.start_offset
+                pm.b.tile_id,
+                pm.a_range.start_offset,
+                pm.len(),
+                pm.b.range.start_offset
             );
         }
 
@@ -2256,9 +2277,8 @@ mod tests {
                 if pm.b.tile_id != t.tile_id {
                     return false;
                 }
-                let edge_in_match = |edge: usize| -> bool {
-                    (edge + n - pm.a_range.start_offset) % n < pm.len()
-                };
+                let edge_in_match =
+                    |edge: usize| -> bool { (edge + n - pm.a_range.start_offset) % n < pm.len() };
                 let consumes_cw = edge_in_match((pos + n - 1) % n);
                 let consumes_ccw = edge_in_match(pos);
                 let pm_side = match (consumes_cw, consumes_ccw) {
@@ -2275,8 +2295,7 @@ mod tests {
                     _ => (pos + n - 1) % n,
                 };
                 let offset_in_match = (edge_pos as i64 - pm.a_range.start_offset as i64)
-                    .rem_euclid(n as i64)
-                    as usize;
+                    .rem_euclid(n as i64) as usize;
                 // Must use the same formula as `bfs_phase` / `Collection::validate`.
                 let computed = (pm.b.range.start_offset as i64 - 1 - offset_in_match as i64)
                     .rem_euclid(m as i64) as usize;
@@ -2291,7 +2310,7 @@ mod tests {
             (t.dst_id, t.side, t.tile_id, t.tile_offset),
             t.src_id,
         );
-        (witness.clone(), pos, matching[0].clone())
+        (witness.clone(), pos, *matching[0])
     }
 
     /// Every catalog transition's metadata uniquely reconstructs to a
@@ -2314,8 +2333,7 @@ mod tests {
             if t.dst_id == CLOSED_ID {
                 let info = idx.entries().get(t.src_id - 1).expect("src VT in range");
                 let closed = ClosedVertexType::from_open_via_closure(info.vtype());
-                let recovered_cvt_id =
-                    idx.get_closed_id(&closed).expect("closed VT in catalog");
+                let recovered_cvt_id = idx.get_closed_id(&closed).expect("closed VT in catalog");
                 assert_eq!(
                     Some(recovered_cvt_id),
                     t.closed_vt_id,
@@ -2328,13 +2346,15 @@ mod tests {
                 } else {
                     0
                 };
-                let new_vt = gp2.junction_vertex_type_at(junction_pos).unwrap_or_else(|| {
-                    panic!(
-                        "open transition {:?}: post-glue junction missing at pos {}",
-                        (t.src_id, t.dst_id, t.side, t.tile_id, t.tile_offset),
-                        junction_pos
-                    )
-                });
+                let new_vt = gp2
+                    .junction_vertex_type_at(junction_pos)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "open transition {:?}: post-glue junction missing at pos {}",
+                            (t.src_id, t.dst_id, t.side, t.tile_id, t.tile_offset),
+                            junction_pos
+                        )
+                    });
                 let dst_info = idx.entries().get(t.dst_id - 1).expect("dst VT in range");
                 assert_eq!(
                     &new_vt,
@@ -2387,13 +2407,8 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![rat]));
         let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
 
-        let mut old_keyed: std::collections::HashSet<(
-            usize,
-            TransitionSide,
-            usize,
-            usize,
-            usize,
-        )> = std::collections::HashSet::new();
+        let mut old_keyed: std::collections::HashSet<(usize, TransitionSide, usize, usize, usize)> =
+            std::collections::HashSet::new();
         for t in idx.transitions() {
             let (witness, pos, pm) = reconstruct_transition_match(&idx, &ts, t);
             let n = witness.boundary_len();
@@ -2402,9 +2417,8 @@ mod tests {
                 TransitionSide::Ccw => pos,
                 _ => (pos + n - 1) % n,
             };
-            let offset_in_match = (edge_pos as i64 - pm.a_range.start_offset as i64)
-                .rem_euclid(n as i64)
-                as usize;
+            let offset_in_match =
+                (edge_pos as i64 - pm.a_range.start_offset as i64).rem_euclid(n as i64) as usize;
             // OLD (buggy) formula: `pm.b.range.start_offset + pm.len()
             // - offset_in_match`. Effective value =
             // `first_matched_b + 2*L - offset` (with `start_offset =
@@ -2421,7 +2435,8 @@ mod tests {
         }
         let collapsed_under_old = idx.transitions().len() - old_keyed.len();
         assert_eq!(
-            collapsed_under_old, 6,
+            collapsed_under_old,
+            6,
             "expected exactly 6 OLD-encoding collisions in spectre catalog \
              (new total {}, OLD-keyed total {})",
             idx.transitions().len(),

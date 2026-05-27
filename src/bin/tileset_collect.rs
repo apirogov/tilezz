@@ -17,13 +17,13 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12};
 use tilezz::analysis::neighborhood::{self, NeighborhoodIndex};
+use tilezz::analysis::seq_explorer::{self, check_fixed_point, SeqExplorer};
+use tilezz::analysis::vertextypes::{self, OpenVertexTypeIndex};
+use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12};
 use tilezz::geom::rat::Rat;
 use tilezz::geom::tileset::{self, TileSet};
-use tilezz::analysis::vertextypes::{self, OpenVertexTypeIndex};
 use tilezz::util::profile::ProfileGuard;
-use tilezz::analysis::seq_explorer::{self, check_fixed_point, SeqExplorer};
 
 #[derive(Parser)]
 #[command(
@@ -418,11 +418,7 @@ fn validate_seq<T: IsRing>(
 
 // ---------------- collect / validate dispatch ----------------
 
-fn run_collect_zz12(
-    ts: Arc<TileSet<ZZ12>>,
-    kind: CollectKind,
-    label: &str,
-) -> serde_json::Value {
+fn run_collect_zz12(ts: Arc<TileSet<ZZ12>>, kind: CollectKind, label: &str) -> serde_json::Value {
     match kind {
         CollectKind::Nbhd => serde_json::to_value(collect_nbhd(ts, "ZZ12", label)).unwrap(),
         CollectKind::Vtype => serde_json::to_value(collect_vtype(ts, "ZZ12", label)).unwrap(),
@@ -430,11 +426,7 @@ fn run_collect_zz12(
     }
 }
 
-fn run_collect_zz10(
-    ts: Arc<TileSet<ZZ10>>,
-    kind: CollectKind,
-    label: &str,
-) -> serde_json::Value {
+fn run_collect_zz10(ts: Arc<TileSet<ZZ10>>, kind: CollectKind, label: &str) -> serde_json::Value {
     match kind {
         CollectKind::Nbhd => serde_json::to_value(collect_nbhd(ts, "ZZ10", label)).unwrap(),
         CollectKind::Vtype => serde_json::to_value(collect_vtype(ts, "ZZ10", label)).unwrap(),
@@ -552,8 +544,8 @@ fn main() {
             if let Some(path) = output {
                 let env = Envelope { kind, payload };
                 let t_write = Instant::now();
-                let file = std::fs::File::create(&path)
-                    .unwrap_or_else(|e| panic!("create {path}: {e}"));
+                let file =
+                    std::fs::File::create(&path).unwrap_or_else(|e| panic!("create {path}: {e}"));
                 serde_json::to_writer(std::io::BufWriter::new(file), &env)
                     .unwrap_or_else(|e| panic!("serialize {path}: {e}"));
                 eprintln!("  Wrote {} in {:.2?}", path, t_write.elapsed());
@@ -567,8 +559,8 @@ fn main() {
                 eprintln!("Open error: {e}");
                 std::process::exit(1);
             });
-            let env: Envelope =
-                serde_json::from_reader(std::io::BufReader::new(file)).unwrap_or_else(|e| {
+            let env: Envelope = serde_json::from_reader(std::io::BufReader::new(file))
+                .unwrap_or_else(|e| {
                     eprintln!("Parse error: {e}");
                     std::process::exit(1);
                 });

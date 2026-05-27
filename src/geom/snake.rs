@@ -134,9 +134,7 @@ impl<I: ToPrimitive, T: IsRing> TryFrom<&[I]> for Snake<T> {
         }
     }
 }
-impl<const N: usize, I: ToPrimitive, T: IsRing> TryFrom<&[I; N]>
-    for Snake<T>
-{
+impl<const N: usize, I: ToPrimitive, T: IsRing> TryFrom<&[I; N]> for Snake<T> {
     type Error = &'static str;
 
     fn try_from(angles: &[I; N]) -> Result<Self, Self::Error> {

@@ -177,10 +177,7 @@ pub fn mul_basis<const PHI: usize>(
 /// ZZ12 specializes this with the inline formula
 /// `conj((a, b, c, d)) = (a + c, b, -c, -b - d)` (see `rings.rs`).
 #[inline]
-pub fn conj_basis<const PHI: usize>(
-    x: &[i64; PHI],
-    conj_matrix: &[[i64; PHI]; PHI],
-) -> [i64; PHI] {
+pub fn conj_basis<const PHI: usize>(x: &[i64; PHI], conj_matrix: &[[i64; PHI]; PHI]) -> [i64; PHI] {
     let mut out = [0i64; PHI];
     let mut i = 0;
     while i < PHI {
@@ -495,10 +492,7 @@ fn scale_kvec<const K: usize>(x: &[i64; K], s: i64) -> [i64; K] {
 /// //   -> column 1 = [0, -1]
 /// assert_eq!(m, [[1, 0], [0, -1]]);
 /// ```
-pub fn derive_conj_matrix<const PHI: usize>(
-    n: usize,
-    reduction: &[i64; PHI],
-) -> [[i64; PHI]; PHI] {
+pub fn derive_conj_matrix<const PHI: usize>(n: usize, reduction: &[i64; PHI]) -> [[i64; PHI]; PHI] {
     let units = derive_units_lookup::<PHI>(n, reduction);
     let mut out = [[0i64; PHI]; PHI];
     let mut j = 0;
@@ -524,10 +518,7 @@ pub fn derive_conj_matrix<const PHI: usize>(
 ///
 /// For each per-ring `OnceLock` unit table, the macro-generated impl wraps a
 /// call to this helper and indexes by `angle.rem_euclid(n)`.
-pub fn derive_units_lookup<const PHI: usize>(
-    n: usize,
-    reduction: &[i64; PHI],
-) -> Vec<[i64; PHI]> {
+pub fn derive_units_lookup<const PHI: usize>(n: usize, reduction: &[i64; PHI]) -> Vec<[i64; PHI]> {
     assert!(PHI >= 1, "PHI must be >= 1");
     let mut out: Vec<[i64; PHI]> = Vec::with_capacity(n + 1);
 
@@ -899,13 +890,11 @@ macro_rules! impl_integral_mul_via_basis {
             type Output = Self;
             #[inline]
             fn mul(self, other: Self) -> Self {
-                Self::from_int_coeffs(
-                    $crate::cyclotomic::integral_basis::mul_basis::<$phi>(
-                        &self.int_coeffs(),
-                        &other.int_coeffs(),
-                        &<$name>::REDUCTION,
-                    ),
-                )
+                Self::from_int_coeffs($crate::cyclotomic::integral_basis::mul_basis::<$phi>(
+                    &self.int_coeffs(),
+                    &other.int_coeffs(),
+                    &<$name>::REDUCTION,
+                ))
             }
         }
     };
@@ -923,12 +912,10 @@ macro_rules! impl_integral_conj_via_basis {
         impl $crate::cyclotomic::Conj for $name {
             #[inline]
             fn conj(&self) -> Self {
-                Self::from_int_coeffs(
-                    $crate::cyclotomic::integral_basis::conj_basis::<$phi>(
-                        &self.int_coeffs(),
-                        <$name>::__conj_matrix(),
-                    ),
-                )
+                Self::from_int_coeffs($crate::cyclotomic::integral_basis::conj_basis::<$phi>(
+                    &self.int_coeffs(),
+                    <$name>::__conj_matrix(),
+                ))
             }
         }
     };
@@ -1635,7 +1622,7 @@ mod tests {
         // (a + bi)(c + di) = (ac - bd) + (ad + bc)i
         let x = [3i64, 4]; // 3 + 4i
         let y = [1i64, 2]; // 1 + 2i
-        // (3 + 4i)(1 + 2i) = 3 + 6i + 4i + 8i^2 = 3 + 10i - 8 = -5 + 10i
+                           // (3 + 4i)(1 + 2i) = 3 + 6i + 4i + 8i^2 = 3 + 10i - 8 = -5 + 10i
         assert_eq!(mul_basis::<2>(&x, &y, &RED_I), [-5, 10]);
 
         // i * i = -1
@@ -1678,10 +1665,7 @@ mod tests {
 
         // zeta^2 * zeta^2 = zeta^4 = zeta^2 - 1.
         let zeta_sq = [0i64, 0, 1, 0];
-        assert_eq!(
-            mul_basis::<4>(&zeta_sq, &zeta_sq, &RED_ZZ12),
-            [-1, 0, 1, 0],
-        );
+        assert_eq!(mul_basis::<4>(&zeta_sq, &zeta_sq, &RED_ZZ12), [-1, 0, 1, 0],);
 
         // zeta^3 * zeta^3 = zeta^6 = zeta * zeta^5 = ... = -1.
         let zeta_cu = [0i64, 0, 0, 1];

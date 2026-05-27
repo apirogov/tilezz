@@ -99,8 +99,8 @@ macro_rules! impl_cell_floor_via_sign_verify {
         impl $crate::cyclotomic::CellFloor for $name {
             #[inline]
             fn cell_floor_exact(&self) -> (i64, i64) {
-                use $crate::cyclotomic::SymNum;
                 use $crate::cyclotomic::geometry::rect_signs;
+                use $crate::cyclotomic::SymNum;
                 let c = self.complex64();
                 let mut cx = c.re.floor() as i64;
                 let mut cy = c.im.floor() as i64;
@@ -301,12 +301,7 @@ fn zz8_display(coeffs: &[i64; 4], f: &mut std::fmt::Formatter<'_>) -> std::fmt::
 /// `within_radius` on large `z * conj(z) - r_sq` inputs.
 #[inline]
 fn zz8_real_sign(x: &[i64; 2]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_2::<i128>(
-        x[0] as i128,
-        1,
-        x[1] as i128,
-        2,
-    ) as i8
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_2::<i128>(x[0] as i128, 1, x[1] as i128, 2) as i8
 }
 
 define_integral_zz! {
@@ -695,8 +690,7 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
             } else {
                 debug_assert_eq!(k_coeffs[0], -1);
                 // uA == -uB. Interior overlap iff 0 < T < 2.
-                return sign_m_plus_n_sqrt3(t_m, t_n) > 0
-                    && sign_m_plus_n_sqrt3(t_m - 4, t_n) < 0;
+                return sign_m_plus_n_sqrt3(t_m, t_n) > 0 && sign_m_plus_n_sqrt3(t_m - 4, t_n) < 0;
             }
         }
 
@@ -865,7 +859,14 @@ fn zz24_display(coeffs: &[i64; 8], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
 #[inline]
 fn zz24_real_sign(x: &[i64; 4]) -> i8 {
     crate::cyclotomic::sign::signum_sum_sqrt_expr_4::<i128>(
-        x[0] as i128, 1, x[1] as i128, 2, x[2] as i128, 3, x[3] as i128, 6,
+        x[0] as i128,
+        1,
+        x[1] as i128,
+        2,
+        x[2] as i128,
+        3,
+        x[3] as i128,
+        6,
     ) as i8
 }
 
@@ -1099,7 +1100,6 @@ impl From<(i64, i64)> for ZZ20 {
     }
 }
 
-
 crate::impl_integral_units_via_basis!(ZZ20, 20);
 crate::impl_integral_mul_via_basis!(ZZ20, 8);
 crate::impl_integral_conj_via_basis!(ZZ20, 8);
@@ -1303,11 +1303,19 @@ fn sign_p_b2_plus_q_b3(p: i64, q: i64) -> i8 {
     // p^2 > q^2: closed-form discriminant for `|p|*sqrt(alpha) > |q|*sqrt(beta)`.
     let poly = p_sq * p_sq - 3 * p_sq * q_sq + q_sq * q_sq;
     if poly > 0 {
-        if p > 0 { 1 } else { -1 }
+        if p > 0 {
+            1
+        } else {
+            -1
+        }
     } else {
         // poly < 0 (poly == 0 is unreachable for integer mixed-sign inputs:
         // it would require p^2 = (3 +/- sqrt(5))/2 * q^2, irrational ratio).
-        if p > 0 { -1 } else { 1 }
+        if p > 0 {
+            -1
+        } else {
+            1
+        }
     }
 }
 
@@ -1345,7 +1353,11 @@ fn sign_p_b2_plus_q_b3_minus_k(p: i64, q: i64, big_k: i64) -> i8 {
     let m = 10 * (p_sq + q_sq) - k_sq;
     let n = 2 * (q_sq - p_sq + 4 * p * q);
     let sign_diff = sign_m_plus_n_sqrt5(m, n);
-    if sign_a > 0 { sign_diff } else { -sign_diff }
+    if sign_a > 0 {
+        sign_diff
+    } else {
+        -sign_diff
+    }
 }
 
 /// Re-part components of `z = (a, b, c, d)` in basis `{1, zeta, zeta^2, zeta^3}`:
@@ -1417,16 +1429,16 @@ impl crate::cyclotomic::Units for ZZ10 {
     #[inline]
     fn unit(angle: i8) -> Self {
         static UNIT_TABLE: [[i64; 4]; 10] = [
-            [1, 0, 0, 0],     // 1
-            [0, 1, 0, 0],     // zeta
-            [0, 0, 1, 0],     // zeta^2
-            [0, 0, 0, 1],     // zeta^3
-            [-1, 1, -1, 1],   // zeta^4 = zeta^3 - zeta^2 + zeta - 1
-            [-1, 0, 0, 0],    // zeta^5 = -1
-            [0, -1, 0, 0],    // zeta^6 = -zeta
-            [0, 0, -1, 0],    // zeta^7 = -zeta^2
-            [0, 0, 0, -1],    // zeta^8 = -zeta^3
-            [1, -1, 1, -1],   // zeta^9 = -zeta^4
+            [1, 0, 0, 0],   // 1
+            [0, 1, 0, 0],   // zeta
+            [0, 0, 1, 0],   // zeta^2
+            [0, 0, 0, 1],   // zeta^3
+            [-1, 1, -1, 1], // zeta^4 = zeta^3 - zeta^2 + zeta - 1
+            [-1, 0, 0, 0],  // zeta^5 = -1
+            [0, -1, 0, 0],  // zeta^6 = -zeta
+            [0, 0, -1, 0],  // zeta^7 = -zeta^2
+            [0, 0, 0, -1],  // zeta^8 = -zeta^3
+            [1, -1, 1, -1], // zeta^9 = -zeta^4
         ];
         let idx = angle.rem_euclid(10) as usize;
         Self::from_int_coeffs(UNIT_TABLE[idx])
@@ -1527,8 +1539,7 @@ impl crate::cyclotomic::IntersectUnitSegments for ZZ10 {
                 debug_assert_eq!(k_coeffs[0], -1);
                 // uA == -uB. Interior overlap iff 0 < T < 2, i.e.,
                 // `t_m + t_n*sqrt(5) > 0` and `t_m - 8 + t_n*sqrt(5) < 0`.
-                return sign_m_plus_n_sqrt5(t_m, t_n) > 0
-                    && sign_m_plus_n_sqrt5(t_m - 8, t_n) < 0;
+                return sign_m_plus_n_sqrt5(t_m, t_n) > 0 && sign_m_plus_n_sqrt5(t_m - 8, t_n) < 0;
             }
         }
 
@@ -1872,10 +1883,8 @@ fn zz60_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt
     let sixteenth = Ratio::<i64>::new_raw(1, 16);
     // Project to (Ratio, Ratio) coefficient pairs of the symbolic basis, each
     // with the implicit /16 folded in.
-    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] = [gpair(
-        Ratio::<i64>::from_integer(0),
-        Ratio::<i64>::from_integer(0),
-    ); 8];
+    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] =
+        [gpair(Ratio::<i64>::from_integer(0), Ratio::<i64>::from_integer(0)); 8];
     for j in 0..8 {
         let mut re_acc: i64 = 0;
         let mut im_acc: i64 = 0;
@@ -2067,10 +2076,8 @@ const ZZ32_IM_DECOMP: [[i64; 8]; 16] = [
 
 fn zz32_display(coeffs: &[i64; 16], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let half = Ratio::<i64>::new_raw(1, 2);
-    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] = [gpair(
-        Ratio::<i64>::from_integer(0),
-        Ratio::<i64>::from_integer(0),
-    ); 8];
+    let mut k_coeffs: [(Ratio<i64>, Ratio<i64>); 8] =
+        [gpair(Ratio::<i64>::from_integer(0), Ratio::<i64>::from_integer(0)); 8];
     for j in 0..8 {
         let mut re_acc: i64 = 0;
         let mut im_acc: i64 = 0;
