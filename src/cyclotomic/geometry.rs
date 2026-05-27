@@ -4,6 +4,77 @@ use std::cmp::Ordering;
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
 use super::traits::{HasZZ4, IntersectUnitSegments, IsRing, OneImag};
 
+/// Where a query point sits relative to a simple polygon boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointLocation {
+    Inside,
+    Outside,
+    Boundary,
+}
+
+/// Classify where `q` sits relative to the polygon given by `polygon`.
+///
+/// `polygon` is a slice of `n` distinct vertices in CCW order with **no**
+/// closing duplicate; edges are `(polygon[i], polygon[(i+1) % n])`.
+///
+/// Returns [`Boundary`] if `q` coincides with a polygon vertex or lies
+/// strictly between the endpoints of any edge. Otherwise the winding number
+/// (horizontal-ray test, all sign arithmetic via `im_sign` + `wedge_sign`)
+/// decides [`Inside`] vs [`Outside`].
+///
+/// All geometry is exact; no f64 is used at any point.
+///
+/// # Panics
+///
+/// Panics if `polygon` has fewer than 3 vertices.
+pub fn point_in_polygon<ZZ: IsRing>(q: &ZZ, polygon: &[ZZ]) -> PointLocation {
+    let n = polygon.len();
+    assert!(n >= 3, "point_in_polygon: need at least 3 vertices");
+
+    for v in polygon {
+        if q == v {
+            return PointLocation::Boundary;
+        }
+    }
+
+    for i in 0..n {
+        let a = &polygon[i];
+        let b = &polygon[(i + 1) % n];
+        let edge = *b - *a;
+        let to_q = *q - *a;
+        if wedge_sign(&edge, &to_q) == 0 && is_between(q, (a, b)) {
+            return PointLocation::Boundary;
+        }
+    }
+
+    let mut wn: i32 = 0;
+    for i in 0..n {
+        let a = &polygon[i];
+        let b = &polygon[(i + 1) % n];
+        let da = (*a - *q).im_sign();
+        let db = (*b - *q).im_sign();
+        if da <= 0 && db > 0 {
+            let edge = *b - *a;
+            let to_q = *q - *a;
+            if wedge_sign(&edge, &to_q) > 0 {
+                wn += 1;
+            }
+        } else if da > 0 && db <= 0 {
+            let edge = *b - *a;
+            let to_q = *q - *a;
+            if wedge_sign(&edge, &to_q) < 0 {
+                wn -= 1;
+            }
+        }
+    }
+
+    if wn != 0 {
+        PointLocation::Inside
+    } else {
+        PointLocation::Outside
+    }
+}
+
 /// Lexicographic comparison of two ring elements by `(Re, Im)`.
 ///
 /// Exact: compares `Re(a) - Re(b)` and `Im(a) - Im(b)` via `re_sign`/`im_sign`
@@ -569,6 +640,156 @@ mod tests {
                 "hull vertex count changed at shift {shift}"
             );
             validate_hull_labels(&shifted_snake, &labels_shifted);
+        }
+    }
+
+    // ---- point_in_polygon ----
+
+    fn snake_points<T: IsRing>(snake: &Snake<T>) -> Vec<T> {
+        let n = snake.len();
+        snake.representative()[..n].to_vec()
+    }
+
+    #[test]
+    fn test_pip_rect_interior() {
+        // 2x2 rect: (0,0),(1,0),(2,0),(2,1),(2,2),(1,2),(0,2),(0,1)
+        // (1,1) is strictly interior (not a vertex, not on any edge).
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 0, 3, 0, 3, 0]).unwrap();
+        let pts = snake_points(&rect);
+        assert_eq!(
+            point_in_polygon(&(ZZ12::one() + ZZ12::one_i()), &pts),
+            PointLocation::Inside,
+            "(1,1) should be Inside the 2x2 rect"
+        );
+    }
+
+    #[test]
+    fn test_pip_rect_exterior() {
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 0, 3, 0, 3, 0]).unwrap();
+        let pts = snake_points(&rect);
+        let far: ZZ12 = ZZ12::from(5) + ZZ12::from(5) * ZZ12::one_i();
+        assert_eq!(
+            point_in_polygon(&far, &pts),
+            PointLocation::Outside,
+            "(5,5) should be Outside"
+        );
+        let below: ZZ12 = -ZZ12::one_i();
+        assert_eq!(
+            point_in_polygon(&below, &pts),
+            PointLocation::Outside,
+            "(0,-1) should be Outside"
+        );
+    }
+
+    #[test]
+    fn test_pip_square_boundary_vertex() {
+        let sq: Snake<ZZ12> = tiles::square();
+        let pts = snake_points(&sq);
+        for i in 0..pts.len() {
+            assert_eq!(
+                point_in_polygon(&pts[i], &pts),
+                PointLocation::Boundary,
+                "square vertex {i} should be Boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pip_hex_boundary_vertex() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let pts = snake_points(&hex);
+        for i in 0..pts.len() {
+            assert_eq!(
+                point_in_polygon(&pts[i], &pts),
+                PointLocation::Boundary,
+                "hex vertex {i} should be Boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pip_triangle_boundary_vertex() {
+        let tri: Snake<ZZ12> = tiles::triangle();
+        let pts = snake_points(&tri);
+        for i in 0..pts.len() {
+            assert_eq!(
+                point_in_polygon(&pts[i], &pts),
+                PointLocation::Boundary,
+                "triangle vertex {i} should be Boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pip_rect_colinear_vertex_boundary() {
+        // 2x2 rect with colinear intermediates.
+        // (1,0) is vertex 1 but also colinear on bottom edge — still Boundary.
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 0, 3, 0, 3, 0]).unwrap();
+        let pts = snake_points(&rect);
+        assert_eq!(
+            point_in_polygon(&ZZ12::one(), &pts),
+            PointLocation::Boundary,
+            "(1,0) is a polygon vertex, must be Boundary"
+        );
+    }
+
+    #[test]
+    fn test_pip_u_shape_notch_vertices_are_boundary() {
+        // U-shape notch corners (1,1) and (2,1) are polygon vertices.
+        let u: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0]).unwrap();
+        let pts = snake_points(&u);
+        for i in 0..pts.len() {
+            assert_eq!(
+                point_in_polygon(&pts[i], &pts),
+                PointLocation::Boundary,
+                "U vertex {i} should be Boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pip_u_shape_exterior() {
+        let u: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0]).unwrap();
+        let pts = snake_points(&u);
+        let far: ZZ12 = ZZ12::from(5) + ZZ12::from(5) * ZZ12::one_i();
+        assert_eq!(
+            point_in_polygon(&far, &pts),
+            PointLocation::Outside,
+            "(5,5) should be Outside the U"
+        );
+    }
+
+    #[test]
+    fn test_pip_l_shape_vertices_boundary() {
+        let l: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 3, -3, 3, 3, 0]).unwrap();
+        let pts = snake_points(&l);
+        for i in 0..pts.len() {
+            assert_eq!(
+                point_in_polygon(&pts[i], &pts),
+                PointLocation::Boundary,
+                "L vertex {i} should be Boundary"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pip_cyclic_invariant() {
+        use crate::geom::rat::Rat;
+
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 0, 3, 0, 3, 0]).unwrap();
+        let rat: Rat<ZZ12> = Rat::from_unchecked(&rect);
+
+        for shift in 0..8 {
+            let shifted = rat.cycled(shift);
+            let shifted_snake: Snake<ZZ12> = Snake::from_slice_unsafe(shifted.seq());
+            let shifted_pts = snake_points(&shifted_snake);
+            for j in 0..shifted_pts.len() {
+                assert_eq!(
+                    point_in_polygon(&shifted_pts[j], &shifted_pts),
+                    PointLocation::Boundary,
+                    "shift {shift}, vertex {j}: must be Boundary"
+                );
+            }
         }
     }
 
