@@ -75,10 +75,6 @@ impl CyclicBitset {
         self.bits[p / 64] |= 1u64 << (p % 64);
     }
 
-    fn is_empty(&self) -> bool {
-        self.bits.iter().all(|&w| w == 0)
-    }
-
     /// Mask off any bits at positions ≥ `self.len` in the top word.
     fn mask_top(&mut self) {
         if self.bits.is_empty() {
@@ -159,6 +155,24 @@ pub struct BitParallelMatcher {
     sym_to_idx: HashMap<i8, usize>,
     // masks[tile_idx][sym_idx] = positions in rc(tile) holding that symbol
     masks: Vec<Vec<CyclicBitset>>,
+}
+
+/// Per-tile streaming state, reused across every boundary step.
+///
+/// One per `(tile, sweep)` pair: holds the bitset of live match
+/// end-positions, per-position length arrays, a precomputed empty
+/// mask (for boundary symbols not in this tile's alphabet), and the
+/// emissions accumulated so far.
+struct TileState {
+    n_b: usize,
+    cap: usize,
+    alive_prev: CyclicBitset,
+    len_arr: Vec<u8>,
+    len_new: Vec<u8>,
+    empty: CyclicBitset,
+    // (boundary_end_in_stream, tile_end_in_P, len)
+    emissions: Vec<(usize, usize, usize)>,
+    skip: bool,
 }
 
 impl BitParallelMatcher {
@@ -254,6 +268,164 @@ impl BitParallelMatcher {
             .collect()
     }
 
+    /// Allocate a fresh per-tile streaming state for `tile_j` against
+    /// a boundary of length `n_a`.
+    fn init_tile_state(&self, tile_j: usize, n_a: usize) -> TileState {
+        let n_b = self.tiles[tile_j].len();
+        let cap = n_a.min(n_b);
+        TileState {
+            n_b,
+            cap,
+            alive_prev: CyclicBitset::new(n_b),
+            len_arr: vec![0u8; n_b],
+            len_new: vec![0u8; n_b],
+            empty: CyclicBitset::new(n_b),
+            emissions: Vec::new(),
+            skip: n_b == 0,
+        }
+    }
+
+    /// Advance one step of the bit-parallel sweep for a single tile.
+    ///
+    /// `k` is the position in the doubled boundary stream (`0..2*n_a`).
+    /// `sym_idx` is the index of the current boundary character in
+    /// `self.sym_to_idx`, or `None` if the character is foreign to the
+    /// matcher's alphabet (then no `P_j` position can match this char,
+    /// so every live bit dies).
+    fn step_tile(
+        &self,
+        ts: &mut TileState,
+        tile_j: usize,
+        k: usize,
+        sym_idx: Option<usize>,
+    ) {
+        // `alive_curr`: bits of `P_j` that match the current boundary
+        // char. When `sym_idx` is `None` we borrow `ts.empty` so the
+        // remainder of the algorithm uniformly works against a
+        // `&CyclicBitset` (everything dies, as it should).
+        let alive_curr: &CyclicBitset = match sym_idx {
+            Some(idx) => &self.masks[tile_j][idx],
+            None => &ts.empty,
+        };
+
+        let shifted = ts.alive_prev.rotate_left_1();
+        let continues = shifted.and(alive_curr);
+        let deaths = shifted.and_not(alive_curr);
+        let starts = alive_curr.and_not(&continues);
+
+        // Deaths: previous-step matches that fail to extend.
+        // `ep_new` in `deaths` was reached by rotating `ep_old =
+        // (ep_new - 1) mod n_b`; emit the match that ended there at
+        // boundary position `k - 1`.
+        for ep_new in deaths.set_bits() {
+            let ep_old = if ep_new == 0 { ts.n_b - 1 } else { ep_new - 1 };
+            let l = ts.len_arr[ep_old] as usize;
+            if l > 0 {
+                ts.emissions.push((k - 1, ep_old, l));
+            }
+        }
+
+        // Reset new-length buffer.
+        for v in ts.len_new.iter_mut() {
+            *v = 0;
+        }
+
+        // Continuations: extend length from predecessor. Cap at `cap =
+        // min(n_a, n_b)`; when we hit cap we emit at full length but
+        // keep the bit alive, so subsequent rotations of the same
+        // full-tile match are also reported (the dedup pass keeps the
+        // canonical one).
+        for ep in continues.set_bits() {
+            let ep_pred = if ep == 0 { ts.n_b - 1 } else { ep - 1 };
+            let nl = (ts.len_arr[ep_pred] as usize + 1).min(ts.cap);
+            ts.len_new[ep] = nl as u8;
+            if nl == ts.cap {
+                ts.emissions.push((k, ep, ts.cap));
+            }
+        }
+
+        // Fresh length-1 starts (where no continuation lives). Emit
+        // immediately when `cap == 1` (no further extension possible).
+        for ep in starts.set_bits() {
+            ts.len_new[ep] = 1;
+            if ts.cap == 1 {
+                ts.emissions.push((k, ep, 1));
+            }
+        }
+
+        ts.alive_prev = alive_curr.clone();
+        std::mem::swap(&mut ts.len_arr, &mut ts.len_new);
+    }
+
+    /// Convert raw `(b_end, ep, l)` emissions into `TileMatch`es:
+    /// reconstruct `(pos_a, pos_b)` on the original tiles, drop
+    /// non-left-maximal matches, sort by `(pos_a, pos_b)` keeping the
+    /// longest per pair.
+    fn emissions_to_matches(
+        &self,
+        emissions: Vec<(usize, usize, usize)>,
+        boundary: &[i8],
+        tile_j: usize,
+    ) -> Vec<TileMatch> {
+        let n_a = boundary.len();
+        let n_b = self.tiles[tile_j].len();
+        let cap = n_a.min(n_b);
+        let tile_b_seq: &[i8] = &self.tiles[tile_j];
+
+        let mut matches: Vec<TileMatch> = emissions
+            .into_iter()
+            .filter_map(|(b_end, ep, l)| {
+                if l == 0 || l > cap {
+                    return None;
+                }
+                // Decode (b_end, ep, l) in stream/P coordinates back
+                // to (pos_a, pos_b) on the original tiles. `b_end` is
+                // the boundary position where the match ended; the
+                // match covered `l` boundary edges, so its start is
+                // `b_end - (l - 1)` (mod n_a), i.e.
+                // `(b_end + n_a + 1 - l) % n_a`. Symmetrically on the
+                // P-side: tile_start_in_p = ep - (l - 1) (mod n_b).
+                // Tile position k in P = (n_b - 1 - k) on the original
+                // tile, so pos_b = n_b - 1 - tile_start_in_p (mod n_b).
+                let pos_a = (b_end + n_a + 1 - l) % n_a;
+                let tile_start_in_p = (ep + n_b + 1 - l) % n_b;
+                let pos_b = (n_b + n_b - 1 - tile_start_in_p) % n_b;
+                // Left-maximality: drop matches whose left endpoint
+                // could extend (= right-suffixes of a longer match
+                // starting one boundary char earlier). Matches that
+                // wrap a whole boundary or tile are trivially
+                // left-maximal.
+                if l < n_a && l < n_b {
+                    let prev_a = boundary[(pos_a + n_a - 1) % n_a];
+                    let prev_b_rc = -tile_b_seq[(pos_b + 1) % n_b];
+                    if prev_a == prev_b_rc {
+                        return None;
+                    }
+                }
+                Some(TileMatch::new(
+                    Segment::new(0, EdgeRange::new(pos_a, l)),
+                    Segment::new(tile_j, EdgeRange::new(pos_b, l)),
+                ))
+            })
+            .collect();
+
+        // Sort with `len` descending as the tiebreaker so that the
+        // following `dedup_by` (which keeps the FIRST of consecutive
+        // equals) keeps the longest match per `(pos_a, pos_b)` pair.
+        matches.sort_by(|a, b| {
+            a.a.range
+                .start_offset
+                .cmp(&b.a.range.start_offset)
+                .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
+                .then_with(|| b.len().cmp(&a.len()))
+        });
+        matches.dedup_by(|a, b| {
+            a.a.range.start_offset == b.a.range.start_offset
+                && a.b.range.start_offset == b.b.range.start_offset
+        });
+        matches
+    }
+
     /// Single sweep through `boundary`, updating per-tile state for
     /// **every** tile in this matcher in lockstep. Returns all maximal
     /// cyclic RC matches across every tile. This is the natural BP
@@ -269,132 +441,22 @@ impl BitParallelMatcher {
         if n_a == 0 || n_tiles == 0 {
             return vec![];
         }
-        let total = 2 * n_a;
+        let mut state: Vec<TileState> =
+            (0..n_tiles).map(|j| self.init_tile_state(j, n_a)).collect();
 
-        // Per-tile state, allocated once per sweep.
-        struct TileState {
-            n_b: usize,
-            cap: usize,
-            alive_prev: CyclicBitset,
-            len_arr: Vec<u8>,
-            len_new: Vec<u8>,
-            empty: CyclicBitset,
-            // (boundary_end_in_stream, tile_end_in_P, len)
-            emissions: Vec<(usize, usize, usize)>,
-            skip: bool,
-        }
-
-        let mut state: Vec<TileState> = (0..n_tiles)
-            .map(|j| {
-                let n_b = self.tiles[j].len();
-                let cap = n_a.min(n_b);
-                TileState {
-                    n_b,
-                    cap,
-                    alive_prev: CyclicBitset::new(n_b),
-                    len_arr: vec![0u8; n_b],
-                    len_new: vec![0u8; n_b],
-                    empty: CyclicBitset::new(n_b),
-                    emissions: Vec::new(),
-                    skip: n_b == 0,
-                }
-            })
-            .collect();
-
-        for k in 0..total {
-            let c = boundary[k % n_a];
-            let sym_idx = self.sym_to_idx.get(&c).copied();
-
+        for k in 0..(2 * n_a) {
+            let sym_idx = self.sym_to_idx.get(&boundary[k % n_a]).copied();
             for (tile_j, ts) in state.iter_mut().enumerate() {
                 if ts.skip {
                     continue;
                 }
-                let alive_curr: &CyclicBitset = match sym_idx {
-                    Some(idx) => &self.masks[tile_j][idx],
-                    None => &ts.empty,
-                };
-
-                let shifted = ts.alive_prev.rotate_left_1();
-                let continues = shifted.and(alive_curr);
-                let deaths = shifted.and_not(alive_curr);
-                let starts = alive_curr.and_not(&continues);
-
-                for ep_new in deaths.set_bits() {
-                    let ep_old = if ep_new == 0 { ts.n_b - 1 } else { ep_new - 1 };
-                    let l = ts.len_arr[ep_old] as usize;
-                    if l > 0 {
-                        ts.emissions.push((k - 1, ep_old, l));
-                    }
-                }
-
-                for v in ts.len_new.iter_mut() {
-                    *v = 0;
-                }
-
-                for ep in continues.set_bits() {
-                    let ep_pred = if ep == 0 { ts.n_b - 1 } else { ep - 1 };
-                    let nl = (ts.len_arr[ep_pred] as usize + 1).min(ts.cap);
-                    ts.len_new[ep] = nl as u8;
-                    if nl == ts.cap {
-                        ts.emissions.push((k, ep, ts.cap));
-                    }
-                }
-
-                for ep in starts.set_bits() {
-                    ts.len_new[ep] = 1;
-                    if ts.cap == 1 {
-                        ts.emissions.push((k, ep, 1));
-                    }
-                }
-
-                ts.alive_prev = alive_curr.clone();
-                std::mem::swap(&mut ts.len_arr, &mut ts.len_new);
+                self.step_tile(ts, tile_j, k, sym_idx);
             }
         }
 
-        // Convert emissions per tile (with left-maximality + dedup,
-        // same as `stream_boundary`).
         let mut out: Vec<TileMatch> = Vec::new();
         for (tile_j, ts) in state.into_iter().enumerate() {
-            let n_p = ts.n_b;
-            let cap = ts.cap;
-            let tile_b_seq: &[i8] = &self.tiles[tile_j];
-            let mut matches: Vec<TileMatch> = ts
-                .emissions
-                .into_iter()
-                .filter_map(|(b_end, ep, l)| {
-                    if l == 0 || l > cap {
-                        return None;
-                    }
-                    let pos_a = (b_end + n_a + 1 - l) % n_a;
-                    let tile_start_in_p = (ep + n_p + 1 - l) % n_p;
-                    let pos_b = (n_p + n_p - 1 - tile_start_in_p) % n_p;
-                    if l < n_a && l < n_p {
-                        let prev_a = boundary[(pos_a + n_a - 1) % n_a];
-                        let prev_b_rc = -tile_b_seq[(pos_b + 1) % n_p];
-                        if prev_a == prev_b_rc {
-                            return None;
-                        }
-                    }
-                    Some(TileMatch::new(
-                        Segment::new(0, EdgeRange::new(pos_a, l)),
-                        Segment::new(tile_j, EdgeRange::new(pos_b, l)),
-                    ))
-                })
-                .collect();
-
-            matches.sort_by(|a, b| {
-                a.a.range
-                    .start_offset
-                    .cmp(&b.a.range.start_offset)
-                    .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
-                    .then_with(|| b.len().cmp(&a.len()))
-            });
-            matches.dedup_by(|a, b| {
-                a.a.range.start_offset == b.a.range.start_offset
-                    && a.b.range.start_offset == b.b.range.start_offset
-            });
-            out.extend(matches);
+            out.extend(self.emissions_to_matches(ts.emissions, boundary, tile_j));
         }
         out
     }
@@ -405,117 +467,17 @@ impl BitParallelMatcher {
     /// tile_a should set it after the call.
     pub fn stream_boundary(&self, boundary: &[i8], tile_j: usize) -> Vec<TileMatch> {
         let n_a = boundary.len();
-        let n_b = self.tiles[tile_j].len();
-        if n_a == 0 || n_b == 0 {
+        if n_a == 0 || self.tiles[tile_j].is_empty() {
             return vec![];
         }
-        let cap = n_a.min(n_b);
-        let total = 2 * n_a;
+        let mut ts = self.init_tile_state(tile_j, n_a);
 
-        let empty = CyclicBitset::new(n_b);
-
-        let mut alive_prev = CyclicBitset::new(n_b);
-        let mut len_arr: Vec<u8> = vec![0u8; n_b];
-        let mut len_new: Vec<u8> = vec![0u8; n_b];
-
-        // (boundary_end_in_stream, tile_end_in_P, len)
-        let mut emissions: Vec<(usize, usize, usize)> = Vec::new();
-
-        for k in 0..total {
-            let c = boundary[k % n_a];
-            let alive_curr: &CyclicBitset = match self.sym_to_idx.get(&c) {
-                Some(&idx) => &self.masks[tile_j][idx],
-                None => &empty,
-            };
-
-            let shifted = alive_prev.rotate_left_1();
-            let continues = shifted.and(alive_curr);
-            let deaths = shifted.and_not(alive_curr);
-            let starts = alive_curr.and_not(&continues);
-
-            // Deaths: previous-step matches that fail to extend.
-            // ep_new in deaths was reached by rotating ep_old=(ep_new-1) mod n_b.
-            for ep_new in deaths.set_bits() {
-                let ep_old = if ep_new == 0 { n_b - 1 } else { ep_new - 1 };
-                let l = len_arr[ep_old] as usize;
-                if l > 0 {
-                    emissions.push((k - 1, ep_old, l));
-                }
-            }
-
-            // Reset new buffer.
-            for v in len_new.iter_mut() {
-                *v = 0;
-            }
-
-            // Continuations: extend len from predecessor.
-            for ep in continues.set_bits() {
-                let ep_pred = if ep == 0 { n_b - 1 } else { ep - 1 };
-                let nl = (len_arr[ep_pred] as usize + 1).min(cap);
-                len_new[ep] = nl as u8;
-                if nl == cap {
-                    emissions.push((k, ep, cap));
-                }
-            }
-
-            // Fresh length-1 starts (where no continuation lives).
-            for ep in starts.set_bits() {
-                len_new[ep] = 1;
-                if cap == 1 {
-                    emissions.push((k, ep, 1));
-                }
-            }
-
-            alive_prev = alive_curr.clone();
-            std::mem::swap(&mut len_arr, &mut len_new);
+        for k in 0..(2 * n_a) {
+            let sym_idx = self.sym_to_idx.get(&boundary[k % n_a]).copied();
+            self.step_tile(&mut ts, tile_j, k, sym_idx);
         }
 
-        let n_p = n_b;
-        let tile_b_seq: &[i8] = &self.tiles[tile_j];
-        let mut matches: Vec<TileMatch> = emissions
-            .into_iter()
-            .filter_map(|(b_end, ep, l)| {
-                if l == 0 || l > cap {
-                    return None;
-                }
-                let pos_a = (b_end + n_a + 1 - l) % n_a;
-                let tile_start_in_p = (ep + n_p + 1 - l) % n_p;
-                let pos_b = (n_p + n_p - 1 - tile_start_in_p) % n_p;
-                // Left-maximality: skip matches whose left endpoint
-                // could extend (i.e., that are right-suffixes of a
-                // longer match starting one boundary char earlier).
-                // Matches that wrap a whole boundary or tile are
-                // trivially left-maximal.
-                if l < n_a && l < n_p {
-                    let prev_a = boundary[(pos_a + n_a - 1) % n_a];
-                    let prev_b_rc = -tile_b_seq[(pos_b + 1) % n_p];
-                    if prev_a == prev_b_rc {
-                        return None;
-                    }
-                }
-                Some(TileMatch::new(
-                    Segment::new(0, EdgeRange::new(pos_a, l)),
-                    Segment::new(tile_j, EdgeRange::new(pos_b, l)),
-                ))
-            })
-            .collect();
-
-        matches.sort_by(|a, b| {
-            a.a.range
-                .start_offset
-                .cmp(&b.a.range.start_offset)
-                .then_with(|| a.b.range.start_offset.cmp(&b.b.range.start_offset))
-                .then_with(|| b.len().cmp(&a.len()))
-        });
-        matches.dedup_by(|a, b| {
-            a.a.range.start_offset == b.a.range.start_offset
-                && a.b.range.start_offset == b.b.range.start_offset
-        });
-
-        // Silence unused warning if `is_empty` is unused outside debug.
-        let _ = CyclicBitset::is_empty;
-
-        matches
+        self.emissions_to_matches(ts.emissions, boundary, tile_j)
     }
 }
 
