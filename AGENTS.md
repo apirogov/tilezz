@@ -6,8 +6,8 @@ expects you to:
 - Push back when a request is wrong, has hidden costs, or doesn't fit
   the existing design. "This won't work because X" said before doing
   the work is more valuable than doing the work.
-- Articulate two or three options with trade-offs before committing
-  to non-trivial structural changes. Don't pick the first plausible
+- Articulate the alternatives with trade-offs before committing to
+  non-trivial structural changes. Don't pick the first plausible
   approach without showing what you considered.
 - Give honest verdicts on your own work, including work the user
   proposed. "I did what you asked but the result has these costs"
@@ -18,23 +18,26 @@ expects you to:
 
 The conversation is the design tool. Treat each significant decision
 as warranting a sentence of justification (or a question) before code
-changes, not after.
+changes, not after. For non-trivial work the loop is: understand,
+investigate, propose, align, implement, verify, review your diff.
+The step most often skipped is propose-and-align.
 
-# Process
+# Before you commit
 
-For non-trivial work the loop is: understand the request, investigate
-the relevant code, propose an approach, get alignment, implement,
-verify, review your own diff. The step most often skipped is propose-
-and-align -- the result is usually correct in isolation but misses
-the design conversation that would have made it better.
+Tests passing is the floor, not the ceiling. Before `git commit`, do
+this literal check -- not as a reflex, as a step:
 
-# Review your own work before shipping
+1. Re-read the diff with: "if asked to review this, what would I
+   flag?" Apply the five sins below to your own diff.
+2. Name one thing that, on a second pass next week, you'd want to
+   change. Change it now or note it explicitly.
+3. If nothing in the diff seems worth flagging, you didn't look hard
+   enough -- look again.
 
-The most common failure mode is shipping work you would have
-criticized if asked, because the self-review step was skipped. Before
-saying "done", re-read your diff with: "if asked to review this, what
-would I flag?" If you would flag something, fix it now. Apply the
-five sins below to your own diff first.
+The file telling you to do this is necessary but not sufficient: the
+failure mode is reading the rule and then shipping anyway. The check
+above only works if it's a numbered step in your workflow before
+`git commit`, not advice you remember sometimes.
 
 # Talk with the user
 
@@ -62,20 +65,16 @@ both sides go through the same helper; any bug in the helper makes
 both sides agree. The reference must be a different implementation:
 brute force, handwritten table, anything but the function under test.
 
-Two specific shapes to watch for:
-- **Same lossy encoding on both sides.** When a "dedup key" or
-  hash compresses richer geometric data into a single integer, the
-  brute and the catalog will both lose information through the same
-  encoding -- so a comparison passes even when the encoding silently
-  merges distinct events. The fix is to verify the encoding's
-  *injectivity* directly: every catalog key must reconstruct to
-  exactly one underlying geometric event.
-- **`.find(predicate)` over a derived set.** Tests and validators
-  that do `set.iter().find(pred)` silently accept ambiguity -- if
-  several distinct elements satisfy the predicate, the test picks
-  the first and proceeds. Use `.filter(pred).collect()` plus an
-  explicit count assertion when the predicate is supposed to
-  uniquely identify one element.
+Two specific shapes:
+- A dedup hash compresses richer data into one integer; brute and
+  catalog both lose the same information through the same encoding,
+  so collisions silently merge distinct events. Verify the encoding
+  is *injective* on its input domain (e.g. each catalog key must
+  reconstruct to exactly one geometric event), not just that the
+  two sides agree.
+- `.find(predicate)` over a derived set accepts the first hit and
+  hides ambiguity. Use `.filter(pred).collect()` + count assertion
+  when the predicate is supposed to identify one element uniquely.
 
 **3. Undocumented preconditions on public functions.** A `pub` function
 that trusts its caller for something it doesn't say it trusts. If
@@ -172,22 +171,16 @@ Each was latent for a meaningful period. Each is a sin above.
   boundary? open or closed?), renamed to `OpenVertexType` with
   invariant enforcement.
 - `ffbe24c` (sin 2, lossy-encoding shape): `vertextypes::bfs_phase`
-  encoded the matched B-edge into `tile_offset` as
-  `first_matched_b + 2*L - offset`. Distinct closing transitions
-  with `b1 + 2*L1 == b2 + 2*L2` shared the same `tile_offset` and
-  silently merged in the catalog. The brute completeness test ran
-  matches through the same encoding on both sides, so the bug never
-  surfaced. Six spectre closing transitions lost. Caught by an
-  explicit injectivity test that demands each catalog transition
-  reconstruct to exactly one geometric `PatchMatch`. Existing
-  `validate_seeds` had been "passing" by `.find(predicate)`
-  accident-finding-some-match rather than by reconstructing the
-  intended one.
-- (symmetric-convention refactor, reverted before commit) An attempt
-  to flip `PatchMatch.b.range.start_offset` from "first surviving"
-  to "first matched" looked locally tidy but pushed `+ len` shifts
-  to ~6 consumer call sites because anti-parallel glue geometry is
-  asymmetric in the underlying math; storage symmetry can only
-  relocate the asymmetry, not eliminate it. Reverted with
-  documentation explaining the trade-off; the lossy-encoding bug
-  fix above was orthogonal and survived. See `PatchMatch` docstring.
+  encoded `(matched_b, len)` into one integer as `first_matched_b +
+  2*L - offset`. Distinct closing transitions with `b1+2*L1 ==
+  b2+2*L2` silently merged; the brute test used the same encoding
+  on both sides so the collision was invisible. Six spectre closing
+  transitions lost. Caught by an explicit injectivity test (each
+  catalog transition must reconstruct to exactly one PatchMatch);
+  `validate_seeds` was "passing" via `.find(...)` finding-some-match.
+- (reverted) Symmetric-convention refactor that tried to flip
+  `PatchMatch.b.range.start_offset` from "first surviving" to "first
+  matched" -- looked tidy locally but pushed `+ len` shifts to ~6
+  consumer call sites. Anti-parallel glue geometry is asymmetric in
+  the math; storage symmetry can only relocate the asymmetry, not
+  eliminate it. See `PatchMatch` docstring.
