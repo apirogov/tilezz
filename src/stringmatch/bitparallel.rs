@@ -86,44 +86,53 @@ impl CyclicBitset {
         }
     }
 
-    /// Cyclic shift left by 1 over `self.len` bits.
-    fn rotate_left_1(&self) -> Self {
-        if self.len == 0 {
-            return self.clone();
+    /// `self <- src cyclically shifted left by 1` over `src.len` bits.
+    /// Reuses `self`'s buffer; the inner streaming loop calls this
+    /// once per tile per boundary step, so avoiding a fresh `Vec<u64>`
+    /// allocation here is the bulk of the per-step allocation
+    /// elimination. `self` and `src` must have the same `len`.
+    fn rotate_left_1_from(&mut self, src: &Self) {
+        debug_assert_eq!(self.len, src.len);
+        if src.len == 0 {
+            return;
         }
-        let mut out = CyclicBitset::new(self.len);
         let mut carry: u64 = 0;
-        for i in 0..self.bits.len() {
-            out.bits[i] = (self.bits[i] << 1) | carry;
-            carry = self.bits[i] >> 63;
+        for i in 0..src.bits.len() {
+            self.bits[i] = (src.bits[i] << 1) | carry;
+            carry = src.bits[i] >> 63;
         }
         // The top bit at position (len - 1) wraps to position 0.
-        let wrap_pos = self.len - 1;
-        let wrap_bit = (self.bits[wrap_pos / 64] >> (wrap_pos % 64)) & 1;
+        let wrap_pos = src.len - 1;
+        let wrap_bit = (src.bits[wrap_pos / 64] >> (wrap_pos % 64)) & 1;
         if wrap_bit == 1 {
-            out.bits[0] |= 1;
+            self.bits[0] |= 1;
         }
-        out.mask_top();
-        out
+        self.mask_top();
     }
 
-    fn and(&self, other: &Self) -> Self {
-        debug_assert_eq!(self.len, other.len);
-        let mut out = CyclicBitset::new(self.len);
-        for i in 0..self.bits.len() {
-            out.bits[i] = self.bits[i] & other.bits[i];
+    /// `self <- a & b`. All three buffers must have the same `len`.
+    fn and_from(&mut self, a: &Self, b: &Self) {
+        debug_assert_eq!(self.len, a.len);
+        debug_assert_eq!(self.len, b.len);
+        for i in 0..a.bits.len() {
+            self.bits[i] = a.bits[i] & b.bits[i];
         }
-        out
     }
 
-    fn and_not(&self, other: &Self) -> Self {
-        debug_assert_eq!(self.len, other.len);
-        let mut out = CyclicBitset::new(self.len);
-        for i in 0..self.bits.len() {
-            out.bits[i] = self.bits[i] & !other.bits[i];
+    /// `self <- a & !b`. All three buffers must have the same `len`.
+    fn and_not_from(&mut self, a: &Self, b: &Self) {
+        debug_assert_eq!(self.len, a.len);
+        debug_assert_eq!(self.len, b.len);
+        for i in 0..a.bits.len() {
+            self.bits[i] = a.bits[i] & !b.bits[i];
         }
-        out.mask_top();
-        out
+        self.mask_top();
+    }
+
+    /// `self <- src` (copy contents in place, no allocation).
+    fn copy_from(&mut self, src: &Self) {
+        debug_assert_eq!(self.len, src.len);
+        self.bits.copy_from_slice(&src.bits);
     }
 
     /// Collect set-bit positions into a Vec (one allocation per call;
@@ -168,14 +177,22 @@ pub struct BitParallelMatcher {
 
 /// Per-tile streaming state, reused across every boundary step.
 ///
-/// One per `(tile, sweep)` pair: holds the bitset of live match
-/// end-positions, per-position length arrays, a precomputed empty
-/// mask (for boundary symbols not in this tile's alphabet), and the
-/// emissions accumulated so far.
+/// One per `(tile, sweep)` pair. Carries:
+///   * the bitset of live match end-positions (`alive_prev`) plus
+///     scratch buffers (`shifted`, `continues`, `deaths`, `starts`)
+///     reused across every step so the inner loop is allocation-free;
+///   * per-position length arrays (`len_arr` swapped with `len_new`);
+///   * a precomputed empty mask for boundary symbols not in this
+///     tile's alphabet;
+///   * the emissions accumulated so far.
 struct TileState {
     n_b: usize,
     cap: usize,
     alive_prev: CyclicBitset,
+    shifted: CyclicBitset,
+    continues: CyclicBitset,
+    deaths: CyclicBitset,
+    starts: CyclicBitset,
     len_arr: Vec<u8>,
     len_new: Vec<u8>,
     empty: CyclicBitset,
@@ -305,7 +322,8 @@ impl BitParallelMatcher {
     }
 
     /// Allocate a fresh per-tile streaming state for `tile_j` against
-    /// a boundary of length `n_a`.
+    /// a boundary of length `n_a`. All bitset scratch buffers are
+    /// sized to `n_b` once here so the inner loop allocates nothing.
     fn init_tile_state(&self, tile_j: usize, n_a: usize) -> TileState {
         let n_b = self.tiles[tile_j].len();
         let cap = n_a.min(n_b);
@@ -313,6 +331,10 @@ impl BitParallelMatcher {
             n_b,
             cap,
             alive_prev: CyclicBitset::new(n_b),
+            shifted: CyclicBitset::new(n_b),
+            continues: CyclicBitset::new(n_b),
+            deaths: CyclicBitset::new(n_b),
+            starts: CyclicBitset::new(n_b),
             len_arr: vec![0u8; n_b],
             len_new: vec![0u8; n_b],
             empty: CyclicBitset::new(n_b),
@@ -344,16 +366,23 @@ impl BitParallelMatcher {
             None => &ts.empty,
         };
 
-        let shifted = ts.alive_prev.rotate_left_1();
-        let continues = shifted.and(alive_curr);
-        let deaths = shifted.and_not(alive_curr);
-        let starts = alive_curr.and_not(&continues);
+        // Compute `shifted = rot1(alive_prev)`, `continues = shifted &
+        // alive_curr`, `deaths = shifted & !alive_curr`, `starts =
+        // alive_curr & !continues` all in-place against ts's scratch
+        // buffers. The four operations are bit-parallel on
+        // `n_b.div_ceil(64)` words; reusing buffers means an N-step
+        // sweep over the boundary does zero per-step heap traffic on
+        // the bitset side.
+        ts.shifted.rotate_left_1_from(&ts.alive_prev);
+        ts.continues.and_from(&ts.shifted, alive_curr);
+        ts.deaths.and_not_from(&ts.shifted, alive_curr);
+        ts.starts.and_not_from(alive_curr, &ts.continues);
 
         // Deaths: previous-step matches that fail to extend.
         // `ep_new` in `deaths` was reached by rotating `ep_old =
         // (ep_new - 1) mod n_b`; emit the match that ended there at
         // boundary position `k - 1`.
-        for ep_new in deaths.set_bits() {
+        for ep_new in ts.deaths.set_bits() {
             let ep_old = if ep_new == 0 { ts.n_b - 1 } else { ep_new - 1 };
             let l = ts.len_arr[ep_old] as usize;
             if l > 0 {
@@ -371,7 +400,7 @@ impl BitParallelMatcher {
         // keep the bit alive, so subsequent rotations of the same
         // full-tile match are also reported (the dedup pass keeps the
         // canonical one).
-        for ep in continues.set_bits() {
+        for ep in ts.continues.set_bits() {
             let ep_pred = if ep == 0 { ts.n_b - 1 } else { ep - 1 };
             let nl = (ts.len_arr[ep_pred] as usize + 1).min(ts.cap);
             ts.len_new[ep] = nl as u8;
@@ -382,14 +411,14 @@ impl BitParallelMatcher {
 
         // Fresh length-1 starts (where no continuation lives). Emit
         // immediately when `cap == 1` (no further extension possible).
-        for ep in starts.set_bits() {
+        for ep in ts.starts.set_bits() {
             ts.len_new[ep] = 1;
             if ts.cap == 1 {
                 ts.emissions.push((k, ep, 1));
             }
         }
 
-        ts.alive_prev = alive_curr.clone();
+        ts.alive_prev.copy_from(alive_curr);
         std::mem::swap(&mut ts.len_arr, &mut ts.len_new);
     }
 
