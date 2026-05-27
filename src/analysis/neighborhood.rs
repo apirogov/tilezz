@@ -2490,17 +2490,40 @@ mod tests {
             let ctx_n = ctx.boundary_len();
             let first_junc = junc_positions[0];
             let anchor_pos = (first_junc + ctx_n - nt.cw_anchor_on_context) % ctx_n;
-            let found = ctx.get_all_matches().into_iter().find(|pm| {
-                pm.b.tile_id == nt.central_tile_id
-                    && pm.a_range.start_offset == anchor_pos
-                    && pm.b.range.start_offset == nt.cw_anchor_on_central
-            });
-            let Some(pm) = found else {
-                errors.push(format!(
-                    "nt c={} ac={} ax={}: no match at anchor positions",
-                    nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
-                ));
-                continue;
+            // Reconstruction must be unique: collect all PatchMatches
+            // that satisfy the metadata, not just the first one. A
+            // `.find` that silently accepts ambiguity is exactly how
+            // the asymmetric-convention tile_offset bug stayed hidden
+            // (see `vertextypes::spectre_old_encoding_*`).
+            let matching: Vec<_> = ctx
+                .get_all_matches()
+                .into_iter()
+                .filter(|pm| {
+                    pm.b.tile_id == nt.central_tile_id
+                        && pm.a_range.start_offset == anchor_pos
+                        && pm.b.range.start_offset == nt.cw_anchor_on_central
+                })
+                .collect();
+            let pm = match matching.len() {
+                0 => {
+                    errors.push(format!(
+                        "nt c={} ac={} ax={}: no match at anchor positions",
+                        nt.central_tile_id, nt.cw_anchor_on_central, nt.cw_anchor_on_context
+                    ));
+                    continue;
+                }
+                1 => matching.into_iter().next().unwrap(),
+                k => {
+                    errors.push(format!(
+                        "nt c={} ac={} ax={}: ambiguous reconstruction \
+                         ({} PatchMatches share the recorded anchor)",
+                        nt.central_tile_id,
+                        nt.cw_anchor_on_central,
+                        nt.cw_anchor_on_context,
+                        k
+                    ));
+                    continue;
+                }
             };
             if !ctx.add_tile(&pm) {
                 errors.push(format!(
@@ -2857,21 +2880,37 @@ mod tests {
                 let first_junc = junc_pos[0];
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
-                let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.b.tile_id == new_nt.central_tile_id
-                        && pm.a_range.start_offset == anchor_pos
-                        && pm.b.range.start_offset == new_nt.cw_anchor_on_central
-                });
-                let Some(pm) = found else {
-                    errors.push(format!(
-                        "seed {}: no match c={} ac={} ax={} (ctx_n={})",
-                        i,
-                        new_nt.central_tile_id,
-                        new_nt.cw_anchor_on_central,
-                        new_nt.cw_anchor_on_context,
-                        ctx.boundary_len()
-                    ));
-                    continue;
+                // See `validate_seeds` for why we collect rather than `.find`.
+                let matching: Vec<_> = ctx
+                    .get_all_matches()
+                    .into_iter()
+                    .filter(|pm| {
+                        pm.b.tile_id == new_nt.central_tile_id
+                            && pm.a_range.start_offset == anchor_pos
+                            && pm.b.range.start_offset == new_nt.cw_anchor_on_central
+                    })
+                    .collect();
+                let pm = match matching.len() {
+                    0 => {
+                        errors.push(format!(
+                            "seed {}: no match c={} ac={} ax={} (ctx_n={})",
+                            i,
+                            new_nt.central_tile_id,
+                            new_nt.cw_anchor_on_central,
+                            new_nt.cw_anchor_on_context,
+                            ctx.boundary_len()
+                        ));
+                        continue;
+                    }
+                    1 => matching.into_iter().next().unwrap(),
+                    k => {
+                        errors.push(format!(
+                            "seed {}: ambiguous reconstruction \
+                             ({} PatchMatches share anchor)",
+                            i, k
+                        ));
+                        continue;
+                    }
                 };
                 if !ctx.add_tile(&pm) {
                     errors.push(format!(
@@ -2920,21 +2959,37 @@ mod tests {
                 let first_junc = junc_pos[0];
                 let ctx_n = ctx.boundary_len();
                 let anchor_pos = (first_junc + ctx_n - new_nt.cw_anchor_on_context) % ctx_n;
-                let found = ctx.get_all_matches().into_iter().find(|pm| {
-                    pm.b.tile_id == new_nt.central_tile_id
-                        && pm.a_range.start_offset == anchor_pos
-                        && pm.b.range.start_offset == new_nt.cw_anchor_on_central
-                });
-                let Some(pm) = found else {
-                    errors.push(format!(
-                        "seed {}: no match c={} ac={} ax={} (ctx_n={})",
-                        i,
-                        new_nt.central_tile_id,
-                        new_nt.cw_anchor_on_central,
-                        new_nt.cw_anchor_on_context,
-                        ctx.boundary_len()
-                    ));
-                    continue;
+                // See `validate_seeds` for why we collect rather than `.find`.
+                let matching: Vec<_> = ctx
+                    .get_all_matches()
+                    .into_iter()
+                    .filter(|pm| {
+                        pm.b.tile_id == new_nt.central_tile_id
+                            && pm.a_range.start_offset == anchor_pos
+                            && pm.b.range.start_offset == new_nt.cw_anchor_on_central
+                    })
+                    .collect();
+                let pm = match matching.len() {
+                    0 => {
+                        errors.push(format!(
+                            "seed {}: no match c={} ac={} ax={} (ctx_n={})",
+                            i,
+                            new_nt.central_tile_id,
+                            new_nt.cw_anchor_on_central,
+                            new_nt.cw_anchor_on_context,
+                            ctx.boundary_len()
+                        ));
+                        continue;
+                    }
+                    1 => matching.into_iter().next().unwrap(),
+                    k => {
+                        errors.push(format!(
+                            "seed {}: ambiguous reconstruction \
+                             ({} PatchMatches share anchor)",
+                            i, k
+                        ));
+                        continue;
+                    }
                 };
                 if !ctx.add_tile(&pm) {
                     errors.push(format!(

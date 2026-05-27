@@ -618,7 +618,22 @@ fn bfs_phase<T: IsRing>(
             let offset_in_match =
                 (edge_pos as i64 - pm.a_range.start_offset as i64).rem_euclid(n as i64) as usize;
             let m = tileset.rat(pm.b.tile_id).len();
-            let tile_offset = (pm.b.range.start_offset as i64 + pm.len() as i64 - offset_in_match as i64)
+            // The canonical CW anchor of the matched edge is the matched
+            // B-edge glued anti-parallel to A's canonical edge at
+            // `offset_in_match` in the matched range. Under the
+            // asymmetric `start_offset = first surviving` storage on
+            // B, that B-edge sits at position
+            //     `first_matched_b + (len - 1 - offset_in_match)`
+            //   = `(first_surv_b - len) + (len - 1 - offset_in_match)`
+            //   = `pm.b.range.start_offset - 1 - offset_in_match`
+            // mod m. The previous formula `+ pm.len()` was off by
+            // `(len + 1)` from this geometric anchor and caused
+            // distinct geometric glues with `b1 + 2*L1 == b2 + 2*L2`
+            // to share a `tile_offset` value -- merging them in the
+            // catalog. See `spectre_old_encoding_*` regression test.
+            let tile_offset = (pm.b.range.start_offset as i64
+                - 1
+                - offset_in_match as i64)
                 .rem_euclid(m as i64) as usize;
 
             // Where is the focus's new junction (if any) in the
@@ -1269,7 +1284,12 @@ impl Collection {
                 }
                 let offset_in_match =
                     (edge_pos as i64 - pm.a_range.start_offset as i64).rem_euclid(n as i64) as usize;
-                let computed_offset = (pm.b.range.start_offset as i64 + pm.len() as i64 - offset_in_match as i64)
+                // Must match the formula used in `bfs_phase` when
+                // emitting the transition: the matched B-edge glued
+                // anti-parallel to A's canonical edge.
+                let computed_offset = (pm.b.range.start_offset as i64
+                    - 1
+                    - offset_in_match as i64)
                     .rem_euclid(tile_len as i64) as usize;
                 if computed_offset != t.tile_offset {
                     continue;
@@ -2173,7 +2193,240 @@ mod tests {
         assert_eq!(cursed, 178, "spectre cursed count");
         assert_eq!(dead, 159, "spectre dead count");
         assert_eq!(undead, 19, "spectre undead count");
-        assert_eq!(idx.transitions().len(), 420, "spectre transition count");
+        // 426 = 212 open + 214 closed. The classifications above
+        // (alive/blessed/etc.) are geometric invariants. The
+        // transition count moved from a previous 420 when the
+        // tile_offset encoding was fixed: see
+        // `spectre_old_encoding_would_collapse_exactly_six_transitions`.
+        // Closing transitions all have `dst_id = CLOSED_ID` and the
+        // closed VT depends only on (src_vt, tile), not on match
+        // length, so length variation has to be carried by the
+        // tile_offset value -- the previous formula put a spurious
+        // `+ L` term in that value, causing distinct geometric
+        // closing glues with `b1 + 2*L1 = b2 + 2*L2` to share the
+        // same key.
+        assert_eq!(idx.transitions().len(), 426, "spectre transition count");
+    }
+
+    // ========================================================
+    // Encoding-injectivity property tests
+    // --------------------------------------------------------
+    // The catalog stores each transition by the 5-tuple
+    // `(src_id, dst_id_or_CLOSED, side, tile_id, tile_offset)`. The
+    // `tile_offset` is a derived integer that compresses the matched
+    // B-edge anti-parallel to A's canonical edge into a single value.
+    // If two distinct geometric glues encode to the same tuple, they
+    // collapse in the catalog -- silently undercounting transitions.
+    //
+    // The previous boundary-match brute tests (e.g.
+    // `vt_witness_touching_matches_match_brute`) compared SETS of
+    // brute-enumerated matches against SETS of API matches at the
+    // boundary level -- both sides ran through the same encoding, so
+    // any encoding collision was invisible. A 6-transition under-count
+    // on spectre (`spectre_old_encoding_*` below) was a real example.
+    //
+    // The injectivity tests here close that gap: they reconstruct each
+    // catalog transition back to its source geometric PatchMatch and
+    // require that the reconstruction be UNIQUE -- a `filter(...).
+    // collect()` with an `assert_eq!(len, 1)` rather than the older
+    // `.find(...)` that silently accepted ambiguity.
+
+    /// Find the unique geometric `PatchMatch` on the source-VT witness
+    /// that the catalog transition's metadata reconstructs to.
+    /// Asserts exactly one match -- the encoding-injectivity check.
+    fn reconstruct_transition_match<T: IsRing>(
+        idx: &OpenVertexTypeIndex<T>,
+        ts: &Arc<TileSet<T>>,
+        t: &TransitionInfo,
+    ) -> (
+        crate::geom::patch::GrowingPatch<T>,
+        usize,
+        crate::geom::matches::PatchMatch,
+    ) {
+        let info = idx.entries().get(t.src_id - 1).expect("src VT in range");
+        let witness = info.witness();
+        let pos = info.witness_pos();
+        let n = witness.boundary_len();
+        let m = ts.rat(t.tile_id).seq().len();
+
+        let touching = witness.get_matches_touching_vertex(pos);
+        let matching: Vec<&crate::geom::matches::PatchMatch> = touching
+            .iter()
+            .filter(|pm| {
+                if pm.b.tile_id != t.tile_id {
+                    return false;
+                }
+                let edge_in_match = |edge: usize| -> bool {
+                    (edge + n - pm.a_range.start_offset) % n < pm.len()
+                };
+                let consumes_cw = edge_in_match((pos + n - 1) % n);
+                let consumes_ccw = edge_in_match(pos);
+                let pm_side = match (consumes_cw, consumes_ccw) {
+                    (true, true) => TransitionSide::Both,
+                    (true, false) => TransitionSide::Cw,
+                    (false, true) => TransitionSide::Ccw,
+                    (false, false) => return false,
+                };
+                if pm_side != t.side {
+                    return false;
+                }
+                let edge_pos = match pm_side {
+                    TransitionSide::Ccw => pos,
+                    _ => (pos + n - 1) % n,
+                };
+                let offset_in_match = (edge_pos as i64 - pm.a_range.start_offset as i64)
+                    .rem_euclid(n as i64)
+                    as usize;
+                // Must use the same formula as `bfs_phase` / `Collection::validate`.
+                let computed = (pm.b.range.start_offset as i64 - 1 - offset_in_match as i64)
+                    .rem_euclid(m as i64) as usize;
+                computed == t.tile_offset
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "transition {:?} (src=#{}) must reconstruct to exactly ONE \
+             PatchMatch on its witness (encoding injectivity)",
+            (t.dst_id, t.side, t.tile_id, t.tile_offset),
+            t.src_id,
+        );
+        (witness.clone(), pos, matching[0].clone())
+    }
+
+    /// Every catalog transition's metadata uniquely reconstructs to a
+    /// PatchMatch on its source witness, and applying that PatchMatch
+    /// produces exactly the catalog-recorded destination.
+    fn assert_vt_transition_metadata_is_injective<T: IsRing>(
+        idx: &OpenVertexTypeIndex<T>,
+        ts: &Arc<TileSet<T>>,
+    ) {
+        for t in idx.transitions() {
+            let (witness, pos, pm) = reconstruct_transition_match(idx, ts, t);
+            let n = witness.boundary_len();
+
+            let mut gp2 = witness.clone();
+            assert!(
+                gp2.add_tile(&pm),
+                "transition {:?}: add_tile failed on reconstructed glue",
+                (t.src_id, t.dst_id, t.side, t.tile_id, t.tile_offset)
+            );
+            if t.dst_id == CLOSED_ID {
+                let info = idx.entries().get(t.src_id - 1).expect("src VT in range");
+                let closed = ClosedVertexType::from_open_via_closure(info.vtype());
+                let recovered_cvt_id =
+                    idx.get_closed_id(&closed).expect("closed VT in catalog");
+                assert_eq!(
+                    Some(recovered_cvt_id),
+                    t.closed_vt_id,
+                    "closing transition {:?} reconstructed closed_vt_id mismatch",
+                    (t.src_id, t.side, t.tile_id, t.tile_offset)
+                );
+            } else {
+                let junction_pos = if pm.a_range.start_offset == pos {
+                    n - pm.len()
+                } else {
+                    0
+                };
+                let new_vt = gp2.junction_vertex_type_at(junction_pos).unwrap_or_else(|| {
+                    panic!(
+                        "open transition {:?}: post-glue junction missing at pos {}",
+                        (t.src_id, t.dst_id, t.side, t.tile_id, t.tile_offset),
+                        junction_pos
+                    )
+                });
+                let dst_info = idx.entries().get(t.dst_id - 1).expect("dst VT in range");
+                assert_eq!(
+                    &new_vt,
+                    dst_info.vtype(),
+                    "open transition {:?}: reconstructed dst VT doesn't match catalog",
+                    (t.src_id, t.dst_id, t.side, t.tile_id, t.tile_offset)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hex_vt_transition_metadata_is_injective() {
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::hexagon();
+        let rat = Rat::try_from(&s).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
+        assert_vt_transition_metadata_is_injective(&idx, &ts);
+    }
+
+    #[test]
+    fn square_vt_transition_metadata_is_injective() {
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::square();
+        let rat = Rat::try_from(&s).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
+        assert_vt_transition_metadata_is_injective(&idx, &ts);
+    }
+
+    #[test]
+    fn spectre_vt_transition_metadata_is_injective() {
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
+        let rat = Rat::try_from(&s).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
+        assert_vt_transition_metadata_is_injective(&idx, &ts);
+    }
+
+    /// Regression: the spectre catalog used to have 420 transitions
+    /// before the `tile_offset` encoding bug was fixed. Re-keying with
+    /// the OLD (buggy) formula collapses exactly 6 of the now-426
+    /// distinct catalog transitions, accounting for the +6 delta.
+    ///
+    /// Pinning both the count and the collision cause means any
+    /// future encoding change comes with explicit review.
+    #[test]
+    fn spectre_old_encoding_would_collapse_exactly_six_transitions() {
+        let s: crate::geom::snake::Snake<ZZ12> = tiles::spectre();
+        let rat = Rat::try_from(&s).unwrap();
+        let ts = Arc::new(TileSet::new(vec![rat]));
+        let idx = OpenVertexTypeIndex::new(Arc::clone(&ts));
+
+        let mut old_keyed: std::collections::HashSet<(
+            usize,
+            TransitionSide,
+            usize,
+            usize,
+            usize,
+        )> = std::collections::HashSet::new();
+        for t in idx.transitions() {
+            let (witness, pos, pm) = reconstruct_transition_match(&idx, &ts, t);
+            let n = witness.boundary_len();
+            let m = ts.rat(t.tile_id).seq().len();
+            let edge_pos = match t.side {
+                TransitionSide::Ccw => pos,
+                _ => (pos + n - 1) % n,
+            };
+            let offset_in_match = (edge_pos as i64 - pm.a_range.start_offset as i64)
+                .rem_euclid(n as i64)
+                as usize;
+            // OLD (buggy) formula: `pm.b.range.start_offset + pm.len()
+            // - offset_in_match`. Effective value =
+            // `first_matched_b + 2*L - offset` (with `start_offset =
+            // first_surv_b` storage), which has a spurious `+ L` term.
+            let old_tile_offset = (pm.b.range.start_offset as i64 + pm.len() as i64
+                - offset_in_match as i64)
+                .rem_euclid(m as i64) as usize;
+            let dst_key = if t.dst_id == CLOSED_ID {
+                t.closed_vt_id.unwrap_or(0) + 1_000_000
+            } else {
+                t.dst_id
+            };
+            old_keyed.insert((t.src_id, t.side, t.tile_id, old_tile_offset, dst_key));
+        }
+        let collapsed_under_old = idx.transitions().len() - old_keyed.len();
+        assert_eq!(
+            collapsed_under_old, 6,
+            "expected exactly 6 OLD-encoding collisions in spectre catalog \
+             (new total {}, OLD-keyed total {})",
+            idx.transitions().len(),
+            old_keyed.len()
+        );
     }
 
     /// Transition-well-formedness check for spectre (same as the hex

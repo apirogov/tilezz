@@ -225,6 +225,59 @@ impl PatchSegment {
 /// Asymmetric on purpose: a `PatchMatch` is not just a `TileMatch` with
 /// the A-tile forgotten — patches grow over time (boundary changes)
 /// while tile ids are fixed lookups into a static set.
+///
+/// # Asymmetric `start_offset` convention (deliberate)
+///
+/// The two `start_offset` fields name *different* geometric objects on
+/// the two sides:
+///
+/// - `a_range.start_offset` is the index of the **first matched edge**
+///   on A's boundary (tile-forward).
+/// - `b.range.start_offset` is the index of the **first surviving edge
+///   past the match** on B's boundary (tile-forward), equivalently the
+///   index of the boundary *vertex* at which the matched range ends in
+///   B's forward direction. This is the **seed-vertex** that
+///   [`crate::geom::rat::Rat::get_match`] takes as input.
+///
+/// This asymmetry is not a convention choice — it reflects the geometry.
+/// In an anti-parallel glue, the *same* boundary vertex sits at the
+/// matched range's *start* on A and its *end* on B. The shared vertex
+/// is what `get_match` and `forward_match_length` actually need as
+/// input; storing the B side as the vertex coordinate means
+/// `PatchMatch.b.range.start_offset` feeds those functions directly
+/// without any shift, and the consumer code stays clear.
+///
+/// # Why not push symmetric "first matched edge" on both sides?
+///
+/// We tried. Storing `b.range.start_offset = first matched B edge`
+/// looks tidier locally — it makes [`TileMatch::involution`] a trivial
+/// swap, makes `glue_raw_angles`'s formulas look symmetric in `a` and
+/// `b`, and gives a single answer to "what does `start_offset` mean?".
+///
+/// But the underlying geometry is *not* symmetric in storage — the
+/// anti-parallel glue puts A's first matched edge and B's first matched
+/// edge at *opposite ends* of the matched range. Once you store both as
+/// "first matched", every consumer that wants to seed a `get_match`
+/// (which structurally requires the shared vertex, = `first_matched_b +
+/// len`) has to compute `+ len` at the call site. The shifts spread
+/// across `~6` call sites in `patch.rs` and `matchtypes.rs`. The
+/// `cw_anchor_on_central` / `ccw_anchor_on_central` pair in
+/// `NeighborhoodType` (which were aliases under the asymmetric
+/// convention) become genuinely different values that need careful
+/// distinction at every site. The local tidiness costs more than it
+/// buys.
+///
+/// The asymmetric storage chose its home well: the asymmetry lives in
+/// **one place** (the storage convention) where it can be named and
+/// documented, and consumers stay shift-free. Pushing the symmetry
+/// onto storage just relocates the asymmetry into every consumer.
+///
+/// If a future refactor wants to revisit this: separate the bug fix
+/// (the lossy `tile_offset` encoding in
+/// `crate::analysis::vertextypes::bfs_phase`, see the
+/// `spectre_old_encoding_*` regression) from the storage convention.
+/// They are orthogonal. The tile_offset encoding was fixed without
+/// touching `start_offset` semantics.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
