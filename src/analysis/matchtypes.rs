@@ -27,12 +27,17 @@ use crate::geom::tileset::TileSet;
 use crate::geom::matches::{EdgeRange, Segment, TileMatch};
 use crate::stringmatch::BitParallelMatcher;
 
-/// Bit-parallel engine state. The B-side masks live in a shared
-/// `BitParallelMatcher`; the A-side angle sequences are kept raw and
-/// streamed against `b_matcher` per query. The shared masks let the
-/// seed-side precompute be built once and shared via `Arc` across
-/// many short-lived `MatchFinder`s with varying A-side tilesets —
-/// see [`BpSeed`] and [`MatchFinder::crossing_bp_with_seed`].
+/// Internal bit-parallel engine state used by [`MatchFinder`].
+///
+/// The B-side masks live in a shared [`BitParallelMatcher`] (built
+/// once, possibly shared via `Arc` across many `MatchFinder`s — see
+/// [`BpSeed`] / [`MatchFinder::crossing_with_seed`]). The A-side
+/// angle sequences are kept raw and streamed against `b_matcher`
+/// per query.
+///
+/// `offset_b` is the shift applied to incoming B-side tile ids so the
+/// engine can index into `b_matcher.tiles[j - offset_b]`. See the
+/// "Tile-id space" note on [`MatchFinder`] for the convention.
 struct CyclicEngine {
     a_sequences: Vec<Vec<i8>>,
     b_matcher: Arc<BitParallelMatcher>,
@@ -78,11 +83,31 @@ impl CyclicEngine {
 
 /// Pre-built bit-parallel state for a fixed "seed" (B-side) tileset.
 ///
-/// Construct once, then pass to [`MatchFinder::crossing_with_seed`]
-/// for each varying A-side tileset (the typical pattern in
-/// `seq_collect` / `seq_explorer` / `patch_enum` where many patch
-/// chunks are matched against a fixed tile alphabet). Cheap to clone
-/// (`Arc` internals).
+/// Bundles an `Arc<TileSet<T>>` with the [`BitParallelMatcher`] built
+/// from its angle sequences. Use this when many short-lived
+/// [`MatchFinder`]s will share the same B-side: build a `BpSeed` once,
+/// then call [`MatchFinder::crossing_with_seed`] for each A-side
+/// without re-running the BP precompute (~`O(num_b_tiles * tile_len)`
+/// per call collapses to a single setup).
+///
+/// Cheap to clone: both fields are `Arc`s. Note: the manual `Clone`
+/// impl (rather than `#[derive(Clone)]`) avoids a spurious `T: Clone`
+/// bound — the underlying `T: IsRing` data only lives inside the
+/// `Arc`s and never needs to be cloned.
+///
+/// # Canonical usage (patch_enum / seq_explorer pattern)
+///
+/// ```ignore
+/// let seed = BpSeed::new(Arc::clone(&fixed_b_tileset));
+/// for batch in /* varying A-side batches */ {
+///     let a_ts = Arc::new(TileSet::new(batch));
+///     let mf = MatchFinder::crossing_with_seed(a_ts, seed.clone());
+///     for m in mf.all_valid_matches() { /* ... */ }
+/// }
+/// ```
+///
+/// `seed.clone()` cheaply hands out new `Arc` handles; the matcher
+/// masks are shared across all `MatchFinder`s.
 pub struct BpSeed<T: IsRing> {
     tileset: Arc<TileSet<T>>,
     matcher: Arc<BitParallelMatcher>,
@@ -98,13 +123,16 @@ impl<T: IsRing> Clone for BpSeed<T> {
 }
 
 impl<T: IsRing> BpSeed<T> {
-    /// Pre-compute the bit-parallel state for the given seed tileset.
+    /// Pre-compute the bit-parallel masks for the given B-side
+    /// tileset. The matcher is wrapped in `Arc` so subsequent
+    /// `clone()`s share the masks.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let matcher = Arc::new(BitParallelMatcher::new(&sequences));
         BpSeed { tileset, matcher }
     }
 
+    /// The B-side tileset this seed indexes.
     pub fn tileset(&self) -> &Arc<TileSet<T>> {
         &self.tileset
     }
@@ -139,22 +167,36 @@ struct TypeEntry {
 /// Enumerates legal glue matches between two tilesets (or one tileset
 /// against itself).
 ///
-/// Use the constructor that matches your scenario:
+/// # When to use which constructor
 ///
-/// * [`MatchFinder::new`] — match a tileset against **itself**. Both
-///   `set_a` and `set_b` point at the same `Arc<TileSet>`. The
-///   resulting `TileMatch`s describe glues between two tiles drawn
-///   from the same tileset.
-/// * [`MatchFinder::crossing`] — match **two distinct** tilesets
-///   against each other. `set_a` and `set_b` are different. Useful
-///   when one tileset represents already-placed boundaries and the
-///   other represents candidates to glue.
+/// | Scenario | Constructor | Cost |
+/// |---|---|---|
+/// | one tileset vs itself | [`Self::new`] | builds BP masks once |
+/// | two distinct tilesets, one-shot | [`Self::crossing`] | builds BP masks once for B |
+/// | two distinct tilesets, many builds reusing the B-side | [`BpSeed::new`] + [`Self::crossing_with_seed`] | BP masks built once, shared by `Arc` across builds |
 ///
-/// Internally backed by a [`BitParallelMatcher`] over the B-side
-/// tileset; the A-side angle sequences are streamed against it per
-/// query. Build cost is proportional to the B-side only; consider
-/// [`Self::crossing_with_seed`] when the B-side is fixed across many
-/// `MatchFinder` builds.
+/// The amortised path matters when you iterate over many A-side
+/// tilesets against a fixed B-side, which is the dominant pattern in
+/// `patch_enum`, `seq_explorer`, and similar callers (a fixed tile
+/// alphabet matched against a stream of grown patches).
+///
+/// # Tile-id space (crossing mode)
+///
+/// In the crossing constructors, the returned [`TileMatch`] values
+/// use a **flat id space**: `tile_a` indexes into `set_a.rats()`
+/// directly (range `[0, num_tiles_a)`), but `tile_b` is shifted by
+/// `offset_b = num_tiles_a` so it falls in `[num_tiles_a,
+/// num_tiles_a + num_tiles_b)`. This lets downstream code recognise
+/// which side an id refers to without carrying a separate "side" tag.
+/// `self_match` mode (`Self::new`) sets `offset_b = 0` and tile ids
+/// in both fields share the single tileset's indexing.
+///
+/// # Internals
+///
+/// Backed by a [`BitParallelMatcher`] over the B-side tileset's angle
+/// sequences. The A-side sequences are streamed against the matcher
+/// per query. Build cost is dominated by the B-side BP precompute,
+/// which is why the `BpSeed` reuse path exists.
 pub struct MatchFinder<T: IsRing> {
     set_a: Arc<TileSet<T>>,
     set_b: Arc<TileSet<T>>,
@@ -164,7 +206,11 @@ pub struct MatchFinder<T: IsRing> {
 
 impl<T: IsRing> MatchFinder<T> {
     /// Build a `MatchFinder` that enumerates self-matches within a
-    /// single tileset (`set_a == set_b == tileset`).
+    /// single tileset (`set_a == set_b == tileset`, `offset_b = 0`).
+    ///
+    /// Returned `TileMatch`es have both `tile_a` and `tile_b` indexed
+    /// into the same `tileset.rats()` (no id shift). Use this for the
+    /// pairwise "which tiles glue to which" enumeration over one set.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
         let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let b_matcher = Arc::new(BitParallelMatcher::new(&sequences));
@@ -182,20 +228,31 @@ impl<T: IsRing> MatchFinder<T> {
     }
 
     /// Build a `MatchFinder` that enumerates matches between two
-    /// distinct tilesets `a` and `b`. The returned `TileMatch` values
-    /// have `tile_a` indexed into `a.rats()` and `tile_b` indexed into
-    /// `b.rats()`. The B-side BP state is built fresh here — use
-    /// [`Self::crossing_with_seed`] to amortise across many builds
-    /// with the same B-side.
+    /// distinct tilesets `a` and `b`. One-shot convenience — builds
+    /// the BP masks for `b` inline.
+    ///
+    /// For callers that iterate many `MatchFinder` builds against
+    /// the **same** B-side, use [`BpSeed::new`] +
+    /// [`Self::crossing_with_seed`] instead so the precompute is
+    /// done once and shared via `Arc`.
+    ///
+    /// See the struct doc for the `tile_a` / `tile_b` id space.
     pub fn crossing(a: Arc<TileSet<T>>, b: Arc<TileSet<T>>) -> Self {
         let seed = BpSeed::new(b);
         Self::crossing_with_seed(a, seed)
     }
 
     /// Build a crossing `MatchFinder` reusing a pre-built [`BpSeed`]
-    /// for the B-side. Per-call cost is proportional to the A-side
-    /// tileset only (cloning the angle sequences); the B-side masks
-    /// are shared by `Arc`.
+    /// for the B-side.
+    ///
+    /// Per-call cost is proportional to the A-side tileset only
+    /// (each Rat's angle sequence is cloned once into the engine);
+    /// the B-side masks are shared by `Arc` from the `BpSeed`. This
+    /// is the right primitive for the inner loop of `patch_enum`,
+    /// `seq_explorer`, and similar callers — see the [`BpSeed`] doc
+    /// for the canonical usage pattern.
+    ///
+    /// See the struct doc for the `tile_a` / `tile_b` id space.
     pub fn crossing_with_seed(a: Arc<TileSet<T>>, seed: BpSeed<T>) -> Self {
         let a_sequences: Vec<Vec<i8>> = a.rats().iter().map(|r| r.seq().to_vec()).collect();
         let offset_b = a.num_tiles();
