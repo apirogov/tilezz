@@ -938,7 +938,7 @@ fn build_attached_context<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(nt.central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::geom::rat::forward_match_length(
+    let match_len = crate::stringmatch::forward_match_length(
         ctx.angles(),
         anchor_pos,
         central_seq,
@@ -1291,7 +1291,7 @@ fn try_construct_nt_from_cw<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::geom::rat::forward_match_length(
+    let match_len = crate::stringmatch::forward_match_length(
         ctx.angles(),
         cw_anchor_pos,
         central_seq,

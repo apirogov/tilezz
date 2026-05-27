@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 use num_traits::ToPrimitive;
 
 use crate::cyclotomic::{IsRing};
+use crate::stringmatch::match_length;
 
 use super::angles::{comp, revcomp};
 use super::snake::{Snake, Turtle};
@@ -60,83 +61,6 @@ pub(crate) fn prepare_seq(angles: &[i8]) -> (Vec<i8>, usize) {
     // Second copy: duplicate the first half in place.
     canonical.extend_from_within(..n);
     (canonical, offset)
-}
-
-/// Given two slices of sequences, return length of longest match
-/// (assuming that we start to match both at index 0)
-/// and possibly a offset to be subtracted from the left side
-/// (if the match can be extended to the left, assuming the sequences are cyclic)
-pub(crate) fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
-    let min_len = x.len().min(y.len());
-    if min_len < 2 {
-        // at least one sequence has
-        // no nodes or only single node -> no segment
-        return (0, 0);
-    }
-
-    // we start checking at the 2nd point and look for the right side end
-    let mut len = min_len;
-    for i in 1..min_len {
-        if x[i] != y[i] {
-            // first non-complementary angle -> right end of match
-            len = i;
-            break;
-        }
-    }
-    if x[0] != y[0] {
-        // cannot extend to the left -> we are done
-        return (len, 0);
-    }
-
-    // go cyclically into the other direction to try extending the interval
-    let remaining = min_len - len;
-    if remaining == 0 {
-        return (len, 0);
-    }
-    let mut offset = remaining;
-    for i in 1..remaining {
-        if x[x.len() - i] != y[y.len() - i] {
-            // first non-complementary angle -> left end of match
-            offset = i;
-            len += i;
-            return (len, offset);
-        }
-    }
-    len += offset;
-    (len, offset)
-}
-
-/// Compute the maximum match length when gluing `other_angles` onto
-/// `self_angles` starting at the seed vertex pair `(self_start,
-/// other_junction)`.
-///
-/// Two sides walk outward from a shared anchor: `self` advances CCW
-/// from `self_start`, `other` advances CW from `other_junction`. Edges
-/// are compatible when `self_angles[k] == -other_angles[mirror(k)]`
-/// (head-to-tail anti-parallel meet).
-///
-/// Length is at least 1 (the anchor edge always matches by construction)
-/// and stops at the first disagreement, capped at `min(self_len,
-/// other_len)`. See [`Rat::get_match`] for the seed-vertex convention.
-pub fn forward_match_length(
-    self_angles: &[i8],
-    self_start: usize,
-    other_angles: &[i8],
-    other_junction: usize,
-) -> usize {
-    let n = self_angles.len();
-    let m = other_angles.len();
-    let max_len = n.min(m);
-    let mut len = 1;
-    for i in 1..max_len {
-        let xi = self_angles[(self_start + i) % n];
-        let yi = -other_angles[(other_junction + m - i) % m];
-        if xi != yi {
-            break;
-        }
-        len += 1;
-    }
-    len
 }
 
 #[derive(Debug, Clone)]
