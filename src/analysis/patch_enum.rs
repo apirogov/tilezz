@@ -32,7 +32,7 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 
 use crate::cyclotomic::{IsRing};
-use crate::analysis::matchtypes::{BpSeed, MatchFinder};
+use crate::analysis::matchfinder::{BpSeed, MatchFinder};
 use crate::geom::rat::Rat;
 use crate::geom::tileset::TileSet;
 
