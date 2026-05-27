@@ -50,8 +50,6 @@
 //! and keep the bit alive, so that subsequent cyclic rotations of the
 //! same full-tile match are also reported. Dedup canonicalises.
 
-use std::collections::HashMap;
-
 use crate::geom::matches::{EdgeRange, Segment, TileMatch};
 
 /// Fixed-length cyclic bitset over `len` bits, stored as a `Vec<u64>`.
@@ -150,10 +148,21 @@ impl CyclicBitset {
 /// `maximal_rc_matches(i, j)` between any two of them, or
 /// `stream_boundary(b, j)` / `stream_boundary_all_tiles(b)` for an
 /// arbitrary external boundary against the indexed tileset.
+/// Sentinel for "boundary symbol not in this matcher's alphabet".
+/// Picked as `u8::MAX` so a single `if idx == NO_SYM` check in the
+/// hot loop suffices.
+const NO_SYM: u8 = u8::MAX;
+
 pub struct BitParallelMatcher {
     tiles: Vec<Vec<i8>>,
-    sym_to_idx: HashMap<i8, usize>,
-    // masks[tile_idx][sym_idx] = positions in rc(tile) holding that symbol
+    /// Flat `i8 -> sym_idx` table indexed by `c as u8` (256 entries).
+    /// `NO_SYM` marks chars outside the alphabet. The alphabet is
+    /// small (4-12 symbols for the cyclotomic rings we care about),
+    /// so the 256-byte table is cheaper to allocate and (critically)
+    /// faster to lookup in the inner streaming loop than a HashMap.
+    sym_to_idx: [u8; 256],
+    /// `masks[tile_idx][sym_idx]` = positions in `rc(tile)` holding
+    /// that symbol.
     masks: Vec<Vec<CyclicBitset>>,
 }
 
@@ -196,9 +205,17 @@ impl BitParallelMatcher {
         }
         alpha.sort();
         alpha.dedup();
-        let sym_to_idx: HashMap<i8, usize> =
-            alpha.iter().enumerate().map(|(i, &c)| (c, i)).collect();
-        let num_syms = sym_to_idx.len();
+        assert!(
+            alpha.len() < NO_SYM as usize,
+            "BitParallelMatcher: alphabet size {} exceeds {}",
+            alpha.len(),
+            NO_SYM as usize - 1
+        );
+        let mut sym_to_idx = [NO_SYM; 256];
+        for (i, &c) in alpha.iter().enumerate() {
+            sym_to_idx[c as u8 as usize] = i as u8;
+        }
+        let num_syms = alpha.len();
 
         let masks: Vec<Vec<CyclicBitset>> = tiles
             .iter()
@@ -209,8 +226,9 @@ impl BitParallelMatcher {
                 // P_j[p] = -t[L - 1 - p]
                 for p in 0..l {
                     let c = -t[l - 1 - p];
-                    if let Some(&idx) = sym_to_idx.get(&c) {
-                        m[idx].set_bit(p);
+                    let idx = sym_to_idx[c as u8 as usize];
+                    if idx != NO_SYM {
+                        m[idx as usize].set_bit(p);
                     }
                 }
                 m
@@ -221,6 +239,19 @@ impl BitParallelMatcher {
             tiles: tiles.to_vec(),
             sym_to_idx,
             masks,
+        }
+    }
+
+    /// Lookup of boundary char `c` in the matcher's alphabet. Returns
+    /// the symbol index, or `None` for chars outside the alphabet
+    /// (which kill every live match at the streaming step).
+    #[inline(always)]
+    fn sym_idx_of(&self, c: i8) -> Option<usize> {
+        let idx = self.sym_to_idx[c as u8 as usize];
+        if idx == NO_SYM {
+            None
+        } else {
+            Some(idx as usize)
         }
     }
 
@@ -450,7 +481,7 @@ impl BitParallelMatcher {
             (0..n_tiles).map(|j| self.init_tile_state(j, n_a)).collect();
 
         for k in 0..(2 * n_a) {
-            let sym_idx = self.sym_to_idx.get(&boundary[k % n_a]).copied();
+            let sym_idx = self.sym_idx_of(boundary[k % n_a]);
             for (tile_j, ts) in state.iter_mut().enumerate() {
                 if ts.skip {
                     continue;
@@ -478,7 +509,7 @@ impl BitParallelMatcher {
         let mut ts = self.init_tile_state(tile_j, n_a);
 
         for k in 0..(2 * n_a) {
-            let sym_idx = self.sym_to_idx.get(&boundary[k % n_a]).copied();
+            let sym_idx = self.sym_idx_of(boundary[k % n_a]);
             self.step_tile(&mut ts, tile_j, k, sym_idx);
         }
 
