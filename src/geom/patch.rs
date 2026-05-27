@@ -67,55 +67,65 @@ pub use crate::geom::matches::PatchMatch;
 /// (which additionally rejects ±hturn boundary junctions). Several
 /// pieces of internal code rely on hole-freeness for correctness; the
 /// relevant comments cite this invariant where it matters.
+/// A patch *before* the first glue: just a seed tile plus a cache of
+/// candidate first-glues against it.
+///
+/// Use [`Self::grow`] to attempt the first glue and produce a
+/// [`GrowingPatch`]. Use [`Self::candidate_matches`] to enumerate the
+/// legal first-glue candidates without committing.
+///
+/// `PatchSeed` is `Clone` because callers (test enumerators, NT seed
+/// phase) iterate over candidates and try several first-glues
+/// independently; `seed.clone().grow(&pm)` is the canonical pattern.
+#[derive(Clone)]
+pub struct PatchSeed<T: IsRing> {
+    match_index: Arc<MatchTypeIndex<T>>,
+    tile_id: usize,
+    cached_matches: Vec<PatchMatch>,
+}
+
+/// An incrementally grown, edge-to-edge tiling of a connected,
+/// hole-free region of the plane, after at least one tile has been
+/// glued. See module-level docstring for the topological invariants.
+///
+/// Construct via [`PatchSeed::grow`] (the seed-plus-first-glue path)
+/// or [`GrowingPatch::from_parts`] (restore from boundary data).
+///
+/// # Grid bookkeeping
+///
+/// The spatial grid uses **stable edge IDs** so incremental glue
+/// updates only touch the changed edges:
+///
+/// * `edge_data[id] -> (p1, p2)` for each edge ever created.
+/// * `boundary_edge_ids[pos] -> id` for the current boundary.
+/// * `next_edge_id` is the next free ID; bumped on each new edge.
+/// * `grid` indexes `edge_data` by ID.
+///
+/// Removed (matched-away) edges leave their entry in `edge_data`
+/// rather than being shifted out -- keeping live IDs stable across
+/// glues is what lets `unregister_edge` work in O(1). Consequently
+/// `edge_data.len()` grows with **total glue history**, not with
+/// current boundary length. For typical workflows (short-lived
+/// patches in BFS enumeration; small handwritten fixtures) the
+/// overhead is small. For long-lived patches grown over many glues,
+/// pass through [`GrowingPatch::from_parts`] to rebuild the grid
+/// from `angles`/`edges`/`inner_chains`/`patch_tile_ids` --
+/// `from_parts` re-traces positions, builds a fresh grid, and
+/// resets `boundary_edge_ids` to `(0..n)`, dropping all tombstones.
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsRing> {
     match_index: Arc<MatchTypeIndex<T>>,
-    state: PatchState<T>,
-}
-
-#[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
-enum PatchState<T: IsRing> {
-    Seed {
-        tile_id: usize,
-        cached_matches: Vec<PatchMatch>,
-    },
-    /// Active patch with a boundary.
-    ///
-    /// # Grid bookkeeping
-    ///
-    /// The spatial grid uses **stable edge IDs** so incremental glue
-    /// updates only touch the changed edges:
-    ///
-    /// * `edge_data[id] -> (p1, p2)` for each edge ever created.
-    /// * `boundary_edge_ids[pos] -> id` for the current boundary.
-    /// * `next_edge_id` is the next free ID; bumped on each new edge.
-    /// * `grid` indexes `edge_data` by ID.
-    ///
-    /// Removed (matched-away) edges leave their entry in `edge_data`
-    /// rather than being shifted out — keeping live IDs stable across
-    /// glues is what lets `unregister_edge` work in O(1). Consequently
-    /// `edge_data.len()` grows with **total glue history**, not with
-    /// current boundary length. For typical workflows (short-lived
-    /// patches in BFS enumeration; small handwritten fixtures) the
-    /// overhead is small. For long-lived patches grown over many glues,
-    /// pass through [`GrowingPatch::from_parts`] to rebuild the grid
-    /// from `angles`/`edges`/`inner_chains`/`patch_tile_ids` —
-    /// `from_parts` re-traces positions, builds a fresh grid, and
-    /// resets `boundary_edge_ids` to `(0..n)`, dropping all tombstones.
-    Growing {
-        angles: Vec<i8>,
-        edges: Vec<EdgeInfo>,
-        candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
-        inner_chains: Vec<Vec<EdgeInfo>>,
-        positions: Vec<T>,
-        grid: UnitSquareGrid,
-        edge_data: Vec<(T, T)>,
-        boundary_edge_ids: Vec<usize>,
-        next_edge_id: usize,
-        patch_tile_ids: Vec<usize>,
-        next_tile_id: usize,
-    },
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
+    inner_chains: Vec<Vec<EdgeInfo>>,
+    positions: Vec<T>,
+    grid: UnitSquareGrid,
+    edge_data: Vec<(T, T)>,
+    boundary_edge_ids: Vec<usize>,
+    next_edge_id: usize,
+    patch_tile_ids: Vec<usize>,
+    next_tile_id: usize,
 }
 
 fn update_inner_chains(
@@ -442,33 +452,65 @@ fn flower_petal_glue<T: IsRing>(
     Some((boundary, junc_pos))
 }
 
-impl<T: IsRing> GrowingPatch<T> {
-    /// Construct a fresh `GrowingPatch` seeded with one tile from
-    /// `tileset` (the tile at `seed_tile_id`).
-    ///
-    /// The patch starts in the `Seed` state — no boundary yet, only
-    /// the seed tile. The first call to [`Self::add_tile`] transitions
-    /// to `Growing` and produces the initial boundary.
+impl<T: IsRing> PatchSeed<T> {
+    /// Build a `PatchSeed` for the given tileset, with `seed_tile_id`
+    /// as the seed tile shape.
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        let seed_matches =
-            Self::compute_seed_matches(&match_index, match_index.tileset(), seed_tile_id);
-        GrowingPatch {
+        let cached_matches =
+            compute_seed_matches(&match_index, match_index.tileset(), seed_tile_id);
+        PatchSeed {
             match_index,
-            state: PatchState::Seed {
-                tile_id: seed_tile_id,
-                cached_matches: seed_matches,
-            },
+            tile_id: seed_tile_id,
+            cached_matches,
         }
     }
 
-    /// Reconstruct a `Growing` patch from its core boundary data.
+    /// Seed tile shape id (indexes into `self.tileset().rats()`).
+    pub fn tile_id(&self) -> usize {
+        self.tile_id
+    }
+
+    /// Underlying tileset.
+    pub fn tileset(&self) -> &Arc<TileSet<T>> {
+        self.match_index.tileset()
+    }
+
+    /// Match index, shared with any `GrowingPatch` produced via
+    /// [`Self::grow`].
+    pub fn match_index(&self) -> &Arc<MatchTypeIndex<T>> {
+        &self.match_index
+    }
+
+    /// The seed tile itself, viewed as a [`Rat`].
+    pub fn to_rat(&self) -> Rat<T> {
+        self.match_index.tileset().rat(self.tile_id).clone()
+    }
+
+    /// All legal first-glue candidates against the seed tile. Cached
+    /// at construction; callers can iterate without recomputing.
+    pub fn candidate_matches(&self) -> &[PatchMatch] {
+        &self.cached_matches
+    }
+
+    /// Attempt the first glue. Consumes the seed; returns the
+    /// resulting `GrowingPatch` on success or `None` on geometric /
+    /// validation failure (which leaves no usable state behind --
+    /// callers that want to try multiple first-glues should
+    /// `seed.clone().grow(&pm)` per candidate).
+    pub fn grow(self, pm: &PatchMatch) -> Option<GrowingPatch<T>> {
+        GrowingPatch::init_from_seed(self.match_index, self.tile_id, pm)
+    }
+}
+
+impl<T: IsRing> GrowingPatch<T> {
+    /// Reconstruct a `GrowingPatch` from its core boundary data.
     ///
     /// Returns `None` if the input slices are inconsistent (empty, or
     /// mismatched lengths between `angles`, `edges`, `inner_chains`,
     /// `patch_tile_ids`).
     ///
-    /// **Caveats — derived state is rebuilt, not restored.** This
+    /// **Caveats -- derived state is rebuilt, not restored.** This
     /// constructor recomputes the spatial grid (`grid`, `edge_data`,
     /// `boundary_edge_ids`, `next_edge_id`) from `angles` via
     /// `trace_boundary_positions` + `build_boundary_grid`. Specifically:
@@ -498,19 +540,17 @@ impl<T: IsRing> GrowingPatch<T> {
             build_boundary_grid::<T>(&positions, n);
         Some(GrowingPatch {
             match_index,
-            state: PatchState::Growing {
-                angles,
-                edges,
-                candidates_by_start: None,
-                inner_chains,
-                positions,
-                grid,
-                edge_data,
-                boundary_edge_ids,
-                next_edge_id,
-                patch_tile_ids,
-                next_tile_id,
-            },
+            angles,
+            edges,
+            candidates_by_start: None,
+            inner_chains,
+            positions,
+            grid,
+            edge_data,
+            boundary_edge_ids,
+            next_edge_id,
+            patch_tile_ids,
+            next_tile_id,
         })
     }
 
@@ -834,31 +874,17 @@ impl<T: IsRing> GrowingPatch<T> {
         result
     }
 
-    /// `true` if the patch has a boundary (one or more `add_tile`
-    /// calls have succeeded); `false` while it's still just a seed.
-    pub fn is_growing(&self) -> bool {
-        matches!(self.state, PatchState::Growing { .. })
-    }
-
     /// All legal `add_tile` candidates for the current boundary, in
     /// arbitrary order. Each candidate is edge-compatible and passes
     /// the angle-math check, but geometric self-intersection is *not*
-    /// pre-filtered — `add_tile` does that final check.
+    /// pre-filtered -- `add_tile` does that final check.
     pub fn get_all_matches(&self) -> Vec<PatchMatch> {
-        match &self.state {
-            PatchState::Seed { cached_matches, .. } => cached_matches.clone(),
-            PatchState::Growing {
-                angles,
-                edges,
-                candidates_by_start,
-                ..
-            } => match candidates_by_start {
-                Some(cbs) => cbs.iter().flatten().cloned().collect(),
-                None => Self::compute_all_candidates(&self.match_index, angles, edges)
-                    .into_iter()
-                    .flatten()
-                    .collect(),
-            },
+        match &self.candidates_by_start {
+            Some(cbs) => cbs.iter().flatten().cloned().collect(),
+            None => Self::compute_all_candidates(&self.match_index, &self.angles, &self.edges)
+                .into_iter()
+                .flatten()
+                .collect(),
         }
     }
 
@@ -867,54 +893,35 @@ impl<T: IsRing> GrowingPatch<T> {
     /// vertex lies in the closed range `[start_a, start_a + len]` of
     /// the matched edges (see [`cyclic_range_contains`]).
     pub fn get_matches_touching_vertex(&self, vertex_index: usize) -> Vec<PatchMatch> {
-        match &self.state {
-            PatchState::Seed { cached_matches, .. } => {
-                let n = self.match_index.tileset().rat(0).len();
-                cached_matches
-                    .iter()
-                    .filter(|pm| {
-                        cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n)
-                    })
-                    .cloned()
-                    .collect()
+        let n = self.angles.len();
+        let computed: Vec<Vec<PatchMatch>>;
+        let source: &[Vec<PatchMatch>] = match &self.candidates_by_start {
+            Some(cbs) => cbs,
+            None => {
+                computed =
+                    Self::compute_all_candidates(&self.match_index, &self.angles, &self.edges);
+                &computed
             }
-            PatchState::Growing {
-                candidates_by_start,
-                angles,
-                edges,
-                ..
-            } => {
-                let n = angles.len();
-                let computed: Vec<Vec<PatchMatch>>;
-                let source: &[Vec<PatchMatch>] = match candidates_by_start {
-                    Some(cbs) => cbs,
-                    None => {
-                        computed = Self::compute_all_candidates(&self.match_index, angles, edges);
-                        &computed
-                    }
-                };
-                let k = self
-                    .match_index
-                    .tileset()
-                    .rats()
-                    .iter()
-                    .map(|r| r.len())
-                    .max()
-                    .unwrap_or(0)
-                    .min(n);
-                let mut result = Vec::new();
-                for offset in 0..=k {
-                    let start = (vertex_index + n - offset) % n;
-                    for pm in &source[start] {
-                        if cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n)
-                        {
-                            result.push(*pm);
-                        }
-                    }
+        };
+        let k = self
+            .match_index
+            .tileset()
+            .rats()
+            .iter()
+            .map(|r| r.len())
+            .max()
+            .unwrap_or(0)
+            .min(n);
+        let mut result = Vec::new();
+        for offset in 0..=k {
+            let start = (vertex_index + n - offset) % n;
+            for pm in &source[start] {
+                if cyclic_range_contains(pm.a_range.start_offset, pm.len(), vertex_index, n) {
+                    result.push(*pm);
                 }
-                result
             }
         }
+        result
     }
 
     /// All `add_tile` candidates whose matched edge run absorbs at
@@ -949,20 +956,12 @@ impl<T: IsRing> GrowingPatch<T> {
 
     #[cfg(test)]
     pub(crate) fn ensure_candidates_materialized(&mut self) {
-        if let PatchState::Growing {
-            angles,
-            edges,
-            candidates_by_start,
-            ..
-        } = &mut self.state
-        {
-            if candidates_by_start.is_none() {
-                *candidates_by_start = Some(Self::compute_all_candidates(
-                    &self.match_index,
-                    angles,
-                    edges,
-                ));
-            }
+        if self.candidates_by_start.is_none() {
+            self.candidates_by_start = Some(Self::compute_all_candidates(
+                &self.match_index,
+                &self.angles,
+                &self.edges,
+            ));
         }
     }
 
@@ -972,32 +971,20 @@ impl<T: IsRing> GrowingPatch<T> {
         self.match_index.tileset().num_tiles()
     }
 
-    /// Length of the current boundary in edges. Returns 0 for a `Seed`
-    /// state (use [`Self::is_growing`] to check).
+    /// Length of the current boundary in edges.
     pub fn boundary_len(&self) -> usize {
-        match &self.state {
-            PatchState::Growing { angles, .. } => angles.len(),
-            _ => 0,
-        }
+        self.angles.len()
     }
 
     /// The boundary's cyclic angle sequence (one entry per boundary
-    /// vertex). Length matches [`Self::boundary_len`]; empty for a
-    /// `Seed` state.
+    /// vertex). Length matches [`Self::boundary_len`].
     pub fn angles(&self) -> &[i8] {
-        match &self.state {
-            PatchState::Growing { angles, .. } => angles,
-            _ => &[],
-        }
+        &self.angles
     }
 
-    /// Materialise the current patch as a `Rat` describing its
-    /// boundary. For a `Seed` state, returns the seed tile.
+    /// Materialise the current boundary as a `Rat`.
     pub fn to_rat(&self) -> Rat<T> {
-        match &self.state {
-            PatchState::Seed { tile_id, .. } => self.match_index.tileset().rat(*tile_id).clone(),
-            PatchState::Growing { angles, .. } => Rat::from_slice_unchecked(angles),
-        }
+        Rat::from_slice_unchecked(&self.angles)
     }
 
     /// Reference to the underlying tileset.
@@ -1017,10 +1004,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// of its edges occupies each boundary position. Length matches
     /// [`Self::boundary_len`].
     pub fn edges(&self) -> &[EdgeInfo] {
-        match &self.state {
-            PatchState::Growing { edges, .. } => edges,
-            _ => &[],
-        }
+        &self.edges
     }
 
     /// Per-boundary-position lists of interior tile edges meeting at
@@ -1028,10 +1012,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// multiple tiles converging (i.e. an [`OpenVertexType`] with
     /// non-empty `inner`).
     pub fn inner_chains(&self) -> &[Vec<EdgeInfo>] {
-        match &self.state {
-            PatchState::Growing { inner_chains, .. } => inner_chains,
-            _ => &[],
-        }
+        &self.inner_chains
     }
 
     /// Per-boundary-position **patch tile id**: a fresh monotonic id
@@ -1041,17 +1022,11 @@ impl<T: IsRing> GrowingPatch<T> {
     /// different patch_tile_ids if they belong to different instances
     /// of the same shape.
     pub fn patch_tile_ids(&self) -> &[usize] {
-        match &self.state {
-            PatchState::Growing { patch_tile_ids, .. } => patch_tile_ids,
-            _ => &[],
-        }
+        &self.patch_tile_ids
     }
 
     pub fn next_tile_id(&self) -> usize {
-        match &self.state {
-            PatchState::Growing { next_tile_id, .. } => *next_tile_id,
-            _ => 0,
-        }
+        self.next_tile_id
     }
 
     /// Rotate the boundary to its canonical (lex-min) starting
@@ -1063,79 +1038,33 @@ impl<T: IsRing> GrowingPatch<T> {
     /// computed on the pre-normalize state). A position `p` in the
     /// pre-normalize boundary maps to `(p + n - rot) % n` in the
     /// post-normalize boundary. Returns `0` when no rotation is
-    /// applied — including: `Seed` state, empty boundary, and an
-    /// already-normalized patch (where `lex_min_rot` returns 0).
+    /// applied (empty boundary or `lex_min_rot` already 0).
     pub fn normalize(&mut self) -> usize {
-        let (
-            angles,
-            edges,
-            inner_chains,
-            positions,
-            grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
-            mut patch_tile_ids,
-            _next_tile_id,
-        ) = match &mut self.state {
-            PatchState::Growing {
-                angles,
-                edges,
-                inner_chains,
-                positions,
-                grid,
-                edge_data,
-                boundary_edge_ids,
-                next_edge_id,
-                patch_tile_ids,
-                next_tile_id,
-                candidates_by_start: _,
-            } => (
-                std::mem::take(angles),
-                std::mem::take(edges),
-                std::mem::take(inner_chains),
-                std::mem::take(positions),
-                std::mem::take(grid),
-                std::mem::take(edge_data),
-                std::mem::take(boundary_edge_ids),
-                *next_edge_id,
-                std::mem::take(patch_tile_ids),
-                *next_tile_id,
-            ),
-            _ => return 0,
-        };
-
-        let n = angles.len();
+        let n = self.angles.len();
         if n == 0 {
             return 0;
         }
 
-        let rot = crate::geom::rat::lex_min_rot(&angles);
-
-        let mut angles = angles;
-        let mut edges = edges;
-        let mut inner_chains = inner_chains;
-        let mut positions = positions;
-        let mut boundary_edge_ids = boundary_edge_ids;
+        let rot = crate::geom::rat::lex_min_rot(&self.angles);
 
         if rot != 0 {
-            angles.rotate_left(rot);
-            edges.rotate_left(rot);
-            inner_chains.rotate_left(rot);
-            patch_tile_ids.rotate_left(rot);
-            boundary_edge_ids.rotate_left(rot);
+            self.angles.rotate_left(rot);
+            self.edges.rotate_left(rot);
+            self.inner_chains.rotate_left(rot);
+            self.patch_tile_ids.rotate_left(rot);
+            self.boundary_edge_ids.rotate_left(rot);
             // `positions` has n + 1 entries (closing vertex repeated). Rotate
             // only the first n; the closing entry is always positions[0].
-            let last_idx = positions.len() - 1;
-            positions.truncate(last_idx);
-            positions.rotate_left(rot);
-            let first = positions[0];
-            positions.push(first);
+            let last_idx = self.positions.len() - 1;
+            self.positions.truncate(last_idx);
+            self.positions.rotate_left(rot);
+            let first = self.positions[0];
+            self.positions.push(first);
         }
 
         let mut remap: rustc_hash::FxHashMap<usize, usize> = rustc_hash::FxHashMap::default();
         let mut next = 0usize;
-        for id in &mut patch_tile_ids {
+        for id in &mut self.patch_tile_ids {
             let new_id = *remap.entry(*id).or_insert_with(|| {
                 let v = next;
                 next += 1;
@@ -1143,97 +1072,57 @@ impl<T: IsRing> GrowingPatch<T> {
             });
             *id = new_id;
         }
-
-        self.state = PatchState::Growing {
-            angles,
-            edges,
-            candidates_by_start: None,
-            inner_chains,
-            positions,
-            grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
-            patch_tile_ids,
-            next_tile_id: next,
-        };
+        self.candidates_by_start = None;
+        self.next_tile_id = next;
         rot
     }
 
     /// Return the junction vertex type at position `i`, or `None` if not a junction.
     pub fn junction_vertex_type_at(&self, i: usize) -> Option<OpenVertexType> {
-        let n = self.boundary_len();
-        if n == 0 || i >= n {
+        let n = self.angles.len();
+        if n == 0 || i >= n || !self.is_junction(i) {
             return None;
         }
-        match &self.state {
-            PatchState::Growing {
-                edges,
-                inner_chains,
-                ..
-            } => {
-                if !self.is_junction(i) {
-                    return None;
-                }
-                let n = edges.len();
-                Some(OpenVertexType {
-                    cw: edges[(i + n - 1) % n],
-                    inner: inner_chains[i].clone(),
-                    ccw: edges[i],
-                })
-            }
-            _ => None,
-        }
+        Some(OpenVertexType {
+            cw: self.edges[(i + n - 1) % n],
+            inner: self.inner_chains[i].clone(),
+            ccw: self.edges[i],
+        })
     }
 
     /// Coarser variant of [`Self::junction_vertex_type_at`]: returns
     /// `Some(CoarseJunction)` if `i` is a junction, with `cw_edge` /
     /// `ccw_edge` populated and `angle` equal to the boundary angle
-    /// at `i`. Drops the interior-tile list — see [`CoarseJunction`]
+    /// at `i`. Drops the interior-tile list -- see [`CoarseJunction`]
     /// for the equivalence semantics.
     pub fn coarse_junction_at(&self, i: usize) -> Option<CoarseJunction> {
-        let n = self.boundary_len();
-        if n == 0 || i >= n {
+        let n = self.angles.len();
+        if n == 0 || i >= n || !self.is_junction(i) {
             return None;
         }
-        match &self.state {
-            PatchState::Growing { edges, .. } => {
-                if !self.is_junction(i) {
-                    return None;
-                }
-                Some(CoarseJunction {
-                    cw_edge: edges[(i + n - 1) % n],
-                    ccw_edge: edges[i],
-                    angle: self.angles()[i],
-                })
-            }
-            _ => None,
-        }
+        Some(CoarseJunction {
+            cw_edge: self.edges[(i + n - 1) % n],
+            ccw_edge: self.edges[i],
+            angle: self.angles[i],
+        })
     }
 
     /// `true` if boundary position `i` is a junction vertex — i.e.
     /// the boundary angle there differs from the local tile's natural
     /// internal angle, meaning multiple tiles meet at this vertex.
     pub fn is_junction(&self, i: usize) -> bool {
-        let edges = match &self.state {
-            PatchState::Growing { edges, .. } => edges,
-            _ => return false,
-        };
-        if edges.is_empty() {
+        if self.edges.is_empty() {
             return false;
         }
-        is_junction_at(self.angles(), edges, self.match_index.tileset(), i)
+        is_junction_at(&self.angles, &self.edges, self.match_index.tileset(), i)
     }
 
     /// At boundary position `pos`, find the nearest junctions in the
     /// CW and CCW directions and return their relevant tile-offsets
-    /// (`(cw_offset, ccw_offset)`). Returns `None` for a `Seed`-state
-    /// patch or for `pos >= boundary_len`.
+    /// (`(cw_offset, ccw_offset)`). Returns `None` for an empty
+    /// boundary or for `pos >= boundary_len`.
     pub fn neighbor_junction_offsets(&self, pos: usize) -> Option<(usize, usize)> {
-        let (edges, n) = match &self.state {
-            PatchState::Growing { edges, .. } => (edges, edges.len()),
-            _ => return None,
-        };
+        let n = self.edges.len();
         if n == 0 || pos >= n {
             return None;
         }
@@ -1248,9 +1137,9 @@ impl<T: IsRing> GrowingPatch<T> {
             j_ccw = (j_ccw + 1) % n;
         }
 
-        let cw_offset = edges[j_cw].tile_offset;
+        let cw_offset = self.edges[j_cw].tile_offset;
         let ccw_prev = (j_ccw + n - 1) % n;
-        let ccw_edge = edges[ccw_prev];
+        let ccw_edge = self.edges[ccw_prev];
         let tile_len = self.match_index.tileset().rat(ccw_edge.tile_id).len();
         let ccw_offset = (ccw_edge.tile_offset + 1) % tile_len;
 
@@ -1265,15 +1154,10 @@ impl<T: IsRing> GrowingPatch<T> {
     /// two linear segments at the array seam.
     #[cfg(test)]
     pub(crate) fn tile_segments(&self) -> Vec<PatchSegment> {
-        let edges = match &self.state {
-            PatchState::Growing { edges, .. } => edges,
-            _ => return vec![],
-        };
-        let n = edges.len();
-        if n == 0 {
+        if self.edges.is_empty() {
             return vec![];
         }
-        compute_segments(self.angles(), edges, self.match_index.tileset())
+        compute_segments(&self.angles, &self.edges, self.match_index.tileset())
     }
 
     /// Attempt to glue the tile described by `pm` onto the current
@@ -1281,15 +1165,11 @@ impl<T: IsRing> GrowingPatch<T> {
     /// rejected (geometric collision, ±hturn junction, or invalid
     /// match dimensions). On failure the patch state is unchanged.
     ///
-    /// If the patch is in `Seed` state, the first successful call
-    /// transitions it to `Growing` and constructs the initial
-    /// boundary.
-    ///
     /// # Caller contract
     ///
     /// `pm` must be a **canonical** match obtained from one of:
     /// [`Self::get_all_matches`], [`Self::get_matches_touching_vertex`],
-    /// or — for hand construction — built via [`Rat::get_match`] /
+    /// or -- for hand construction -- built via [`Rat::get_match`] /
     /// [`forward_match_length`] and the boundary's own angle sequence.
     /// `add_tile` does **not** validate that `(pm.a_range.start_offset, pm.len(),
     /// pm.b.range.start_offset)` describes a real match: it only checks ±hturn
@@ -1299,24 +1179,25 @@ impl<T: IsRing> GrowingPatch<T> {
     /// nonsensical boundary. A `debug_assert!` in
     /// [`glue::glue_raw_angles`] catches this in test builds.
     pub fn add_tile(&mut self, pm: &PatchMatch) -> bool {
-        match &self.state {
-            PatchState::Seed { tile_id, .. } => {
-                let seed_id = *tile_id;
-                self.init_from_first_add(seed_id, pm)
-            }
-            PatchState::Growing { .. } => self.add_tile_growing(pm),
-        }
+        self.add_tile_growing(pm)
     }
 
-    fn init_from_first_add(&mut self, seed_id: usize, pm: &PatchMatch) -> bool {
-        let tileset = self.match_index.tileset();
+    /// Build a `GrowingPatch` from a seed tile plus a first glue.
+    /// Called by [`PatchSeed::grow`]; not public so the canonical
+    /// constructor path is `PatchSeed::new(...).grow(&pm)`.
+    fn init_from_seed(
+        match_index: Arc<MatchTypeIndex<T>>,
+        seed_id: usize,
+        pm: &PatchMatch,
+    ) -> Option<Self> {
+        let tileset = match_index.tileset();
         let seed_rat = tileset.rat(seed_id);
         let n = seed_rat.seq().len();
         let m = tileset.rat(pm.b.tile_id).seq().len();
         let mlen = pm.len();
 
         if mlen == 0 || mlen > n || mlen > m {
-            return false;
+            return None;
         }
 
         let (_ns, seed_len, _ne) = seed_rat.get_match(
@@ -1327,20 +1208,17 @@ impl<T: IsRing> GrowingPatch<T> {
             tileset.rat(pm.b.tile_id),
         );
         if seed_len == 0 {
-            return false;
+            return None;
         }
 
         let seed_angles = seed_rat.seq().to_vec();
-        let new_angles = match compute_glue_angles::<T>(&seed_angles, pm, tileset) {
-            Some(a) => a,
-            None => return false,
-        };
+        let new_angles = compute_glue_angles::<T>(&seed_angles, pm, tileset)?;
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
         let new_len = seg_len_old + seg_len_new;
         if new_len == 0 {
-            return false;
+            return None;
         }
 
         // Geometric self-intersection check.
@@ -1353,7 +1231,7 @@ impl<T: IsRing> GrowingPatch<T> {
         // `UnitSquareGrid` primitive, and their agreement is cross-checked
         // by `add_tile_decision_agrees_with_snake_on_spectre`.
         if Snake::<T>::try_from(new_angles.as_slice()).is_err() {
-            return false;
+            return None;
         }
 
         let positions = trace_boundary_positions::<T>(&new_angles);
@@ -1376,7 +1254,8 @@ impl<T: IsRing> GrowingPatch<T> {
 
         let inner_chains = vec![vec![]; new_len];
 
-        self.state = PatchState::Growing {
+        Some(GrowingPatch {
+            match_index,
             angles: new_angles,
             edges,
             candidates_by_start: None,
@@ -1388,9 +1267,7 @@ impl<T: IsRing> GrowingPatch<T> {
             next_edge_id,
             patch_tile_ids,
             next_tile_id: 2,
-        };
-
-        true
+        })
     }
 
     fn add_tile_growing(&mut self, pm: &PatchMatch) -> bool {
@@ -1402,8 +1279,8 @@ impl<T: IsRing> GrowingPatch<T> {
         // by `try_glue_precomputed` inside `get_all_matches`, and full
         // closure (4) is geometrically impossible since the patch interior
         // is already filled. The `debug_assert!`s catch any bugs in tests;
-        // the `return false`s are release-mode safety nets that leave
-        // `self.state` untouched (no mem::take has happened yet).
+        // the `return false`s are release-mode safety nets that leave the
+        // patch fields untouched (no mem::take has happened yet).
         let n = self.boundary_len();
         let mlen = pm.len();
         let m = self.match_index.tileset().rat(pm.b.tile_id).seq().len();
@@ -1444,44 +1321,16 @@ impl<T: IsRing> GrowingPatch<T> {
 
         // === Take state. Path 3 (geometric collision) is the only remaining
         // rollback path; it mutates `grid`, so we must restore on failure. ===
-        let (
-            old_angles,
-            edges,
-            old_inner,
-            positions,
-            mut grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
-            patch_tile_ids,
-            next_tile_id,
-        ) = match &mut self.state {
-            PatchState::Growing {
-                angles,
-                edges,
-                candidates_by_start: _,
-                inner_chains,
-                positions,
-                grid,
-                edge_data,
-                boundary_edge_ids,
-                next_edge_id,
-                patch_tile_ids,
-                next_tile_id,
-            } => (
-                std::mem::take(angles),
-                std::mem::take(edges),
-                std::mem::take(inner_chains),
-                std::mem::take(positions),
-                std::mem::take(grid),
-                std::mem::take(edge_data),
-                std::mem::take(boundary_edge_ids),
-                *next_edge_id,
-                std::mem::take(patch_tile_ids),
-                *next_tile_id,
-            ),
-            _ => return false,
-        };
+        let old_angles = std::mem::take(&mut self.angles);
+        let edges = std::mem::take(&mut self.edges);
+        let old_inner = std::mem::take(&mut self.inner_chains);
+        let positions = std::mem::take(&mut self.positions);
+        let mut grid = std::mem::take(&mut self.grid);
+        let edge_data = std::mem::take(&mut self.edge_data);
+        let boundary_edge_ids = std::mem::take(&mut self.boundary_edge_ids);
+        let next_edge_id = self.next_edge_id;
+        let patch_tile_ids = std::mem::take(&mut self.patch_tile_ids);
+        let next_tile_id = self.next_tile_id;
 
         let ccw_pos = (pm.a_range.start_offset + mlen) % n;
 
@@ -1567,19 +1416,17 @@ impl<T: IsRing> GrowingPatch<T> {
 
         let new_inner = update_inner_chains(&old_inner, &edges, pm, new_len, &patch_tile_ids);
 
-        self.state = PatchState::Growing {
-            angles: new_angles,
-            edges: new_edges,
-            candidates_by_start: None,
-            inner_chains: new_inner,
-            positions: new_positions,
-            grid,
-            edge_data: new_seg_data,
-            boundary_edge_ids: new_boundary_edge_ids,
-            next_edge_id: next_id,
-            patch_tile_ids: new_patch_tile_ids,
-            next_tile_id: next_tile_id + 1,
-        };
+        self.angles = new_angles;
+        self.edges = new_edges;
+        self.candidates_by_start = None;
+        self.inner_chains = new_inner;
+        self.positions = new_positions;
+        self.grid = grid;
+        self.edge_data = new_seg_data;
+        self.boundary_edge_ids = new_boundary_edge_ids;
+        self.next_edge_id = next_id;
+        self.patch_tile_ids = new_patch_tile_ids;
+        self.next_tile_id = next_tile_id + 1;
 
         true
     }
@@ -1598,59 +1445,62 @@ impl<T: IsRing> GrowingPatch<T> {
         patch_tile_ids: Vec<usize>,
         next_tile_id: usize,
     ) {
-        self.state = PatchState::Growing {
-            angles,
-            edges,
-            candidates_by_start: None,
-            inner_chains,
-            positions,
-            grid,
-            edge_data,
-            boundary_edge_ids,
-            next_edge_id,
-            patch_tile_ids,
-            next_tile_id,
-        };
+        self.angles = angles;
+        self.edges = edges;
+        self.candidates_by_start = None;
+        self.inner_chains = inner_chains;
+        self.positions = positions;
+        self.grid = grid;
+        self.edge_data = edge_data;
+        self.boundary_edge_ids = boundary_edge_ids;
+        self.next_edge_id = next_edge_id;
+        self.patch_tile_ids = patch_tile_ids;
+        self.next_tile_id = next_tile_id;
     }
+}
 
-    fn compute_seed_matches(
-        match_index: &MatchTypeIndex<T>,
-        tileset: &TileSet<T>,
-        seed_tile_id: usize,
-    ) -> Vec<PatchMatch> {
-        let seed = tileset.rat(seed_tile_id);
-        let seed_seq = seed.seq();
-        let n = seed_seq.len();
-        let mut seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
-        let mut matches = Vec::new();
+/// All legal first-glue candidates against tile `seed_tile_id`.
+/// Iterates `MatchTypeIndex::candidates_starting_at` for every
+/// A-side offset, validating each via `Rat::get_match` +
+/// `junctions_glueable` + `try_glue_precomputed`. Used by
+/// [`PatchSeed::new`] to populate `cached_matches`.
+fn compute_seed_matches<T: IsRing>(
+    match_index: &MatchTypeIndex<T>,
+    tileset: &TileSet<T>,
+    seed_tile_id: usize,
+) -> Vec<PatchMatch> {
+    let seed = tileset.rat(seed_tile_id);
+    let seed_seq = seed.seq();
+    let n = seed_seq.len();
+    let mut seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
+    let mut matches = Vec::new();
 
-        for offset in 0..n {
-            for cand in match_index.candidates_starting_at(seed_tile_id, offset) {
-                let tile_b = tileset.rat(cand.tile_id);
-                let (ns, len, ne) =
-                    seed.get_match((offset as i64, cand.range.start_offset as i64), tile_b);
-                if len == 0 {
-                    continue;
-                }
-                let ns_u = ns.rem_euclid(n as i64) as usize;
-                let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-                if !junctions_glueable(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
-                    continue;
-                }
-                if let Ok(_glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
-                    let key = (ns_u, len, ne_u, cand.tile_id);
-                    if seen.insert(key) {
-                        matches.push(PatchMatch::new(
-                            EdgeRange::new(ns_u, len),
-                            Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
-                        ));
-                    }
+    for offset in 0..n {
+        for cand in match_index.candidates_starting_at(seed_tile_id, offset) {
+            let tile_b = tileset.rat(cand.tile_id);
+            let (ns, len, ne) =
+                seed.get_match((offset as i64, cand.range.start_offset as i64), tile_b);
+            if len == 0 {
+                continue;
+            }
+            let ns_u = ns.rem_euclid(n as i64) as usize;
+            let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
+            if !junctions_glueable(seed_seq, ns_u, len, tile_b.seq(), ne_u) {
+                continue;
+            }
+            if let Ok(_glued) = seed.try_glue_precomputed((ns, len, ne), tile_b, true) {
+                let key = (ns_u, len, ne_u, cand.tile_id);
+                if seen.insert(key) {
+                    matches.push(PatchMatch::new(
+                        EdgeRange::new(ns_u, len),
+                        Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
+                    ));
                 }
             }
         }
-
-        matches
     }
+
+    matches
 }
 
 /// Build the post-glue `(edges, patch_tile_ids)` vectors.
@@ -2026,18 +1876,45 @@ mod tests {
         assert_eq!(closed.len(), 4);
     }
 
-    fn square_patch() -> GrowingPatch<ZZ4> {
+    fn square_seed() -> PatchSeed<ZZ4> {
         let sq: Snake<ZZ4> = tiles::square();
         let rat = Rat::try_from(&sq).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        GrowingPatch::new(ts, 0)
+        PatchSeed::new(ts, 0)
     }
 
-    fn hex_patch() -> GrowingPatch<ZZ12> {
+    fn hex_seed() -> PatchSeed<ZZ12> {
         let hex: Snake<ZZ12> = tiles::hexagon();
         let rat = Rat::try_from(&hex).unwrap();
         let ts = Arc::new(TileSet::new(vec![rat]));
-        GrowingPatch::new(ts, 0)
+        PatchSeed::new(ts, 0)
+    }
+
+    /// Build a `GrowingPatch` by gluing the first candidate match to a
+    /// fresh seed for tile shape 0. Convenience for tests that just
+    /// need *some* growing patch on a given tileset.
+    fn grow_first<T: IsRing>(ts: Arc<TileSet<T>>) -> GrowingPatch<T> {
+        let seed = PatchSeed::new(ts, 0);
+        let pm = *seed.candidate_matches().first().expect("seed has matches");
+        seed.grow(&pm).expect("first glue succeeds")
+    }
+
+    /// Apply a pinned sequence of glues starting from a seed. Panics
+    /// with a descriptive message at the failing glue index. Used by
+    /// the hand-built test fixtures (3x3-minus-corner, T-tetromino,
+    /// five-hex cross).
+    fn build_from_glues<T: IsRing>(
+        seed: PatchSeed<T>,
+        glues: &[PatchMatch],
+        label: &str,
+    ) -> GrowingPatch<T> {
+        let mut gp = seed
+            .grow(&glues[0])
+            .unwrap_or_else(|| panic!("{label} glue 0 failed: pm={:?}", glues[0]));
+        for (i, pm) in glues.iter().enumerate().skip(1) {
+            assert!(gp.add_tile(pm), "{label} glue {} failed: pm={:?}", i, pm);
+        }
+        gp
     }
 
     /// User-suggested hollow-ring construction: build a curving chain
@@ -2055,12 +1932,11 @@ mod tests {
     /// `glue_match_to_raw_boundary`).
     #[test]
     fn hollow_hex_ring_closure_rejected() {
-        let mut gp = hex_patch();
-        // First glue: hex_0's edge 1 → hex_1's edge 5 (start_a=1 on
+        // First glue: hex_0's edge 1 -> hex_1's edge 5 (start_a=1 on
         // the seed's notional boundary, len=1, start_b=0 so the
         // matched petal edge is start_b-1 = 5 mod 6).
         let first = PatchMatch::new(EdgeRange::new(1, 1), Segment::new(0, EdgeRange::new(0, 1)));
-        assert!(gp.add_tile(&first), "first glue should succeed");
+        let mut gp = hex_seed().grow(&first).expect("first glue should succeed");
         // Glues 2-4: continue the chain. start_a is tracked from
         // the post-glue boundary's "second surviving edge of latest
         // hex" = boundary_len - 4.
@@ -2131,9 +2007,8 @@ mod tests {
         //      via mlen=5 (matching all 5 center-facing edges).
         //   3. Close (1 glue): 6th corona at the remaining wedge via
         //      mlen=3 (matching the 3 wedge-facing edges).
-        let mut gp = hex_patch();
         let first = PatchMatch::new(EdgeRange::new(1, 1), Segment::new(0, EdgeRange::new(0, 1)));
-        assert!(gp.add_tile(&first), "chain glue 1");
+        let mut gp = hex_seed().grow(&first).expect("chain glue 1");
         for _ in 2..=4 {
             let start_a = gp.boundary_len() - 4;
             let pm = PatchMatch::new(
@@ -2360,9 +2235,9 @@ mod tests {
                 Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
             ])),
         ] {
-            let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-            let first = gp.get_all_matches().into_iter().next().expect("seed match");
-            assert!(gp.add_tile(&first), "seed add");
+            let seed = PatchSeed::new(Arc::clone(&ts), 0);
+            let first = *seed.candidate_matches().first().expect("seed match");
+            let gp = seed.grow(&first).expect("seed add");
             let n = gp.boundary_len();
             assert!(n > 0);
             let all = gp.get_all_matches();
@@ -2418,9 +2293,9 @@ mod tests {
             Arc::new(TileSet::new(vec![
                 Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
             ]));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first));
+        let seed = PatchSeed::new(Arc::clone(&ts), 0);
+        let first = *seed.candidate_matches().first().unwrap();
+        let gp = seed.grow(&first).unwrap();
         let n = gp.boundary_len();
         let mut all: Vec<_> = gp.get_all_matches();
         all.sort_by_key(|pm| {
@@ -2468,9 +2343,9 @@ mod tests {
             ])),
         ] {
             // Grow a patch a few tiles deep and check at each step.
-            let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-            let first = gp.get_all_matches().into_iter().next().unwrap();
-            assert!(gp.add_tile(&first));
+            let seed = PatchSeed::new(Arc::clone(&ts), 0);
+            let first = *seed.candidate_matches().first().unwrap();
+            let mut gp = seed.grow(&first).unwrap();
             for _step in 0..4 {
                 let pre_pairs = collect_pair_set(&gp);
                 let mut normed = gp.clone();
@@ -2508,27 +2383,6 @@ mod tests {
             out.insert((juncs[j].clone(), juncs[(j + 1) % k].clone()));
         }
         out
-    }
-
-    /// Empty-boundary patch: `get_matches_in_edge_range` returns an
-    /// empty vec without panicking.
-    #[test]
-    fn get_matches_in_edge_range_handles_empty_boundary() {
-        // Take an end-state (Closed) patch via from_parts with empty
-        // boundary. Direct construction is simpler.
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
-            ]));
-        let gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        // The seed-state patch returns boundary_len = 0 since seed has
-        // no boundary edges materialized yet. Confirm this.
-        // (Note: seed state still has `cached_matches`, so
-        // get_all_matches returns non-empty even with boundary_len=0.)
-        if gp.boundary_len() == 0 {
-            let got = gp.get_matches_in_edge_range(0, 0);
-            assert!(got.is_empty(), "empty boundary → no matches");
-        }
     }
 
     /// Regression test for the keystone-glue path in
@@ -2579,11 +2433,7 @@ mod tests {
             // boundary 12 → 12: drop into the inner tile (1, 1).
             PatchMatch::new(EdgeRange::new(1, 2), Segment::new(0, EdgeRange::new(1, 2))),
         ];
-        let mut gp = square_patch();
-        for (i, pm) in glues.iter().enumerate() {
-            assert!(gp.add_tile(pm), "fixture glue {} failed: pm={:?}", i, pm);
-        }
-        gp
+        build_from_glues(square_seed(), &glues, "3x3-minus-corner fixture")
     }
 
     /// User-suggested scenario: 8 unit squares forming a 3x3 grid
@@ -2854,29 +2704,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn seed_patch_has_no_boundary() {
-        let gp = square_patch();
-        assert!(!gp.is_growing());
-        assert_eq!(gp.boundary_len(), 0);
-        assert_eq!(gp.edges().len(), 0);
-    }
-
-    /// Cloning a `Seed` must preserve the seed-match set (the seed
-    /// boundary never changes, so the matches computed at construction
-    /// are still authoritative for the clone). Regression test for an
-    /// earlier latent bug in the (now-removed) `clone_for_mutation`
-    /// method, which used to reset `cached_matches` to empty.
+    /// Cloning a `PatchSeed` must preserve the seed-match set (the seed
+    /// never changes, so the matches computed at construction are still
+    /// authoritative for the clone). Regression test for an earlier
+    /// latent bug in the (now-removed) `clone_for_mutation` method,
+    /// which used to reset `cached_matches` to empty.
     #[test]
     fn clone_preserves_seed_matches() {
-        let gp = hex_patch();
-        let original = gp.get_all_matches();
+        let seed = hex_seed();
+        let original = seed.candidate_matches().to_vec();
         assert!(
             !original.is_empty(),
             "fixture: seed should have non-empty matches"
         );
-        let clone = gp.clone();
-        let cloned_matches = clone.get_all_matches();
+        let clone = seed.clone();
+        let cloned_matches = clone.candidate_matches().to_vec();
         assert_eq!(
             cloned_matches, original,
             "cloned Seed must report the same matches as the original"
@@ -2885,11 +2727,10 @@ mod tests {
 
     #[test]
     fn first_add_produces_growing() {
-        let mut gp = hex_patch();
-        let pm = gp.get_all_matches()[0];
-        assert!(gp.add_tile(&pm), "first add");
+        let seed = hex_seed();
+        let pm = seed.candidate_matches()[0];
+        let gp = seed.grow(&pm).expect("first add");
 
-        assert!(gp.is_growing());
         assert_eq!(gp.boundary_len(), 12 - 2 * pm.len());
         assert_eq!(gp.edges().len(), gp.boundary_len());
         assert_eq!(gp.angles().len(), gp.boundary_len());
@@ -2897,9 +2738,20 @@ mod tests {
 
     #[test]
     fn junction_vertex_ids_nonempty_after_each_add() {
-        let mut gp = hex_patch();
+        let seed = hex_seed();
+        let first = seed.candidate_matches()[0];
+        let mut gp = seed.grow(&first).expect("first glue");
         let mut step = 0;
-        // Recompute candidates after each add — pms from a stale patch
+        assert!(
+            !gp.edges().is_empty(),
+            "step {step}: edges should not be empty"
+        );
+        assert!(
+            (0..gp.boundary_len()).any(|i| gp.is_junction(i)),
+            "step {step}: should have junction vertices"
+        );
+        step += 1;
+        // Recompute candidates after each add -- pms from a stale patch
         // state are not valid input to `add_tile` once the boundary changes.
         while step < 3 {
             let candidates = gp.get_all_matches();
@@ -2925,14 +2777,15 @@ mod tests {
 
     #[test]
     fn hexagon_all_36_matches_produce_valid_bi_hexes() {
-        let gp = hex_patch();
-        let matches = gp.get_all_matches();
+        let seed = hex_seed();
+        let matches = seed.candidate_matches().to_vec();
         assert_eq!(matches.len(), 36, "hex self-matches = 36");
 
         for pm in &matches {
-            let mut gp2 = hex_patch();
-            assert!(gp2.add_tile(pm), "first add should succeed for pm {:?}", pm);
-            assert!(gp2.is_growing());
+            let gp2 = seed
+                .clone()
+                .grow(pm)
+                .unwrap_or_else(|| panic!("first add should succeed for pm {:?}", pm));
             assert_eq!(gp2.boundary_len(), 12 - 2 * pm.len());
             assert_eq!(gp2.edges().len(), gp2.boundary_len());
 
@@ -2947,14 +2800,15 @@ mod tests {
 
     #[test]
     fn square_all_16_matches_produce_valid_bi_squares() {
-        let gp = square_patch();
-        let matches = gp.get_all_matches();
+        let seed = square_seed();
+        let matches = seed.candidate_matches().to_vec();
         assert_eq!(matches.len(), 16, "square self-matches = 16");
 
         for pm in &matches {
-            let mut gp2 = square_patch();
-            assert!(gp2.add_tile(pm), "first add should succeed for pm {:?}", pm);
-            assert!(gp2.is_growing());
+            let gp2 = seed
+                .clone()
+                .grow(pm)
+                .unwrap_or_else(|| panic!("first add should succeed for pm {:?}", pm));
             assert_eq!(gp2.boundary_len(), 8 - 2 * pm.len());
 
             let rat = gp2.to_rat();
@@ -2968,13 +2822,14 @@ mod tests {
 
     #[test]
     fn to_rat_matches_direct_glue_for_all_matches() {
-        let gp = hex_patch();
-        let matches = gp.get_all_matches();
-        let ts = gp.tileset().clone();
+        let seed = hex_seed();
+        let matches = seed.candidate_matches().to_vec();
+        let ts = seed.tileset().clone();
 
         for pm in &matches {
-            let mut gp2 = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), 0);
-            assert!(gp2.add_tile(pm), "first add");
+            let gp2 = PatchSeed::<ZZ12>::new(Arc::clone(&ts), 0)
+                .grow(pm)
+                .expect("first add");
             let rat = gp2.to_rat();
 
             let seed_rat = ts.rat(0);
@@ -2995,24 +2850,24 @@ mod tests {
 
     #[test]
     fn edges_self_consistent() {
-        let gp_sq: GrowingPatch<ZZ4> = square_patch();
-        for pm in gp_sq.get_all_matches() {
-            let mut gp2 = gp_sq.clone();
-            if !gp2.add_tile(&pm) || !gp2.is_growing() {
-                continue;
-            }
+        let seed_sq: PatchSeed<ZZ4> = square_seed();
+        for pm in seed_sq.candidate_matches() {
+            let gp2 = match seed_sq.clone().grow(pm) {
+                Some(g) => g,
+                None => continue,
+            };
             verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-sq pm {:?}", pm));
         }
-        let gp_hex: GrowingPatch<ZZ12> = hex_patch();
-        for pm in gp_hex.get_all_matches() {
-            let mut gp2 = gp_hex.clone();
-            if !gp2.add_tile(&pm) || !gp2.is_growing() {
-                continue;
-            }
+        let seed_hex: PatchSeed<ZZ12> = hex_seed();
+        for pm in seed_hex.candidate_matches() {
+            let gp2 = match seed_hex.clone().grow(pm) {
+                Some(g) => g,
+                None => continue,
+            };
             verify_edges_consistency(&gp2, gp2.tileset(), &format!("bi-hex pm {:?}", pm));
             for pm2 in gp2.get_all_matches() {
                 let mut gp3 = gp2.clone();
-                if gp3.add_tile(&pm2) && gp3.is_growing() {
+                if gp3.add_tile(&pm2) {
                     verify_edges_consistency(&gp3, gp3.tileset(), "3-hex");
                 }
             }
@@ -3222,10 +3077,9 @@ mod tests {
         let ts = Arc::new(TileSet::new(vec![hex_rat, sq_rat]));
 
         for seed_id in 0..ts.num_tiles() {
-            let gp = GrowingPatch::<ZZ12>::new(Arc::clone(&ts), seed_id);
-            for pm in gp.get_all_matches() {
-                let mut gp2 = GrowingPatch::new(Arc::clone(&ts), seed_id);
-                if gp2.add_tile(&pm) && gp2.is_growing() {
+            let seed = PatchSeed::<ZZ12>::new(Arc::clone(&ts), seed_id);
+            for pm in seed.candidate_matches() {
+                if let Some(gp2) = seed.clone().grow(pm) {
                     verify_edges_consistency(
                         &gp2,
                         &ts,
@@ -3294,7 +3148,7 @@ mod tests {
         let rat = gp.to_rat();
         results.entry(rat).or_default().push(history.clone());
 
-        if num_tiles >= max_tiles || !gp.is_growing() {
+        if num_tiles >= max_tiles {
             return;
         }
 
@@ -3318,10 +3172,10 @@ mod tests {
             .or_default()
             .push(Vec::new());
 
-        let seed_matches = GrowingPatch::new(Arc::clone(ts), 0).get_all_matches();
+        let seed = PatchSeed::new(Arc::clone(ts), 0);
+        let seed_matches = seed.candidate_matches().to_vec();
         for pm in &seed_matches {
-            let mut gp = GrowingPatch::new(Arc::clone(ts), 0);
-            assert!(gp.add_tile(pm), "first add");
+            let mut gp = seed.clone().grow(pm).expect("first add");
             let mut history = vec![*pm];
             brute_force_recurse(&mut gp, &mut history, max_tiles, &mut results);
         }
@@ -3331,15 +3185,10 @@ mod tests {
 
     #[test]
     fn inner_chains_empty_after_first_glue() {
-        let gp = hex_patch();
-        let pm = gp.get_all_matches()[0];
-        let mut gp2 = gp.clone();
-        assert!(gp2.add_tile(&pm), "first add");
-        let inner = match &gp2.state {
-            PatchState::Growing { inner_chains, .. } => inner_chains.clone(),
-            _ => panic!("expected Growing"),
-        };
-        for (i, chain) in inner.iter().enumerate() {
+        let seed = hex_seed();
+        let pm = seed.candidate_matches()[0];
+        let gp2 = seed.grow(&pm).expect("first add");
+        for (i, chain) in gp2.inner_chains().iter().enumerate() {
             assert!(
                 chain.is_empty(),
                 "inner chain at position {i} should be empty after first glue, got {chain:?}"
@@ -3349,10 +3198,9 @@ mod tests {
 
     #[test]
     fn inner_chains_grow_on_second_glue() {
-        let gp = hex_patch();
-        let first_match = gp.get_all_matches()[0];
-        let mut gp2 = gp.clone();
-        assert!(gp2.add_tile(&first_match), "first add");
+        let seed = hex_seed();
+        let first_match = seed.candidate_matches()[0];
+        let gp2 = seed.grow(&first_match).expect("first add");
 
         let candidates = gp2.get_all_matches();
         let second = candidates
@@ -3390,10 +3238,9 @@ mod tests {
 
     #[test]
     fn junction_vertex_type_roundtrip_after_first_glue() {
-        let gp = hex_patch();
-        let pm = gp.get_all_matches()[0];
-        let mut gp2 = gp.clone();
-        assert!(gp2.add_tile(&pm), "first add");
+        let seed = hex_seed();
+        let pm = seed.candidate_matches()[0];
+        let gp2 = seed.grow(&pm).expect("first add");
         let n = gp2.boundary_len();
         let mut junction_count = 0;
         for i in 0..n {
@@ -3407,33 +3254,30 @@ mod tests {
 
     #[test]
     fn construct_minimal_witness_hex_roundtrip() {
-        let gp = hex_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut glued = gp.clone();
-            assert!(glued.add_tile(pm), "glue should succeed");
+        let seed = hex_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let glued = seed.clone().grow(pm).expect("glue should succeed");
             assert_minimal_witness_roundtrips_for(&glued, &mi, &format!("hex pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_square_roundtrip() {
-        let gp = square_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut glued = gp.clone();
-            assert!(glued.add_tile(pm), "glue should succeed");
+        let seed = square_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let glued = seed.clone().grow(pm).expect("glue should succeed");
             assert_minimal_witness_roundtrips_for(&glued, &mi, &format!("square pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_hex_with_inner() {
-        let gp = hex_patch();
-        let mi = gp.match_index().clone();
-        let first = gp.get_all_matches()[0];
-        let mut gp2 = gp.clone();
-        assert!(gp2.add_tile(&first), "first add");
+        let seed = hex_seed();
+        let mi = seed.match_index().clone();
+        let first = seed.candidate_matches()[0];
+        let gp2 = seed.grow(&first).expect("first add");
 
         let len1_match = gp2
             .get_all_matches()
@@ -3452,9 +3296,9 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let pm = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&pm));
+        let seed = PatchSeed::new(Arc::clone(&ts), 0);
+        let pm = *seed.candidate_matches().first().unwrap();
+        let mut gp = seed.grow(&pm).unwrap();
         gp.ensure_candidates_materialized();
 
         let n = gp.boundary_len();
@@ -3499,9 +3343,7 @@ mod tests {
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
         let mi: Arc<MatchTypeIndex<ZZ12>> = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let pm = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&pm));
+        let gp = grow_first(Arc::clone(&ts));
 
         let all_cands = GrowingPatch::compute_all_candidates(&mi, gp.angles(), gp.edges());
         let n = gp.angles().len();
@@ -3603,9 +3445,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first), "fixture setup");
+        let mut gp = grow_first(Arc::clone(&ts));
         let before = snapshot_growing(&gp);
         let failing_pm = before
             .6
@@ -3638,9 +3478,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first));
+        let gp = grow_first(Arc::clone(&ts));
 
         let candidates = gp.get_all_matches();
         let (mut accepted, mut rejected) = (0usize, 0usize);
@@ -3685,9 +3523,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first), "fixture setup");
+        let gp = grow_first(Arc::clone(&ts));
 
         let candidates = gp.get_all_matches();
         let tileset = gp.tileset().clone();
@@ -3728,8 +3564,21 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let mut step = 0usize;
+        let mut gp = grow_first(Arc::clone(&ts));
+        // First snake check before any further growth.
+        {
+            let angles = gp.angles().to_vec();
+            let snake = Snake::<ZZ12>::try_from(angles.as_slice());
+            assert!(
+                snake.is_ok(),
+                "step 0: snake validation failed: angles={angles:?}"
+            );
+            assert!(
+                snake.unwrap().is_closed(),
+                "step 0: boundary should close as a polygon"
+            );
+        }
+        let mut step = 1usize;
         while step < 4 {
             let pm = match gp.get_all_matches().first() {
                 Some(pm) => *pm,
@@ -3769,9 +3618,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first), "fixture setup");
+        let gp = grow_first(Arc::clone(&ts));
 
         let n = gp.boundary_len();
         let rat = Rat::from_slice_unchecked(gp.angles());
@@ -3832,9 +3679,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let first = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&first), "fixture setup");
+        let mut gp = grow_first(Arc::clone(&ts));
         gp.ensure_candidates_materialized();
 
         let n = gp.boundary_len();
@@ -3925,13 +3770,13 @@ mod tests {
     /// junction's preceding edge.
     #[test]
     fn neighbor_junction_offsets_returns_valid_offsets() {
-        let mut gp = hex_patch();
-        let pm = gp
-            .get_all_matches()
-            .into_iter()
+        let seed = hex_seed();
+        let pm = *seed
+            .candidate_matches()
+            .iter()
             .find(|p| p.len() == 1)
             .expect("len-1 hex match");
-        assert!(gp.add_tile(&pm), "fixture");
+        let gp = seed.grow(&pm).expect("fixture");
         let n = gp.boundary_len();
         let edges = gp.edges().to_vec();
         let ts = gp.tileset().clone();
@@ -3968,10 +3813,8 @@ mod tests {
             );
         }
 
-        // Out-of-range and Seed state both return None.
+        // Out-of-range returns None.
         assert!(gp.neighbor_junction_offsets(n).is_none());
-        let seed = hex_patch();
-        assert!(seed.neighbor_junction_offsets(0).is_none());
     }
 
     /// `tile_segments()` should:
@@ -3982,13 +3825,13 @@ mod tests {
     /// advances by 1 modulo the tile's edge count.
     #[test]
     fn tile_segments_partitions_boundary() {
-        let mut gp = hex_patch();
-        let pm = gp
-            .get_all_matches()
-            .into_iter()
+        let seed = hex_seed();
+        let pm = *seed
+            .candidate_matches()
+            .iter()
             .find(|p| p.len() == 1)
             .expect("len-1 hex match");
-        assert!(gp.add_tile(&pm), "fixture");
+        let gp = seed.grow(&pm).expect("fixture");
         let n = gp.boundary_len();
         let edges = gp.edges().to_vec();
         let segs = gp.tile_segments();
@@ -4042,22 +3885,20 @@ mod tests {
 
     #[test]
     fn construct_minimal_witness_hex_boundary_matches_brute_force() {
-        let gp = hex_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut brute = gp.clone();
-            assert!(brute.add_tile(pm), "brute glue");
+        let seed = hex_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let brute = seed.clone().grow(pm).expect("brute glue");
             assert_witness_matches_brute_force(&brute, &mi, &format!("hex pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_minimal_witness_square_boundary_matches_brute_force() {
-        let gp = square_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut brute = gp.clone();
-            assert!(brute.add_tile(pm), "brute glue");
+        let seed = square_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let brute = seed.clone().grow(pm).expect("brute glue");
             assert_witness_matches_brute_force(&brute, &mi, &format!("square pm {:?}", pm));
         }
     }
@@ -4068,9 +3909,7 @@ mod tests {
             Arc::new(TileSet::new(
                 vec![Rat::try_from(&tiles::spectre()).unwrap()],
             ));
-        let mut gp = GrowingPatch::new(Arc::clone(&ts), 0);
-        let pm = gp.get_all_matches().into_iter().next().unwrap();
-        assert!(gp.add_tile(&pm), "first spectre glue");
+        let gp = grow_first(Arc::clone(&ts));
         let mi = gp.match_index().clone();
         assert_minimal_witness_roundtrips_for(&gp, &mi, "spectre first-glue");
     }
@@ -4130,27 +3969,24 @@ mod tests {
 
     #[test]
     fn test_junction_angle_sequence_hex() {
-        let gp = hex_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut glued = gp.clone();
-            assert!(glued.add_tile(pm), "glue");
+        let seed = hex_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let glued = seed.clone().grow(pm).expect("glue");
             assert_junction_angle_sequence_valid(&glued, &mi, &format!("hex pm {:?}", pm));
         }
     }
 
     #[test]
     fn construct_witness_from_vt_sequence_single_vt_roundtrip() {
-        let gp = hex_patch();
-        let mi = gp.match_index().clone();
-
-        let mut gp = gp;
-        let pm = gp
-            .get_all_matches()
-            .into_iter()
+        let seed = hex_seed();
+        let mi = seed.match_index().clone();
+        let pm = *seed
+            .candidate_matches()
+            .iter()
             .find(|pm| pm.len() == 1)
             .expect("len-1 match");
-        assert!(gp.add_tile(&pm), "first glue");
+        let gp = seed.grow(&pm).expect("first glue");
 
         let vt = gp.junction_vertex_type_at(0).expect("junction at 0");
 
@@ -4197,16 +4033,7 @@ mod tests {
             PatchMatch::new(EdgeRange::new(2, 2), Segment::new(0, EdgeRange::new(1, 2))),
             PatchMatch::new(EdgeRange::new(9, 2), Segment::new(0, EdgeRange::new(1, 2))),
         ];
-        let mut gp = hex_patch();
-        for (i, pm) in glues.iter().enumerate() {
-            assert!(
-                gp.add_tile(pm),
-                "five_hex_cross glue {} failed: pm={:?}",
-                i,
-                pm
-            );
-        }
-        gp
+        build_from_glues(hex_seed(), &glues, "five_hex_cross")
     }
 
     #[test]
@@ -4304,16 +4131,15 @@ mod tests {
 
     #[test]
     fn next_junction_on_raw_boundary_finds_all_junctions() {
-        let gp = hex_patch();
-        let ts = gp.tileset().clone();
+        let seed = hex_seed();
+        let ts = seed.tileset().clone();
 
-        let mut gp = gp;
-        let pm = gp
-            .get_all_matches()
-            .into_iter()
+        let pm = *seed
+            .candidate_matches()
+            .iter()
             .find(|pm| pm.len() == 1)
             .expect("len-1 match");
-        assert!(gp.add_tile(&pm), "first glue");
+        let gp = seed.grow(&pm).expect("first glue");
 
         let raw = RawBoundary {
             angles: gp.angles().to_vec(),
@@ -4342,11 +4168,10 @@ mod tests {
 
     #[test]
     fn test_junction_angle_sequence_square() {
-        let gp = square_patch();
-        let mi = gp.match_index().clone();
-        for pm in &gp.get_all_matches() {
-            let mut glued = gp.clone();
-            assert!(glued.add_tile(pm), "glue");
+        let seed = square_seed();
+        let mi = seed.match_index().clone();
+        for pm in seed.candidate_matches() {
+            let glued = seed.clone().grow(pm).expect("glue");
             assert_junction_angle_sequence_valid(&glued, &mi, &format!("square pm {:?}", pm));
         }
     }
@@ -4433,15 +4258,7 @@ mod tests {
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
             PatchMatch::new(EdgeRange::new(0, 1), Segment::new(0, EdgeRange::new(1, 1))),
         ];
-        let mut gp = square_patch();
-        for (i, pm) in glues.iter().enumerate() {
-            assert!(
-                gp.add_tile(pm),
-                "t_tetromino glue {} failed: pm={:?}",
-                i,
-                pm
-            );
-        }
+        let gp = build_from_glues(square_seed(), &glues, "t_tetromino");
         assert_eq!(gp.boundary_len(), 10, "T-tetromino should have 10 edges");
         gp
     }
