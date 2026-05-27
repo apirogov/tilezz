@@ -27,60 +27,6 @@ use crate::geom::tileset::TileSet;
 use crate::geom::matches::{EdgeRange, Segment, TileMatch};
 use crate::stringmatch::BitParallelMatcher;
 
-/// Internal bit-parallel engine state used by [`MatchFinder`].
-///
-/// The B-side masks live in a shared [`BitParallelMatcher`] (built
-/// once, possibly shared via `Arc` across many `MatchFinder`s — see
-/// [`BpSeed`] / [`MatchFinder::crossing_with_seed`]). The A-side
-/// angle sequences are kept raw and streamed against `b_matcher`
-/// per query.
-///
-/// `offset_b` is the shift applied to incoming B-side tile ids so the
-/// engine can index into `b_matcher.tiles[j - offset_b]`. See the
-/// "Tile-id space" note on [`MatchFinder`] for the convention.
-struct CyclicEngine {
-    a_sequences: Vec<Vec<i8>>,
-    b_matcher: Arc<BitParallelMatcher>,
-    offset_b: usize,
-}
-
-impl CyclicEngine {
-    fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<TileMatch> {
-        let b_idx = j - self.offset_b;
-        let mut matches = self.b_matcher.stream_boundary(&self.a_sequences[i], b_idx);
-        for m in &mut matches {
-            m.a.tile_id = i;
-        }
-        matches
-    }
-
-    fn maximal_rc_matches_at_positions(
-        &self,
-        i: usize,
-        j: usize,
-        positions: &[usize],
-    ) -> Vec<TileMatch> {
-        if positions.is_empty() {
-            return vec![];
-        }
-        let b_idx = j - self.offset_b;
-        let boundary = &self.a_sequences[i];
-        let n_a = boundary.len();
-        let mut keep = vec![false; n_a];
-        for &p in positions {
-            if p < n_a {
-                keep[p] = true;
-            }
-        }
-        let mut matches = self.b_matcher.stream_boundary(boundary, b_idx);
-        matches.retain(|m| keep[m.a.range.start_offset]);
-        for m in &mut matches {
-            m.a.tile_id = i;
-        }
-        matches
-    }
-}
-
 /// Pre-built bit-parallel state for a fixed "seed" (B-side) tileset.
 ///
 /// Bundles an `Arc<TileSet<T>>` with the [`BitParallelMatcher`] built
@@ -180,50 +126,43 @@ struct TypeEntry {
 /// `patch_enum`, `seq_explorer`, and similar callers (a fixed tile
 /// alphabet matched against a stream of grown patches).
 ///
-/// # Tile-id space (crossing mode)
+/// # Tile ids
 ///
-/// In the crossing constructors, the returned [`TileMatch`] values
-/// use a **flat id space**: `tile_a` indexes into `set_a.rats()`
-/// directly (range `[0, num_tiles_a)`), but `tile_b` is shifted by
-/// `offset_b = num_tiles_a` so it falls in `[num_tiles_a,
-/// num_tiles_a + num_tiles_b)`. This lets downstream code recognise
-/// which side an id refers to without carrying a separate "side" tag.
-/// `self_match` mode (`Self::new`) sets `offset_b = 0` and tile ids
-/// in both fields share the single tileset's indexing.
+/// The returned [`TileMatch`]es carry **side-local** tile ids:
+/// `m.a.tile_id` indexes into `set_a.rats()` (range `[0,
+/// num_tiles_a)`) and `m.b.tile_id` indexes into `set_b.rats()`
+/// (range `[0, num_tiles_b)`). For `Self::new` (self-match), the two
+/// sides are the same tileset so the ranges coincide.
 ///
 /// # Internals
 ///
-/// Backed by a [`BitParallelMatcher`] over the B-side tileset's angle
-/// sequences. The A-side sequences are streamed against the matcher
-/// per query. Build cost is dominated by the B-side BP precompute,
-/// which is why the `BpSeed` reuse path exists.
+/// Backed by a [`BitParallelMatcher`] built once from the B-side
+/// tileset's angle sequences; A-side sequences are streamed against
+/// it per query, reading directly from `set_a.rat(i).seq()` (no
+/// per-MatchFinder clone of the angle data). Build cost is
+/// dominated by the B-side BP precompute, which is why the `BpSeed`
+/// reuse path exists.
 pub struct MatchFinder<T: IsRing> {
     set_a: Arc<TileSet<T>>,
     set_b: Arc<TileSet<T>>,
-    offset_b: usize,
-    engine: CyclicEngine,
+    b_matcher: Arc<BitParallelMatcher>,
 }
 
 impl<T: IsRing> MatchFinder<T> {
     /// Build a `MatchFinder` that enumerates self-matches within a
-    /// single tileset (`set_a == set_b == tileset`, `offset_b = 0`).
+    /// single tileset (`set_a == set_b == tileset`).
     ///
-    /// Returned `TileMatch`es have both `tile_a` and `tile_b` indexed
-    /// into the same `tileset.rats()` (no id shift). Use this for the
-    /// pairwise "which tiles glue to which" enumeration over one set.
+    /// Both `tile_a` and `tile_b` in the returned `TileMatch`es index
+    /// into the same `tileset.rats()`. Use this for the pairwise
+    /// "which tiles glue to which" enumeration over one set.
     pub fn new(tileset: Arc<TileSet<T>>) -> Self {
-        let sequences: Vec<Vec<i8>> = tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
+        let sequences: Vec<Vec<i8>> =
+            tileset.rats().iter().map(|r| r.seq().to_vec()).collect();
         let b_matcher = Arc::new(BitParallelMatcher::new(&sequences));
-        let engine = CyclicEngine {
-            a_sequences: sequences,
-            b_matcher,
-            offset_b: 0,
-        };
         MatchFinder {
             set_a: Arc::clone(&tileset),
             set_b: tileset,
-            offset_b: 0,
-            engine,
+            b_matcher,
         }
     }
 
@@ -235,38 +174,66 @@ impl<T: IsRing> MatchFinder<T> {
     /// the **same** B-side, use [`BpSeed::new`] +
     /// [`Self::crossing_with_seed`] instead so the precompute is
     /// done once and shared via `Arc`.
-    ///
-    /// See the struct doc for the `tile_a` / `tile_b` id space.
     pub fn crossing(a: Arc<TileSet<T>>, b: Arc<TileSet<T>>) -> Self {
-        let seed = BpSeed::new(b);
-        Self::crossing_with_seed(a, seed)
+        Self::crossing_with_seed(a, BpSeed::new(b))
     }
 
     /// Build a crossing `MatchFinder` reusing a pre-built [`BpSeed`]
     /// for the B-side.
     ///
-    /// Per-call cost is proportional to the A-side tileset only
-    /// (each Rat's angle sequence is cloned once into the engine);
-    /// the B-side masks are shared by `Arc` from the `BpSeed`. This
-    /// is the right primitive for the inner loop of `patch_enum`,
-    /// `seq_explorer`, and similar callers — see the [`BpSeed`] doc
-    /// for the canonical usage pattern.
-    ///
-    /// See the struct doc for the `tile_a` / `tile_b` id space.
+    /// Per-call cost is now constant beyond the `Arc` bookkeeping —
+    /// `MatchFinder` reads A-side angle sequences directly from the
+    /// `set_a` tileset rather than cloning them, so the only state
+    /// per build is the two `Arc<TileSet<T>>` handles and the
+    /// `Arc<BitParallelMatcher>`. This is the right primitive for
+    /// the inner loop of `patch_enum`, `seq_explorer`, and similar
+    /// callers — see the [`BpSeed`] doc for the canonical usage
+    /// pattern.
     pub fn crossing_with_seed(a: Arc<TileSet<T>>, seed: BpSeed<T>) -> Self {
-        let a_sequences: Vec<Vec<i8>> = a.rats().iter().map(|r| r.seq().to_vec()).collect();
-        let offset_b = a.num_tiles();
-        let engine = CyclicEngine {
-            a_sequences,
-            b_matcher: seed.matcher,
-            offset_b,
-        };
         MatchFinder {
             set_a: a,
             set_b: seed.tileset,
-            offset_b,
-            engine,
+            b_matcher: seed.matcher,
         }
+    }
+
+    /// Enumerate all maximal RC matches between A-tile `i` and B-tile
+    /// `j` (both side-local indices). Returned `TileMatch`es have
+    /// `m.a.tile_id == i` and `m.b.tile_id == j`. No geometric
+    /// validation -- caller is responsible for downstream filters.
+    fn maximal_rc_matches(&self, i: usize, j: usize) -> Vec<TileMatch> {
+        let mut matches = self.b_matcher.stream_boundary(self.set_a.rat(i).seq(), j);
+        for m in &mut matches {
+            m.a.tile_id = i;
+        }
+        matches
+    }
+
+    /// Same as [`Self::maximal_rc_matches`] but post-filtered to
+    /// matches whose A-side start position is in `positions`.
+    fn maximal_rc_matches_at_positions(
+        &self,
+        i: usize,
+        j: usize,
+        positions: &[usize],
+    ) -> Vec<TileMatch> {
+        if positions.is_empty() {
+            return vec![];
+        }
+        let boundary = self.set_a.rat(i).seq();
+        let n_a = boundary.len();
+        let mut keep = vec![false; n_a];
+        for &p in positions {
+            if p < n_a {
+                keep[p] = true;
+            }
+        }
+        let mut matches = self.b_matcher.stream_boundary(boundary, j);
+        matches.retain(|m| keep[m.a.range.start_offset]);
+        for m in &mut matches {
+            m.a.tile_id = i;
+        }
+        matches
     }
 
     /// The A-side tileset.
@@ -310,7 +277,7 @@ impl<T: IsRing> MatchFinder<T> {
     /// Includes raw matches that haven't yet been validated as legal
     /// glues (e.g. they might cause self-intersection).
     pub fn shared_boundaries(&self, i: usize, j: usize) -> Vec<TileMatch> {
-        self.engine.maximal_rc_matches(i, self.offset_b + j)
+        self.maximal_rc_matches(i, j)
     }
 
     /// Enumerate the legal glue matches between tile `i` (A-side) and
@@ -351,7 +318,6 @@ impl<T: IsRing> MatchFinder<T> {
     ) -> Vec<(Rat<T>, TileMatch)> {
         let a = self.set_a.rat(i);
         let b = self.set_b.rat(j);
-        let cmi_j = self.offset_b + j;
         let n_a = a.len();
         let n_b = b.len();
 
@@ -373,9 +339,7 @@ impl<T: IsRing> MatchFinder<T> {
 
         let mut raw: Vec<(Rat<T>, TileMatch)> = Vec::new();
 
-        let cmi_matches = self
-            .engine
-            .maximal_rc_matches_at_positions(i, cmi_j, &scan_positions);
+        let cmi_matches = self.maximal_rc_matches_at_positions(i, j, &scan_positions);
         for m in &cmi_matches {
             let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
             if len <= 1 {
@@ -458,7 +422,6 @@ impl<T: IsRing> MatchFinder<T> {
     fn candidates_for_pair(&self, i: usize, j: usize) -> BTreeMap<Rat<T>, Vec<TileMatch>> {
         let a = self.set_a.rat(i);
         let b = self.set_b.rat(j);
-        let cmi_j = self.offset_b + j;
         let n_a = a.len();
         let n_b = b.len();
 
@@ -467,7 +430,7 @@ impl<T: IsRing> MatchFinder<T> {
             return groups;
         }
 
-        let cmi_matches = self.engine.maximal_rc_matches(i, cmi_j);
+        let cmi_matches = self.maximal_rc_matches(i, j);
         for m in &cmi_matches {
             let (ns, len, ne) = a.get_match((m.a.range.start_offset as i64, m.b.range.start_offset as i64), b);
             if len <= 1 {
