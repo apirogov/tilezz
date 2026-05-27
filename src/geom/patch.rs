@@ -133,6 +133,16 @@ pub struct GrowingPatch<T: IsRing> {
     match_index: Arc<MatchTypeIndex<T>>,
     angles: Vec<i8>,
     edges: Vec<EdgeInfo>,
+    /// Lazily-materialised cache of all legal candidate matches,
+    /// bucketed by `pm.a_range.start_offset`. Filled on first access
+    /// via [`Self::ensure_candidates_materialized`] /
+    /// [`Self::get_all_matches`].
+    ///
+    /// **Invalidation rule (load-bearing).** Any code path that
+    /// mutates `angles` or `edges` MUST reset this field to `None` in
+    /// the same step. `add_tile_growing` and `normalize` both do; any
+    /// future helper that touches the boundary must as well, or
+    /// stale cached candidates will be served for the new boundary.
     candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
     inner_chains: Vec<Vec<EdgeInfo>>,
     boundary: BoundaryGrid<T>,
@@ -208,27 +218,6 @@ struct RawBoundary {
     edges: Vec<EdgeInfo>,
     inner_chains: Vec<Vec<EdgeInfo>>,
     patch_tile_ids: Vec<usize>,
-}
-
-#[cfg(test)]
-fn raw_is_junction<T: IsRing>(boundary: &RawBoundary, tileset: &TileSet<T>, pos: usize) -> bool {
-    is_junction_at(&boundary.angles, &boundary.edges, tileset, pos)
-}
-
-#[cfg(test)]
-fn next_junction_on_raw_boundary<T: IsRing>(
-    boundary: &RawBoundary,
-    tileset: &TileSet<T>,
-    from_pos: usize,
-) -> Option<usize> {
-    let n = boundary.angles.len();
-    for step in 1..=n {
-        let pos = (from_pos + step) % n;
-        if raw_is_junction(boundary, tileset, pos) {
-            return Some(pos);
-        }
-    }
-    None
 }
 
 /// Result of [`glue_match_to_raw_boundary`].
@@ -335,6 +324,30 @@ fn glue_match_to_raw_boundary<T: IsRing>(
     if mlen == 0 || mlen > n || mlen > m {
         return None;
     }
+
+    // Pre-check the caller contract from the doc comment: `pm` must
+    // describe a real match. Verifying this here keeps misuse from
+    // silently passing through `glue_raw_angles` to a nonsensical
+    // boundary downstream.
+    debug_assert_eq!(
+        forward_match_length(
+            &boundary.angles,
+            pm.a_range.start_offset,
+            tile_seq,
+            pm.b.range.start_offset,
+        )
+        .min({
+            // forward_match_length stops at first mismatch; cap at the
+            // claimed mlen so we accept the canonical-or-prefix case.
+            mlen
+        }),
+        mlen,
+        "glue_match_to_raw_boundary: pm must describe a real match \
+         (a_range.start_offset={}, b.range.start_offset={}, len={})",
+        pm.a_range.start_offset,
+        pm.b.range.start_offset,
+        mlen,
+    );
 
     let seg_len_old = n - mlen;
     let seg_len_new = m - mlen;
@@ -1614,14 +1627,22 @@ fn enumerate_junction_candidates_at<T: IsRing>(
 /// the boundary `angles` along the match described by `pm`.
 ///
 /// Wraps [`glue::glue_raw_angles`] and additionally rejects glues that
-/// would produce a ±half-turn at either of the two new junction angles
+/// would produce a +/-half-turn at either of the two new junction angles
 /// (a half-turn boundary angle means the boundary doubles back on itself
-/// — a degenerate pinched vertex, which is not a valid patch boundary).
+/// -- a degenerate pinched vertex, which is not a valid patch boundary).
 ///
-/// Returns `None` if either the raw glue would be empty or a ±hturn
-/// junction would result. This is the live-patch glue path; the parallel
-/// raw-boundary path used by witness construction (`glue_match_to_raw_boundary`)
-/// is intentionally permissive at this level — see
+/// # Returns
+///
+/// `Some(new_angles)` if the glue produces a non-degenerate boundary;
+/// `None` if **any** new junction would have angle +/-hturn. Both
+/// rejection paths -- the inner `glue_raw_angles?` (= keystone-glue
+/// hturn) and the explicit `a_yx`/`a_xy` check below (= normal-glue
+/// hturn) -- collapse to the same semantic: "this glue would pinch
+/// the boundary at a junction." There is no other `None` cause.
+///
+/// This is the live-patch glue path; the parallel raw-boundary path
+/// used by witness construction (`glue_match_to_raw_boundary`) is
+/// intentionally permissive at this level -- see
 /// [`construct_witness_from_vt_sequence`] for the open-VT enforcement.
 ///
 /// # Caller contract
@@ -1840,6 +1861,29 @@ mod tests {
         let expected = ClosedVertexType::from_cyclic(&[ei(0, 0), ei(2, 3), ei(1, 4), ei(1, 5)]);
         assert_eq!(closed, expected);
         assert_eq!(closed.len(), 4);
+    }
+
+    fn raw_is_junction<T: IsRing>(
+        boundary: &RawBoundary,
+        tileset: &TileSet<T>,
+        pos: usize,
+    ) -> bool {
+        is_junction_at(&boundary.angles, &boundary.edges, tileset, pos)
+    }
+
+    fn next_junction_on_raw_boundary<T: IsRing>(
+        boundary: &RawBoundary,
+        tileset: &TileSet<T>,
+        from_pos: usize,
+    ) -> Option<usize> {
+        let n = boundary.angles.len();
+        for step in 1..=n {
+            let pos = (from_pos + step) % n;
+            if raw_is_junction(boundary, tileset, pos) {
+                return Some(pos);
+            }
+        }
+        None
     }
 
     fn square_seed() -> PatchSeed<ZZ4> {
