@@ -106,6 +106,39 @@ pub(crate) fn match_length(x: &[i8], y: &[i8]) -> (usize, usize) {
     (len, offset)
 }
 
+/// Compute the maximum match length when gluing `other_angles` onto
+/// `self_angles` starting at the seed vertex pair `(self_start,
+/// other_junction)`.
+///
+/// Two sides walk outward from a shared anchor: `self` advances CCW
+/// from `self_start`, `other` advances CW from `other_junction`. Edges
+/// are compatible when `self_angles[k] == -other_angles[mirror(k)]`
+/// (head-to-tail anti-parallel meet).
+///
+/// Length is at least 1 (the anchor edge always matches by construction)
+/// and stops at the first disagreement, capped at `min(self_len,
+/// other_len)`. See [`Rat::get_match`] for the seed-vertex convention.
+pub fn forward_match_length(
+    self_angles: &[i8],
+    self_start: usize,
+    other_angles: &[i8],
+    other_junction: usize,
+) -> usize {
+    let n = self_angles.len();
+    let m = other_angles.len();
+    let max_len = n.min(m);
+    let mut len = 1;
+    for i in 1..max_len {
+        let xi = self_angles[(self_start + i) % n];
+        let yi = -other_angles[(other_junction + m - i) % m];
+        if xi != yi {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
 #[derive(Debug, Clone)]
 pub struct Rat<T: IsRing> {
     /// Even though we don't need to use the underlying complex integer ring,

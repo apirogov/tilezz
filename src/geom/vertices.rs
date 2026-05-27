@@ -2,12 +2,21 @@
 //! origin, how junction vertices on a patch boundary are classified,
 //! and which side of a junction a glue transition consumed.
 //!
-//! These are small data-modelling types -- no behaviour beyond
-//! construction and trivial accessors. They are shared by [`crate::geom::patch`]
-//! (where they are produced) and by the [`crate::analysis`] layer
-//! (where the vertex-type catalog is built on top of them).
+//! The data types are small (no behaviour beyond construction and
+//! trivial accessors); the module also hosts the small set of
+//! boundary-level helpers that operate purely on
+//! `(angles, edges, tileset)` triples without needing a full
+//! `GrowingPatch` -- `is_junction_at`, `compute_junctions`,
+//! `compute_segments`. They live here so the partitioning of a
+//! boundary into junctions / per-tile segments is in the same module
+//! as the vertex / segment types it produces, and so
+//! [`crate::geom::patch`] can stay focused on the live-patch state
+//! machine.
 
+use crate::cyclotomic::IsRing;
+use crate::geom::matches::{EdgeRange, PatchSegment, Segment};
 use crate::geom::rat::lex_min_rot;
+use crate::geom::tileset::TileSet;
 
 // ============================================================
 // EdgeInfo: identifying one edge of one tile.
@@ -206,4 +215,111 @@ pub enum TransitionSide {
     /// vertex. The transition's `tile_offset` is canonicalized to
     /// the CW edge.
     Both,
+}
+
+// ============================================================
+// Boundary-level helpers: junction detection + segment partition.
+// ============================================================
+//
+// These work on raw `(angles, edges, tileset)` triples and don't
+// need a live `GrowingPatch` -- they're shared by the patch state
+// machine and by the witness-construction / raw-boundary code paths.
+// Keeping them next to `EdgeInfo`, `OpenVertexType`, and `PatchSegment`
+// puts the partitioning of a boundary into junctions / per-tile
+// segments in the same module as the types it produces.
+
+/// `true` if position `pos` on the boundary is a junction vertex --
+/// i.e. the boundary angle there differs from the natural internal
+/// angle of the tile occupying the boundary edge at that position.
+/// Equivalently: at a non-junction position, the boundary curves
+/// exactly the way the tile's own outgoing edge prescribes.
+pub(crate) fn is_junction_at<T: IsRing>(
+    angles: &[i8],
+    edges: &[EdgeInfo],
+    tileset: &TileSet<T>,
+    pos: usize,
+) -> bool {
+    let ei = edges[pos];
+    tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[pos]
+}
+
+/// Indices of every junction vertex on the boundary, in increasing
+/// order. See [`is_junction_at`] for the per-position predicate.
+pub(crate) fn compute_junctions<T: IsRing>(
+    angles: &[i8],
+    edges: &[EdgeInfo],
+    tileset: &TileSet<T>,
+) -> Vec<usize> {
+    (0..edges.len())
+        .filter(|&i| is_junction_at(angles, edges, tileset, i))
+        .collect()
+}
+
+/// Partition the boundary into [`PatchSegment`]s -- maximal contiguous
+/// runs of edges from the same tile instance (no junction between them).
+///
+/// The segment-break condition is the canonical junction check
+/// ([`is_junction_at`]): `angles[i] != tile.seq()[edges[i].tile_offset]`.
+/// Every glue updates the boundary angle at the new junction (the
+/// compute_glue_angles path produces an angle that for non-degenerate
+/// tiles is provably different from either tile's natural internal
+/// angle there), so this check reliably detects every tile-instance
+/// boundary.
+///
+/// A simpler offset-arithmetic heuristic (same `tile_id` + contiguous
+/// `tile_offset` from the segment start) is **not** used here. It
+/// would over-segment on intra-tile wrap-arounds (a single tile
+/// instance whose surviving boundary edges have offsets like
+/// `2,3,4,5,0`) and could under-segment in pathological same-tile-id
+/// glues whose offsets happen to line up. The angle-based check is
+/// canonical and avoids both.
+///
+/// Cyclic-vs-linear caveat: when position 0 is not at a junction, a
+/// single cyclic tile-instance run is split into two linear segments
+/// at the array seam (`[0, first_junction)` and `[last_junction, n)`).
+/// See [`PatchSegment`] for details.
+pub(crate) fn compute_segments<T: IsRing>(
+    angles: &[i8],
+    edges: &[EdgeInfo],
+    tileset: &TileSet<T>,
+) -> Vec<PatchSegment> {
+    let n = edges.len();
+    if n == 0 {
+        return vec![];
+    }
+    let mut segments: Vec<PatchSegment> = Vec::new();
+    let mut seg_start = 0;
+    for i in 1..=n {
+        let break_here = i == n || is_junction_at(angles, edges, tileset, i);
+        if break_here {
+            let len = i - seg_start;
+            segments.push(PatchSegment::new(
+                EdgeRange::new(seg_start, len),
+                Segment::new(
+                    edges[seg_start].tile_id,
+                    EdgeRange::new(edges[seg_start].tile_offset, len),
+                ),
+            ));
+            seg_start = i;
+        }
+    }
+    segments
+}
+
+/// Raw `(cw, inner, ccw)` triple extraction at a boundary position
+/// (no junction check). Test-only; the live-patch path goes through
+/// [`crate::geom::patch::GrowingPatch::junction_vertex_type_at`] which
+/// returns `None` at non-junction positions.
+#[cfg(test)]
+pub(crate) fn vertex_type_raw_from(
+    edges: &[EdgeInfo],
+    inner_chains: &[Vec<EdgeInfo>],
+    pos: usize,
+) -> OpenVertexType {
+    let n = edges.len();
+    OpenVertexType {
+        cw: edges[(pos + n - 1) % n],
+        inner: inner_chains[pos].clone(),
+        ccw: edges[pos],
+    }
 }
