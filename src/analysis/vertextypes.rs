@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::cyclotomic::IsRing;
-use crate::geom::patch::{GrowingPatch, PatchMatch};
+use crate::geom::patch::{GrowingPatch, PatchMatch, PatchSeed};
 use crate::geom::rat::Rat;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{ClosedVertexType, EdgeInfo, OpenVertexType, TransitionSide};
@@ -515,12 +515,12 @@ impl<T: IsRing> Default for BfsState<T> {
 /// witness patch (the 2-tile patch that contains it).
 fn seed_phase<T: IsRing>(state: &mut BfsState<T>, tileset: &Arc<TileSet<T>>) {
     for seed_id in 0..tileset.num_tiles() {
-        let seed = GrowingPatch::new(Arc::clone(tileset), seed_id);
-        for pm in seed.get_all_matches() {
-            let mut gp = seed.clone();
-            if !gp.add_tile(&pm) || !gp.is_growing() {
-                continue;
-            }
+        let seed = PatchSeed::new(Arc::clone(tileset), seed_id);
+        for pm in seed.candidate_matches() {
+            let gp = match seed.clone().grow(pm) {
+                Some(g) => g,
+                None => continue,
+            };
             for pos in 0..gp.boundary_len() {
                 if !gp.is_junction(pos) {
                     continue;
@@ -560,7 +560,7 @@ fn bfs_phase<T: IsRing>(state: &mut BfsState<T>, tileset: &Arc<TileSet<T>>) {
         for pm in touching {
             let gp = &state.witness_store[&vt].0;
             let mut gp2 = gp.clone();
-            if !gp2.add_tile(&pm) || !gp2.is_growing() {
+            if !gp2.add_tile(&pm) {
                 continue;
             }
 
@@ -1302,7 +1302,7 @@ impl Collection {
                     continue;
                 }
                 let mut gp2 = gp.clone();
-                if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                if !gp2.add_tile(&pm) {
                     continue;
                 }
                 if t.dst_id == CLOSED_ID {
@@ -1371,7 +1371,7 @@ impl Collection {
             for pm in gp.get_matches_touching_vertex(pos) {
                 matches_checked += 1;
                 let mut gp2 = gp.clone();
-                if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                if !gp2.add_tile(&pm) {
                     continue;
                 }
                 let junction_pos = if pm.a_range.start_offset == pos {
@@ -1648,9 +1648,9 @@ mod tests {
     /// calling [`Rat::get_match`] to extend maximally in both
     /// directions. Filter to matches whose edge range covers the CW
     /// or CCW incident edge of the focus vertex (pure modular
-    /// arithmetic). For every such match accepted by `add_tile +
-    /// is_growing`, every junction VT exposed in the resulting patch
-    /// must already be in the catalog.
+    /// arithmetic). For every such match accepted by `add_tile`,
+    /// every junction VT exposed in the resulting patch must already
+    /// be in the catalog.
     ///
     /// This is non-circular w.r.t. the BFS's match-enumeration in
     /// `patch.rs` (`compute_all_candidates` /
@@ -1719,7 +1719,7 @@ mod tests {
                     Segment::new(tile_id, EdgeRange::new(ext_end, len)),
                 );
                 let mut gp2 = witness.clone();
-                if !gp2.add_tile(&pm) || !gp2.is_growing() {
+                if !gp2.add_tile(&pm) {
                     continue;
                 }
                 for new_pos in 0..gp2.boundary_len() {

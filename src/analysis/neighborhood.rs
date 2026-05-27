@@ -101,7 +101,7 @@ use rustc_hash::FxHashMap;
 use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::cyclotomic::IsRing;
 use crate::geom::matches::{EdgeRange, Segment};
-use crate::geom::patch::{GrowingPatch, PatchMatch};
+use crate::geom::patch::{GrowingPatch, PatchMatch, PatchSeed};
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{EdgeInfo, OpenVertexType, TransitionSide};
 
@@ -724,7 +724,7 @@ struct BfsState {
 fn seed_phase<T: IsRing>(state: &mut BfsState, match_index: &Arc<MatchTypeIndex<T>>) {
     for id in 1..=match_index.num_types() {
         let mt = match_index.get(id);
-        let mut patch = GrowingPatch::new(Arc::clone(match_index.tileset()), mt.a.tile_id);
+        let seed = PatchSeed::new(Arc::clone(match_index.tileset()), mt.a.tile_id);
         let pm = PatchMatch::new(
             EdgeRange::new(mt.a.range.start_offset, mt.len()),
             Segment::new(
@@ -732,9 +732,10 @@ fn seed_phase<T: IsRing>(state: &mut BfsState, match_index: &Arc<MatchTypeIndex<
                 EdgeRange::new(mt.b.range.start_offset, mt.len()),
             ),
         );
-        if !patch.add_tile(&pm) {
-            continue;
-        }
+        let mut patch = match seed.grow(&pm) {
+            Some(p) => p,
+            None => continue,
+        };
         patch.normalize();
         let patch_n = patch.boundary_len();
 
@@ -2661,14 +2662,15 @@ mod tests {
                             continue;
                         }
                         // Build the 2-tile patch.
-                        let mut patch = GrowingPatch::new(Arc::clone(&tileset), a);
+                        let seed = PatchSeed::new(Arc::clone(&tileset), a);
                         let pm1 = PatchMatch::new(
                             EdgeRange::new(ns_u, len),
                             Segment::new(b, EdgeRange::new(ne_u, len)),
                         );
-                        if !patch.add_tile(&pm1) {
-                            continue;
-                        }
+                        let mut patch = match seed.grow(&pm1) {
+                            Some(p) => p,
+                            None => continue,
+                        };
                         patch.normalize();
                         let patch_n = patch.boundary_len();
                         let patch_rat = crate::geom::rat::Rat::from_slice_unchecked(patch.angles());
