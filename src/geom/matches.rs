@@ -99,15 +99,33 @@ impl Match {
         self.len() == 0
     }
 
-    /// View the match from the other side: swap `a` and `b`.
+    /// The involution of this match: the same glue described from the
+    /// other boundary's perspective.
     ///
-    /// With the universal "`start_offset` = first matched edge"
-    /// convention this is a trivial swap. Existing callers that use the
-    /// asymmetric "B-side is first surviving edge" convention will need
-    /// to shift starts during migration; that shifting is not this
-    /// type's responsibility.
-    pub fn swap_sides(self) -> Self {
-        Self { a: self.b, b: self.a }
+    /// **Not a trivial A/B swap.** Under the asymmetric `start_offset`
+    /// convention (see [`PatchMatch`]'s docstring), `a.start_offset` is
+    /// the first matched A-edge while `b.start_offset` is the first
+    /// surviving B-edge past the match. After swapping roles, both
+    /// sides need their offsets shifted to land on the correct anchor
+    /// under the new role:
+    ///
+    /// - new A start = (old B start + len_b - len) mod len_b
+    /// - new B start = (old A start + len)         mod len_a
+    ///
+    /// `len_a` / `len_b` are the cyclic boundary lengths of the two
+    /// sides. Idempotent under the same input lengths:
+    /// `m.involution(la, lb).involution(lb, la) == m`.
+    ///
+    /// This mirrors [`TileMatch::involution`]; the only difference is
+    /// that `Match` is purely positional (no tile ids) so the boundary
+    /// lengths are passed in directly rather than looked up via tile
+    /// ids.
+    pub fn involution(self, len_a: usize, len_b: usize) -> Self {
+        let len = self.len();
+        Self {
+            a: EdgeRange::new((self.b.start_offset + len_b - len) % len_b, len),
+            b: EdgeRange::new((self.a.start_offset + len) % len_a, len),
+        }
     }
 
     /// Attach tile ids on both sides, lifting to a [`TileMatch`].
@@ -348,37 +366,16 @@ impl TileMatch {
     }
 
     /// The involution of this match: the same glue described from the
-    /// other tile's perspective.
-    ///
-    /// Not a trivial A/B swap. The codebase uses an asymmetric edge-
-    /// offset convention -- on the A side, `range.start_offset` is the
-    /// first **matched** edge; on the B side, it is the first
-    /// **surviving** edge just past the match (see
-    /// [`crate::geom::glue::glue_raw_angles`] for why). When we view
-    /// the match from B's side, the new A is the old B and vice
-    /// versa; but the start offsets need to shift so each lands on the
-    /// first matched / first surviving edge appropriately under the
-    /// new role:
-    ///
-    /// - new A start = (old B start + len_b - len) mod len_b
-    /// - new B start = (old A start + len)         mod len_a
-    ///
-    /// `len_a` / `len_b` are the cyclic boundary lengths of the two
-    /// tiles (`rats[tile_a].len()` and `rats[tile_b].len()` in caller
-    /// terms). Idempotent under the same input lengths:
-    /// `m.involution(la, lb).involution(lb, la) == m`.
+    /// other tile's perspective. Swaps tile ids and applies the
+    /// positional involution to the edge ranges via [`Match::involution`].
+    /// See that method for the (asymmetric) offset shift; see
+    /// [`PatchMatch`] for why the underlying convention is asymmetric.
     pub fn involution(self, len_a: usize, len_b: usize) -> Self {
-        let len = self.len();
-        TileMatch::new(
-            Segment::new(
-                self.b.tile_id,
-                EdgeRange::new((self.b.range.start_offset + len_b - len) % len_b, len),
-            ),
-            Segment::new(
-                self.a.tile_id,
-                EdgeRange::new((self.a.range.start_offset + len) % len_a, len),
-            ),
-        )
+        let inv = self.spec().involution(len_a, len_b);
+        TileMatch {
+            a: Segment { tile_id: self.b.tile_id, range: inv.a },
+            b: Segment { tile_id: self.a.tile_id, range: inv.b },
+        }
     }
 }
 
@@ -420,11 +417,19 @@ mod tests {
     }
 
     #[test]
-    fn match_swap_sides_is_involutive() {
-        let m = Match::new(EdgeRange::new(1, 2), EdgeRange::new(5, 2));
-        assert_eq!(m.swap_sides().swap_sides(), m);
-        assert_eq!(m.swap_sides().a, m.b);
-        assert_eq!(m.swap_sides().b, m.a);
+    fn match_involution_shifts_offsets_and_is_idempotent() {
+        // len = 2, len_a = 6, len_b = 5. Asymmetric convention:
+        //   a = (1, 2): matched A edges 1..3
+        //   b = (3, 2): first surviving on B = 3, matched on B = 1..3 cyc
+        // Involuted:
+        //   new a = (3 + 5 - 2) % 5 = 1 -> (1, 2)
+        //   new b = (1 + 2) % 6     = 3 -> (3, 2)
+        let m = Match::new(EdgeRange::new(1, 2), EdgeRange::new(3, 2));
+        let inv = m.involution(6, 5);
+        assert_eq!(inv.a, EdgeRange::new(1, 2));
+        assert_eq!(inv.b, EdgeRange::new(3, 2));
+        // Idempotent under the swapped-length input.
+        assert_eq!(inv.involution(5, 6), m);
     }
 
     #[test]
