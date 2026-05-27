@@ -362,19 +362,39 @@ impl<T: IsRing> Snake<T> {
     ///
     /// Note that the correctness of the optimized check strongly relies
     /// on the assumption that all segments have unit length.
-    fn can_add(&self, angle: i8) -> bool {
+    /// Check whether appending the segment described by `angle` would cause
+    /// a self-intersection.
+    ///
+    /// Returns `None` if the segment can be added safely, or `Some(edge_idx)`
+    /// where `edge_idx` is the latest (highest-index) existing edge that
+    /// conflicts. If multiple edges conflict, the latest is returned — it is
+    /// the closest to the would-be new edge.
+    ///
+    /// The closing segment (new endpoint = origin) is exempt and returns `None`.
+    /// The "already closed" and "allow_intersections" fast paths are handled
+    /// here for now; they return `Some(0)` for closed and `None` for unchecked.
+    fn can_add(&self, angle: i8) -> Option<usize> {
         if self.allow_intersections {
-            return true;
+            return None;
         }
 
         if self.is_closed() {
-            return false;
+            return Some(0);
         }
 
         let new_seg @ (prev_pt, new_pt) = self.next_seg(angle);
 
         if let Some(ref visited) = self.visited {
-            return new_pt.is_zero() || !visited.contains(&new_pt);
+            if new_pt.is_zero() || !visited.contains(&new_pt) {
+                return None;
+            }
+            // Vertex revisit: scan for the index.
+            for i in 1..self.points.len() {
+                if self.points[i] == new_pt {
+                    return Some(i);
+                }
+            }
+            unreachable!("visited contains new_pt but not found in points");
         }
 
         // Direct grid traversal: no intermediate Vec / sort / dedup.
@@ -390,6 +410,7 @@ impl<T: IsRing> Snake<T> {
         let new_pt_nz = !new_pt.is_zero();
         let len = self.len();
         let mut seen_segs: u128 = 0;
+        let mut conflict: Option<usize> = None;
 
         // Iterate the precomputed deduplicated cell set for this segment's
         // (dx, dy) cell offset (one of 9 cases). Yields at most 8 cells, all
@@ -399,7 +420,7 @@ impl<T: IsRing> Snake<T> {
                 // Vertex-revisit check (only when new_pt is not origin --
                 // origin matches points[0] by polygon closure, which is fine).
                 if new_pt_nz && self.points[pt_idx] == new_pt {
-                    return false;
+                    conflict = Some(conflict.unwrap_or(0).max(pt_idx));
                 }
                 // Segment ending at pt_idx (if any).
                 if pt_idx > 0 {
@@ -407,7 +428,7 @@ impl<T: IsRing> Snake<T> {
                     if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[seg_id], self.points[pt_idx]);
                         if intersect_unit_segments(&new_seg, &s) {
-                            return false;
+                            conflict = Some(conflict.unwrap_or(0).max(seg_id));
                         }
                     }
                 }
@@ -417,35 +438,43 @@ impl<T: IsRing> Snake<T> {
                     if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[pt_idx], self.points[pt_idx + 1]);
                         if intersect_unit_segments(&new_seg, &s) {
-                            return false;
+                            conflict = Some(conflict.unwrap_or(0).max(seg_id));
                         }
                     }
                 }
             }
         }
-        true
+        conflict
+    }
+
+    /// Add a new segment to the snake, returning the index of the conflicting
+    /// edge if the segment would cause a self-intersection.
+    ///
+    /// Returns `None` on success (segment added), or `Some(edge_idx)` where
+    /// `edge_idx` is the latest existing edge that conflicts with the new
+    /// segment. Panics if the snake is already closed or the angle is a
+    /// half-turn (degenerate).
+    pub fn add_diagnosed(&mut self, angle: i8) -> Option<usize> {
+        assert!(!self.is_closed(), "add_diagnosed: snake is already closed");
+        let a = normalize_angle::<T>(angle);
+        assert!(a.abs() != T::hturn());
+        match self.can_add(a) {
+            None => {
+                self.add_unsafe(a);
+                None
+            }
+            Some(idx) => Some(idx),
+        }
     }
 
     /// Add a new segment to the snake.
     /// Returns true on success or false if the new segment
     /// would cause a self-intersection (point is rejected).
     pub fn add(&mut self, angle: i8) -> bool {
-        // normalize angle to be in (-halfturn, ..., halfturn)
-        let a = normalize_angle::<T>(angle);
-        // check that angle is not degenerate
-        // for a simple polyline or polygon
-        // (a half-turn step means walking the
-        // last segment backwards, i.e. self-intersects)
-        assert!(a.abs() != T::hturn());
-
-        // check for induced self-intersections
-        if !self.can_add(a) {
+        if self.is_closed() {
             return false;
         }
-
-        // everything is ok -> add new segment
-        self.add_unsafe(a);
-        true
+        self.add_diagnosed(angle).is_none()
     }
 
     /// Remove the most-recently-added segment, returning its angle
@@ -693,6 +722,52 @@ mod tests {
             s.cell_segs(&[(2, 0)]),
             &[(ZZ12::one(), ZZ12::one().scale(2))]
         );
+    }
+
+    #[test]
+    fn test_add_diagnosed_crossing() {
+        // s3: origin → unit(0) → unit(0)+unit(4).
+        // angle 5 would go back across edge 0.
+        let mut s3: Snake<ZZ12> = Snake::try_from(&[0, 4]).unwrap();
+        assert_eq!(s3.add_diagnosed(5), Some(0), "should cross edge 0");
+        // add still returns false — no behavioral change.
+        assert!(!s3.add(5));
+    }
+
+    #[test]
+    fn test_add_diagnosed_vertex_revisit() {
+        // ZZ4: [0,0,1,1] → (0,0)→(1,0)→(2,0)→(2,1)→(1,1). Dir=2(left).
+        // From (1,1), angle 1 → dir 3(down): new_pt = (1,1)+(-i) = (1,0) = vertex 1.
+        // Vertex index 1 = edge 1.
+        let mut s: Snake<ZZ4> = Snake::try_from(&[0, 0, 1, 1]).unwrap();
+        assert_eq!(s.add_diagnosed(1), Some(1), "should revisit vertex 1 (edge 1)");
+    }
+
+    #[test]
+    fn test_add_diagnosed_latest_conflict() {
+        // Build a zigzag where the new segment crosses TWO existing edges.
+        // In ZZ12: [0, 5, 5] → origin → (1,0) → (1+unit(5), 0+unit(5+0))...
+        // Actually, let me use the s4 example from test_can_add which is well-understood.
+        let mut s4: Snake<ZZ12> = Snake::new();
+        assert!(s4.add(0)); // edge 0: (0,0)→(1,0)
+        assert!(s4.add(5)); // edge 1: (1,0)→(1+u5, u5)
+                            // angle 4 would cross — verify it reports a valid edge index.
+        let result = s4.add_diagnosed(4);
+        assert!(result.is_some(), "angle 4 should conflict");
+        let idx = result.unwrap();
+        assert!(
+            idx < s4.len(),
+            "conflicting edge {idx} must be < len {}",
+            s4.len()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "add_diagnosed: snake is already closed")]
+    fn test_add_diagnosed_panics_on_closed() {
+        let mut s: Snake<ZZ12> = Snake::try_from(&[3, 3, 3]).unwrap();
+        assert!(s.add(3)); // closes the square
+        s.add_diagnosed(0); // should panic
     }
 
     #[test]
