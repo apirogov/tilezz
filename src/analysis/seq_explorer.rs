@@ -75,7 +75,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::cyclotomic::{IsRing};
-use crate::analysis::matchtypes::{BpSeed, MatchFinder};
+use crate::analysis::matchfinder::{BpSeed, MatchFinder};
 use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
