@@ -1,6 +1,96 @@
 //! Utility functions to use cyclotomic rings for 2D geometry
+use std::cmp::Ordering;
+
 use super::linalg::{dot_sign, is_between, is_ccw, wedge_sign};
 use super::traits::{HasZZ4, IntersectUnitSegments, IsRing, OneImag};
+
+/// Lexicographic comparison of two ring elements by `(Re, Im)`.
+///
+/// Exact: compares `Re(a) - Re(b)` and `Im(a) - Im(b)` via `re_sign`/`im_sign`
+/// on the difference, with no f64 intermediate.
+pub fn cmp_xy<ZZ: IsRing>(a: &ZZ, b: &ZZ) -> Ordering {
+    let d = *a - *b;
+    match d.re_sign().cmp(&0) {
+        Ordering::Equal => d.im_sign().cmp(&0),
+        ord => ord,
+    }
+}
+
+/// Strict convex hull via Andrew's monotone chain.
+///
+/// Returns indices into `points` (in CCW order, starting from the
+/// lexicographically smallest point) of the vertices that lie on the
+/// strict convex hull. Colinear intermediate points are **excluded**
+/// (when `wedge_sign == 0` the middle point is popped).
+///
+/// Every comparison and orientation test stays in exact ring arithmetic;
+/// no f64 is used at any point.
+///
+/// # Panics
+///
+/// Panics if `points` is empty.
+pub fn convex_hull<ZZ: IsRing>(points: &[ZZ]) -> Vec<usize> {
+    assert!(!points.is_empty(), "convex_hull: empty input");
+    let n = points.len();
+    if n <= 2 {
+        return (0..n).collect();
+    }
+
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&i, &j| cmp_xy(&points[i], &points[j]));
+
+    let mut hull: Vec<usize> = Vec::with_capacity(n);
+
+    // Lower hull: scan left to right.
+    for &pi in &idx {
+        while hull.len() >= 2 {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            if wedge_sign(&(points[b] - points[a]), &(points[pi] - points[b])) >= 0 {
+                hull.pop();
+            } else {
+                break;
+            }
+        }
+        hull.push(pi);
+    }
+
+    // Upper hull: scan right to left.
+    let lower_len = hull.len() + 1;
+    for &pi in idx.iter().rev() {
+        while hull.len() >= lower_len {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            if wedge_sign(&(points[b] - points[a]), &(points[pi] - points[b])) >= 0 {
+                hull.pop();
+            } else {
+                break;
+            }
+        }
+        hull.push(pi);
+    }
+
+    hull.pop();
+
+    hull
+}
+
+/// Label each point as "on strict convex hull" or not.
+///
+/// Returns `Vec<bool>` of the same length as `points`. A `true` at index `i`
+/// means `points[i]` lies on the strict convex hull, with colinear
+/// intermediates excluded.
+///
+/// Thin wrapper around [`convex_hull`]; all geometry stays in exact ring
+/// arithmetic.
+pub fn hull_labels<ZZ: IsRing>(points: &[ZZ]) -> Vec<bool> {
+    let hull = convex_hull(points);
+    let mut labels = vec![false; points.len()];
+    for idx in hull {
+        labels[idx] = true;
+    }
+    labels
+}
 
 /// Return whether the point `p` lies on the line through `a` and `b`.
 ///
@@ -161,6 +251,326 @@ mod tests {
     use super::*;
 
     type ZZi = ZZ12;
+
+    // ---- cmp_xy ----
+
+    #[test]
+    fn test_cmp_xy() {
+        let a: ZZi = ZZi::zero();
+        let b: ZZi = ZZi::one();
+        let e: ZZi = ZZi::one_i();
+
+        assert_eq!(cmp_xy(&a, &a), Ordering::Equal);
+        assert_eq!(cmp_xy(&a, &b), Ordering::Less);
+        assert_eq!(cmp_xy(&b, &a), Ordering::Greater);
+        assert_eq!(cmp_xy(&a, &e), Ordering::Less);
+        assert_eq!(cmp_xy(&e, &b), Ordering::Less);
+    }
+
+    // ---- convex_hull basic ----
+
+    #[test]
+    fn test_convex_hull_triangle() {
+        let pts: Vec<ZZi> = vec![ZZi::zero(), ZZi::one(), ZZi::one_i()];
+        let hull = convex_hull(&pts);
+        assert_eq!(hull.len(), 3);
+    }
+
+    #[test]
+    fn test_convex_hull_square() {
+        let pts: Vec<ZZi> = vec![
+            ZZi::zero(),
+            ZZi::one(),
+            ZZi::one() + ZZi::one_i(),
+            ZZi::one_i(),
+        ];
+        let hull = convex_hull(&pts);
+        assert_eq!(hull.len(), 4);
+    }
+
+    #[test]
+    fn test_convex_hull_colinear_excluded() {
+        // (0,0), (1,0), (2,0), (2,1), (2,2), (1,2), (0,2), (0,1)
+        let pts: Vec<ZZi> = vec![
+            ZZi::zero(),                                // 0: (0,0)
+            ZZi::one(),                                 // 1: (1,0)
+            ZZi::from(2),                               // 2: (2,0)
+            ZZi::from(2) + ZZi::one_i(),                // 3: (2,1)
+            ZZi::from(2) + ZZi::from(2) * ZZi::one_i(), // 4: (2,2)
+            ZZi::one() + ZZi::from(2) * ZZi::one_i(),   // 5: (1,2)
+            ZZi::from(2) * ZZi::one_i(),                // 6: (0,2)
+            ZZi::one_i(),                               // 7: (0,1)
+        ];
+        let hull = convex_hull(&pts);
+        assert_eq!(hull.len(), 4);
+        let hull_set: std::collections::HashSet<usize> = hull.into_iter().collect();
+        assert!(hull_set.contains(&0));
+        assert!(hull_set.contains(&2));
+        assert!(hull_set.contains(&4));
+        assert!(hull_set.contains(&6));
+        assert!(!hull_set.contains(&1));
+        assert!(!hull_set.contains(&3));
+        assert!(!hull_set.contains(&5));
+        assert!(!hull_set.contains(&7));
+    }
+
+    // ---- convex_hull via Snake ----
+
+    use crate::geom::snake::Snake;
+    use crate::geom::tiles;
+
+    fn snake_hull_labels<T: IsRing>(snake: &Snake<T>) -> Vec<bool> {
+        assert!(snake.is_closed());
+        let n = snake.len();
+        hull_labels(&snake.representative()[..n])
+    }
+
+    fn validate_hull_labels<T: IsRing>(snake: &Snake<T>, labels: &[bool]) {
+        let n = snake.len();
+        assert_eq!(labels.len(), n);
+
+        let hull_indices: Vec<usize> = (0..n).filter(|&i| labels[i]).collect();
+        assert!(!hull_indices.is_empty(), "hull must be non-empty");
+
+        let pts = &snake.representative()[..n];
+
+        // Strict convexity: every triple of consecutive hull vertices is CCW.
+        let h = &hull_indices;
+        for k in 0..h.len() {
+            let a = h[k];
+            let b = h[(k + 1) % h.len()];
+            let c = h[(k + 2) % h.len()];
+            let w = wedge_sign(&(pts[b] - pts[a]), &(pts[c] - pts[b]));
+            assert!(
+                w > 0,
+                "hull not strictly convex at hull vertices [{a},{b},{c}], wedge={w}"
+            );
+        }
+
+        // Non-hull vertices are inside or on the hull boundary.
+        for i in 0..n {
+            if labels[i] {
+                continue;
+            }
+            let v = pts[i];
+            for k in 0..h.len() {
+                let a = pts[h[k]];
+                let b = pts[h[(k + 1) % h.len()]];
+                let w = wedge_sign(&(b - a), &(v - a));
+                assert!(
+                    w >= 0,
+                    "non-hull vertex {i} is outside hull edge [{}..{}], wedge={w}",
+                    h[k],
+                    h[(k + 1) % h.len()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_hull_labels_hexagon_all_on_hull() {
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let labels = snake_hull_labels(&hex);
+        assert_eq!(labels.len(), 6);
+        assert!(
+            labels.iter().all(|&b| b),
+            "all hex vertices should be on hull"
+        );
+        validate_hull_labels(&hex, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_triangle_all_on_hull() {
+        let tri: Snake<ZZ12> = tiles::triangle();
+        let labels = snake_hull_labels(&tri);
+        assert_eq!(labels.len(), 3);
+        assert!(labels.iter().all(|&b| b));
+        validate_hull_labels(&tri, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_square_all_on_hull() {
+        let sq: Snake<ZZ12> = tiles::square();
+        let labels = snake_hull_labels(&sq);
+        assert_eq!(labels.len(), 4);
+        assert!(labels.iter().all(|&b| b));
+        validate_hull_labels(&sq, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_rect_colinear_intermediates() {
+        // 2x2 rect with extra vertices on each edge:
+        // (0,0),(1,0),(2,0),(2,1),(2,2),(1,2),(0,2),(0,1)
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 0, 3, 0, 3, 0]).unwrap();
+        let labels = snake_hull_labels(&rect);
+        assert_eq!(labels.len(), 8);
+        // Corners on hull, intermediates not.
+        assert!(labels[0], "(0,0) should be on hull");
+        assert!(!labels[1], "(1,0) colinear intermediate");
+        assert!(labels[2], "(2,0) should be on hull");
+        assert!(!labels[3], "(2,1) colinear intermediate");
+        assert!(labels[4], "(2,2) should be on hull");
+        assert!(!labels[5], "(1,2) colinear intermediate");
+        assert!(labels[6], "(0,2) should be on hull");
+        assert!(!labels[7], "(0,1) colinear intermediate");
+        validate_hull_labels(&rect, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_l_shape() {
+        // L-shape boundary, 8 unit segments, CCW:
+        //   (0,0)→(1,0)→(2,0)→(2,1)→(1,1)→(1,2)→(0,2)→(0,1)→(0,0)
+        // Vertex 4=(1,1) is the concave corner. (1,0) and (0,1) are colinear
+        // intermediates on hull edges.
+        let l: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 3, 3, -3, 3, 3, 0]).unwrap();
+        assert!(l.is_closed());
+        let labels = snake_hull_labels(&l);
+        assert_eq!(labels.len(), 8);
+        assert!(labels[0], "(0,0) on hull");
+        assert!(!labels[1], "(1,0) colinear on bottom edge");
+        assert!(labels[2], "(2,0) on hull");
+        assert!(labels[3], "(2,1) on hull");
+        assert!(!labels[4], "(1,1) concave corner");
+        assert!(labels[5], "(1,2) on hull");
+        assert!(labels[6], "(0,2) on hull");
+        assert!(!labels[7], "(0,1) colinear on left edge");
+        validate_hull_labels(&l, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_longer_rect_multiple_colinear() {
+        // 3x2 rect: (0,0),(1,0),(2,0),(3,0),(3,1),(3,2),(2,2),(1,2),(0,2),(0,1)
+        let rect: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 0, 3, 0, 3, 0, 0, 3, 0]).unwrap();
+        assert!(rect.is_closed());
+        let labels = snake_hull_labels(&rect);
+        assert_eq!(labels.len(), 10);
+        // Hull corners: (0,0)=0, (3,0)=3, (3,2)=5, (0,2)=8
+        assert!(labels[0]);
+        assert!(!labels[1], "(1,0) colinear");
+        assert!(!labels[2], "(2,0) colinear");
+        assert!(labels[3], "(3,0) corner");
+        assert!(!labels[4], "(3,1) colinear");
+        assert!(labels[5], "(3,2) corner");
+        assert!(!labels[6], "(2,2) colinear");
+        assert!(!labels[7], "(1,2) colinear");
+        assert!(labels[8], "(0,2) corner");
+        assert!(!labels[9], "(0,1) colinear");
+        validate_hull_labels(&rect, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_spectre() {
+        let spec: Snake<ZZ12> = tiles::spectre();
+        let labels = snake_hull_labels(&spec);
+        assert_eq!(labels.len(), 14);
+        let hull_count = labels.iter().filter(|&&b| b).count();
+        assert!(
+            hull_count < 14,
+            "spectre is non-convex, some vertices must be non-hull"
+        );
+        assert!(hull_count >= 4, "hull should have at least 4 vertices");
+        validate_hull_labels(&spec, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_cyclic_invariant() {
+        use crate::geom::rat::Rat;
+
+        let hex: Snake<ZZ12> = tiles::hexagon();
+        let labels_base = snake_hull_labels(&hex);
+
+        let rat: Rat<ZZ12> = Rat::from_unchecked(&hex);
+        for shift in 0..6 {
+            let shifted = rat.cycled(shift);
+            let shifted_snake: Snake<ZZ12> = Snake::from_slice_unsafe(shifted.seq());
+            let labels_shifted = snake_hull_labels(&shifted_snake);
+            let hull_count_base = labels_base.iter().filter(|&&b| b).count();
+            let hull_count_shifted = labels_shifted.iter().filter(|&&b| b).count();
+            assert_eq!(
+                hull_count_base, hull_count_shifted,
+                "hull vertex count changed at shift {shift}"
+            );
+            validate_hull_labels(&shifted_snake, &labels_shifted);
+        }
+    }
+
+    #[test]
+    fn test_hull_labels_cross_ring() {
+        use crate::cyclotomic::ZZ24;
+        use crate::geom::tiles as tiles24;
+
+        let hex12: Snake<ZZ12> = tiles::hexagon();
+        let hex24: Snake<ZZ24> = tiles24::hexagon();
+
+        let labels12 = snake_hull_labels(&hex12);
+        let labels24 = snake_hull_labels(&hex24);
+
+        assert_eq!(
+            labels12, labels24,
+            "same shape should give same hull labels"
+        );
+        validate_hull_labels(&hex12, &labels12);
+        validate_hull_labels(&hex24, &labels24);
+    }
+
+    #[test]
+    fn test_hull_labels_u_shape() {
+        // 3x2 bounding box with 1x1 notch carved from top-center.
+        //   (0,2) ___ (1,2) (2,2) (3,2)
+        //        |   |           |
+        //        |   +---+       |      (1,1),(2,1) = notch bottom
+        //        +---------------+
+        //      (0,0)           (3,0)
+        //
+        // 12 vertices, CCW from (0,0):
+        //   0:(0,0) 1:(1,0) 2:(2,0) 3:(3,0)
+        //   4:(3,1) 5:(3,2) 6:(2,2) 7:(2,1)
+        //   8:(1,1) 9:(1,2) 10:(0,2) 11:(0,1)
+        let u: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0]).unwrap();
+        assert!(u.is_closed());
+        let labels = snake_hull_labels(&u);
+        assert_eq!(labels.len(), 12);
+
+        assert!(labels[0], "(0,0) BL corner");
+        assert!(!labels[1], "(1,0) colinear bottom");
+        assert!(!labels[2], "(2,0) colinear bottom");
+        assert!(labels[3], "(3,0) BR corner");
+        assert!(!labels[4], "(3,1) colinear right");
+        assert!(labels[5], "(3,2) TR corner");
+        assert!(!labels[6], "(2,2) colinear top");
+        assert!(!labels[7], "(2,1) concave inner");
+        assert!(!labels[8], "(1,1) concave inner");
+        assert!(!labels[9], "(1,2) colinear top");
+        assert!(labels[10], "(0,2) TL corner");
+        assert!(!labels[11], "(0,1) colinear left");
+
+        let hull_count = labels.iter().filter(|&&b| b).count();
+        assert_eq!(hull_count, 4, "U-shape hull should have exactly 4 vertices");
+        validate_hull_labels(&u, &labels);
+    }
+
+    #[test]
+    fn test_hull_labels_u_shape_cyclic_invariant() {
+        use crate::geom::rat::Rat;
+
+        let u: Snake<ZZ12> = Snake::try_from(&[0i8, 0, 0, 3, 0, 3, 3, -3, -3, 3, 3, 0]).unwrap();
+        let labels_base = snake_hull_labels(&u);
+        let hull_count_base = labels_base.iter().filter(|&&b| b).count();
+        assert_eq!(hull_count_base, 4);
+
+        let rat: Rat<ZZ12> = Rat::from_unchecked(&u);
+        for shift in 0..12 {
+            let shifted = rat.cycled(shift);
+            let shifted_snake: Snake<ZZ12> = Snake::from_slice_unsafe(shifted.seq());
+            let labels_shifted = snake_hull_labels(&shifted_snake);
+            let hull_count_shifted = labels_shifted.iter().filter(|&&b| b).count();
+            assert_eq!(
+                hull_count_base, hull_count_shifted,
+                "hull vertex count changed at shift {shift}"
+            );
+            validate_hull_labels(&shifted_snake, &labels_shifted);
+        }
+    }
 
     /// Return collection of test points.
     ///
