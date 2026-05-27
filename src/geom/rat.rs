@@ -288,8 +288,10 @@ impl<T: IsRing> Rat<T> {
     // ----
 
     /// Return the maximal length of a match described by the given pair of indices.
-    /// Note that this still does NOT mean that the tiles can be legally glued along the match,
-    /// because outside of the match the sequence could have self-intersections.
+    /// See [`Self::get_match`] for the input semantics. Note that a non-zero
+    /// match length does NOT mean the tiles can be legally glued along the
+    /// match, because outside of the match the sequence could have
+    /// self-intersections.
     #[allow(dead_code)]
     pub(crate) fn match_length(&self, (self_start, other_end): (i64, i64), other: &Self) -> usize {
         let x_seq = self.slice_from(self_start, self.len());
@@ -297,9 +299,39 @@ impl<T: IsRing> Rat<T> {
         match_length(x_seq, y_seq.as_slice()).0
     }
 
-    /// Return the maximal match that touches the given pair of indices.
-    /// The returned indices are normalized to be non-negative.
-    /// Note that this still does NOT mean that the tiles can be legally glued along the match.
+    /// Return the maximal match anchored at the seed vertex pair
+    /// `(self_start, other_end)`.
+    ///
+    /// # Input: seed vertex pair, asymmetrically named
+    ///
+    /// The two arguments name the **same** boundary vertex on the two
+    /// tiles — the point where the matched edges coincide when the
+    /// glue is applied. Because the glue is **anti-parallel** (this
+    /// side traversed CCW, `other` traversed CW), that single shared
+    /// vertex sits at *different* ends of the matched range on the two
+    /// tiles:
+    ///   - on `self`: at the CW endpoint of the matched range (tile-forward
+    ///     **start**), hence the name `self_start`,
+    ///   - on `other`: at the CCW endpoint of the matched range (tile-forward
+    ///     **end**), hence the name `other_end`.
+    /// The asymmetric naming reflects the anti-parallel geometry; you cannot
+    /// pass "first matched edge" on both sides because under anti-parallel
+    /// gluing those edges sit at opposite ends and you'd need `len` to
+    /// relate them (and `len` is the output, not the input).
+    ///
+    /// # Output: `(a_start, len, b_end)`
+    ///
+    /// `a_start` = first matched A edge in tile-forward; `b_end` = first
+    /// surviving B edge past the match in tile-forward. These coincide
+    /// with [`crate::geom::matches::PatchMatch`]'s storage convention,
+    /// so callers can pass `(pm.a_range.start_offset, pm.b.range.start_offset)`
+    /// to this function and get back the same anchors. See `PatchMatch`'s
+    /// doc for the design rationale -- attempts to make the input
+    /// "symmetric edge pair" instead push the geometric asymmetry into
+    /// every consumer of `get_match`.
+    ///
+    /// A non-zero `len` still does NOT mean the tiles can be legally
+    /// glued along the match.
     pub fn get_match(
         &self,
         (self_start, other_end): (i64, i64),
