@@ -5,14 +5,20 @@ use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::{IsRing};
 use crate::analysis::matchtypes::MatchTypeIndex;
 use crate::geom::angles;
+use crate::geom::cyclic::{cyclic_arcs_overlap, cyclic_range_contains};
 use crate::geom::glue;
 use crate::geom::glue::junctions_glueable;
 use crate::geom::grid::UnitSquareGrid;
-use crate::geom::matches::{EdgeRange, PatchSegment, Segment};
-use crate::geom::rat::Rat;
+use crate::geom::matches::{EdgeRange, Segment};
+#[cfg(test)]
+use crate::geom::matches::PatchSegment;
+use crate::geom::rat::{forward_match_length, Rat};
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
-use crate::geom::vertices::{CoarseJunction, EdgeInfo, OpenVertexType};
+use crate::geom::vertices::{
+    compute_junctions, compute_segments, is_junction_at, CoarseJunction, EdgeInfo,
+    OpenVertexType,
+};
 
 /// A description of a candidate glue between the current patch
 /// boundary and a new tile.
@@ -110,72 +116,6 @@ enum PatchState<T: IsRing> {
         patch_tile_ids: Vec<usize>,
         next_tile_id: usize,
     },
-}
-
-/// Returns true if position `pos` on the boundary is a junction vertex,
-/// i.e. the boundary angle differs from the tile's internal angle at the
-/// outgoing edge.
-fn is_junction_at<T: IsRing>(
-    angles: &[i8],
-    edges: &[EdgeInfo],
-    tileset: &TileSet<T>,
-    pos: usize,
-) -> bool {
-    let ei = edges[pos];
-    tileset.rat(ei.tile_id).seq()[ei.tile_offset] != angles[pos]
-}
-
-/// Raw vertex type extraction at a boundary position (no junction check).
-///
-/// Constructs the (cw, inner, ccw) triple from boundary edge/inner-chain data.
-/// Used only by tests; prefer [`GrowingPatch::junction_vertex_type_at`] which
-/// returns `None` at non-junction positions.
-#[cfg(test)]
-fn vertex_type_raw_from(
-    edges: &[EdgeInfo],
-    inner_chains: &[Vec<EdgeInfo>],
-    pos: usize,
-) -> OpenVertexType {
-    let n = edges.len();
-    OpenVertexType {
-        cw: edges[(pos + n - 1) % n],
-        inner: inner_chains[pos].clone(),
-        ccw: edges[pos],
-    }
-}
-
-/// Compute the maximum match length when gluing `other` onto `self_angles`
-/// starting at `self_start`, with the match endpoint at `other_junction`
-/// on the other side.
-///
-/// The two sides are walked outward from a shared anchor edge: `self`
-/// advances CCW from `self_start`, `other` advances CW from
-/// `other_junction`. Edges are compatible when `self_angles[k] ==
-/// -other_angles[mirror(k)]` (the angles meet head-to-tail with opposite
-/// signs, since one side is traversed CCW and the other CW).
-///
-/// Length is at least 1 (the anchor edge itself always matches by
-/// construction) and stops as soon as the angle pair disagrees, capped
-/// at `min(self_len, other_len)`.
-pub(crate) fn forward_match_length(
-    self_angles: &[i8],
-    self_start: usize,
-    other_angles: &[i8],
-    other_junction: usize,
-) -> usize {
-    let n = self_angles.len();
-    let m = other_angles.len();
-    let max_len = n.min(m);
-    let mut len = 1;
-    for i in 1..max_len {
-        let xi = self_angles[(self_start + i) % n];
-        let yi = -other_angles[(other_junction + m - i) % m];
-        if xi != yi {
-            break;
-        }
-        len += 1;
-    }
-    len
 }
 
 fn update_inner_chains(
@@ -1755,63 +1695,6 @@ fn build_glued_edges(
     (new_edges, new_ptids)
 }
 
-/// Partition the boundary into [`PatchSegment`]s -- maximal contiguous
-/// runs of edges from the same tile instance (no junction between them).
-///
-/// The segment-break condition is the **canonical** junction check
-/// [`is_junction_at`] -- i.e. `angles[i] != tile.seq()[edges[i].tile_offset]`.
-/// Every glue updates the boundary angle at the new junction
-/// (`compute_glue_angles` produces an angle that for non-degenerate tiles
-/// is provably different from either tile's natural internal angle at the
-/// junction position), so this check reliably detects every tile-instance
-/// boundary.
-///
-/// Note: a simpler offset-arithmetic heuristic (same `tile_id` + contiguous
-/// `tile_offset` from the segment start) is **not** used here. It would
-/// over-segment on intra-tile wrap-arounds (a single tile instance whose
-/// surviving boundary edges have offsets like `2,3,4,5,0`) and could
-/// under-segment in pathological same-tile-id glues whose offsets happen
-/// to line up. The angle-based check is canonical and avoids both.
-///
-/// Cyclic-vs-linear caveat: when position 0 is not at a junction, a single
-/// cyclic tile-instance run is split into two linear segments at the array
-/// seam (`[0, first_junction)` and `[last_junction, n)`). See
-/// [`PatchSegment`] for details.
-fn compute_segments<T: IsRing>(
-    angles: &[i8],
-    edges: &[EdgeInfo],
-    tileset: &TileSet<T>,
-) -> Vec<PatchSegment> {
-    let n = edges.len();
-    if n == 0 {
-        return vec![];
-    }
-    let mut segments: Vec<PatchSegment> = Vec::new();
-    let mut seg_start = 0;
-    for i in 1..=n {
-        let break_here = i == n || is_junction_at(angles, edges, tileset, i);
-        if break_here {
-            let len = i - seg_start;
-            segments.push(PatchSegment::new(
-                EdgeRange::new(seg_start, len),
-                Segment::new(edges[seg_start].tile_id, EdgeRange::new(edges[seg_start].tile_offset, len)),
-            ));
-            seg_start = i;
-        }
-    }
-    segments
-}
-
-fn compute_junctions<T: IsRing>(
-    angles: &[i8],
-    edges: &[EdgeInfo],
-    tileset: &TileSet<T>,
-) -> Vec<usize> {
-    (0..edges.len())
-        .filter(|&i| is_junction_at(angles, edges, tileset, i))
-        .collect()
-}
-
 #[allow(clippy::too_many_arguments)]
 fn compute_candidates_at_position<T: IsRing>(
     pos: usize,
@@ -1914,58 +1797,6 @@ fn enumerate_junction_candidates_at<T: IsRing>(
             }
         }
     }
-}
-
-/// Returns true if vertex `index` is touched by a match of `len` edges
-/// starting at edge position `start` on a cyclic boundary of length `n`.
-///
-/// A match of length `len` starting at edge `start` covers edges
-/// `[start, start+1, ..., start+len-1]` and therefore *touches* the
-/// `len + 1` boundary **vertices** `[start, start+1, ..., start+len]`
-/// (the CW endpoint of the first edge through the CCW endpoint of the
-/// last edge). This function is inclusive on both ends — both the CW
-/// vertex (`start`) and the CCW vertex (`start + len`) are considered
-/// to be touched.
-///
-/// Used by `compute_candidates_covering_position` and
-/// `get_matches_touching_vertex` to find matches incident with a given
-/// boundary vertex.
-pub fn cyclic_range_contains(start: usize, len: usize, index: usize, n: usize) -> bool {
-    if len == 0 || n == 0 {
-        return false;
-    }
-    // A match of `len` edges starting at edge `start` (cyclic) touches
-    // vertices `start, start+1, …, start+len` (mod n). Compute the
-    // forward cyclic distance from `start` to `index` and accept if
-    // it's ≤ len. This is correct regardless of whether `start + len`
-    // wraps around the boundary — the previous formulation had a bug
-    // exactly when `start + len == n`, because the `end <= n` branch
-    // checked `index <= end == n` (which `index < n` would fail) and
-    // missed the wrap vertex at `end % n == 0`.
-    let cyclic_diff = (index + n - start % n) % n;
-    cyclic_diff <= len
-}
-
-/// Whether two **edge-inclusive** cyclic arcs on a boundary of length
-/// `n` share at least one edge.
-///
-/// Arc `A` = edges `[a, a+1, ..., a+l_a - 1]` (mod `n`);
-/// arc `B` = edges `[b, b+1, ..., b+l_b - 1]` (mod `n`).
-/// Both arcs are interpreted on a cycle of length `n`; either arc may
-/// wrap. Empty arcs (`l_a == 0` or `l_b == 0`) never overlap.
-///
-/// Returns true iff the two arcs share at least one boundary edge.
-/// Internal helper for [`GrowingPatch::get_matches_in_edge_range`].
-pub(crate) fn cyclic_arcs_overlap(a: usize, l_a: usize, b: usize, l_b: usize, n: usize) -> bool {
-    if l_a == 0 || l_b == 0 || n == 0 {
-        return false;
-    }
-    // Two cyclic arcs overlap iff either's start is "in" the other.
-    // "Start of B in A": forward cyclic distance from `a` to `b` is
-    // strictly less than `l_a`. Symmetric for "start of A in B".
-    let b_in_a = (b + n - a % n) % n < l_a;
-    let a_in_b = (a + n - b % n) % n < l_b;
-    b_in_a || a_in_b
 }
 
 /// Compute the new boundary angles after gluing `pm.b.tile_id`'s tile onto
@@ -2140,7 +1971,7 @@ mod tests {
     use crate::analysis::matchtypes::MatchTypeIndex;
     use crate::geom::snake::Snake;
     use crate::geom::tiles;
-    use crate::geom::vertices::ClosedVertexType;
+    use crate::geom::vertices::{vertex_type_raw_from, ClosedVertexType};
     use std::collections::BTreeMap;
 
     fn ei(tile_id: usize, tile_offset: usize) -> EdgeInfo {

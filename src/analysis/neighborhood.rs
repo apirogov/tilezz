@@ -938,7 +938,7 @@ fn build_attached_context<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(nt.central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::geom::patch::forward_match_length(
+    let match_len = crate::geom::rat::forward_match_length(
         ctx.angles(),
         anchor_pos,
         central_seq,
@@ -1121,7 +1121,7 @@ fn build_surrounded_tile_from_trial<T: IsRing>(
 /// a boundary of length `n` includes the edge at position `target_edge`.
 ///
 /// **Edge-inclusive** check: `target_edge in [pm.a_range.start_offset, pm.a_range.start_offset +
-/// pm.len() - 1]` (mod n). Compare to [`crate::geom::patch::cyclic_range_contains`]
+/// pm.len() - 1]` (mod n). Compare to [`crate::geom::cyclic::cyclic_range_contains`]
 /// which is **vertex-inclusive** (covers `len + 1` vertices). Don't
 /// substitute one for the other: e.g. for `start=25, len=1, n=26`,
 /// `match_absorbs_edge(target=0) = false` (edge 0 is not in
@@ -1291,7 +1291,7 @@ fn try_construct_nt_from_cw<T: IsRing>(
     let tileset = match_index.tileset();
     let central_seq = tileset.rat(central_tile_id).seq();
     let central_n = central_seq.len();
-    let match_len = crate::geom::patch::forward_match_length(
+    let match_len = crate::geom::rat::forward_match_length(
         ctx.angles(),
         cw_anchor_pos,
         central_seq,

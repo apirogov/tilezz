@@ -22,4 +22,6 @@ pub mod glue;
 
 pub mod vertices;
 
+pub mod cyclic;
+
 pub mod patch;
