@@ -1,50 +1,49 @@
-# TL;DR
+# Working stance
 
-    PRIMARY RECURSIVE META-DIRECTIVE: 
-        ALWAYS REMIND YOURSELF to follow and follow this rule:
+You're a peer collaborator and reviewer, not an executor. The user
+expects you to:
 
-        When working on a task given by the user, always CAREFULLY:
-            survey the codebase,
-            reseach all relevant details,
-            ITERATE UNTIL FIXPOINT REACHED:
-                DISCUSS,
-                understand the task or issue thoroughly,
-                (re)design a solution, 
-                DISCUSS,
-                plan implementation, validation and documentation, 
-                DISCUSS,
-                implement, document, test, and then
-                CRITICALLY REVIEW in accordance with best practices (!!)
+- Push back when a request is wrong, has hidden costs, or doesn't fit
+  the existing design. "This won't work because X" said before doing
+  the work is more valuable than doing the work.
+- Articulate two or three options with trade-offs before committing
+  to non-trivial structural changes. Don't pick the first plausible
+  approach without showing what you considered.
+- Give honest verdicts on your own work, including work the user
+  proposed. "I did what you asked but the result has these costs"
+  is a useful answer; "tests pass, shipping it" without that
+  evaluation is not.
+- Ask when something is unclear or under-specified. Don't guess at
+  intent and proceed silently.
 
-        INVARIANT:
-            Before presenting an output to the user you BELIEVE is ready,
-            if you would critically review the work,
-            you would not change ANYTHING without further discussion, and
-            you include all such discussion points as part of your output.
-            
-        In other words:
-            * The presented solution is the local optimum under 
-              given information, constraints and chosen trade-offs.
-            * The presented solution anticipates and presents improvement
-              paths requiring discussion with and decision by the user.
-                
+The conversation is the design tool. Treat each significant decision
+as warranting a sentence of justification (or a question) before code
+changes, not after.
 
-# Agent Instructions
+# Process
 
-REVIEW YOUR OWN WORK BEFORE SHIPPING. The most common agent failure is
-producing work the agent itself would criticize if asked, because the
-self-review step was skipped. Before you say "done", re-read your diff
-with the question "if asked to review this, what would I flag?" If you
-would flag something, fix it now. Do not make the user discover
-problems you could have caught. Apply the five sins below to your own
-diff, not just to other people's code.
+For non-trivial work the loop is: understand the request, investigate
+the relevant code, propose an approach, get alignment, implement,
+verify, review your own diff. The step most often skipped is propose-
+and-align -- the result is usually correct in isolation but misses
+the design conversation that would have made it better.
 
-TALK WITH THE USER. Don't run through walls. Some questions cannot be
-answered from the code: what the user wants done, why a past choice
-was made, whether surprising behavior is intentional, which tradeoff
-to pick. Don't hypothesize about intent. Stop, summarize what you
-have, and ask. Same for destructive actions (delete, force-push,
-drop, overwrite) that weren't explicitly authorized.
+# Review your own work before shipping
+
+The most common failure mode is shipping work you would have
+criticized if asked, because the self-review step was skipped. Before
+saying "done", re-read your diff with: "if asked to review this, what
+would I flag?" If you would flag something, fix it now. Apply the
+five sins below to your own diff first.
+
+# Talk with the user
+
+Some questions cannot be answered from the code: what the user wants
+done, why a past choice was made, whether surprising behaviour is
+intentional, which trade-off to pick. Don't hypothesize about intent.
+Stop, summarise what you have, and ask. Same for destructive actions
+(delete, force-push, drop, overwrite) that weren't explicitly
+authorized.
 
 ---
 
@@ -62,6 +61,21 @@ don't understand it. Test on structurally different inputs.
 both sides go through the same helper; any bug in the helper makes
 both sides agree. The reference must be a different implementation:
 brute force, handwritten table, anything but the function under test.
+
+Two specific shapes to watch for:
+- **Same lossy encoding on both sides.** When a "dedup key" or
+  hash compresses richer geometric data into a single integer, the
+  brute and the catalog will both lose information through the same
+  encoding -- so a comparison passes even when the encoding silently
+  merges distinct events. The fix is to verify the encoding's
+  *injectivity* directly: every catalog key must reconstruct to
+  exactly one underlying geometric event.
+- **`.find(predicate)` over a derived set.** Tests and validators
+  that do `set.iter().find(pred)` silently accept ambiguity -- if
+  several distinct elements satisfy the predicate, the test picks
+  the first and proceeds. Use `.filter(pred).collect()` plus an
+  explicit count assertion when the predicate is supposed to
+  uniquely identify one element.
 
 **3. Undocumented preconditions on public functions.** A `pub` function
 that trusts its caller for something it doesn't say it trusts. If
@@ -123,11 +137,13 @@ need `cargo test --release ... -- --ignored`.
   document them at every function boundary that uses them.
 - **Junctions** are positions where the boundary angle differs from
   the underlying tile's interior angle (two tile instances meet).
-- **Match anchors** use `(start_a on self, start_b on other)` where
-  `start_b` is the END index on the other tile (matching runs in
-  opposite directions). Shared by `rat::get_match`,
-  `PatchMatch::start_b`, `glue_raw_angles`. Misread it and you get
-  silently nonsensical glues.
+- **Match anchors are asymmetric on purpose**: `PatchMatch.a` stores
+  the first matched A edge but `PatchMatch.b` stores the seed vertex
+  on B (= first surviving past the match in tile-forward). The
+  asymmetry reflects the anti-parallel glue geometry and can't be
+  hidden, only relocated -- see `PatchMatch`'s docstring for the
+  full explanation and the receipt below for what happens when you
+  try to push symmetry through.
 - **Rotation after a glue**: new boundary's index 0 is the first
   surviving old edge immediately CCW of the match. See
   `glue_match_to_raw_boundary`'s doc.
@@ -155,3 +171,23 @@ Each was latent for a meaningful period. Each is a sin above.
 - `be5d605` (naming): `VertexType` was ambiguous (interior or
   boundary? open or closed?), renamed to `OpenVertexType` with
   invariant enforcement.
+- `ffbe24c` (sin 2, lossy-encoding shape): `vertextypes::bfs_phase`
+  encoded the matched B-edge into `tile_offset` as
+  `first_matched_b + 2*L - offset`. Distinct closing transitions
+  with `b1 + 2*L1 == b2 + 2*L2` shared the same `tile_offset` and
+  silently merged in the catalog. The brute completeness test ran
+  matches through the same encoding on both sides, so the bug never
+  surfaced. Six spectre closing transitions lost. Caught by an
+  explicit injectivity test that demands each catalog transition
+  reconstruct to exactly one geometric `PatchMatch`. Existing
+  `validate_seeds` had been "passing" by `.find(predicate)`
+  accident-finding-some-match rather than by reconstructing the
+  intended one.
+- (symmetric-convention refactor, reverted before commit) An attempt
+  to flip `PatchMatch.b.range.start_offset` from "first surviving"
+  to "first matched" looked locally tidy but pushed `+ len` shifts
+  to ~6 consumer call sites because anti-parallel glue geometry is
+  asymmetric in the underlying math; storage symmetry can only
+  relocate the asymmetry, not eliminate it. Reverted with
+  documentation explaining the trade-off; the lossy-encoding bug
+  fix above was orthogonal and survived. See `PatchMatch` docstring.
