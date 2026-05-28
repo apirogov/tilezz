@@ -740,7 +740,11 @@ mod tests {
         // From (1,1), angle 1 → dir 3(down): new_pt = (1,1)+(-i) = (1,0) = vertex 1.
         // Vertex index 1 = edge 1.
         let mut s: Snake<ZZ4> = Snake::try_from(&[0, 0, 1, 1]).unwrap();
-        assert_eq!(s.add_diagnosed(1), Some(1), "should revisit vertex 1 (edge 1)");
+        assert_eq!(
+            s.add_diagnosed(1),
+            Some(1),
+            "should revisit vertex 1 (edge 1)"
+        );
     }
 
     #[test]
