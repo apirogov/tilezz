@@ -17,6 +17,68 @@ use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
+// -------- DFS stats --------
+
+#[derive(Default)]
+struct DfsStats {
+    closed: u64,
+    intersected: u64,
+    too_far: u64,
+    recursed: u64,
+    canonical_skip: u64,
+}
+
+impl DfsStats {
+    fn total(&self) -> u64 {
+        self.closed + self.intersected + self.too_far + self.recursed + self.canonical_skip
+    }
+
+    fn merge(&mut self, other: &DfsStats) {
+        self.closed += other.closed;
+        self.intersected += other.intersected;
+        self.too_far += other.too_far;
+        self.recursed += other.recursed;
+        self.canonical_skip += other.canonical_skip;
+    }
+}
+
+impl std::fmt::Display for DfsStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let t = self.total();
+        writeln!(f, "DFS stats ({} total direction attempts):", t)?;
+        writeln!(
+            f,
+            "  canonical_skip:  {:>10} ({:>5.1}%)",
+            self.canonical_skip,
+            100.0 * self.canonical_skip as f64 / t as f64
+        )?;
+        writeln!(
+            f,
+            "  intersected:    {:>10} ({:>5.1}%)",
+            self.intersected,
+            100.0 * self.intersected as f64 / t as f64
+        )?;
+        writeln!(
+            f,
+            "  closed:         {:>10} ({:>5.1}%)",
+            self.closed,
+            100.0 * self.closed as f64 / t as f64
+        )?;
+        writeln!(
+            f,
+            "  recursed:       {:>10} ({:>5.1}%)",
+            self.recursed,
+            100.0 * self.recursed as f64 / t as f64
+        )?;
+        write!(
+            f,
+            "  too_far:        {:>10} ({:>5.1}%)",
+            self.too_far,
+            100.0 * self.too_far as f64 / t as f64
+        )
+    }
+}
+
 // --------
 
 /// Canonical-rotation prune for the open walk `prefix` virtually
@@ -67,12 +129,13 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// `step = 1` (default) walks every direction. `step = 2` on ZZ20 walks
 /// only even-indexed directions, enumerating the ZZ10-equivalent
 /// subset; `step = 2` on ZZ24 enumerates the ZZ12 subset; etc.
-pub fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> Vec<Vec<i8>> {
+fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
+    let mut stats = DfsStats::default();
 
     println!("-------- enumeration started --------");
-    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result);
+    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result, &mut stats);
     println!(
         "-------- enumeration completed --------\n{} rats found",
         result.len()
@@ -80,7 +143,7 @@ pub fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> Vec<Vec<i8>> {
 
     let mut result: Vec<Vec<i8>> = result.into_iter().collect();
     result.sort_by_key(|x| x.len());
-    result
+    (result, stats)
 }
 
 fn rat_enum_step<ZZ: IsRing>(
@@ -88,13 +151,12 @@ fn rat_enum_step<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     result: &mut HashSet<Vec<i8>>,
+    stats: &mut DfsStats,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
         return;
     }
-    // Heuristic: the snake's current head must lie within `remaining`
-    // unit steps of the origin, else the path can never close in time.
     let remaining = (max_steps - depth) as i64;
 
     for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
@@ -102,17 +164,30 @@ fn rat_enum_step<ZZ: IsRing>(
             continue;
         }
         // Canonical-rotation prune (see `is_canonical_extended`):
-        // pre-check *before* calling `Snake::add` so that
-        // canonical-rejected branches don't pay the cyclotomic
-        // intersect cost.
+        // pre-check *before* the radius and geometry checks so that
+        // canonical-rejected branches pay nothing.
         if !is_canonical_extended(snake.angles(), direction) {
+            stats.canonical_skip += 1;
             continue;
         }
+
+        // Early reachability prune: compute the next head position
+        // before paying the cyclotomic intersect cost of `Snake::add`.
+        // If the new point is too far from the origin to ever close,
+        // skip this direction entirely.
+        let new_pt = snake.offset()
+            + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
+        if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
+            stats.too_far += 1;
+            continue;
+        }
+
         if !snake.add(direction) {
+            stats.intersected += 1;
             continue;
         }
         if snake.is_closed() {
-            // polygon completed -> record canonical ccw description.
+            stats.closed += 1;
             let r = {
                 let tmp = Rat::from_unchecked(snake);
                 if tmp.chirality() > 0 {
@@ -126,11 +201,10 @@ fn rat_enum_step<ZZ: IsRing>(
             if result.insert(seq.clone()) {
                 println!("RAT {seq:?}");
             }
-        } else if snake.head().pos.within_radius(remaining) {
-            // Still reachable -- recurse to extend further.
-            rat_enum_step::<ZZ>(snake, max_steps, step, result);
+        } else {
+            stats.recursed += 1;
+            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats);
         }
-        // Backtrack: restore the snake to the pre-add state.
         snake.pop();
     }
 }
@@ -170,6 +244,7 @@ fn collect_seeds<ZZ: IsRing>(
     split_depth: usize,
     seeds: &mut Vec<Vec<i8>>,
     closed: &mut HashSet<Vec<i8>>,
+    stats: &mut DfsStats,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -182,12 +257,24 @@ fn collect_seeds<ZZ: IsRing>(
             continue;
         }
         if !is_canonical_extended(snake.angles(), direction) {
+            stats.canonical_skip += 1;
             continue;
         }
+
+        // Early reachability prune (see `rat_enum_step`).
+        let new_pt = snake.offset()
+            + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
+        if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
+            stats.too_far += 1;
+            continue;
+        }
+
         if !snake.add(direction) {
+            stats.intersected += 1;
             continue;
         }
         if snake.is_closed() {
+            stats.closed += 1;
             let r = {
                 let tmp = Rat::from_unchecked(snake);
                 if tmp.chirality() > 0 {
@@ -201,13 +288,14 @@ fn collect_seeds<ZZ: IsRing>(
             if closed.insert(seq.clone()) {
                 println!("RAT {seq:?}");
             }
-        } else if snake.head().pos.within_radius(remaining) {
+        } else {
+            stats.recursed += 1;
             if snake.angles().len() >= split_depth {
                 // Reached splitting horizon -- emit this prefix as a
                 // seed for a worker thread to expand.
                 seeds.push(snake.angles().to_vec());
             } else {
-                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, seeds, closed);
+                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, seeds, closed, stats);
             }
         }
         snake.pop();
@@ -219,9 +307,11 @@ fn collect_seeds<ZZ: IsRing>(
 /// prefixes out to `n_threads` worker threads via a shared atomic
 /// counter. Each worker keeps its own `HashSet` and the main thread
 /// merges the per-worker sets at the end.
-pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
-    // Effective branching with `step`: directions in `[-(hturn-1), hturn-1]`
-    // that are multiples of `step`, i.e. `2 * floor((hturn-1)/step) + 1`.
+fn rat_enum_parallel<ZZ: IsRing>(
+    max_steps: usize,
+    step: i8,
+    n_threads: usize,
+) -> (Vec<Vec<i8>>, DfsStats) {
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
     let branching = 2 * (hm1 / step.max(1) as usize) + 1;
     let split_depth = splitting_depth(n_threads, branching);
@@ -231,6 +321,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usiz
 
     let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
     let mut seeds: Vec<Vec<i8>> = Vec::new();
+    let mut seed_stats = DfsStats::default();
     {
         let mut snake: Snake<ZZ> = Snake::new();
         collect_seeds::<ZZ>(
@@ -240,6 +331,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usiz
             split_depth,
             &mut seeds,
             &mut closed_main,
+            &mut seed_stats,
         );
     }
     println!("parallel: {} seed states collected", seeds.len());
@@ -248,11 +340,12 @@ pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usiz
     let seeds_ref: &[Vec<i8>] = &seeds;
     let next_ref = &next_idx;
 
-    let merged: HashSet<Vec<i8>> = thread::scope(|s| {
+    let (merged, worker_stats): (HashSet<Vec<i8>>, DfsStats) = thread::scope(|s| {
         let mut handles = Vec::with_capacity(n_threads);
         for _ in 0..n_threads {
-            handles.push(s.spawn(move || -> HashSet<Vec<i8>> {
+            handles.push(s.spawn(move || -> (HashSet<Vec<i8>>, DfsStats) {
                 let mut local: HashSet<Vec<i8>> = HashSet::new();
+                let mut stats = DfsStats::default();
                 loop {
                     let i = next_ref.fetch_add(1, Ordering::Relaxed);
                     if i >= seeds_ref.len() {
@@ -261,17 +354,19 @@ pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usiz
                     // Rebuild snake from this trusted (already self-
                     // intersect-checked) prefix and resume DFS.
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
-                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local);
+                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local, &mut stats);
                 }
-                local
+                (local, stats)
             }));
         }
         let mut merged = closed_main;
+        let mut total_stats = seed_stats;
         for h in handles {
-            let local = h.join().expect("worker panic");
+            let (local, wstats) = h.join().expect("worker panic");
             merged.extend(local);
+            total_stats.merge(&wstats);
         }
-        merged
+        (merged, total_stats)
     });
 
     println!(
@@ -281,7 +376,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usiz
 
     let mut result: Vec<Vec<i8>> = merged.into_iter().collect();
     result.sort_by_key(|x| x.len());
-    result
+    (result, worker_stats)
 }
 
 fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
@@ -290,7 +385,9 @@ fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
         .collect()
 }
 
-fn enumerate_dispatch<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
+type EnumResult = (Vec<Vec<i8>>, DfsStats);
+
+fn enumerate_dispatch<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> EnumResult {
     if n_threads <= 1 {
         rat_enum::<ZZ>(max_steps, step)
     } else {
@@ -300,15 +397,15 @@ fn enumerate_dispatch<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) 
 
 fn run_rat_enum_polylines(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<P64>> {
     match ring {
-        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads)),
-        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads)),
-        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads)),
-        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads)),
-        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads)),
-        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads)),
-        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads)),
-        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads)),
-        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads)),
+        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads).0),
+        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads).0),
+        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads).0),
+        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads).0),
+        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads).0),
+        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads).0),
+        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads).0),
+        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads).0),
+        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads).0),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -364,8 +461,8 @@ fn print_stats(rats: &[Vec<i8>]) {
     }
 }
 
-fn run_rat_enum_seqs(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<i8>> {
-    let f: fn(usize, i8, usize) -> Vec<Vec<i8>> = match ring {
+fn run_rat_enum_seqs(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> EnumResult {
+    let f: fn(usize, i8, usize) -> EnumResult = match ring {
         4 => enumerate_dispatch::<ZZ4>,
         8 => enumerate_dispatch::<ZZ8>,
         10 => enumerate_dispatch::<ZZ10>,
@@ -462,8 +559,7 @@ fn main() {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
-            let rats: Vec<Vec<i8>> =
-                run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads);
+            let (rats, stats) = run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads);
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
@@ -478,6 +574,8 @@ fn main() {
                 total_boundary_len,
                 dt
             );
+
+            println!("{stats}");
 
             profile.finish();
 
