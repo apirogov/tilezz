@@ -781,16 +781,17 @@ impl<T: IsRing> GrowingPatch<T> {
         target: usize,
     ) -> Vec<PatchMatch> {
         let n = angles.len();
-        let rat = Rat::from_slice_unchecked(angles);
         let tileset = match_index.tileset();
         let max_tile_len = tileset.rats().iter().map(|r| r.len()).max().unwrap_or(0);
-        let mut global_seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
         let mut result: Vec<PatchMatch> = Vec::new();
 
         let segments = compute_segments(angles, edges, tileset);
         let junctions_set: FxHashSet<usize> = compute_junctions(angles, edges, tileset)
             .into_iter()
             .collect();
+
+        let enumr = CandidateEnumerator::new(angles, match_index);
+        let mut seen: CandidateSeen = FxHashSet::default();
 
         for offset in 0..max_tile_len.min(n) {
             let pos = (target + n - offset) % n;
@@ -804,16 +805,11 @@ impl<T: IsRing> GrowingPatch<T> {
                     + (pos - segment.range.start_offset))
                     % tileset.rat(tile_id).len();
                 let mut tmp_by_start: Vec<Vec<PatchMatch>> = vec![Vec::new(); n];
-                compute_candidates_at_position(
+                enumr.enumerate_at_position(
                     pos,
-                    angles,
-                    &rat,
-                    n,
                     tile_id,
                     tile_offset,
-                    match_index,
-                    tileset,
-                    &mut global_seen,
+                    &mut seen,
                     &mut tmp_by_start,
                 );
                 for pm in tmp_by_start.into_iter().flatten() {
@@ -824,13 +820,9 @@ impl<T: IsRing> GrowingPatch<T> {
             }
 
             if junctions_set.contains(&pos) {
-                enumerate_junction_candidates_at(
+                enumr.enumerate_at_junction(
                     pos,
-                    angles,
-                    &rat,
-                    n,
-                    tileset,
-                    &mut global_seen,
+                    &mut seen,
                     |start_a, len| cyclic_range_contains(start_a, len, target, n),
                     |pm| result.push(pm),
                 );
@@ -846,14 +838,14 @@ impl<T: IsRing> GrowingPatch<T> {
         edges: &[EdgeInfo],
     ) -> Vec<Vec<PatchMatch>> {
         let n = angles.len();
-        let rat = Rat::from_slice_unchecked(angles);
         let tileset = match_index.tileset();
         let mut result = vec![Vec::new(); n];
 
         let segments = compute_segments(angles, edges, tileset);
         let junctions = compute_junctions(angles, edges, tileset);
 
-        let mut global_seen: FxHashSet<(usize, usize, usize, usize)> = FxHashSet::default();
+        let enumr = CandidateEnumerator::new(angles, match_index);
+        let mut seen: CandidateSeen = FxHashSet::default();
 
         for segment in &segments {
             let tile_id = segment.tile_seg.tile_id;
@@ -862,29 +854,20 @@ impl<T: IsRing> GrowingPatch<T> {
                 let tile_offset =
                     (segment.tile_seg.range.start_offset + local_k) % tileset.rat(tile_id).len();
                 let patch_pos = segment.range.start_offset + local_k;
-                compute_candidates_at_position(
+                enumr.enumerate_at_position(
                     patch_pos,
-                    angles,
-                    &rat,
-                    n,
                     tile_id,
                     tile_offset,
-                    match_index,
-                    tileset,
-                    &mut global_seen,
+                    &mut seen,
                     &mut result,
                 );
             }
         }
 
         for &junc_idx in &junctions {
-            enumerate_junction_candidates_at(
+            enumr.enumerate_at_junction(
                 junc_idx,
-                angles,
-                &rat,
-                n,
-                tileset,
-                &mut global_seen,
+                &mut seen,
                 |_, _| true,
                 |pm| result[pm.a_range.start_offset].push(pm),
             );
@@ -1521,105 +1504,140 @@ fn build_glued_edges(
     (new_edges, new_ptids)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compute_candidates_at_position<T: IsRing>(
-    pos: usize,
-    angles: &[i8],
-    rat: &Rat<T>,
-    n: usize,
-    tile_id: usize,
-    tile_offset: usize,
-    match_index: &MatchTypeIndex<T>,
-    tileset: &TileSet<T>,
-    global_seen: &mut FxHashSet<(usize, usize, usize, usize)>,
-    result: &mut [Vec<PatchMatch>],
-) {
-    for cand in match_index.candidates_starting_at(tile_id, tile_offset) {
-        append_match_candidate(pos, angles, rat, n, cand, tileset, global_seen, result);
-    }
-}
+/// Dedup key used while enumerating candidates: `(start_a, len,
+/// start_b, b_tile_id)`. Two candidates with the same key are the
+/// same canonical match.
+type CandidateSeen = FxHashSet<(usize, usize, usize, usize)>;
 
-#[allow(clippy::too_many_arguments)]
-fn append_match_candidate<T: IsRing>(
-    pos: usize,
-    angles: &[i8],
-    rat: &Rat<T>,
-    n: usize,
-    cand: &Segment,
-    tileset: &TileSet<T>,
-    seen: &mut FxHashSet<(usize, usize, usize, usize)>,
-    result: &mut [Vec<PatchMatch>],
-) {
-    let tile_b = tileset.rat(cand.tile_id);
-    let (ns, len, ne) = rat.get_match((pos as i64, cand.range.start_offset as i64), tile_b);
-    if len == 0 {
-        return;
-    }
-    let ns_u = ns.rem_euclid(n as i64) as usize;
-    let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
-    if !junctions_glueable(angles, ns_u, len, tile_b.seq(), ne_u) {
-        return;
-    }
-    let key = (ns_u, len, ne_u, cand.tile_id);
-    if !seen.insert(key) {
-        return;
-    }
-    if rat
-        .try_glue_precomputed((ns, len, ne), tile_b, true)
-        .is_ok()
-    {
-        result[ns_u].push(PatchMatch::new(
-            EdgeRange::new(ns_u, len),
-            Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
-        ));
-    }
-}
-
-/// Enumerate single-edge match candidates that anchor at junction position `pos`.
+/// Read-only context for enumerating candidate `PatchMatch`es against
+/// a fixed boundary. Bundles `(angles, rat, match_index, n)` so the
+/// per-position / per-junction methods don't carry 8-arg signatures.
 ///
-/// For each `(tile_id_b, ib)` pair, checks single-edge compatibility, dedups
-/// via `seen`, applies the `keep(start_a, len)` filter before the relatively
-/// expensive `try_glue_precomputed`, and hands surviving matches to `emit`.
-#[allow(clippy::too_many_arguments)]
-fn enumerate_junction_candidates_at<T: IsRing>(
-    pos: usize,
-    angles: &[i8],
-    rat: &Rat<T>,
+/// Borrow-disciplined: methods take `&self`. The dedup table is
+/// supplied by the caller as a separate `&mut CandidateSeen` so that
+/// reusing the same set across multiple method calls (or across both
+/// `enumerate_at_position` and `enumerate_at_junction`) is explicit
+/// and the borrow checker can keep the read-only context and the
+/// mutable dedup table coexisting cleanly.
+struct CandidateEnumerator<'a, T: IsRing> {
+    angles: &'a [i8],
+    rat: Rat<T>,
+    match_index: &'a MatchTypeIndex<T>,
     n: usize,
-    tileset: &TileSet<T>,
-    seen: &mut FxHashSet<(usize, usize, usize, usize)>,
-    keep: impl Fn(usize, usize) -> bool,
-    mut emit: impl FnMut(PatchMatch),
-) {
-    for tile_id_b in 0..tileset.num_tiles() {
-        let tile_b = tileset.rat(tile_id_b);
-        let b_seq = tile_b.seq();
-        let m = b_seq.len();
-        for ib in 0..m {
-            if !junctions_glueable(angles, pos, 1, b_seq, ib) {
-                continue;
-            }
-            let (ns, len, ne) = rat.get_match((pos as i64, ib as i64), tile_b);
-            if len != 1 {
-                continue;
-            }
-            let ns_u = ns.rem_euclid(n as i64) as usize;
-            let ne_u = ne.rem_euclid(m as i64) as usize;
-            let key = (ns_u, len, ne_u, tile_id_b);
-            if !seen.insert(key) {
-                continue;
-            }
-            if !keep(ns_u, len) {
-                continue;
-            }
-            if rat
-                .try_glue_precomputed((ns, len, ne), tile_b, true)
-                .is_ok()
-            {
-                emit(PatchMatch::new(
-                    EdgeRange::new(ns_u, len),
-                    Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
-                ));
+}
+
+impl<'a, T: IsRing> CandidateEnumerator<'a, T> {
+    fn new(angles: &'a [i8], match_index: &'a MatchTypeIndex<T>) -> Self {
+        let rat = Rat::from_slice_unchecked(angles);
+        let n = angles.len();
+        Self {
+            angles,
+            rat,
+            match_index,
+            n,
+        }
+    }
+
+    fn tileset(&self) -> &TileSet<T> {
+        self.match_index.tileset()
+    }
+
+    /// Enumerate candidates against the fixed edge identified by
+    /// `(tile_id, tile_offset)` at boundary position `pos`. Surviving
+    /// matches are pushed into `result[pm.a_range.start_offset]`.
+    fn enumerate_at_position(
+        &self,
+        pos: usize,
+        tile_id: usize,
+        tile_offset: usize,
+        seen: &mut CandidateSeen,
+        result: &mut [Vec<PatchMatch>],
+    ) {
+        for cand in self
+            .match_index
+            .candidates_starting_at(tile_id, tile_offset)
+        {
+            self.try_candidate(pos, cand, seen, result);
+        }
+    }
+
+    fn try_candidate(
+        &self,
+        pos: usize,
+        cand: &Segment,
+        seen: &mut CandidateSeen,
+        result: &mut [Vec<PatchMatch>],
+    ) {
+        let tile_b = self.tileset().rat(cand.tile_id);
+        let (ns, len, ne) = self
+            .rat
+            .get_match((pos as i64, cand.range.start_offset as i64), tile_b);
+        if len == 0 {
+            return;
+        }
+        let ns_u = ns.rem_euclid(self.n as i64) as usize;
+        let ne_u = ne.rem_euclid(tile_b.len() as i64) as usize;
+        if !junctions_glueable(self.angles, ns_u, len, tile_b.seq(), ne_u) {
+            return;
+        }
+        if !seen.insert((ns_u, len, ne_u, cand.tile_id)) {
+            return;
+        }
+        if self
+            .rat
+            .try_glue_precomputed((ns, len, ne), tile_b, true)
+            .is_ok()
+        {
+            result[ns_u].push(PatchMatch::new(
+                EdgeRange::new(ns_u, len),
+                Segment::new(cand.tile_id, EdgeRange::new(ne_u, len)),
+            ));
+        }
+    }
+
+    /// Enumerate single-edge match candidates anchored at the junction
+    /// position `pos`. For each `(tile_id_b, ib)` pair: single-edge
+    /// compatibility, dedup, `keep` filter (cheap), then the
+    /// `try_glue_precomputed` check (expensive). Surviving matches are
+    /// handed to `emit`.
+    fn enumerate_at_junction(
+        &self,
+        pos: usize,
+        seen: &mut CandidateSeen,
+        keep: impl Fn(usize, usize) -> bool,
+        mut emit: impl FnMut(PatchMatch),
+    ) {
+        let tileset = self.tileset();
+        for tile_id_b in 0..tileset.num_tiles() {
+            let tile_b = tileset.rat(tile_id_b);
+            let b_seq = tile_b.seq();
+            let m = b_seq.len();
+            for ib in 0..m {
+                if !junctions_glueable(self.angles, pos, 1, b_seq, ib) {
+                    continue;
+                }
+                let (ns, len, ne) = self.rat.get_match((pos as i64, ib as i64), tile_b);
+                if len != 1 {
+                    continue;
+                }
+                let ns_u = ns.rem_euclid(self.n as i64) as usize;
+                let ne_u = ne.rem_euclid(m as i64) as usize;
+                if !seen.insert((ns_u, len, ne_u, tile_id_b)) {
+                    continue;
+                }
+                if !keep(ns_u, len) {
+                    continue;
+                }
+                if self
+                    .rat
+                    .try_glue_precomputed((ns, len, ne), tile_b, true)
+                    .is_ok()
+                {
+                    emit(PatchMatch::new(
+                        EdgeRange::new(ns_u, len),
+                        Segment::new(tile_id_b, EdgeRange::new(ne_u, len)),
+                    ));
+                }
             }
         }
     }
