@@ -1,3 +1,97 @@
+//! `rat_enum`: enumerate every simple polygon on a cyclotomic-ring
+//! lattice with boundary length up to `n`. Output mode (Render/Bench/
+//! ListSeeds) is controlled by `--mode`.
+//!
+//! # Memory profile and how to scale to large `n`
+//!
+//! The result set is a `HashSet<Vec<i8>>` of canonical (or
+//! dihedral-canonical) angle sequences. The *raw* sequence data is
+//! tiny (`n` bytes per polygon), but several effects multiply the
+//! peak memory of a single process by ~50-100x:
+//!
+//! 1. **HashSet bucket overhead.** Hashbrown stores each entry with
+//!    a control byte, a cached hash, and the `Vec<i8>` header (24
+//!    bytes pointer/len/cap). The `Vec`'s heap allocation is
+//!    malloc-rounded (~16-32 bytes for an n=13 payload). With load
+//!    factor ~0.875, one fully-populated set is ~80 bytes per
+//!    polygon -- already 6x the raw payload.
+//!
+//! 2. **Hashbrown grows by doubling.** Inside a resize from 2^k to
+//!    2^(k+1) buckets, *both* arrays are alive while entries are
+//!    copied. A set that just resized briefly holds ~3x its final
+//!    structure size. When 16 worker threads are all near the same
+//!    fill level (atomic-counter dispatch keeps work balanced),
+//!    several can resize concurrently.
+//!
+//! 3. **Per-thread duplication during parallel DFS.** In
+//!    `rat_enum_parallel`, each of `n_threads` workers maintains its
+//!    own thread-local `HashSet`. These sets are live for the entire
+//!    DFS phase and only consolidated at the end. Peak during DFS:
+//!    `n_threads * per-thread-final-size * resize-factor`.
+//!
+//! 4. **Merge double-buffer.** Once workers complete, the main
+//!    thread folds each local into a `merged` set via `extend`.
+//!    The local being drained is freed only at end of the
+//!    for-iteration; the others sit in their `JoinHandle`s until
+//!    consumed. Right before the last drain: 1 unconsumed local,
+//!    plus `merged` at ~final size, plus a transient resize buffer
+//!    inside `merged` -- another ~2x at peak.
+//!
+//! 5. **glibc malloc arena retention.** Each worker thread's malloc
+//!    arena keeps its high-water-mark pages mapped, even after the
+//!    transient `Vec<i8>` allocations from inside the close-event
+//!    closure are freed. This isn't huge per thread, but it does
+//!    add up at scale.
+//!
+//! Empirically at ZZ12 dihedral n=13 (4.08M polygons, ~50 MB raw),
+//! single-process 16-thread peak is **~5.5 GB** -- a ~100x blowup.
+//!
+//! # Recommendation: separate processes
+//!
+//! **Running N independent single-threaded processes is strictly
+//! better than running one process with `--threads N`** for memory:
+//!
+//! * Each process holds only its share of the polygons (~1x final
+//!   set size for that share, plus the resize transient: peak ~3x).
+//! * No per-thread duplication: there's only one HashSet per
+//!   process.
+//! * No cross-thread merge double-buffer: each process's final set
+//!   *is* the final set for that share.
+//! * On process exit, the OS reclaims **every page** (arenas
+//!   included). Sequential or wall-clock-parallel batches never
+//!   share memory across batches.
+//!
+//! Mechanics: use `--mode list-seeds` to emit a list of work-unit
+//! prefixes, then run one `--seed <prefix> --threads 1` process per
+//! prefix. An external orchestrator (`xargs -P N`, GNU `parallel`,
+//! Slurm, etc.) picks how many run concurrently -- and that becomes
+//! the only knob that affects total wall time. Per-process peak
+//! memory is *unchanged* by orchestrator parallelism, because each
+//! process holds only its own share.
+//!
+//! Example for n=14 at ZZ12 with 16 cores:
+//!
+//! ```sh
+//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//!     --mode list-seeds > listing.txt
+//! grep '^SEED ' listing.txt | sed 's/SEED //' | \
+//!   xargs -I{} -P 16 \
+//!     ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//!     --seed "{}" --threads 1 \
+//!   > all_rats.txt
+//! { grep '^RAT ' listing.txt; cat all_rats.txt; } \
+//!   | sort -u | grep -c '^RAT '
+//! ```
+//!
+//! Peak memory: ~16 processes * ~50-100 MB each ≈ ~1 GB total,
+//! versus ~30-40 GB for the equivalent single-process run.
+//!
+//! `--seed <prefix> --threads N>1` exists (it routes through
+//! `enumerate_from_seed_parallel`) for environments where an
+//! orchestrator gives one big process at a time, but it has the
+//! same per-process memory profile as `--mode bench --threads N` --
+//! it does NOT recover the single-threaded-per-process savings.
+
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -616,11 +710,53 @@ fn rat_enum_parallel<ZZ: IsRing>(
     }
     println!("parallel: {} seed states collected", seeds.len());
 
+    let (merged, worker_stats) = parallel_drain_seeds::<ZZ>(
+        &seeds,
+        closed_main,
+        seed_stats,
+        max_steps,
+        step,
+        n_threads,
+        ops,
+        paranoid,
+    );
+
+    println!(
+        "-------- {label} completed --------\n{prefix}{} rats found",
+        merged.len()
+    );
+
+    let mut result: Vec<Vec<i8>> = merged.into_iter().collect();
+    result.sort_by_key(|x| x.len());
+    (result, worker_stats)
+}
+
+/// Dispatch a collected list of seed prefixes across `n_threads`
+/// worker threads via an atomic counter. Each worker takes seeds one
+/// at a time, runs `rat_enum_step` from the seed's snake state, and
+/// accumulates canonical sequences into a thread-local HashSet. At
+/// the end the locals are folded into `closed_main` (which already
+/// contains any polygons that closed during seed collection).
+///
+/// Used by both `rat_enum_parallel` (whole-tree enumeration, seeds
+/// collected from the root) and `enumerate_from_seed_parallel`
+/// (single-seed sub-tree enumeration, sub-seeds collected from a
+/// given prefix).
+#[allow(clippy::too_many_arguments)]
+fn parallel_drain_seeds<ZZ: IsRing>(
+    seeds: &[Vec<i8>],
+    closed_main: HashSet<Vec<i8>>,
+    seed_stats: DfsStats,
+    max_steps: usize,
+    step: i8,
+    n_threads: usize,
+    ops: CanonicalOps,
+    paranoid: bool,
+) -> (HashSet<Vec<i8>>, DfsStats) {
     let next_idx = AtomicUsize::new(0);
-    let seeds_ref: &[Vec<i8>] = &seeds;
     let next_ref = &next_idx;
 
-    let (merged, worker_stats): (HashSet<Vec<i8>>, DfsStats) = thread::scope(|s| {
+    thread::scope(|s| {
         let mut handles = Vec::with_capacity(n_threads);
         for _ in 0..n_threads {
             handles.push(s.spawn(move || -> (HashSet<Vec<i8>>, DfsStats) {
@@ -628,10 +764,10 @@ fn rat_enum_parallel<ZZ: IsRing>(
                 let mut stats = DfsStats::default();
                 loop {
                     let i = next_ref.fetch_add(1, Ordering::Relaxed);
-                    if i >= seeds_ref.len() {
+                    if i >= seeds.len() {
                         break;
                     }
-                    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
+                    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds[i]);
                     rat_enum_step::<ZZ>(
                         &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
                     );
@@ -647,16 +783,7 @@ fn rat_enum_parallel<ZZ: IsRing>(
             total_stats.merge(&wstats);
         }
         (merged, total_stats)
-    });
-
-    println!(
-        "-------- {label} completed --------\n{prefix}{} rats found",
-        merged.len()
-    );
-
-    let mut result: Vec<Vec<i8>> = merged.into_iter().collect();
-    result.sort_by_key(|x| x.len());
-    (result, worker_stats)
+    })
 }
 
 fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
@@ -877,29 +1004,103 @@ fn collect_seed_prefixes<ZZ: IsRing>(
     (closed, seeds)
 }
 
-/// Resume the DFS from `seed` (a walked angle prefix) and return the
-/// unique canonical sequences found below it. Used by `--seed` and
-/// by the unit-test merge check.
+/// Resume the DFS from `seed` (a walked angle prefix) and return
+/// the unique canonical sequences found below it.
+///
+/// * `n_threads == 1` (recommended): single-threaded fast path. Runs
+///   `rat_enum_step` directly from the seed's snake state. Holds at
+///   most one `HashSet` (this seed's share of the final set).
+/// * `n_threads > 1`: sub-splits the seed's subtree at depth
+///   `seed.len() + splitting_depth(n_threads, branching)` (clamped
+///   to `max_steps`) to produce ~10*n_threads work units, then
+///   dispatches them across worker threads via `parallel_drain_seeds`.
+///
+/// # Memory profile and why separate processes are strictly better
+///
+/// **Single-threaded:** ~1x the final set size at peak (one HashSet,
+/// growing with resize transients to ~3x during a bucket-array
+/// doubling).
+///
+/// **Multi-threaded:** ~5x the final set size at peak. Each of
+/// `n_threads` workers holds a thread-local HashSet that lives for
+/// the whole DFS phase, plus the merge double-buffers as the main
+/// `closed_main` absorbs each local. This is the same memory profile
+/// as the whole-tree parallel mode.
+///
+/// **If memory matters and you have multiple seeds to process,
+/// running them as separate single-threaded processes (e.g.
+/// `xargs -P 16 ... --seed {} --threads 1`) is strictly better:**
+/// each process holds only its own share of the final set, and the
+/// OS reclaims everything (allocator arenas included) when each
+/// process exits. See the file-level docstring for the full
+/// accounting. Use `n_threads > 1` only when an orchestrator
+/// constrains you to one process at a time.
 fn enumerate_from_seed<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     seed: &[i8],
+    n_threads: usize,
     dihedral: bool,
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
     let ops = make_ops(dihedral);
-    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
-    let mut local: HashSet<Vec<i8>> = HashSet::new();
-    let mut stats = DfsStats::default();
-    rat_enum_step::<ZZ>(
-        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+
+    if n_threads <= 1 {
+        // Single-threaded fast path. No sub-split, no worker spawn:
+        // just walk the DFS from this seed's snake state directly.
+        let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
+        let mut local: HashSet<Vec<i8>> = HashSet::new();
+        let mut stats = DfsStats::default();
+        rat_enum_step::<ZZ>(
+            &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+        );
+        return local;
+    }
+
+    // Multi-threaded: sub-split the seed's subtree to ~10*n_threads
+    // work units (capped at `max_steps`), then dispatch.
+    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
+    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
+    let sub_split = splitting_depth(n_threads, branching);
+    let split_depth = (seed.len() + sub_split).min(max_steps);
+
+    let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
+    let mut sub_seeds: Vec<Vec<i8>> = Vec::new();
+    let mut seed_stats = DfsStats::default();
+    {
+        let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
+        let mut gather = SeedGather {
+            seeds: &mut sub_seeds,
+            closed: &mut closed_main,
+            stats: &mut seed_stats,
+        };
+        collect_seeds::<ZZ>(
+            &mut snake,
+            max_steps,
+            step,
+            split_depth,
+            &mut gather,
+            ops,
+            paranoid,
+        );
+    }
+
+    let (merged, _) = parallel_drain_seeds::<ZZ>(
+        &sub_seeds,
+        closed_main,
+        seed_stats,
+        max_steps,
+        step,
+        n_threads,
+        ops,
+        paranoid,
     );
-    local
+    merged
 }
 
 type SeedListing = (HashSet<Vec<i8>>, Vec<Vec<i8>>);
 type CollectSeedFn = fn(usize, i8, usize, bool) -> SeedListing;
-type EnumFromSeedFn = fn(usize, i8, &[i8], bool, bool) -> HashSet<Vec<i8>>;
+type EnumFromSeedFn = fn(usize, i8, &[i8], usize, bool, bool) -> HashSet<Vec<i8>>;
 
 fn dispatch_collect_seed_prefixes(
     ring: u8,
@@ -928,6 +1129,7 @@ fn dispatch_enumerate_from_seed(
     max_steps: usize,
     step: i8,
     seed: &[i8],
+    n_threads: usize,
     dihedral: bool,
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
@@ -943,7 +1145,7 @@ fn dispatch_enumerate_from_seed(
         60 => enumerate_from_seed::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
-    f(max_steps, step, seed, dihedral, paranoid)
+    f(max_steps, step, seed, n_threads, dihedral, paranoid)
 }
 
 // --------
@@ -1026,11 +1228,12 @@ struct Cli {
     paranoid: bool,
 
     /// Resume the DFS from a specific seed prefix (comma-separated
-    /// angles like `-5,3,-4`). When set, the DFS skips seed collection
-    /// and runs single-threaded from this prefix only; output is the
-    /// same RAT lines as Bench mode. Used together with
-    /// `--mode list-seeds` to dispatch per-prefix jobs externally.
-    #[arg(long, value_delimiter = ',', allow_hyphen_values = true, num_args = 1..)]
+    /// angles like `-5,3,-4`). When set, the DFS skips seed
+    /// collection and resumes from this prefix; output is the same
+    /// RAT lines as Bench mode. Honours `--threads`. Used together
+    /// with `--mode list-seeds` to dispatch per-prefix jobs
+    /// externally.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true, num_args = 1)]
     seed: Option<Vec<i8>>,
 
     /// DFS splitting depth for `--mode list-seeds` and for the
@@ -1098,9 +1301,14 @@ fn main() {
     }
 
     // `--seed <prefix>`: skip seed collection, resume DFS from the
-    // given prefix, print RAT lines. Single-threaded since this is
-    // one work unit; the orchestrator runs multiple `--seed` jobs
-    // in parallel itself.
+    // given prefix, print RAT lines. With `--threads 1` (default and
+    // recommended), this is one work unit; the orchestrator runs
+    // multiple `--seed` jobs as separate processes to use more cores.
+    // With `--threads N>1`, the seed's subtree is itself sub-split
+    // for in-process parallelism -- useful when an orchestrator
+    // gives one big process at a time, but per-process memory is
+    // ~N x higher. See the file-level docstring for why separate
+    // processes are strictly better for memory.
     if let Some(seed) = cli.seed.as_deref() {
         let t0 = Instant::now();
         let rats = dispatch_enumerate_from_seed(
@@ -1108,6 +1316,7 @@ fn main() {
             cli.max_steps,
             cli.step,
             seed,
+            n_threads,
             cli.dihedral,
             cli.paranoid,
         );
@@ -1462,9 +1671,15 @@ mod dihedral_tests {
                     let (mut seeded, prefixes) =
                         super::collect_seed_prefixes::<ZZ12>(n, 1, split_depth, dihedral);
                     for prefix in &prefixes {
-                        seeded.extend(super::enumerate_from_seed::<ZZ12>(
-                            n, 1, prefix, dihedral, false,
-                        ));
+                        // Sweep both branches of the n_threads dispatch
+                        // (single-threaded direct path AND sub-split +
+                        // parallel_drain_seeds) within the same test --
+                        // they must produce the same set.
+                        for nthreads in &[1usize, 4] {
+                            seeded.extend(super::enumerate_from_seed::<ZZ12>(
+                                n, 1, prefix, *nthreads, dihedral, false,
+                            ));
+                        }
                     }
 
                     assert_eq!(
