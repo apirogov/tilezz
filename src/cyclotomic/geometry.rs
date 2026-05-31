@@ -323,6 +323,57 @@ mod tests {
 
     type ZZi = ZZ12;
 
+    // ---- intersect: T-touch bug (vertex on segment interior) ----
+
+    /// Two unit-length ZZ12 edges where one segment's endpoint lies
+    /// exactly on the strict interior of the other segment's line.
+    /// In Z[omega_12] (rank-4 lattice) this is a real configuration:
+    /// (1 - omega + omega^2) lies on the line from -2 to (-2 + omega)
+    /// at parameter t = sqrt(3) - 1.
+    ///
+    /// Both `intersect` and `intersect_unit_segments` should return
+    /// `true` for this pair -- it is a genuine T-touch self-intersection.
+    /// This is the bug behind the OEIS A316192 mismatch at ZZ12 n>=9.
+    #[test]
+    fn test_intersect_zz12_t_touch_endpoint_on_segment() {
+        let omega = ZZ12::ccw();
+        // V_1 = -omega, V_2 = -1 - omega + omega^2.
+        let v1 = -omega;
+        let v2 = -ZZ12::one() - omega + omega * omega;
+        // V_5 = -2, V_6 = -2 + omega.
+        let v5 = -ZZ12::from(2);
+        let v6 = v5 + omega;
+
+        // V_2 is on the line through V_5..V_6: wedge((V_6 - V_5), (V_2 - V_5)) == 0.
+        assert_eq!(
+            wedge_sign(&(v6 - v5), &(v2 - v5)),
+            0,
+            "V_2 should be colinear with V_5-V_6"
+        );
+        // ...and strictly between V_5 and V_6 (not at either endpoint).
+        assert!(
+            is_between(&v2, (&v5, &v6)),
+            "V_2 should be strictly interior to V_5-V_6"
+        );
+
+        // The two segments share no endpoint.
+        assert_ne!(v1, v5);
+        assert_ne!(v1, v6);
+        assert_ne!(v2, v5);
+        assert_ne!(v2, v6);
+
+        // So (V_1, V_2) and (V_5, V_6) genuinely touch (at V_2 = interior
+        // point of V_5-V_6). Both checks should report intersection.
+        assert!(
+            intersect(&(v1, v2), &(v5, v6)),
+            "generic intersect missed T-touch (V_2 lies on V_5-V_6 interior)"
+        );
+        assert!(
+            intersect_unit_segments(&(v1, v2), &(v5, v6)),
+            "intersect_unit_segments missed T-touch (V_2 lies on V_5-V_6 interior)"
+        );
+    }
+
     // ---- cmp_xy ----
 
     #[test]
