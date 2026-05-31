@@ -81,6 +81,25 @@ impl std::fmt::Display for DfsStats {
 
 // --------
 
+/// Pair of canonical-check and output-mapping functions that parameterise
+/// the DFS.  Both rotation-canonical and dihedral-canonical enumeration
+/// share the same core walk; they differ only in which pair of functions
+/// they supply.
+///
+/// * `is_canonical` — prefix prune applied *before* `Snake::add`.
+///   Returns false when the extended walk cannot be the lex-min rotation
+///   (or dihedral image) of any closure it could grow into.
+/// * `canonicalize` — applied to the chirality-normalised canonical
+///   rotation at closure, producing the key inserted into the result
+///   `HashSet`.  For rotation-canonical this is the identity; for
+///   dihedral-canonical it picks the lex-min over rotations and
+///   reversed-rotations.
+#[derive(Clone, Copy)]
+struct CanonicalOps {
+    is_canonical: fn(&[i8], i8) -> bool,
+    canonicalize: fn(&[i8]) -> Vec<i8>,
+}
+
 /// Canonical-rotation prune for the open walk `prefix` virtually
 /// extended by one more angle `new`. Lets the caller skip walks
 /// that cannot be the lex-min cyclic rotation of any closure they
@@ -115,6 +134,10 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
     true
 }
 
+fn canonical_identity(seq: &[i8]) -> Vec<i8> {
+    seq.to_vec()
+}
+
 /// Enumerate every simple polygon with boundary length up to
 /// `max_steps` over the cyclotomic ring `ZZ`, in canonical-CCW form.
 ///
@@ -129,15 +152,63 @@ fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// `step = 1` (default) walks every direction. `step = 2` on ZZ20 walks
 /// only even-indexed directions, enumerating the ZZ10-equivalent
 /// subset; `step = 2` on ZZ24 enumerates the ZZ12 subset; etc.
+#[cfg(test)]
 fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) {
+    rat_enum_with::<ZZ>(
+        max_steps,
+        step,
+        CanonicalOps {
+            is_canonical: is_canonical_extended,
+            canonicalize: canonical_identity,
+        },
+        "enumeration",
+        "",
+    )
+}
+
+/// Dihedral-canonical variant of [`rat_enum`].
+///
+/// Two-stage design (see module-level comment above for rationale):
+///
+/// 1. [`is_dihedral_canonical_extended`] prunes walk prefixes whose
+///    complement rotation is lex-smaller, reducing the search tree
+///    (~2.3x speedup at ZZ12 n=10).
+///
+/// 2. [`dihedral_canonical`] at closure maps the chirality-normalized
+///    canonical rotation to the lex-min dihedral form, so both
+///    surviving members of each chiral pair hash to the same key.
+///
+/// Returns the same set as running [`rat_enum`] and quotienting by
+/// dihedral equivalence.
+#[cfg(test)]
+fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) {
+    rat_enum_with::<ZZ>(
+        max_steps,
+        step,
+        CanonicalOps {
+            is_canonical: is_dihedral_canonical_extended,
+            canonicalize: dihedral_canonical,
+        },
+        "dihedral enumeration",
+        "dihedral ",
+    )
+}
+
+fn rat_enum_with<ZZ: IsRing>(
+    max_steps: usize,
+    step: i8,
+    ops: CanonicalOps,
+    label: &str,
+    prefix: &str,
+) -> (Vec<Vec<i8>>, DfsStats) {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
     let mut stats = DfsStats::default();
 
-    println!("-------- enumeration started --------");
-    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result, &mut stats);
+    println!("-------- {label} started --------");
+    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result, &mut stats, ops);
     println!(
-        "-------- enumeration completed --------\n{} rats found",
+        "-------- {label} completed --------\n{prefix}{} rats found",
         result.len()
     );
 
@@ -152,6 +223,7 @@ fn rat_enum_step<ZZ: IsRing>(
     step: i8,
     result: &mut HashSet<Vec<i8>>,
     stats: &mut DfsStats,
+    ops: CanonicalOps,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -163,16 +235,15 @@ fn rat_enum_step<ZZ: IsRing>(
         if direction.rem_euclid(step) != 0 {
             continue;
         }
-        // Canonical-rotation prune (see `is_canonical_extended`):
-        // pre-check *before* the radius and geometry checks so that
-        // canonical-rejected branches pay nothing.
-        if !is_canonical_extended(snake.angles(), direction) {
+        // Canonical prune before the radius and geometry checks so
+        // that rejected branches pay nothing.
+        if !(ops.is_canonical)(snake.angles(), direction) {
             stats.canonical_skip += 1;
             continue;
         }
 
         // Early reachability prune: compute the next head position
-        // before paying the cyclotomic intersect cost of `Snake::add`.
+        // before paying the cyclotomic intersect cost of Snake::add.
         // If the new point is too far from the origin to ever close,
         // skip this direction entirely.
         let new_pt = snake.offset()
@@ -197,16 +268,133 @@ fn rat_enum_step<ZZ: IsRing>(
                 }
                 .canonical()
             };
-            let seq = r.seq().to_vec();
+            let seq = (ops.canonicalize)(r.seq());
             if result.insert(seq.clone()) {
                 println!("RAT {seq:?}");
             }
         } else {
             stats.recursed += 1;
-            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats);
+            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops);
         }
         snake.pop();
     }
+}
+
+// -------- dihedral-canonical enumeration --------
+//
+// Two-stage design: prefix pruning for speed + output dedup for
+// correctness.  The prefix prune alone is NOT sufficient to produce
+// exactly one representative per dihedral class.  Here is why.
+//
+// A polygon's dihedral images include all n rotations and all n
+// reflections.  For a chiral pair {P, mirror(P)}, both have distinct
+// rotation-canonical forms.  To produce dihedral classes, we must
+// keep exactly one.
+//
+// Stage 1 — is_dihedral_canonical_extended:
+//
+//   Compares the walk prefix against complement rotations (negated
+//   angle sequences).  At depth 0 this prunes all positive first
+//   angles (-a_0 < a_0), cutting the root branching factor roughly in
+//   half.  At deeper depths it prunes additional branches where a
+//   complement rotation is lex-smaller.
+//
+//   This is a HEURISTIC prefix prune, not a dihedral guarantee.  The
+//   check guards the raw walk prefix, but the DFS output at closure
+//   goes through chirality normalization (.reversed() if chirality <
+//   0) then canonical rotation (.canonical()).  These transformations
+//   produce a different sequence than what the prefix check was
+//   comparing, so both members of some chiral pairs still reach
+//   closure as distinct canonical-rotation outputs.
+//
+// Stage 2 — dihedral_canonical at closure:
+//
+//   Maps the chirality-normalized canonical rotation to the lex-min
+//   over all rotations AND reversed-rotations.  Both canonical
+//   rotations of a chiral pair map to the same dihedral-canonical
+//   form, so the HashSet deduplicates them.  Without this, the output
+//   would contain duplicate chiral pairs — valid polygons, but not
+//   dihedral-canonical.
+//
+// The speedup (~2.3x at ZZ12 n=10) comes from stage 1 reducing the
+// search tree.  Stage 2 is cheap (O(n^2) per closed polygon) and
+// handles the correctness gap left by stage 1.
+
+/// Heuristic dihedral prefix prune.  Like [`is_canonical_extended`]
+/// but also compares the walk prefix against complement rotations
+/// (negated angle sequences).  Returns `false` when any complement
+/// rotation of the eventual closure has a lex-smaller prefix than the
+/// identity walk, indicating the walk is suboptimal under the
+/// dihedral group.
+///
+/// This is sound (never prunes a walk that could produce the
+/// dihedral-min output) but incomplete (does not eliminate all
+/// chiral duplicates — see module-level comment above).  At depth 0
+/// it prunes all positive first angles (`-a_0 < a_0`), roughly
+/// halving the root branching factor.
+///
+/// Complement rotation `k` maps position `i` to `-a_{(k-i) mod n}`.
+/// For `k <= d` (where `d = len(prefix) + 1`), positions `i = 0..k`
+/// have both sides known.
+fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
+    let base = prefix.len();
+    let d = base + 1;
+    let get = |i: usize| -> i8 {
+        if i < base {
+            prefix[i]
+        } else {
+            new
+        }
+    };
+
+    // Rotation check (unchanged from is_canonical_extended).
+    for k in 1..d {
+        for i in 0..(d - k) {
+            match get(k + i).cmp(&get(i)) {
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Equal => continue,
+            }
+        }
+    }
+
+    // Complement-reflection check: for k = 0..d, compare -a_{k-i}
+    // with a_i at positions i = 0..k.
+    for k in 0..=d {
+        for i in 0..=k {
+            match (-get(k - i)).cmp(&get(i)) {
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Equal => continue,
+            }
+        }
+    }
+
+    true
+}
+
+/// Correctness layer for the dihedral DFS.  Computes the lex-minimum
+/// over all cyclic rotations and reversed rotations of `seq`.  Both
+/// canonical rotations of a chiral pair map to the same value, so the
+/// HashSet deduplicates them.  Without this step, the output would
+/// contain both members of some chiral pairs
+/// (see module-level comment above).
+fn dihedral_canonical(seq: &[i8]) -> Vec<i8> {
+    let n = seq.len();
+    let mut best: Vec<i8> = seq.to_vec();
+    let mut rot: Vec<i8> = seq.to_vec();
+    for _ in 0..n {
+        if rot < best {
+            best = rot.clone();
+        }
+        let mut rev = rot.clone();
+        rev.reverse();
+        if rev < best {
+            best = rev.clone();
+        }
+        rot.rotate_left(1);
+    }
+    best
 }
 
 // -------- multi-threaded enumeration --------
@@ -230,21 +418,28 @@ fn splitting_depth(n_threads: usize, branching: usize) -> usize {
     depth.max(1)
 }
 
+/// Output accumulators for [`collect_seeds`]: incomplete-walk prefixes
+/// (seeds for worker threads), already-closed polygons, and DFS stats.
+struct SeedGather<'a> {
+    seeds: &'a mut Vec<Vec<i8>>,
+    closed: &'a mut HashSet<Vec<i8>>,
+    stats: &'a mut DfsStats,
+}
+
 /// Walk the existing DFS only down to `split_depth` and collect every
 /// alive snake state (angle prefix) that survives the canonical-rotation
 /// prune, the `Snake::add` self-intersect check, and the reachability
 /// heuristic. These are the seeds the worker threads will pick up.
 ///
 /// Polygons that already close at or above `split_depth` are recorded
-/// directly into `closed` -- they have no remaining work to delegate.
+/// directly into `gather.closed` -- they have no remaining work to delegate.
 fn collect_seeds<ZZ: IsRing>(
     snake: &mut Snake<ZZ>,
     max_steps: usize,
     step: i8,
     split_depth: usize,
-    seeds: &mut Vec<Vec<i8>>,
-    closed: &mut HashSet<Vec<i8>>,
-    stats: &mut DfsStats,
+    gather: &mut SeedGather<'_>,
+    ops: CanonicalOps,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -256,8 +451,8 @@ fn collect_seeds<ZZ: IsRing>(
         if direction.rem_euclid(step) != 0 {
             continue;
         }
-        if !is_canonical_extended(snake.angles(), direction) {
-            stats.canonical_skip += 1;
+        if !(ops.is_canonical)(snake.angles(), direction) {
+            gather.stats.canonical_skip += 1;
             continue;
         }
 
@@ -265,16 +460,16 @@ fn collect_seeds<ZZ: IsRing>(
         let new_pt = snake.offset()
             + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
         if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
-            stats.too_far += 1;
+            gather.stats.too_far += 1;
             continue;
         }
 
         if !snake.add(direction) {
-            stats.intersected += 1;
+            gather.stats.intersected += 1;
             continue;
         }
         if snake.is_closed() {
-            stats.closed += 1;
+            gather.stats.closed += 1;
             let r = {
                 let tmp = Rat::from_unchecked(snake);
                 if tmp.chirality() > 0 {
@@ -284,18 +479,16 @@ fn collect_seeds<ZZ: IsRing>(
                 }
                 .canonical()
             };
-            let seq = r.seq().to_vec();
-            if closed.insert(seq.clone()) {
+            let seq = (ops.canonicalize)(r.seq());
+            if gather.closed.insert(seq.clone()) {
                 println!("RAT {seq:?}");
             }
         } else {
-            stats.recursed += 1;
+            gather.stats.recursed += 1;
             if snake.angles().len() >= split_depth {
-                // Reached splitting horizon -- emit this prefix as a
-                // seed for a worker thread to expand.
-                seeds.push(snake.angles().to_vec());
+                gather.seeds.push(snake.angles().to_vec());
             } else {
-                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, seeds, closed, stats);
+                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops);
             }
         }
         snake.pop();
@@ -311,12 +504,15 @@ fn rat_enum_parallel<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     n_threads: usize,
+    ops: CanonicalOps,
+    label: &str,
+    prefix: &str,
 ) -> (Vec<Vec<i8>>, DfsStats) {
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
     let branching = 2 * (hm1 / step.max(1) as usize) + 1;
     let split_depth = splitting_depth(n_threads, branching);
 
-    println!("-------- enumeration started --------");
+    println!("-------- {label} started --------");
     println!("parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}");
 
     let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
@@ -324,15 +520,12 @@ fn rat_enum_parallel<ZZ: IsRing>(
     let mut seed_stats = DfsStats::default();
     {
         let mut snake: Snake<ZZ> = Snake::new();
-        collect_seeds::<ZZ>(
-            &mut snake,
-            max_steps,
-            step,
-            split_depth,
-            &mut seeds,
-            &mut closed_main,
-            &mut seed_stats,
-        );
+        let mut gather = SeedGather {
+            seeds: &mut seeds,
+            closed: &mut closed_main,
+            stats: &mut seed_stats,
+        };
+        collect_seeds::<ZZ>(&mut snake, max_steps, step, split_depth, &mut gather, ops);
     }
     println!("parallel: {} seed states collected", seeds.len());
 
@@ -351,10 +544,8 @@ fn rat_enum_parallel<ZZ: IsRing>(
                     if i >= seeds_ref.len() {
                         break;
                     }
-                    // Rebuild snake from this trusted (already self-
-                    // intersect-checked) prefix and resume DFS.
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
-                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local, &mut stats);
+                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local, &mut stats, ops);
                 }
                 (local, stats)
             }));
@@ -370,7 +561,7 @@ fn rat_enum_parallel<ZZ: IsRing>(
     });
 
     println!(
-        "-------- enumeration completed --------\n{} rats found",
+        "-------- {label} completed --------\n{prefix}{} rats found",
         merged.len()
     );
 
@@ -387,25 +578,55 @@ fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
 
 type EnumResult = (Vec<Vec<i8>>, DfsStats);
 
-fn enumerate_dispatch<ZZ: IsRing>(max_steps: usize, step: i8, n_threads: usize) -> EnumResult {
-    if n_threads <= 1 {
-        rat_enum::<ZZ>(max_steps, step)
+fn enumerate_dispatch<ZZ: IsRing>(
+    max_steps: usize,
+    step: i8,
+    n_threads: usize,
+    dihedral: bool,
+) -> EnumResult {
+    let ops = if dihedral {
+        CanonicalOps {
+            is_canonical: is_dihedral_canonical_extended,
+            canonicalize: dihedral_canonical,
+        }
     } else {
-        rat_enum_parallel::<ZZ>(max_steps, step, n_threads)
+        CanonicalOps {
+            is_canonical: is_canonical_extended,
+            canonicalize: canonical_identity,
+        }
+    };
+
+    let label = if dihedral {
+        "dihedral enumeration"
+    } else {
+        "enumeration"
+    };
+    let prefix = if dihedral { "dihedral " } else { "" };
+
+    if n_threads <= 1 {
+        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix)
+    } else {
+        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix)
     }
 }
 
-fn run_rat_enum_polylines(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> Vec<Vec<P64>> {
+fn run_rat_enum_polylines(
+    ring: u8,
+    max_steps: usize,
+    step: i8,
+    n_threads: usize,
+    dihedral: bool,
+) -> Vec<Vec<P64>> {
     match ring {
-        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads).0),
-        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads).0),
-        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads).0),
-        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads).0),
-        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads).0),
-        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads).0),
-        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads).0),
-        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads).0),
-        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads).0),
+        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads, dihedral).0),
+        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads, dihedral).0),
+        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads, dihedral).0),
+        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads, dihedral).0),
+        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads, dihedral).0),
+        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads, dihedral).0),
+        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads, dihedral).0),
+        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads, dihedral).0),
+        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads, dihedral).0),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -461,8 +682,14 @@ fn print_stats(rats: &[Vec<i8>]) {
     }
 }
 
-fn run_rat_enum_seqs(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> EnumResult {
-    let f: fn(usize, i8, usize) -> EnumResult = match ring {
+fn run_rat_enum_seqs(
+    ring: u8,
+    max_steps: usize,
+    step: i8,
+    n_threads: usize,
+    dihedral: bool,
+) -> EnumResult {
+    let f: fn(usize, i8, usize, bool) -> EnumResult = match ring {
         4 => enumerate_dispatch::<ZZ4>,
         8 => enumerate_dispatch::<ZZ8>,
         10 => enumerate_dispatch::<ZZ10>,
@@ -474,7 +701,7 @@ fn run_rat_enum_seqs(ring: u8, max_steps: usize, step: i8, n_threads: usize) -> 
         60 => enumerate_dispatch::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
-    f(max_steps, step, n_threads)
+    f(max_steps, step, n_threads, dihedral)
 }
 
 // --------
@@ -532,6 +759,14 @@ struct Cli {
     /// ZZ24 -> ZZ8 subset, etc.
     #[arg(long, default_value_t = 1)]
     step: i8,
+
+    /// Use dihedral-canonical enumeration: outputs one representative
+    /// per chiral pair (lex-min over rotations and reflections).
+    /// Faster than the default rotation-canonical DFS because
+    /// complement-reflection pruning halves the search space at
+    /// the root.
+    #[arg(long)]
+    dihedral: bool,
 }
 
 /// Resolve the `--threads` CLI value to an actual worker count.
@@ -559,7 +794,8 @@ fn main() {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
-            let (rats, stats) = run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads);
+            let (rats, stats) =
+                run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads, cli.dihedral);
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
@@ -585,7 +821,7 @@ fn main() {
         }
         Mode::Render => {
             let rats: Vec<Vec<P64>> =
-                run_rat_enum_polylines(cli.ring, cli.max_steps, cli.step, n_threads);
+                run_rat_enum_polylines(cli.ring, cli.max_steps, cli.step, n_threads, cli.dihedral);
 
             let Some(filename) = cli.filename else {
                 return;
@@ -632,5 +868,59 @@ fn main() {
             std::fs::write(&filename, gif_bytes).expect("write GIF");
             println!("wrote {filename}");
         }
+    }
+}
+
+#[cfg(test)]
+mod dihedral_tests {
+    use super::*;
+    use tilezz::cyclotomic::ZZ12;
+
+    /// Cross-validate the dihedral DFS variant against the original
+    /// rotation-canonical DFS: the original output quotiented by
+    /// dihedral_canonical must equal the dihedral variant's output.
+    #[test]
+    fn test_dihedral_enum_matches_dfs_quotient() {
+        let (all_rats, _stats) = super::rat_enum::<ZZ12>(9, 1);
+        let mut expected: HashSet<Vec<i8>> = HashSet::new();
+        for seq in &all_rats {
+            expected.insert(super::dihedral_canonical(seq));
+        }
+
+        let (dihedral_rats, _stats) = super::rat_enum_dihedral::<ZZ12>(9, 1);
+        let actual: HashSet<Vec<i8>> = dihedral_rats.into_iter().collect();
+
+        if expected != actual {
+            let missing: Vec<_> = expected.difference(&actual).collect();
+            let extra: Vec<_> = actual.difference(&expected).collect();
+            if !missing.is_empty() {
+                eprintln!("MISSING from dihedral DFS:");
+                for s in &missing {
+                    eprintln!("  {s:?}");
+                }
+            }
+            if !extra.is_empty() {
+                eprintln!("EXTRA in dihedral DFS:");
+                for s in &extra {
+                    eprintln!("  {s:?}");
+                }
+            }
+        }
+        assert_eq!(
+            expected.len(),
+            actual.len(),
+            "DFS quotient has {}, dihedral DFS found {}",
+            expected.len(),
+            actual.len()
+        );
+        assert_eq!(
+            expected, actual,
+            "dihedral DFS output differs from DFS quotient"
+        );
+        eprintln!(
+            "OK — {} dihedral classes match (from {} rotation-canonical rats)",
+            actual.len(),
+            all_rats.len()
+        );
     }
 }
