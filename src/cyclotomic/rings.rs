@@ -626,87 +626,14 @@ impl crate::cyclotomic::WithinRadius for ZZ12 {
     }
 }
 
-/// Imaginary-part components of a ZZ12 value `z = (a, b, c, d)`:
-/// `Im(z) = (im_m + im_n * sqrt(3)) / 2` where `im_m = b + 2*d`, `im_n = c`.
-#[inline]
-fn im_components(coeffs: &[i64; 4]) -> (i64, i64) {
-    let [_, b, c, d] = *coeffs;
-    (b + 2 * d, c)
+/// ZZ12's K=2 real-subring sign: sign of `m + n*sqrt(3)`. The
+/// `fn(&[i64; K]) -> i8` shape expected by the basis-routed
+/// `intersect_unit_segments_basis` impl.
+fn zz12_real_sign(x: &[i64; 2]) -> i8 {
+    sign_m_plus_n_sqrt3(x[0], x[1])
 }
 
-/// Real-part components of a ZZ12 value `z = (a, b, c, d)`:
-/// `Re(z) = (re_m + re_n * sqrt(3)) / 2` where `re_m = 2*a + c`, `re_n = b`.
-#[inline]
-fn re_components(coeffs: &[i64; 4]) -> (i64, i64) {
-    let [a, b, c, _] = *coeffs;
-    (2 * a + c, b)
-}
-
-impl crate::cyclotomic::IntersectUnitSegments for ZZ12 {
-    /// 3-multiplication pure-i64 fast path that exploits the unit-length
-    /// structure of both input segments. Shape-identical to the generic
-    /// `intersect_unit_segments_basis` in `integral_basis.rs`, but
-    /// inlines `Re`/`Im` component extraction off each multiplication
-    /// result (avoiding the K-vector projection).
-    #[inline]
-    fn intersect_unit_segments(s1: &(ZZ12, ZZ12), s2: &(ZZ12, ZZ12)) -> bool {
-        use crate::cyclotomic::Conj;
-
-        let (a, b) = *s1;
-        let (c, d) = *s2;
-
-        // Touching endpoints do not count as a proper intersection.
-        if a == c || a == d || b == c || b == d {
-            return false;
-        }
-
-        let u_a = b - a;
-        let u_b = d - c;
-        let delta = c - a;
-
-        // ZZ12 mul #1: K = wedge(uA, uB).
-        let k_z = u_a.conj() * u_b;
-        let (k_m, k_n) = im_components(&k_z.int_coeffs());
-        let sign_k = sign_m_plus_n_sqrt3(k_m, k_n);
-
-        // ZZ12 mul #2: V = wedge(uA, delta) (Im(v_z)). We also reuse Re(v_z)
-        // = dot(uA, delta) for the inline colinear-overlap test below.
-        let v_z = u_a.conj() * delta;
-        let (v_m, v_n) = im_components(&v_z.int_coeffs());
-        let sign_v = sign_m_plus_n_sqrt3(v_m, v_n);
-
-        if sign_k == 0 {
-            if sign_v != 0 {
-                return false;
-            }
-            // Colinear. T = Re(v_z) = dot(uA, delta).
-            let (t_m, t_n) = re_components(&v_z.int_coeffs());
-            let k_coeffs = k_z.int_coeffs();
-            debug_assert_eq!([k_coeffs[1], k_coeffs[2], k_coeffs[3]], [0, 0, 0]);
-            if k_coeffs[0] == 1 {
-                // uA == uB. Interior overlap iff -1 < T < 1.
-                return sign_m_plus_n_sqrt3(t_m + 2, t_n) > 0
-                    && sign_m_plus_n_sqrt3(t_m - 2, t_n) < 0;
-            } else {
-                debug_assert_eq!(k_coeffs[0], -1);
-                // uA == -uB. Interior overlap iff 0 < T < 2.
-                return sign_m_plus_n_sqrt3(t_m, t_n) > 0 && sign_m_plus_n_sqrt3(t_m - 4, t_n) < 0;
-            }
-        }
-
-        // Non-colinear case.
-        let sign_v_plus_k = sign_m_plus_n_sqrt3(v_m + k_m, v_n + k_n);
-        if (sign_v > 0) == (sign_v_plus_k > 0) {
-            return false;
-        }
-
-        // ZZ12 mul #3: W = wedge(delta, uB).
-        let (w_m, w_n) = im_components(&(delta.conj() * u_b).int_coeffs());
-        let sign_w = sign_m_plus_n_sqrt3(w_m, w_n);
-        let sign_w_minus_k = sign_m_plus_n_sqrt3(w_m - k_m, w_n - k_n);
-        (sign_w > 0) != (sign_w_minus_k > 0)
-    }
-}
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ12, 4, 2, zz12_real_sign);
 
 // ----------------
 // Generic algebraic / cyclotomic-structure test suite for ZZ12.
@@ -1489,74 +1416,19 @@ impl crate::cyclotomic::ReImSign for ZZ10 {
     }
 }
 
-impl crate::cyclotomic::IntersectUnitSegments for ZZ10 {
-    /// 3-multiplication pure-i64 (i128 squaring) fast path that exploits
-    /// the unit-length structure of both input segments. Shape-identical
-    /// to ZZ12's hand-rolled version, but uses the pentagonal sign
-    /// primitives `sign_m_plus_n_sqrt5` (Re) and `sign_p_b2_plus_q_b3` (Im).
-    #[inline]
-    fn intersect_unit_segments(s1: &(ZZ10, ZZ10), s2: &(ZZ10, ZZ10)) -> bool {
-        use crate::cyclotomic::Conj;
-
-        let (a, b) = *s1;
-        let (c, d) = *s2;
-
-        // Touching endpoints do not count as a proper intersection.
-        if a == c || a == d || b == c || b == d {
-            return false;
-        }
-
-        let u_a = b - a;
-        let u_b = d - c;
-        let delta = c - a;
-
-        // Mul #1: K = wedge(uA, uB).
-        let k_z = u_a.conj() * u_b;
-        let (k_p, k_q) = im_components_zz10(&k_z.int_coeffs());
-        let sign_k = sign_p_b2_plus_q_b3(k_p, k_q);
-
-        // Mul #2: V = wedge(uA, delta). We also reuse Re(v_z) for the
-        // collinear-overlap test below.
-        let v_z = u_a.conj() * delta;
-        let (v_p, v_q) = im_components_zz10(&v_z.int_coeffs());
-        let sign_v = sign_p_b2_plus_q_b3(v_p, v_q);
-
-        if sign_k == 0 {
-            if sign_v != 0 {
-                return false;
-            }
-            // Collinear. T = Re(v_z) = dot(uA, delta).
-            let (t_m, t_n) = re_components_zz10(&v_z.int_coeffs());
-            let k_coeffs = k_z.int_coeffs();
-            debug_assert_eq!([k_coeffs[1], k_coeffs[2], k_coeffs[3]], [0, 0, 0]);
-            // `1` in ZZ10's `(M, N)` form is `(4, 0)` (since Re(1) = (4+0*sqrt(5))/4).
-            if k_coeffs[0] == 1 {
-                // uA == uB. Interior overlap iff -1 < T < 1, i.e.,
-                // `t_m + 4 + t_n*sqrt(5) > 0` and `t_m - 4 + t_n*sqrt(5) < 0`.
-                return sign_m_plus_n_sqrt5(t_m + 4, t_n) > 0
-                    && sign_m_plus_n_sqrt5(t_m - 4, t_n) < 0;
-            } else {
-                debug_assert_eq!(k_coeffs[0], -1);
-                // uA == -uB. Interior overlap iff 0 < T < 2, i.e.,
-                // `t_m + t_n*sqrt(5) > 0` and `t_m - 8 + t_n*sqrt(5) < 0`.
-                return sign_m_plus_n_sqrt5(t_m, t_n) > 0 && sign_m_plus_n_sqrt5(t_m - 8, t_n) < 0;
-            }
-        }
-
-        // Non-colinear case.
-        let sign_v_plus_k = sign_p_b2_plus_q_b3(v_p + k_p, v_q + k_q);
-        if (sign_v > 0) == (sign_v_plus_k > 0) {
-            return false;
-        }
-
-        // Mul #3: W = wedge(delta, uB).
-        let w_z = delta.conj() * u_b;
-        let (w_p, w_q) = im_components_zz10(&w_z.int_coeffs());
-        let sign_w = sign_p_b2_plus_q_b3(w_p, w_q);
-        let sign_w_minus_k = sign_p_b2_plus_q_b3(w_p - k_p, w_q - k_q);
-        (sign_w > 0) != (sign_w_minus_k > 0)
-    }
+/// ZZ10's K=4 real-subring sign: sign over `{1, sqrt(5), b2, b3}` with
+/// `b2 = sqrt(10 - 2*sqrt(5)), b3 = sqrt(5)*b2`. Routes through the
+/// pentagonal closed-form helper, same as ZZ20 / ZZ60.
+fn zz10_real_sign(x: &[i64; 4]) -> i8 {
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(
+        x[0] as i128,
+        x[1] as i128,
+        x[2] as i128,
+        x[3] as i128,
+    ) as i8
 }
+
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
 
 /// Exact `CellFloor` for ZZ10. Same f64-hint-plus-verify pattern as the
 /// `impl_cell_floor_via_sign_verify!` macro, but per-axis rather than

@@ -398,19 +398,76 @@ pub fn intersect_unit_segments_basis<const PHI: usize, const K: usize>(
         }
     }
 
-    // Non-colinear case.
+    // Non-colinear case. We use the 4 orientation signs to classify:
+    //
+    //   sign_v          = sign(wedge(uA, delta))     = sidedness of c vs line ab
+    //   sign_v_plus_k   = sign(wedge(uA, d - a))     = sidedness of d vs line ab
+    //   sign_w          = sign(wedge(delta, uB))     = sidedness of a vs line cd
+    //   sign_w_minus_k  = sign(wedge(c - b, uB))     = sidedness of b vs line cd
+    //
+    // PROPER crossing requires c, d strictly opposite sides of ab AND a, b
+    // strictly opposite sides of cd, i.e. all four signs nonzero and the
+    // two pairs disagree.
+    //
+    // T-TOUCH: when one of the four signs is zero, the corresponding
+    // endpoint lies on the other segment's *line*. To distinguish
+    // "strictly interior to the other segment" (= intersection) from
+    // "on the line but past the endpoints" (= no intersection) we need a
+    // between-on-line check. For unit `uX`, `dot(uX, p - xstart)` is the
+    // position of `p` along the segment in [0, 1]; strictly interior
+    // means `0 < dot < 1`. The relevant dot products are the *real
+    // parts* of the same three products we already computed --
+    //   Re(v_z) = dot(uA, c - a),  Re(v + k) = dot(uA, d - a),
+    //   Re(w_z) = dot(uB, c - a),  Re(w - k) = dot(uB, c - b)
+    // -- so the T-touch cases need no additional multiplications.
+
+    // `strictly_between_0_and_1` and `strictly_between_neg1_and_0`
+    // decide `0 < t < 1` and `-1 < t < 0` respectively, where `t` is a
+    // K-vector representation of a real quantity. The +/- 1 boundary
+    // corresponds to the unit-length segment's endpoints.
+    let strictly_between_0_and_1 = |t: &[i64; K]| -> bool {
+        let t_minus_1 = sub_kvec::<K>(t, one_in_real_basis);
+        real_sign(t) > 0 && real_sign(&t_minus_1) < 0
+    };
+    let strictly_between_neg1_and_0 = |t: &[i64; K]| -> bool {
+        let t_plus_1 = add_kvec::<K>(t, one_in_real_basis);
+        real_sign(t) < 0 && real_sign(&t_plus_1) > 0
+    };
+
+    // c side check: sign_v + sign_v_plus_k.
     let v_plus_k = add_basis::<PHI>(&v_z, &k_z);
     let sign_v_plus_k = im_sign_basis::<PHI, K>(&v_plus_k, im_decomp, real_sign);
+    // T-touch: c on line ab and strictly between a, b.
+    if sign_v == 0 {
+        return strictly_between_0_and_1(&project_re::<PHI, K>(&v_z, re_decomp));
+    }
+    if sign_v_plus_k == 0 {
+        return strictly_between_0_and_1(&project_re::<PHI, K>(&v_plus_k, re_decomp));
+    }
+    // Both c and d strictly off line ab. If they're on the same side, no crossing.
     if (sign_v > 0) == (sign_v_plus_k > 0) {
         return false;
     }
 
-    // Mul #3: w_z = conj(delta) * uB.
+    // a side check: sign_w + sign_w_minus_k.
     let conj_delta = conj_basis::<PHI>(&delta, conj_matrix);
     let w_z = mul_basis::<PHI>(&conj_delta, &u_b, reduction);
     let w_minus_k = sub_basis::<PHI>(&w_z, &k_z);
     let sign_w = im_sign_basis::<PHI, K>(&w_z, im_decomp, real_sign);
     let sign_w_minus_k = im_sign_basis::<PHI, K>(&w_minus_k, im_decomp, real_sign);
+    // T-touch: a on line cd and strictly between c, d.
+    // dot(uB, a - c) = -dot(uB, delta) = -Re(w_z), in (0,1) iff Re(w_z) in (-1,0).
+    if sign_w == 0 {
+        return strictly_between_neg1_and_0(&project_re::<PHI, K>(&w_z, re_decomp));
+    }
+    // T-touch: b on line cd and strictly between c, d.
+    // dot(uB, b - c) = Re(k_z) - Re(w_z) = -Re(w - k), in (0,1) iff
+    // Re(w-k) in (-1, 0).
+    if sign_w_minus_k == 0 {
+        return strictly_between_neg1_and_0(&project_re::<PHI, K>(&w_minus_k, re_decomp));
+    }
+
+    // No zero signs: proper crossing iff a, b strictly on opposite sides of cd.
     (sign_w > 0) != (sign_w_minus_k > 0)
 }
 
