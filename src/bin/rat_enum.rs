@@ -100,6 +100,41 @@ struct CanonicalOps {
     canonicalize: fn(&[i8]) -> Vec<i8>,
 }
 
+/// Bind `prefix ++ [new]` so that index `i` (for `i < prefix.len() + 1`)
+/// resolves to the corresponding walk angle. Out-of-range indices are
+/// not handled -- callers must keep accesses within `0..d` where
+/// `d = prefix.len() + 1`.
+fn walk_get(prefix: &[i8], new: i8, i: usize) -> i8 {
+    if i < prefix.len() {
+        prefix[i]
+    } else {
+        // Caller must guarantee i == prefix.len(). debug_assert documents
+        // the boundary; release-mode behavior is still correct (returns
+        // `new`) but a violation indicates a bug in the caller.
+        debug_assert_eq!(i, prefix.len(), "walk_get: index past extended prefix");
+        new
+    }
+}
+
+/// For the extended walk `prefix ++ [new]` of length `d`, return
+/// `false` if some rotation `k > 0` makes the rotation lex-smaller
+/// than the identity within the fully-known comparable region. The
+/// caller pairs this with a complementary loop for the dihedral case
+/// (see [`is_dihedral_canonical_extended`]).
+fn rotation_lex_min_violated(prefix: &[i8], new: i8) -> bool {
+    let d = prefix.len() + 1;
+    for k in 1..d {
+        for i in 0..(d - k) {
+            match walk_get(prefix, new, k + i).cmp(&walk_get(prefix, new, i)) {
+                std::cmp::Ordering::Less => return true,
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Equal => continue,
+            }
+        }
+    }
+    false
+}
+
 /// Canonical-rotation prune for the open walk `prefix` virtually
 /// extended by one more angle `new`. Lets the caller skip walks
 /// that cannot be the lex-min cyclic rotation of any closure they
@@ -113,25 +148,7 @@ struct CanonicalOps {
 /// eventual closed polygon's canonical rotation cannot start at
 /// position 0 -- pruning is safe.
 fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
-    let base = prefix.len();
-    let d = base + 1;
-    let get = |i: usize| -> i8 {
-        if i < base {
-            prefix[i]
-        } else {
-            new
-        }
-    };
-    for k in 1..d {
-        for i in 0..(d - k) {
-            match get(k + i).cmp(&get(i)) {
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Greater => break,
-                std::cmp::Ordering::Equal => continue,
-            }
-        }
-    }
-    true
+    !rotation_lex_min_violated(prefix, new)
 }
 
 fn canonical_identity(seq: &[i8]) -> Vec<i8> {
@@ -329,40 +346,29 @@ fn rat_enum_step<ZZ: IsRing>(
 ///
 /// This is sound (never prunes a walk that could produce the
 /// dihedral-min output) but incomplete (does not eliminate all
-/// chiral duplicates — see module-level comment above).  At depth 0
+/// chiral duplicates -- see module-level comment above).  At depth 0
 /// it prunes all positive first angles (`-a_0 < a_0`), roughly
 /// halving the root branching factor.
 ///
-/// Complement rotation `k` maps position `i` to `-a_{(k-i) mod n}`.
-/// For `k <= d` (where `d = len(prefix) + 1`), positions `i = 0..k`
-/// have both sides known.
+/// # Index bounds
+///
+/// Complement rotation `k` compares `-a_{k - i}` with `a_i` at
+/// positions `i = 0..=k`. Both sides are decided by the known walk
+/// only when `0 <= k - i < d` and `0 <= i < d`; for the inner-loop
+/// range `i = 0..=k` to stay within the prefix we need `k < d`.
+/// Hence the outer loop is `for k in 0..d` (NOT `0..=d`) -- accessing
+/// `walk_get(prefix, new, d)` would silently return `new` again for
+/// a position whose value is genuinely undetermined, which would
+/// over-prune.
 fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
-    let base = prefix.len();
-    let d = base + 1;
-    let get = |i: usize| -> i8 {
-        if i < base {
-            prefix[i]
-        } else {
-            new
-        }
-    };
-
-    // Rotation check (unchanged from is_canonical_extended).
-    for k in 1..d {
-        for i in 0..(d - k) {
-            match get(k + i).cmp(&get(i)) {
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Greater => break,
-                std::cmp::Ordering::Equal => continue,
-            }
-        }
+    if rotation_lex_min_violated(prefix, new) {
+        return false;
     }
 
-    // Complement-reflection check: for k = 0..d, compare -a_{k-i}
-    // with a_i at positions i = 0..k.
-    for k in 0..=d {
+    let d = prefix.len() + 1;
+    for k in 0..d {
         for i in 0..=k {
-            match (-get(k - i)).cmp(&get(i)) {
+            match (-walk_get(prefix, new, k - i)).cmp(&walk_get(prefix, new, i)) {
                 std::cmp::Ordering::Less => return false,
                 std::cmp::Ordering::Greater => break,
                 std::cmp::Ordering::Equal => continue,
@@ -874,53 +880,57 @@ fn main() {
 #[cfg(test)]
 mod dihedral_tests {
     use super::*;
-    use tilezz::cyclotomic::ZZ12;
+    use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4, ZZ8};
 
-    /// Cross-validate the dihedral DFS variant against the original
-    /// rotation-canonical DFS: the original output quotiented by
-    /// dihedral_canonical must equal the dihedral variant's output.
-    #[test]
-    fn test_dihedral_enum_matches_dfs_quotient() {
-        let (all_rats, _stats) = super::rat_enum::<ZZ12>(9, 1);
+    /// For a single `(ring, max_steps)` pair, check that the
+    /// dihedral DFS output equals the rotation DFS output quotiented
+    /// by `dihedral_canonical`. Stage-1 over-pruning shows up as
+    /// MISSING dihedral classes; stage-2 under-deduplication shows
+    /// up as EXTRA. The body prints both lists before asserting so
+    /// any future regression is diagnosable from the test log.
+    fn check_quotient_match<ZZ: IsRing>(ring_label: &str, max_steps: usize) {
+        let (all_rats, _) = super::rat_enum::<ZZ>(max_steps, 1);
         let mut expected: HashSet<Vec<i8>> = HashSet::new();
         for seq in &all_rats {
             expected.insert(super::dihedral_canonical(seq));
         }
-
-        let (dihedral_rats, _stats) = super::rat_enum_dihedral::<ZZ12>(9, 1);
+        let (dihedral_rats, _) = super::rat_enum_dihedral::<ZZ>(max_steps, 1);
         let actual: HashSet<Vec<i8>> = dihedral_rats.into_iter().collect();
 
         if expected != actual {
-            let missing: Vec<_> = expected.difference(&actual).collect();
-            let extra: Vec<_> = actual.difference(&expected).collect();
-            if !missing.is_empty() {
-                eprintln!("MISSING from dihedral DFS:");
-                for s in &missing {
-                    eprintln!("  {s:?}");
-                }
+            for s in expected.difference(&actual) {
+                eprintln!("[{ring_label} n={max_steps}] MISSING: {s:?}");
             }
-            if !extra.is_empty() {
-                eprintln!("EXTRA in dihedral DFS:");
-                for s in &extra {
-                    eprintln!("  {s:?}");
-                }
+            for s in actual.difference(&expected) {
+                eprintln!("[{ring_label} n={max_steps}] EXTRA:   {s:?}");
             }
         }
         assert_eq!(
-            expected.len(),
-            actual.len(),
-            "DFS quotient has {}, dihedral DFS found {}",
-            expected.len(),
-            actual.len()
-        );
-        assert_eq!(
             expected, actual,
-            "dihedral DFS output differs from DFS quotient"
+            "{ring_label} n={max_steps}: dihedral DFS != rotation DFS / dihedral",
         );
         eprintln!(
-            "OK — {} dihedral classes match (from {} rotation-canonical rats)",
+            "[{ring_label} n={max_steps}] OK -- {} dihedral classes from {} rotation-canonical rats",
             actual.len(),
-            all_rats.len()
+            all_rats.len(),
         );
+    }
+
+    /// Sweep multiple `(ring, max_steps)` pairs. ZZ4 and ZZ8 are
+    /// included to catch ring-specific over-pruning: with only 3 or
+    /// 7 candidate directions per step, the per-rotation comparisons
+    /// are more constrained and an off-by-one in the prefix prune is
+    /// easier to spot than at ZZ12.
+    #[test]
+    fn test_dihedral_enum_matches_dfs_quotient() {
+        for n in [4, 5, 6, 7, 8, 9] {
+            check_quotient_match::<ZZ12>("ZZ12", n);
+        }
+        for n in [4, 6, 8, 10, 12] {
+            check_quotient_match::<ZZ8>("ZZ8", n);
+        }
+        for n in [4, 6, 8, 10, 12, 14] {
+            check_quotient_match::<ZZ4>("ZZ4", n);
+        }
     }
 }
