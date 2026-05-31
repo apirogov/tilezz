@@ -1,0 +1,85 @@
+tilezz-dafsa JSON schema (version 1)
+====================================
+
+A serialized DAFSA is a single JSON object with the following fields.
+All arrays use 0-based indexing. State 0 is always the root. The
+label alphabet is `i8`.
+
+  {
+    "format":      "tilezz-dafsa",       // discriminator
+    "version":     1,                     // u32, currently 1
+    "scalar":      "i8",                  // label element type, always "i8"
+    "n_states":    <usize>,               // == edges_start.len()
+                                          //  == counts.len()
+    "n_edges":     <usize>,               // == labels.len()
+                                          //  == targets.len()
+    "edges_start": [u32, ...],            // CSR row pointers
+    "labels":      [i8, ...],             // per edge (sorted within state)
+    "targets":     [u32, ...],            // per edge
+    "counts":      [u64, ...]             // per state: # accepted seqs
+                                          //  reachable, including empty
+                                          //  continuation if accepting
+  }
+
+Reading the automaton
+---------------------
+
+A state `s` (0 <= s < n_states) owns the edge slice
+  labels[ edges_start[s] .. edges_start_or_n_edges(s+1) ]
+  targets[ edges_start[s] .. edges_start_or_n_edges(s+1) ]
+where `edges_start_or_n_edges(s+1)` is `edges_start[s+1]` if `s+1 <
+n_states` and `n_edges` otherwise. Edges within a state appear sorted
+ascending by `label`; binary search by label is the natural lookup.
+
+Derived: is_accept and total accept count
+-----------------------------------------
+
+Two values are NOT stored on disk because they are redundant with
+the data above; reconstruct them once at load time:
+
+* `is_accept[s] := counts[s] > sum(counts[targets[k]]
+                                   for k in edges_start[s] ..
+                                           edges_start_or_n_edges(s+1))`
+* `accept_count := counts[0]`  (the count at the root)
+
+In any well-formed file the difference
+
+  counts[s] - sum-over-children-of-counts
+
+is exactly 0 (non-accepting) or 1 (accepting -- the +1 comes from
+the empty continuation at s). Readers should reject files where the
+difference falls outside {0, 1}, since that indicates a corrupt or
+non-minimal automaton.
+
+Set membership for a sequence `seq`:
+
+  s = 0
+  for symbol in seq:
+      slice = edges of state s
+      idx   = binary_search(slice.labels, symbol)
+      if not found: return False
+      s = slice.targets[idx]
+  return is_accept[s]
+
+Indexed get (the i-th accepted sequence in lex order):
+
+  out = []; s = 0; rem = i
+  while True:
+      if is_accept[s]:
+          if rem == 0: return out
+          rem -= 1
+      for label, target in edges of state s (in stored order):
+          n = counts[target]
+          if rem < n:
+              out.append(label); s = target; break
+          rem -= n
+
+Lex-sorted iteration is just a depth-first walk that yields a copy of
+the running prefix each time it enters an accepting state.
+
+Scalars
+-------
+
+`scalar` is always `"i8"`. Readers should reject files whose
+`scalar` value is anything else; future label widths would require a
+format-version bump.

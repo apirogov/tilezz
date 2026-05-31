@@ -16,14 +16,23 @@
 //!     standalone KMP-based utilities — unrelated to
 //!     `BitParallelMatcher` but exposed here because they belong to
 //!     the same family of primitives.
+//!   * [`Dafsa`] is a minimum-state DAFSA with `from_seqs(sorted)` /
+//!     `iter()` round-trip plus `contains` / `get(i)` / `walk_prefix`
+//!     queries. Independent of the rest of the module; used as a
+//!     compact storage format for large enumerated sequence sets
+//!     (e.g. dumping `rat_enum` output for a browser-side explorer).
 
 mod bitparallel;
 mod cyclic;
+mod dafsa;
 mod extend;
 mod period;
 
 pub use bitparallel::BitParallelMatcher;
 pub use cyclic::cyclic_contains;
+pub use dafsa::{
+    Dafsa, DafsaBuilder, DafsaCursor, DafsaIter, JSON_SCHEMA_DOC as DAFSA_JSON_SCHEMA_DOC,
+};
 pub use extend::{forward_match_length, match_length};
 pub use period::repetition_factor;
 
