@@ -1447,15 +1447,18 @@ mod tests {
 
     #[test]
     fn spectre_counts() {
-        // Spectre is non-convex; exercises every kind. Phase-1
-        // entries classify the same as before phase-2 was introduced
-        // (dead=6001, undead=1615, free=1914), confirming the
-        // phase-1 BFS graph is structurally unchanged. Phase-2 adds
-        // 445 entries (251 closed terminals + 194 open
-        // intermediates), all Blessed (the closed terminals as
-        // direct Blessed seeds; the open ones via propagation
-        // through their successors).
-        assert_counts(spectre_idx(), 10559, 11742, 251, 6001, 1615, 1029, 1914);
+        // Spectre is non-convex; exercises every kind. Pinned counts
+        // shrank from (num_types=10559, transitions=11742, dead=6001,
+        // undead=1615) when the ZZ12 segment-intersection check was
+        // fixed to reject T-touches (an endpoint of one boundary edge
+        // lying on the strict interior of a non-adjacent edge). The
+        // previously-admitted T-touch configurations were not valid
+        // self-avoiding polygons. Closed-phase2 / blessed / free
+        // categories are unchanged (the dropped entries were all
+        // phase-1 dead/undead). See the OEIS A316192 test in
+        // `bin::rat_enum::dihedral_tests::test_oeis_a316192_zz12`
+        // for the downstream confirmation.
+        assert_counts(spectre_idx(), 9976, 11171, 251, 5561, 1472, 1029, 1914);
     }
 
     #[test]

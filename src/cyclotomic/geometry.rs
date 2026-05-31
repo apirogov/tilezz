@@ -187,21 +187,49 @@ pub fn lines_perp<ZZ: IsRing>((a, b): (&ZZ, &ZZ), (c, d): (&ZZ, &ZZ)) -> bool {
 }
 
 /// Return whether line segments AB and CD intersect.
-/// Note that touching in only endpoints does not count as intersection.
-/// Based on: <https://stackoverflow.com/a/9997374/432908>
+///
+/// Sharing an endpoint (`a == c`, etc.) is NOT counted as intersection.
+/// Proper interior crossings, colinear overlaps, and T-touches (one
+/// segment's endpoint strictly interior to the other segment) all
+/// return true.
+///
+/// The fast-path [`intersect_unit_segments`] handles the same predicate
+/// when both segments are unit-length; this generic version is the
+/// reference for arbitrary-length segments. Both must agree on every
+/// shared input, which is what the trait tests in
+/// `integral_basis::tests::intersect_unit_segments_matches_generic`
+/// enforce.
 pub fn intersect<ZZ: IsRing + PartialEq>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
-        // we ignore touching endpoints
-        // (not counting it as proper intersection of _disjoint_ segments)
-        // NOTE: if true, there also cannot be any other intersection
         return false;
     }
-    if is_colinear(&c, &a, &b) && is_colinear(&d, &a, &b) {
-        is_between(&c, (&a, &b)) || is_between(&d, (&a, &b))
-    } else {
-        // TODO: understand logic why this works
-        is_ccw(&a, (&c, &d)) != is_ccw(&b, (&c, &d)) && is_ccw(&a, (&b, &c)) != is_ccw(&a, (&b, &d))
+    let c_on_ab = is_colinear(&c, &a, &b);
+    let d_on_ab = is_colinear(&d, &a, &b);
+    if c_on_ab && d_on_ab {
+        // Colinear: any interior point of one segment falling on the
+        // other counts as overlap.
+        return is_between(&c, (&a, &b)) || is_between(&d, (&a, &b));
     }
+    // T-touch cases: one endpoint lies strictly between the other
+    // segment's endpoints. `is_between` is strict (endpoints already
+    // excluded above), so this catches exactly the "endpoint on
+    // interior" case that the strict-CCW branch below misses (wedge==0
+    // gets read as wedge<0 by `is_ccw`).
+    if c_on_ab && is_between(&c, (&a, &b)) {
+        return true;
+    }
+    if d_on_ab && is_between(&d, (&a, &b)) {
+        return true;
+    }
+    if is_colinear(&a, &c, &d) && is_between(&a, (&c, &d)) {
+        return true;
+    }
+    if is_colinear(&b, &c, &d) && is_between(&b, (&c, &d)) {
+        return true;
+    }
+    // Proper interior crossing: c, d strictly on opposite sides of line
+    // ab AND a, b strictly on opposite sides of line cd.
+    is_ccw(&a, (&c, &d)) != is_ccw(&b, (&c, &d)) && is_ccw(&a, (&b, &c)) != is_ccw(&a, (&b, &d))
 }
 
 /// Return whether two unit-length segments intersect.
