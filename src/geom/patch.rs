@@ -127,6 +127,93 @@ struct BoundaryGrid<T: IsRing> {
     next_edge_id: usize,
 }
 
+/// Bundle of `(angles, edges, candidate cache)` with the invariant
+/// that the cache is consistent with the angle/edge sequences.
+///
+/// Encoded -- not just documented. The fields are private; the only
+/// way to mutate `angles` or `edges` is through [`Self::replace`] or
+/// [`Self::rotate_left`], both of which invalidate the cache. Cannot
+/// forget.
+#[derive(Clone)]
+struct BoundaryAndCache {
+    angles: Vec<i8>,
+    edges: Vec<EdgeInfo>,
+    /// Lazily materialised cache of all legal candidate matches,
+    /// bucketed by `pm.a_range.start_offset`. Filled by
+    /// [`Self::fill_candidates`] on first access; consumers see it
+    /// via [`Self::candidates`]. Reset to `None` automatically on
+    /// every angle/edge mutation.
+    candidates: Option<Vec<Vec<PatchMatch>>>,
+}
+
+impl BoundaryAndCache {
+    fn new(angles: Vec<i8>, edges: Vec<EdgeInfo>) -> Self {
+        debug_assert_eq!(
+            angles.len(),
+            edges.len(),
+            "boundary angles/edges length mismatch"
+        );
+        Self {
+            angles,
+            edges,
+            candidates: None,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.angles.len()
+    }
+    fn angles(&self) -> &[i8] {
+        &self.angles
+    }
+    fn edges(&self) -> &[EdgeInfo] {
+        &self.edges
+    }
+    fn candidates(&self) -> Option<&[Vec<PatchMatch>]> {
+        self.candidates.as_deref()
+    }
+    /// Populate the candidate cache. Currently only called from the
+    /// `#[cfg(test)]` `ensure_candidates_materialized` helper -- the
+    /// production paths in `get_all_matches` /
+    /// `get_matches_touching_vertex` recompute candidates on every call
+    /// (the cache is set up to be filled but isn't on the hot path).
+    /// Kept as part of the encoded mutator API so a future change that
+    /// chooses to fill the cache can do so without bypassing the
+    /// length-consistency check.
+    #[allow(dead_code)]
+    fn fill_candidates(&mut self, c: Vec<Vec<PatchMatch>>) {
+        debug_assert_eq!(
+            c.len(),
+            self.angles.len(),
+            "candidate cache must be bucketed by boundary position"
+        );
+        self.candidates = Some(c);
+    }
+
+    /// Swap in new angles and edges (typical: `add_tile_growing`
+    /// after a successful glue). The candidate cache is auto-reset
+    /// because the new boundary has a different shape.
+    fn replace(&mut self, angles: Vec<i8>, edges: Vec<EdgeInfo>) {
+        debug_assert_eq!(
+            angles.len(),
+            edges.len(),
+            "boundary angles/edges length mismatch"
+        );
+        self.angles = angles;
+        self.edges = edges;
+        self.candidates = None;
+    }
+
+    /// Cyclically rotate angles and edges left by `n` positions
+    /// (typical: `normalize`). The cache is auto-reset because the
+    /// position labels shift.
+    fn rotate_left(&mut self, n: usize) {
+        self.angles.rotate_left(n);
+        self.edges.rotate_left(n);
+        self.candidates = None;
+    }
+}
+
 /// An incrementally grown, edge-to-edge tiling of a connected,
 /// hole-free region of the plane, after at least one tile has been
 /// glued. See module-level docstring for the topological invariants.
@@ -136,19 +223,10 @@ struct BoundaryGrid<T: IsRing> {
 #[derive(Clone)]
 pub struct GrowingPatch<T: IsRing> {
     match_index: Arc<MatchTypeIndex<T>>,
-    angles: Vec<i8>,
-    edges: Vec<EdgeInfo>,
-    /// Lazily-materialised cache of all legal candidate matches,
-    /// bucketed by `pm.a_range.start_offset`. Filled on first access
-    /// via [`Self::ensure_candidates_materialized`] /
-    /// [`Self::get_all_matches`].
-    ///
-    /// **Invalidation rule (load-bearing).** Any code path that
-    /// mutates `angles` or `edges` MUST reset this field to `None` in
-    /// the same step. `add_tile_growing` and `normalize` both do; any
-    /// future helper that touches the boundary must as well, or
-    /// stale cached candidates will be served for the new boundary.
-    candidates_by_start: Option<Vec<Vec<PatchMatch>>>,
+    /// Boundary topology (angles, edges) + candidate-match cache.
+    /// The cache invariant is encoded in [`BoundaryAndCache`]'s API:
+    /// every angle/edge mutation auto-invalidates.
+    boundary_cache: BoundaryAndCache,
     inner_chains: Vec<Vec<EdgeInfo>>,
     boundary: BoundaryGrid<T>,
     patch_tile_ids: Vec<usize>,
@@ -563,9 +641,7 @@ impl<T: IsRing> GrowingPatch<T> {
         let boundary = BoundaryGrid::<T>::from_angles(&angles);
         Some(GrowingPatch {
             match_index,
-            angles,
-            edges,
-            candidates_by_start: None,
+            boundary_cache: BoundaryAndCache::new(angles, edges),
             inner_chains,
             boundary,
             patch_tile_ids,
@@ -881,12 +957,16 @@ impl<T: IsRing> GrowingPatch<T> {
     /// the angle-math check, but geometric self-intersection is *not*
     /// pre-filtered -- `add_tile` does that final check.
     pub fn get_all_matches(&self) -> Vec<PatchMatch> {
-        match &self.candidates_by_start {
+        match self.boundary_cache.candidates() {
             Some(cbs) => cbs.iter().flatten().cloned().collect(),
-            None => Self::compute_all_candidates(&self.match_index, &self.angles, &self.edges)
-                .into_iter()
-                .flatten()
-                .collect(),
+            None => Self::compute_all_candidates(
+                &self.match_index,
+                self.boundary_cache.angles(),
+                self.boundary_cache.edges(),
+            )
+            .into_iter()
+            .flatten()
+            .collect(),
         }
     }
 
@@ -895,13 +975,16 @@ impl<T: IsRing> GrowingPatch<T> {
     /// vertex lies in the closed range `[start_a, start_a + len]` of
     /// the matched edges (see [`cyclic_range_contains`]).
     pub fn get_matches_touching_vertex(&self, vertex_index: usize) -> Vec<PatchMatch> {
-        let n = self.angles.len();
+        let n = self.boundary_cache.len();
         let computed: Vec<Vec<PatchMatch>>;
-        let source: &[Vec<PatchMatch>] = match &self.candidates_by_start {
+        let source: &[Vec<PatchMatch>] = match self.boundary_cache.candidates() {
             Some(cbs) => cbs,
             None => {
-                computed =
-                    Self::compute_all_candidates(&self.match_index, &self.angles, &self.edges);
+                computed = Self::compute_all_candidates(
+                    &self.match_index,
+                    self.boundary_cache.angles(),
+                    self.boundary_cache.edges(),
+                );
                 &computed
             }
         };
@@ -958,12 +1041,13 @@ impl<T: IsRing> GrowingPatch<T> {
 
     #[cfg(test)]
     pub(crate) fn ensure_candidates_materialized(&mut self) {
-        if self.candidates_by_start.is_none() {
-            self.candidates_by_start = Some(Self::compute_all_candidates(
+        if self.boundary_cache.candidates().is_none() {
+            let c = Self::compute_all_candidates(
                 &self.match_index,
-                &self.angles,
-                &self.edges,
-            ));
+                self.boundary_cache.angles(),
+                self.boundary_cache.edges(),
+            );
+            self.boundary_cache.fill_candidates(c);
         }
     }
 
@@ -975,18 +1059,18 @@ impl<T: IsRing> GrowingPatch<T> {
 
     /// Length of the current boundary in edges.
     pub fn boundary_len(&self) -> usize {
-        self.angles.len()
+        self.boundary_cache.len()
     }
 
     /// The boundary's cyclic angle sequence (one entry per boundary
     /// vertex). Length matches [`Self::boundary_len`].
     pub fn angles(&self) -> &[i8] {
-        &self.angles
+        self.boundary_cache.angles()
     }
 
     /// Materialise the current boundary as a `Rat`.
     pub fn to_rat(&self) -> Rat<T> {
-        Rat::from_slice_unchecked(&self.angles)
+        Rat::from_slice_unchecked(self.boundary_cache.angles())
     }
 
     /// Reference to the underlying tileset.
@@ -1006,7 +1090,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// of its edges occupies each boundary position. Length matches
     /// [`Self::boundary_len`].
     pub fn edges(&self) -> &[EdgeInfo] {
-        &self.edges
+        self.boundary_cache.edges()
     }
 
     /// Per-boundary-position lists of interior tile edges meeting at
@@ -1042,16 +1126,16 @@ impl<T: IsRing> GrowingPatch<T> {
     /// post-normalize boundary. Returns `0` when no rotation is
     /// applied (empty boundary or `lex_min_rot` already 0).
     pub fn normalize(&mut self) -> usize {
-        let n = self.angles.len();
+        let n = self.boundary_cache.len();
         if n == 0 {
             return 0;
         }
 
-        let rot = crate::geom::rat::lex_min_rot(&self.angles);
+        let rot = crate::geom::rat::lex_min_rot(self.boundary_cache.angles());
 
         if rot != 0 {
-            self.angles.rotate_left(rot);
-            self.edges.rotate_left(rot);
+            // Auto-invalidates the candidate cache via the method API.
+            self.boundary_cache.rotate_left(rot);
             self.inner_chains.rotate_left(rot);
             self.patch_tile_ids.rotate_left(rot);
             self.boundary.boundary_edge_ids.rotate_left(rot);
@@ -1074,21 +1158,20 @@ impl<T: IsRing> GrowingPatch<T> {
             });
             *id = new_id;
         }
-        self.candidates_by_start = None;
         self.next_tile_id = next;
         rot
     }
 
     /// Return the junction vertex type at position `i`, or `None` if not a junction.
     pub fn junction_vertex_type_at(&self, i: usize) -> Option<OpenVertexType> {
-        let n = self.angles.len();
+        let n = self.boundary_cache.len();
         if n == 0 || i >= n || !self.is_junction(i) {
             return None;
         }
         Some(OpenVertexType {
-            cw: self.edges[(i + n - 1) % n],
+            cw: self.boundary_cache.edges()[(i + n - 1) % n],
             inner: self.inner_chains[i].clone(),
-            ccw: self.edges[i],
+            ccw: self.boundary_cache.edges()[i],
         })
     }
 
@@ -1098,14 +1181,14 @@ impl<T: IsRing> GrowingPatch<T> {
     /// at `i`. Drops the interior-tile list -- see [`CoarseJunction`]
     /// for the equivalence semantics.
     pub fn coarse_junction_at(&self, i: usize) -> Option<CoarseJunction> {
-        let n = self.angles.len();
+        let n = self.boundary_cache.len();
         if n == 0 || i >= n || !self.is_junction(i) {
             return None;
         }
         Some(CoarseJunction {
-            cw_edge: self.edges[(i + n - 1) % n],
-            ccw_edge: self.edges[i],
-            angle: self.angles[i],
+            cw_edge: self.boundary_cache.edges()[(i + n - 1) % n],
+            ccw_edge: self.boundary_cache.edges()[i],
+            angle: self.boundary_cache.angles()[i],
         })
     }
 
@@ -1113,10 +1196,15 @@ impl<T: IsRing> GrowingPatch<T> {
     /// the boundary angle there differs from the local tile's natural
     /// internal angle, meaning multiple tiles meet at this vertex.
     pub fn is_junction(&self, i: usize) -> bool {
-        if self.edges.is_empty() {
+        if self.boundary_cache.edges().is_empty() {
             return false;
         }
-        is_junction_at(&self.angles, &self.edges, self.match_index.tileset(), i)
+        is_junction_at(
+            self.boundary_cache.angles(),
+            self.boundary_cache.edges(),
+            self.match_index.tileset(),
+            i,
+        )
     }
 
     /// At boundary position `pos`, find the nearest junctions in the
@@ -1124,7 +1212,7 @@ impl<T: IsRing> GrowingPatch<T> {
     /// (`(cw_offset, ccw_offset)`). Returns `None` for an empty
     /// boundary or for `pos >= boundary_len`.
     pub fn neighbor_junction_offsets(&self, pos: usize) -> Option<(usize, usize)> {
-        let n = self.edges.len();
+        let n = self.boundary_cache.edges().len();
         if n == 0 || pos >= n {
             return None;
         }
@@ -1139,9 +1227,9 @@ impl<T: IsRing> GrowingPatch<T> {
             j_ccw = (j_ccw + 1) % n;
         }
 
-        let cw_offset = self.edges[j_cw].tile_offset;
+        let cw_offset = self.boundary_cache.edges()[j_cw].tile_offset;
         let ccw_prev = (j_ccw + n - 1) % n;
-        let ccw_edge = self.edges[ccw_prev];
+        let ccw_edge = self.boundary_cache.edges()[ccw_prev];
         let tile_len = self.match_index.tileset().rat(ccw_edge.tile_id).len();
         let ccw_offset = (ccw_edge.tile_offset + 1) % tile_len;
 
@@ -1156,10 +1244,14 @@ impl<T: IsRing> GrowingPatch<T> {
     /// two linear segments at the array seam.
     #[cfg(test)]
     pub(crate) fn tile_segments(&self) -> Vec<PatchSegment> {
-        if self.edges.is_empty() {
+        if self.boundary_cache.edges().is_empty() {
             return vec![];
         }
-        compute_segments(&self.angles, &self.edges, self.match_index.tileset())
+        compute_segments(
+            self.boundary_cache.angles(),
+            self.boundary_cache.edges(),
+            self.match_index.tileset(),
+        )
     }
 
     /// Attempt to glue the tile described by `pm` onto the current
@@ -1256,9 +1348,7 @@ impl<T: IsRing> GrowingPatch<T> {
 
         Some(GrowingPatch {
             match_index,
-            angles: new_angles,
-            edges,
-            candidates_by_start: None,
+            boundary_cache: BoundaryAndCache::new(new_angles, edges),
             inner_chains,
             boundary,
             patch_tile_ids,
@@ -1290,18 +1380,21 @@ impl<T: IsRing> GrowingPatch<T> {
             return false;
         }
 
-        let new_angles =
-            match compute_glue_angles::<T>(self.angles(), pm, self.match_index.tileset()) {
-                Ok(a) => a,
-                Err(why) => {
-                    debug_assert!(
-                        false,
-                        "compute_glue_angles rejected ({why:?}); get_all_matches() \
+        let new_angles = match compute_glue_angles::<T>(
+            self.boundary_cache.angles(),
+            pm,
+            self.match_index.tileset(),
+        ) {
+            Ok(a) => a,
+            Err(why) => {
+                debug_assert!(
+                    false,
+                    "compute_glue_angles rejected ({why:?}); get_all_matches() \
                          should already filter +/-hturn glues via try_glue_precomputed"
-                    );
-                    return false;
-                }
-            };
+                );
+                return false;
+            }
+        };
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
@@ -1387,21 +1480,25 @@ impl<T: IsRing> GrowingPatch<T> {
             self.boundary.register_edge(p1, p2, id);
         }
 
-        let (new_edges, new_patch_tile_ids) =
-            build_glued_edges(&self.edges, &self.patch_tile_ids, pm, m, self.next_tile_id);
+        let (new_edges, new_patch_tile_ids) = build_glued_edges(
+            self.boundary_cache.edges(),
+            &self.patch_tile_ids,
+            pm,
+            m,
+            self.next_tile_id,
+        );
         debug_assert_eq!(new_edges.len(), new_len);
 
         let new_inner = update_inner_chains(
             &self.inner_chains,
-            &self.edges,
+            self.boundary_cache.edges(),
             pm,
             new_len,
             &self.patch_tile_ids,
         );
 
-        self.angles = new_angles;
-        self.edges = new_edges;
-        self.candidates_by_start = None;
+        // Auto-invalidates the candidate cache via the method API.
+        self.boundary_cache.replace(new_angles, new_edges);
         self.inner_chains = new_inner;
         self.boundary.positions = new_positions;
         self.boundary.boundary_edge_ids = new_boundary_edge_ids;
