@@ -186,19 +186,35 @@ pub fn lines_perp<ZZ: IsRing>((a, b): (&ZZ, &ZZ), (c, d): (&ZZ, &ZZ)) -> bool {
     dot_sign(&(*b - *a), &(*d - *c)) == 0
 }
 
-/// Return whether line segments AB and CD intersect.
+/// Decide whether two line segments AB and CD intersect, for any ring
+/// elements (no unit-length precondition). Sharing an endpoint
+/// (`a == c` etc.) is NOT counted as intersection; everything else --
+/// proper interior crossings, colinear overlaps, and T-touches (one
+/// segment's endpoint strictly interior to the other segment) -- is.
 ///
-/// Sharing an endpoint (`a == c`, etc.) is NOT counted as intersection.
-/// Proper interior crossings, colinear overlaps, and T-touches (one
-/// segment's endpoint strictly interior to the other segment) all
-/// return true.
-///
-/// The fast-path [`intersect_unit_segments`] handles the same predicate
-/// when both segments are unit-length; this generic version is the
-/// reference for arbitrary-length segments. Both must agree on every
-/// shared input, which is what the trait tests in
+/// This is the reference implementation, used in tests and as the
+/// arbitrary-length fallback. For unit-length segments (Snake's hot
+/// path), use [`intersect_unit_segments`] -- it routes through
+/// [`crate::cyclotomic::integral_basis::intersect_unit_segments_basis`]
+/// which implements the same predicate in pure integer-basis
+/// arithmetic and is roughly 2x faster. The cross-check tests in
 /// `integral_basis::tests::intersect_unit_segments_matches_generic`
-/// enforce.
+/// enforce agreement.
+///
+/// # Case structure
+///
+/// Mirrors the basis impl's structure. After the shared-endpoint
+/// filter:
+///
+/// * **Colinear overlap**: both endpoints of one segment lie on the
+///   other segment's line. Return true iff at least one is strictly
+///   interior to the other segment.
+/// * **T-touch**: exactly one endpoint of one segment lies on the
+///   other segment's line. Return true iff it is also strictly
+///   interior to the other segment.
+/// * **Proper crossing**: no endpoint is colinear with the other
+///   segment. Return true iff the four sidedness comparisons via
+///   [`is_ccw`] give strictly disagreeing pairs on both sides.
 pub fn intersect<ZZ: IsRing + PartialEq>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ)) -> bool {
     if a == c || a == d || b == c || b == d {
         return false;
@@ -232,17 +248,19 @@ pub fn intersect<ZZ: IsRing + PartialEq>(&(a, b): &(ZZ, ZZ), &(c, d): &(ZZ, ZZ))
     is_ccw(&a, (&c, &d)) != is_ccw(&b, (&c, &d)) && is_ccw(&a, (&b, &c)) != is_ccw(&a, (&b, &d))
 }
 
-/// Return whether two unit-length segments intersect.
+/// Decide whether two unit-length segments intersect. Computes the
+/// same predicate as [`intersect`] but routes through the basis-level
+/// implementation in
+/// [`crate::cyclotomic::integral_basis::intersect_unit_segments_basis`]
+/// (one source-of-truth across every ring; see that function's
+/// docstring for the algorithm).
 ///
-/// **Precondition**: both `s1.1 - s1.0` and `s2.1 - s2.0` are unit vectors of
-/// the ring's CCW unit group. Behaviour is unspecified if either segment is
-/// not unit-length; callers that cannot guarantee unit-length should use the
-/// generic [`intersect`] instead.
+/// **Precondition**: both `s1.1 - s1.0` and `s2.1 - s2.0` are unit
+/// vectors of the ring's CCW unit group. Behaviour is unspecified if
+/// either segment is not unit-length; callers that can't guarantee
+/// unit-length should use the generic [`intersect`] instead.
 ///
 /// Touching only in endpoints does **not** count as intersection.
-///
-/// Per-ring overrides may exploit the unit-length precondition for speed
-/// (see `IntersectUnitSegments` and the ZZ12 specialization).
 #[inline]
 pub fn intersect_unit_segments<ZZ: IntersectUnitSegments>(s1: &(ZZ, ZZ), s2: &(ZZ, ZZ)) -> bool {
     ZZ::intersect_unit_segments(s1, s2)
