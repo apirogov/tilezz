@@ -2202,21 +2202,23 @@ mod tests {
             idx.transitions().len()
         );
 
-        assert_eq!(idx.num_types(), 280, "spectre VT count");
-        assert_eq!(alive + cursed, 280, "alive + cursed = total");
+        // num_types dropped from 280 to 271 (-9 Dead) and transitions
+        // from 426 to 414 (-12) after the ZZ12 segment-intersection
+        // T-touch fix: nine vertex types that were exhibited only by
+        // self-touching polygons (a vertex sitting exactly on a
+        // non-adjacent edge's interior) are now correctly excluded.
+        // Alive / Blessed / Free / Undead are unchanged.
+        assert_eq!(idx.num_types(), 271, "spectre VT count");
+        assert_eq!(alive + cursed, 271, "alive + cursed = total");
         assert_eq!(dead + undead, cursed, "cursed = Dead + Undead");
         assert_eq!(blessed + free, alive, "alive = Blessed + Free");
-        // Concrete counts — current values; will need updating if the
-        // algorithm changes.
         assert_eq!(alive, 102, "spectre alive count");
         assert_eq!(blessed, 82, "spectre blessed count");
         assert_eq!(free, 20, "spectre free count");
-        assert_eq!(cursed, 178, "spectre cursed count");
-        assert_eq!(dead, 159, "spectre dead count");
+        assert_eq!(cursed, 169, "spectre cursed count");
+        assert_eq!(dead, 150, "spectre dead count");
         assert_eq!(undead, 19, "spectre undead count");
-        // 426 = 212 open + 214 closed. The classifications above
-        // (alive/blessed/etc.) are geometric invariants. The
-        // transition count moved from a previous 420 when the
+        // The transition count moved from a previous 420 when the
         // tile_offset encoding was fixed: see
         // `spectre_old_encoding_would_collapse_exactly_six_transitions`.
         // Closing transitions all have `dst_id = CLOSED_ID` and the
@@ -2226,7 +2228,7 @@ mod tests {
         // `+ L` term in that value, causing distinct geometric
         // closing glues with `b1 + 2*L1 = b2 + 2*L2` to share the
         // same key.
-        assert_eq!(idx.transitions().len(), 426, "spectre transition count");
+        assert_eq!(idx.transitions().len(), 414, "spectre transition count");
     }
 
     // ========================================================
