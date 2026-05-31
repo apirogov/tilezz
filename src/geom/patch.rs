@@ -1223,7 +1223,7 @@ impl<T: IsRing> GrowingPatch<T> {
         }
 
         let seed_angles = seed_rat.seq().to_vec();
-        let new_angles = compute_glue_angles::<T>(&seed_angles, pm, tileset)?;
+        let new_angles = compute_glue_angles::<T>(&seed_angles, pm, tileset).ok()?;
 
         let seg_len_old = n - mlen;
         let seg_len_new = m - mlen;
@@ -1301,11 +1301,11 @@ impl<T: IsRing> GrowingPatch<T> {
 
         let new_angles =
             match compute_glue_angles::<T>(self.angles(), pm, self.match_index.tileset()) {
-                Some(a) => a,
-                None => {
+                Ok(a) => a,
+                Err(why) => {
                     debug_assert!(
                         false,
-                        "compute_glue_angles returned None; get_all_matches() \
+                        "compute_glue_angles rejected ({why:?}); get_all_matches() \
                          should already filter +/-hturn glues via try_glue_precomputed"
                     );
                     return false;
@@ -1654,7 +1654,7 @@ fn compute_glue_angles<T: IsRing>(
     angles: &[i8],
     pm: &PatchMatch,
     tileset: &Arc<TileSet<T>>,
-) -> Option<Vec<i8>> {
+) -> Result<Vec<i8>, DegenerateGlue> {
     let other_seq = tileset.rat(pm.b.tile_id).seq();
     let gr = glue::glue_raw_angles::<T>(
         angles,
@@ -1662,13 +1662,31 @@ fn compute_glue_angles<T: IsRing>(
         pm.a_range.start_offset,
         pm.len(),
         pm.b.range.start_offset,
-    )?;
+    )
+    .ok_or(DegenerateGlue::KeystoneHturn)?;
     if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
         if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-            return None;
+            return Err(DegenerateGlue::JunctionHturn);
         }
     }
-    Some(gr.angles)
+    Ok(gr.angles)
+}
+
+/// Why [`compute_glue_angles`] rejected a glue. Both variants amount
+/// to "the glue would pinch the boundary at a junction" -- they
+/// distinguish *where* the pinch is detected for diagnostic purposes
+/// and may grow if other rejection causes appear later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DegenerateGlue {
+    /// Keystone-glue case: the petal's full perimeter is absorbed by
+    /// the match so both ends of the matched run collapse to a single
+    /// new boundary vertex, and the merged junction angle there is
+    /// +/-hturn. Surfaced from [`glue::glue_raw_angles`] returning
+    /// `None`.
+    KeystoneHturn,
+    /// Non-keystone glue: at least one of the two new junction angles
+    /// (between A-survivors and B-survivors) is +/-hturn.
+    JunctionHturn,
 }
 
 /// Trace a polyline of unit edges starting at `start` facing
@@ -3536,8 +3554,8 @@ mod tests {
 
         for pm in &candidates {
             let new_angles = match compute_glue_angles::<ZZ12>(gp.angles(), pm, &tileset) {
-                Some(a) => a,
-                None => continue,
+                Ok(a) => a,
+                Err(_) => continue,
             };
             let snake_ok = Snake::<ZZ12>::try_from(new_angles.as_slice()).is_ok();
             let mut trial = gp.clone();
