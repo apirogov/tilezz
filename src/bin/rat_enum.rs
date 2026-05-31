@@ -814,6 +814,138 @@ fn run_rat_enum_seqs(
     f(max_steps, step, n_threads, dihedral, paranoid)
 }
 
+// ---- Seed partitioning ----
+//
+// External-orchestration entry points. `--list-seeds` walks the DFS
+// down to `split_depth` and prints (1) "SEED <comma,sep,angles>"
+// lines for alive prefixes and (2) "RAT [...]" lines for polygons
+// that closed before reaching `split_depth`. `--seed <prefix>`
+// resumes the DFS from the given prefix and prints RAT lines for
+// what it finds. The two outputs together (one --list-seeds plus
+// per-seed jobs) are mergeable via `sort -u` on the RAT lines to
+// recover the one-shot result.
+
+/// Build the `CanonicalOps` pair for either rotation-canonical or
+/// dihedral-canonical enumeration.
+fn make_ops(dihedral: bool) -> CanonicalOps {
+    if dihedral {
+        CanonicalOps {
+            is_canonical: is_dihedral_canonical_extended,
+            canonicalize: dihedral_canonical,
+        }
+    } else {
+        CanonicalOps {
+            is_canonical: is_canonical_extended,
+            canonicalize: canonical_identity,
+        }
+    }
+}
+
+/// Walk the DFS down to `split_depth` and return
+/// `(closed, alive_prefixes)`. `closed` contains polygons that
+/// closed *during the seed walk* (perimeter <= split_depth). The
+/// caller is responsible for handling both: closed ones go straight
+/// into the final result; alive prefixes are the work units to be
+/// dispatched to per-seed jobs.
+fn collect_seed_prefixes<ZZ: IsRing>(
+    max_steps: usize,
+    step: i8,
+    split_depth: usize,
+    dihedral: bool,
+) -> (HashSet<Vec<i8>>, Vec<Vec<i8>>) {
+    let ops = make_ops(dihedral);
+    let mut snake: Snake<ZZ> = Snake::new();
+    let mut seeds: Vec<Vec<i8>> = Vec::new();
+    let mut closed: HashSet<Vec<i8>> = HashSet::new();
+    let mut stats = DfsStats::default();
+    {
+        let mut gather = SeedGather {
+            seeds: &mut seeds,
+            closed: &mut closed,
+            stats: &mut stats,
+        };
+        collect_seeds::<ZZ>(
+            &mut snake,
+            max_steps,
+            step,
+            split_depth,
+            &mut gather,
+            ops,
+            false,
+        );
+    }
+    (closed, seeds)
+}
+
+/// Resume the DFS from `seed` (a walked angle prefix) and return the
+/// unique canonical sequences found below it. Used by `--seed` and
+/// by the unit-test merge check.
+fn enumerate_from_seed<ZZ: IsRing>(
+    max_steps: usize,
+    step: i8,
+    seed: &[i8],
+    dihedral: bool,
+    paranoid: bool,
+) -> HashSet<Vec<i8>> {
+    let ops = make_ops(dihedral);
+    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
+    let mut local: HashSet<Vec<i8>> = HashSet::new();
+    let mut stats = DfsStats::default();
+    rat_enum_step::<ZZ>(
+        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+    );
+    local
+}
+
+type SeedListing = (HashSet<Vec<i8>>, Vec<Vec<i8>>);
+type CollectSeedFn = fn(usize, i8, usize, bool) -> SeedListing;
+type EnumFromSeedFn = fn(usize, i8, &[i8], bool, bool) -> HashSet<Vec<i8>>;
+
+fn dispatch_collect_seed_prefixes(
+    ring: u8,
+    max_steps: usize,
+    step: i8,
+    split_depth: usize,
+    dihedral: bool,
+) -> SeedListing {
+    let f: CollectSeedFn = match ring {
+        4 => collect_seed_prefixes::<ZZ4>,
+        8 => collect_seed_prefixes::<ZZ8>,
+        10 => collect_seed_prefixes::<ZZ10>,
+        12 => collect_seed_prefixes::<ZZ12>,
+        16 => collect_seed_prefixes::<ZZ16>,
+        20 => collect_seed_prefixes::<ZZ20>,
+        24 => collect_seed_prefixes::<ZZ24>,
+        32 => collect_seed_prefixes::<ZZ32>,
+        60 => collect_seed_prefixes::<ZZ60>,
+        _ => panic!("invalid ring selected"),
+    };
+    f(max_steps, step, split_depth, dihedral)
+}
+
+fn dispatch_enumerate_from_seed(
+    ring: u8,
+    max_steps: usize,
+    step: i8,
+    seed: &[i8],
+    dihedral: bool,
+    paranoid: bool,
+) -> HashSet<Vec<i8>> {
+    let f: EnumFromSeedFn = match ring {
+        4 => enumerate_from_seed::<ZZ4>,
+        8 => enumerate_from_seed::<ZZ8>,
+        10 => enumerate_from_seed::<ZZ10>,
+        12 => enumerate_from_seed::<ZZ12>,
+        16 => enumerate_from_seed::<ZZ16>,
+        20 => enumerate_from_seed::<ZZ20>,
+        24 => enumerate_from_seed::<ZZ24>,
+        32 => enumerate_from_seed::<ZZ32>,
+        60 => enumerate_from_seed::<ZZ60>,
+        _ => panic!("invalid ring selected"),
+    };
+    f(max_steps, step, seed, dihedral, paranoid)
+}
+
 // --------
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -822,6 +954,11 @@ enum Mode {
     Render,
     /// Enumerate only and report elapsed time
     Bench,
+    /// Walk the DFS down to `split_depth` (default 3) and print alive
+    /// prefixes one per line as "SEED a,b,c", plus any polygon that
+    /// closed before reaching that depth as "RAT [...]". Use with
+    /// `--seed` to dispatch per-prefix jobs externally and merge.
+    ListSeeds,
 }
 
 #[derive(Parser, Debug)]
@@ -887,6 +1024,21 @@ struct Cli {
     /// Roughly O(n) extra work per step; expect ~2x slowdown.
     #[arg(long)]
     paranoid: bool,
+
+    /// Resume the DFS from a specific seed prefix (comma-separated
+    /// angles like `-5,3,-4`). When set, the DFS skips seed collection
+    /// and runs single-threaded from this prefix only; output is the
+    /// same RAT lines as Bench mode. Used together with
+    /// `--mode list-seeds` to dispatch per-prefix jobs externally.
+    #[arg(long, value_delimiter = ',', allow_hyphen_values = true, num_args = 1..)]
+    seed: Option<Vec<i8>>,
+
+    /// DFS splitting depth for `--mode list-seeds` and for the
+    /// parallel (`--threads > 1`) seed-collection step. Defaults to
+    /// 3 in list-seeds mode (~50-300 seeds for typical n), or to
+    /// the auto-picked value otherwise.
+    #[arg(long)]
+    split_depth: Option<usize>,
 }
 
 /// Resolve the `--threads` CLI value to an actual worker count.
@@ -909,7 +1061,66 @@ fn main() {
 
     let n_threads = resolve_n_threads(cli.threads);
 
+    // `--mode list-seeds`: walk the DFS down to split_depth, print
+    // alive prefixes as `SEED a,b,c` lines and any already-closed
+    // polygons as `RAT [...]` lines, then exit. The split_depth
+    // defaults to 3 (typically ~50-300 seeds at usable n).
+    if matches!(cli.mode, Mode::ListSeeds) {
+        let split_depth = cli.split_depth.unwrap_or(3);
+        let (closed, seeds) = dispatch_collect_seed_prefixes(
+            cli.ring,
+            cli.max_steps,
+            cli.step,
+            split_depth,
+            cli.dihedral,
+        );
+        for prefix in &seeds {
+            let s = prefix
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            println!("SEED {s}");
+        }
+        // Polygons that closed before reaching split_depth (typically
+        // perimeter-3 only, e.g. the triangle at ZZ12). These would
+        // be missed if the orchestrator only ran the SEED jobs.
+        for seq in &closed {
+            println!("RAT {seq:?}");
+        }
+        eprintln!(
+            "list-seeds: {} alive prefixes at depth {}, {} polygons closed before split",
+            seeds.len(),
+            split_depth,
+            closed.len(),
+        );
+        return;
+    }
+
+    // `--seed <prefix>`: skip seed collection, resume DFS from the
+    // given prefix, print RAT lines. Single-threaded since this is
+    // one work unit; the orchestrator runs multiple `--seed` jobs
+    // in parallel itself.
+    if let Some(seed) = cli.seed.as_deref() {
+        let t0 = Instant::now();
+        let rats = dispatch_enumerate_from_seed(
+            cli.ring,
+            cli.max_steps,
+            cli.step,
+            seed,
+            cli.dihedral,
+            cli.paranoid,
+        );
+        let dt = t0.elapsed();
+        for seq in &rats {
+            println!("RAT {seq:?}");
+        }
+        eprintln!("seed {:?}: {} unique rats in {dt:?}", seed, rats.len());
+        return;
+    }
+
     match cli.mode {
+        Mode::ListSeeds => unreachable!("handled above"),
         Mode::Bench => {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
@@ -1215,6 +1426,58 @@ mod dihedral_tests {
         }
         for n in [4, 6, 8, 10, 12, 14] {
             check_quotient_match::<ZZ4>("ZZ4", n);
+        }
+    }
+
+    /// Mechanics of the `--mode list-seeds` + per-seed dispatch:
+    /// running the DFS in one shot must yield the same set of
+    /// canonical sequences as collecting seeds at some `split_depth`,
+    /// then enumerating from each seed and union-ing with the
+    /// already-closed polygons. Tested across:
+    ///   * small `max_steps` (5-7) for tractable runtime;
+    ///   * dihedral on AND off (each uses a different `CanonicalOps`
+    ///     pair and a different dedup hash);
+    ///   * `split_depth` in 1-3 (1: every root-direction branch is a
+    ///     seed; 3: small polygons close before split, exercising
+    ///     the `closed` half of the merge).
+    ///
+    /// This is the regression target for the seed-partition API.
+    /// Catches any future drift where collect_seeds and the per-seed
+    /// runner stop agreeing on what "the same enumeration" means.
+    #[test]
+    fn test_seed_partitioning_matches_one_shot() {
+        for &n in &[5usize, 6, 7] {
+            for &dihedral in &[false, true] {
+                for &split_depth in &[1usize, 2, 3] {
+                    if split_depth >= n {
+                        continue;
+                    }
+                    let (one_shot_seqs, _) = if dihedral {
+                        super::rat_enum_dihedral::<ZZ12>(n, 1)
+                    } else {
+                        super::rat_enum::<ZZ12>(n, 1)
+                    };
+                    let one_shot: HashSet<Vec<i8>> = one_shot_seqs.into_iter().collect();
+
+                    let (mut seeded, prefixes) =
+                        super::collect_seed_prefixes::<ZZ12>(n, 1, split_depth, dihedral);
+                    for prefix in &prefixes {
+                        seeded.extend(super::enumerate_from_seed::<ZZ12>(
+                            n, 1, prefix, dihedral, false,
+                        ));
+                    }
+
+                    assert_eq!(
+                        one_shot,
+                        seeded,
+                        "n={n} dihedral={dihedral} split_depth={split_depth}: \
+                         seed-partitioned != one-shot \
+                         ({} prefixes + {} pre-closed)",
+                        prefixes.len(),
+                        seeded.len() - prefixes.iter().map(|_| 0).sum::<usize>(),
+                    );
+                }
+            }
         }
     }
 }
