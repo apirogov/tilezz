@@ -291,49 +291,59 @@ pub fn im_sign_basis<const PHI: usize, const K: usize>(
 }
 
 // ----------------
-// Unit-segment intersection (3-multiplication fast path).
+// Unit-segment intersection. This is the one canonical algorithm; every
+// `IntersectUnitSegments` impl in the crate routes through here.
 
-/// Generic 3-multiplication fast path for unit-length segment intersection.
+/// Decide whether two unit-length segments intersect, in exact ring
+/// arithmetic over the integer basis. Touching only at shared endpoints
+/// (`a == c` etc.) is NOT counted as intersection.
 ///
-/// Assumes both segments have unit length (i.e. `s.1 - s.0` is a unit of
-/// the ring's CCW unit group); endpoint coincidence is filtered up front.
+/// # Math
 ///
-/// Math:
-///
-/// ```text
-///   uA = s1.1 - s1.0,  uB = s2.1 - s2.0,  delta = s2.0 - s1.0
-///   v_z = conj(uA) * delta            mul #1 (V = Im(v_z), Re(v_z) = dot(uA, delta))
-///   k_z = conj(uA) * uB               mul #2 (K = Im(k_z))
-///   w_z = conj(delta) * uB            mul #3 (W = Im(w_z))
-/// ```
-///
-/// Non-colinear branch (when `sign(K) != 0`):
+/// Given `s1 = (a, b)`, `s2 = (c, d)`, all four endpoints distinct:
 ///
 /// ```text
-///   (sign(V) > 0) != (sign(V + K) > 0)
-///   && (sign(W) > 0) != (sign(W - K) > 0)
+///   uA    = b - a,  uB = d - c,  delta = c - a    (uA, uB are units)
+///   v_z   = conj(uA) * delta     mul #1
+///   k_z   = conj(uA) * uB        mul #2
+///   w_z   = conj(delta) * uB     mul #3 (only when needed)
 /// ```
 ///
-/// Colinear sub-case (`sign(K) == 0`): `k_z` is then a real `+/-1`. We
-/// read `Re(v_z) = dot(uA, delta) = T` (via the same `v_z` already
-/// computed); the interior-overlap condition depends on whether `k_z`
-/// reduces to `+1` (`uA == uB`, overlap iff `-1 < T < 1`) or `-1`
-/// (`uA == -uB`, overlap iff `0 < T < 2`).
+/// Then `Im(v_z) = wedge(uA, delta)` is the sidedness of `c` vs line ab,
+/// `Im(v_z + k_z) = wedge(uA, d - a)` of `d` vs ab, `Im(w_z) = wedge(delta, uB)`
+/// of `a` vs cd, and `Im(w_z - k_z) = wedge(c - b, uB)` of `b` vs cd.
 ///
-/// The shift representation depends on the per-ring symbolic basis
-/// (specifically how `1` is expressed in `re_decomp`). To keep the
-/// helper closed-form across rings we take `one_in_real_basis: &[i64; K]`
-/// -- the K-vector for the constant `+1` -- so the call site doesn't
-/// have to know the basis layout.
+/// Case analysis:
 ///
-/// `re_decomp[k]` here is the K-vector of `Re(zeta^k)` -- the *same*
-/// table used by [`re_sign_basis`]. We don't need `im_decomp` because
-/// the imaginary parts come from `Im(v_z)`, `Im(k_z)`, `Im(w_z)` via
-/// [`im_sign_basis`].
+/// * `sign(K) == 0`: lines parallel. If `sign(V) != 0` the lines are
+///   distinct parallels (no intersection). Otherwise both segments
+///   are colinear; check overlap via `T = Re(v_z) = dot(uA, delta)`
+///   against the unit-length endpoints (`-1 < T < 1` when `uA == uB`,
+///   `0 < T < 2` when `uA == -uB`).
 ///
-/// ZZ12 has a hand-rolled override (see `rings.rs`) that exploits its
-/// `{1, sqrt(3)}` real-subring shape for a tighter inner loop. Every
-/// other ring routes here via `impl_integral_intersect_unit_segments_via_basis!`.
+/// * `sign(K) != 0`: lines cross at some point. The four sidedness
+///   signs `sign(V)`, `sign(V + K)`, `sign(W)`, `sign(W - K)` classify:
+///
+///   - **Proper crossing**: all four nonzero, both pairs disagree.
+///   - **T-touch**: exactly one sidedness sign is zero (= that endpoint
+///     lies on the other segment's *line*). Intersection iff the
+///     endpoint also lies strictly between the other segment's
+///     endpoints, decided by the corresponding real part:
+///     `Re(v_z) / Re(v_z + k_z) / Re(w_z) / Re(w_z - k_z)`, each
+///     compared against 0 and +/- 1 (the unit segment's endpoints).
+///   - **Same side**: both members of either pair are strictly
+///     same-signed: no crossing.
+///
+/// # Re/Im basis tables
+///
+/// `im_decomp` (= K-vector of `Im(zeta^k)`) drives [`im_sign_basis`] for
+/// the four sidedness signs. `re_decomp` (= K-vector of `Re(zeta^k)`)
+/// drives [`project_re`] for the dot-product position checks in the
+/// colinear and T-touch sub-cases. `one_in_real_basis` is the K-vector
+/// of the real constant `+1`, used to compare positions against the
+/// unit-segment endpoints; we accept it as a parameter rather than
+/// re-deriving it from `re_decomp[0]` so the call site doesn't have to
+/// know the basis layout.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn intersect_unit_segments_basis<const PHI: usize, const K: usize>(
@@ -398,76 +408,59 @@ pub fn intersect_unit_segments_basis<const PHI: usize, const K: usize>(
         }
     }
 
-    // Non-colinear case. We use the 4 orientation signs to classify:
-    //
-    //   sign_v          = sign(wedge(uA, delta))     = sidedness of c vs line ab
-    //   sign_v_plus_k   = sign(wedge(uA, d - a))     = sidedness of d vs line ab
-    //   sign_w          = sign(wedge(delta, uB))     = sidedness of a vs line cd
-    //   sign_w_minus_k  = sign(wedge(c - b, uB))     = sidedness of b vs line cd
-    //
-    // PROPER crossing requires c, d strictly opposite sides of ab AND a, b
-    // strictly opposite sides of cd, i.e. all four signs nonzero and the
-    // two pairs disagree.
-    //
-    // T-TOUCH: when one of the four signs is zero, the corresponding
-    // endpoint lies on the other segment's *line*. To distinguish
-    // "strictly interior to the other segment" (= intersection) from
-    // "on the line but past the endpoints" (= no intersection) we need a
-    // between-on-line check. For unit `uX`, `dot(uX, p - xstart)` is the
-    // position of `p` along the segment in [0, 1]; strictly interior
-    // means `0 < dot < 1`. The relevant dot products are the *real
-    // parts* of the same three products we already computed --
-    //   Re(v_z) = dot(uA, c - a),  Re(v + k) = dot(uA, d - a),
-    //   Re(w_z) = dot(uB, c - a),  Re(w - k) = dot(uB, c - b)
-    // -- so the T-touch cases need no additional multiplications.
+    // Lines not parallel. Process the two sidedness pairs in turn.
+    // For each pair we (a) cover the T-touch sub-case when one
+    // sidedness sign is zero, then (b) reject if both are strictly
+    // same-signed. The remaining case -- both strictly differ -- falls
+    // through to the next pair (or to the final return). See the
+    // function-level docstring for the algorithm structure.
 
-    // `strictly_between_0_and_1` and `strictly_between_neg1_and_0`
-    // decide `0 < t < 1` and `-1 < t < 0` respectively, where `t` is a
-    // K-vector representation of a real quantity. The +/- 1 boundary
-    // corresponds to the unit-length segment's endpoints.
-    let strictly_between_0_and_1 = |t: &[i64; K]| -> bool {
+    // `t` is a real quantity in the K-vector representation. Strictly
+    // interior to a unit segment iff `0 < t < 1` or, in the
+    // opposite-sign convention, `-1 < t < 0`.
+    let in_open_0_1 = |t: &[i64; K]| -> bool {
         let t_minus_1 = sub_kvec::<K>(t, one_in_real_basis);
         real_sign(t) > 0 && real_sign(&t_minus_1) < 0
     };
-    let strictly_between_neg1_and_0 = |t: &[i64; K]| -> bool {
+    let in_open_neg1_0 = |t: &[i64; K]| -> bool {
         let t_plus_1 = add_kvec::<K>(t, one_in_real_basis);
         real_sign(t) < 0 && real_sign(&t_plus_1) > 0
     };
 
-    // c side check: sign_v + sign_v_plus_k.
+    // -- Pair 1: c, d vs line ab.
     let v_plus_k = add_basis::<PHI>(&v_z, &k_z);
     let sign_v_plus_k = im_sign_basis::<PHI, K>(&v_plus_k, im_decomp, real_sign);
-    // T-touch: c on line ab and strictly between a, b.
+    // T-touch: c on line ab, position along ab = Re(v_z), in (0, 1).
     if sign_v == 0 {
-        return strictly_between_0_and_1(&project_re::<PHI, K>(&v_z, re_decomp));
+        return in_open_0_1(&project_re::<PHI, K>(&v_z, re_decomp));
     }
+    // T-touch: d on line ab, position along ab = Re(v_z + k_z), in (0, 1).
     if sign_v_plus_k == 0 {
-        return strictly_between_0_and_1(&project_re::<PHI, K>(&v_plus_k, re_decomp));
+        return in_open_0_1(&project_re::<PHI, K>(&v_plus_k, re_decomp));
     }
-    // Both c and d strictly off line ab. If they're on the same side, no crossing.
+    // c, d strictly on the same side: no crossing.
     if (sign_v > 0) == (sign_v_plus_k > 0) {
         return false;
     }
 
-    // a side check: sign_w + sign_w_minus_k.
+    // -- Pair 2: a, b vs line cd. (Only reached if pair 1 disagrees.)
     let conj_delta = conj_basis::<PHI>(&delta, conj_matrix);
     let w_z = mul_basis::<PHI>(&conj_delta, &u_b, reduction);
     let w_minus_k = sub_basis::<PHI>(&w_z, &k_z);
     let sign_w = im_sign_basis::<PHI, K>(&w_z, im_decomp, real_sign);
     let sign_w_minus_k = im_sign_basis::<PHI, K>(&w_minus_k, im_decomp, real_sign);
-    // T-touch: a on line cd and strictly between c, d.
-    // dot(uB, a - c) = -dot(uB, delta) = -Re(w_z), in (0,1) iff Re(w_z) in (-1,0).
+    // T-touch: a on line cd. Position along cd = dot(uB, a - c)
+    // = -dot(uB, delta) = -Re(w_z). In (0, 1) iff Re(w_z) in (-1, 0).
     if sign_w == 0 {
-        return strictly_between_neg1_and_0(&project_re::<PHI, K>(&w_z, re_decomp));
+        return in_open_neg1_0(&project_re::<PHI, K>(&w_z, re_decomp));
     }
-    // T-touch: b on line cd and strictly between c, d.
-    // dot(uB, b - c) = Re(k_z) - Re(w_z) = -Re(w - k), in (0,1) iff
-    // Re(w-k) in (-1, 0).
+    // T-touch: b on line cd. Position along cd = dot(uB, b - c)
+    // = Re(k_z) - Re(w_z) = -Re(w_z - k_z). In (0, 1) iff
+    // Re(w_z - k_z) in (-1, 0).
     if sign_w_minus_k == 0 {
-        return strictly_between_neg1_and_0(&project_re::<PHI, K>(&w_minus_k, re_decomp));
+        return in_open_neg1_0(&project_re::<PHI, K>(&w_minus_k, re_decomp));
     }
-
-    // No zero signs: proper crossing iff a, b strictly on opposite sides of cd.
+    // Proper crossing iff a, b strictly on opposite sides of cd.
     (sign_w > 0) != (sign_w_minus_k > 0)
 }
 

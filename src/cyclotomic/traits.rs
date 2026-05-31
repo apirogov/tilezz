@@ -58,14 +58,18 @@ pub trait ReImSign {
     fn im_sign(&self) -> i8;
 }
 
-/// Per-ring specialization hook for the unit-length segment intersection
-/// test.
+/// Trait-dispatch hook for the unit-length segment intersection test.
 ///
 /// `intersect_unit_segments(s1, s2)` is equivalent to
 /// `geometry::intersect(s1, s2)` *given* that both segments have unit
-/// length. ZZ12 uses a hand-rolled 3-multiplication pure-i64 fast path;
-/// every other ring routes through `intersect_unit_segments_basis` via
-/// the `impl_integral_intersect_unit_segments_via_basis!` macro.
+/// length. The canonical implementation lives in
+/// [`crate::cyclotomic::integral_basis::intersect_unit_segments_basis`];
+/// every ring implements this trait via the
+/// `impl_integral_intersect_unit_segments_via_basis!` macro, supplying
+/// only a `fn(&[i64; K]) -> i8` real-subring sign function. The trait
+/// exists for type dispatch (so generic code can write
+/// `T::intersect_unit_segments(...)` without naming the macro
+/// machinery), not for opt-in per-ring specialization.
 pub trait IntersectUnitSegments: Sized {
     fn intersect_unit_segments(s1: &(Self, Self), s2: &(Self, Self)) -> bool;
 }
