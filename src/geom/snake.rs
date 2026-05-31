@@ -415,12 +415,16 @@ impl<T: IsRing> Snake<T> {
         // Iterate the precomputed deduplicated cell set for this segment's
         // (dx, dy) cell offset (one of 9 cases). Yields at most 8 cells, all
         // unique -- no runtime dedup needed at the cell level.
+        let mut record = |idx: usize| {
+            conflict = Some(conflict.map_or(idx, |c| c.max(idx)));
+        };
+
         for cell in UnitSquareGrid::edge_neighborhood_of(prev_pt, new_pt) {
             for &pt_idx in self.grid.get(cell) {
                 // Vertex-revisit check (only when new_pt is not origin --
                 // origin matches points[0] by polygon closure, which is fine).
                 if new_pt_nz && self.points[pt_idx] == new_pt {
-                    conflict = Some(conflict.unwrap_or(0).max(pt_idx));
+                    record(pt_idx);
                 }
                 // Segment ending at pt_idx (if any).
                 if pt_idx > 0 {
@@ -428,7 +432,7 @@ impl<T: IsRing> Snake<T> {
                     if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[seg_id], self.points[pt_idx]);
                         if intersect_unit_segments(&new_seg, &s) {
-                            conflict = Some(conflict.unwrap_or(0).max(seg_id));
+                            record(seg_id);
                         }
                     }
                 }
@@ -438,7 +442,7 @@ impl<T: IsRing> Snake<T> {
                     if check_and_mark(&mut seen_segs, seg_id) {
                         let s = (self.points[pt_idx], self.points[pt_idx + 1]);
                         if intersect_unit_segments(&new_seg, &s) {
-                            conflict = Some(conflict.unwrap_or(0).max(seg_id));
+                            record(seg_id);
                         }
                     }
                 }
@@ -458,13 +462,11 @@ impl<T: IsRing> Snake<T> {
         assert!(!self.is_closed(), "add_diagnosed: snake is already closed");
         let a = normalize_angle::<T>(angle);
         assert!(a.abs() != T::hturn());
-        match self.can_add(a) {
-            None => {
-                self.add_unsafe(a);
-                None
-            }
-            Some(idx) => Some(idx),
+        let conflict = self.can_add(a);
+        if conflict.is_none() {
+            self.add_unsafe(a);
         }
+        conflict
     }
 
     /// Add a new segment to the snake.
@@ -747,23 +749,57 @@ mod tests {
         );
     }
 
+    /// Cross-check `add_diagnosed` against a brute scan: build several
+    /// snakes, try every legal next angle, and for each rejection
+    /// confirm the reported edge index matches `max` over all edges
+    /// that geometrically conflict with the would-be new segment.
+    ///
+    /// "Latest" is the load-bearing contract; this test verifies it
+    /// directly rather than relying on a hand-picked multi-crossing
+    /// configuration.
     #[test]
-    fn test_add_diagnosed_latest_conflict() {
-        // Build a zigzag where the new segment crosses TWO existing edges.
-        // In ZZ12: [0, 5, 5] → origin → (1,0) → (1+unit(5), 0+unit(5+0))...
-        // Actually, let me use the s4 example from test_can_add which is well-understood.
-        let mut s4: Snake<ZZ12> = Snake::new();
-        assert!(s4.add(0)); // edge 0: (0,0)→(1,0)
-        assert!(s4.add(5)); // edge 1: (1,0)→(1+u5, u5)
-                            // angle 4 would cross — verify it reports a valid edge index.
-        let result = s4.add_diagnosed(4);
-        assert!(result.is_some(), "angle 4 should conflict");
-        let idx = result.unwrap();
-        assert!(
-            idx < s4.len(),
-            "conflicting edge {idx} must be < len {}",
-            s4.len()
-        );
+    fn test_add_diagnosed_latest_conflict_brute() {
+        fn brute_conflicts<T: IsRing>(s: &Snake<T>, angle: i8) -> Vec<usize> {
+            let new_seg @ (_prev, new_pt) = s.next_seg(angle);
+            let new_pt_nz = !new_pt.is_zero();
+            let mut conflicts: Vec<usize> = Vec::new();
+            // Vertex revisits: any existing vertex (except origin / closure)
+            // that matches `new_pt`.
+            for i in 1..s.points.len() {
+                if new_pt_nz && s.points[i] == new_pt {
+                    conflicts.push(i);
+                }
+            }
+            // Segment crossings: every existing edge.
+            for seg_id in 0..s.len() {
+                let seg = (s.points[seg_id], s.points[seg_id + 1]);
+                if intersect_unit_segments(&new_seg, &seg) {
+                    conflicts.push(seg_id);
+                }
+            }
+            conflicts
+        }
+
+        fn check<T: IsRing>(label: &str, prefix: &[i8]) {
+            let s: Snake<T> = Snake::try_from(prefix).expect("valid prefix");
+            for direction in (-T::hturn() + 1)..T::hturn() {
+                let expected_max = brute_conflicts(&s, direction).into_iter().max();
+                let got = s.clone().add_diagnosed(direction);
+                assert_eq!(
+                    got, expected_max,
+                    "{label}: prefix={prefix:?} angle={direction}: brute={expected_max:?}, got={got:?}"
+                );
+            }
+        }
+
+        // ZZ4 L-shaped walk. Last-vertex revisit by stepping back into
+        // an interior vertex is one expected conflict here.
+        check::<ZZ4>("zz4 L-walk", &[0, 0, 1, 1]);
+        // ZZ12 short zig that creates multiple candidate crossing edges
+        // on a follow-up angle.
+        check::<ZZ12>("zz12 zig", &[0, 5]);
+        check::<ZZ12>("zz12 longer zig", &[0, 5, -5, 5]);
+        check::<ZZ12>("zz12 spiral", &[0, 1, 1, 1, 1, 1]);
     }
 
     #[test]
