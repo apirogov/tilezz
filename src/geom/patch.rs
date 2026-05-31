@@ -77,11 +77,16 @@ pub use crate::geom::matches::PatchMatch;
 /// `PatchSeed` is `Clone` because callers (test enumerators, NT seed
 /// phase) iterate over candidates and try several first-glues
 /// independently; `seed.clone().grow(&pm)` is the canonical pattern.
+///
+/// The candidate-match cache (`cached_matches`) is lazy: BFS phases
+/// that try each tile as a candidate seed and only actually need
+/// `candidate_matches()` for the ones that survive other filters
+/// don't pay for the enumeration on rejected seeds.
 #[derive(Clone)]
 pub struct PatchSeed<T: IsRing> {
     match_index: Arc<MatchTypeIndex<T>>,
     tile_id: usize,
-    cached_matches: Vec<PatchMatch>,
+    cached_matches: std::sync::OnceLock<Vec<PatchMatch>>,
 }
 
 /// Spatial collision-detection state for the boundary of a
@@ -473,15 +478,15 @@ fn flower_petal_glue<T: IsRing>(
 
 impl<T: IsRing> PatchSeed<T> {
     /// Build a `PatchSeed` for the given tileset, with `seed_tile_id`
-    /// as the seed tile shape.
+    /// as the seed tile shape. The first-glue candidate set is NOT
+    /// computed here; the first call to [`Self::candidate_matches`]
+    /// triggers the enumeration and caches it.
     pub fn new(tileset: Arc<TileSet<T>>, seed_tile_id: usize) -> Self {
         let match_index = Arc::new(MatchTypeIndex::new(Arc::clone(&tileset)));
-        let cached_matches =
-            compute_seed_matches(&match_index, match_index.tileset(), seed_tile_id);
         PatchSeed {
             match_index,
             tile_id: seed_tile_id,
-            cached_matches,
+            cached_matches: std::sync::OnceLock::new(),
         }
     }
 
@@ -506,10 +511,13 @@ impl<T: IsRing> PatchSeed<T> {
         self.match_index.tileset().rat(self.tile_id).clone()
     }
 
-    /// All legal first-glue candidates against the seed tile. Cached
-    /// at construction; callers can iterate without recomputing.
+    /// All legal first-glue candidates against the seed tile. Computed
+    /// and cached on first call; subsequent calls return the cached
+    /// slice without recomputing.
     pub fn candidate_matches(&self) -> &[PatchMatch] {
-        &self.cached_matches
+        self.cached_matches.get_or_init(|| {
+            compute_seed_matches(&self.match_index, self.match_index.tileset(), self.tile_id)
+        })
     }
 
     /// Attempt the first glue. Consumes the seed; returns the
