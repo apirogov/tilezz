@@ -180,6 +180,7 @@ fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) 
         },
         "enumeration",
         "",
+        false,
     )
 }
 
@@ -208,6 +209,7 @@ fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, D
         },
         "dihedral enumeration",
         "dihedral ",
+        false,
     )
 }
 
@@ -217,13 +219,25 @@ fn rat_enum_with<ZZ: IsRing>(
     ops: CanonicalOps,
     label: &str,
     prefix: &str,
+    paranoid: bool,
 ) -> (Vec<Vec<i8>>, DfsStats) {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
     let mut stats = DfsStats::default();
 
     println!("-------- {label} started --------");
-    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut result, &mut stats, ops);
+    if paranoid {
+        println!("paranoid: per-step fresh-snake cross-check enabled");
+    }
+    rat_enum_step::<ZZ>(
+        &mut snake,
+        max_steps,
+        step,
+        &mut result,
+        &mut stats,
+        ops,
+        paranoid,
+    );
     println!(
         "-------- {label} completed --------\n{prefix}{} rats found",
         result.len()
@@ -241,6 +255,7 @@ fn rat_enum_step<ZZ: IsRing>(
     result: &mut HashSet<Vec<i8>>,
     stats: &mut DfsStats,
     ops: CanonicalOps,
+    paranoid: bool,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -274,6 +289,30 @@ fn rat_enum_step<ZZ: IsRing>(
             stats.intersected += 1;
             continue;
         }
+        if paranoid {
+            // After each successful add(), replay the entire current
+            // angle prefix in a fresh Snake. Any disagreement means
+            // the stateful incremental check accepts a prefix the
+            // from-scratch check rejects -- a Snake bug.
+            let angles = snake.angles().to_vec();
+            let mut fresh: Snake<ZZ> = Snake::new();
+            for (i, &a) in angles.iter().enumerate() {
+                assert!(
+                    fresh.add(a),
+                    "stateful snake accepted full prefix {:?} but fresh snake \
+                     rejected angle {} at step {}",
+                    &angles,
+                    a,
+                    i
+                );
+            }
+            assert_eq!(
+                fresh.is_closed(),
+                snake.is_closed(),
+                "fresh snake disagrees on is_closed for {:?}",
+                &angles
+            );
+        }
         if snake.is_closed() {
             stats.closed += 1;
             let r = {
@@ -291,7 +330,7 @@ fn rat_enum_step<ZZ: IsRing>(
             }
         } else {
             stats.recursed += 1;
-            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops);
+            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops, paranoid);
         }
         snake.pop();
     }
@@ -380,11 +419,20 @@ fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
 }
 
 /// Correctness layer for the dihedral DFS.  Computes the lex-minimum
-/// over all cyclic rotations and reversed rotations of `seq`.  Both
-/// canonical rotations of a chiral pair map to the same value, so the
-/// HashSet deduplicates them.  Without this step, the output would
-/// contain both members of some chiral pairs
-/// (see module-level comment above).
+/// over all cyclic rotations and reversed rotations of `seq`.
+///
+/// The inputs are already chirality-normalized to CW by the DFS
+/// before this function runs. Under that normalization, two mirror
+/// images of the same polygon shape (an enantiomer pair) end up as
+/// CW walks of the original and the mirror. Algebraically these CW
+/// walks differ by SEQUENCE REVERSAL (one polygon walked CW from
+/// vertex V0, vs its mirror walked CW from V0' = mirror of V0,
+/// gives sequences related by reverse). Plain reversal -- not
+/// revcomp -- is therefore the right relation here.
+///
+/// Both members of an enantiomer pair map to the same value, so the
+/// HashSet deduplicates them. Without this step, the output would
+/// contain both members of every non-achiral chiral pair.
 fn dihedral_canonical(seq: &[i8]) -> Vec<i8> {
     let n = seq.len();
     let mut best: Vec<i8> = seq.to_vec();
@@ -446,6 +494,7 @@ fn collect_seeds<ZZ: IsRing>(
     split_depth: usize,
     gather: &mut SeedGather<'_>,
     ops: CanonicalOps,
+    paranoid: bool,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -474,6 +523,26 @@ fn collect_seeds<ZZ: IsRing>(
             gather.stats.intersected += 1;
             continue;
         }
+        if paranoid {
+            let angles = snake.angles().to_vec();
+            let mut fresh: Snake<ZZ> = Snake::new();
+            for (i, &a) in angles.iter().enumerate() {
+                assert!(
+                    fresh.add(a),
+                    "stateful snake accepted full prefix {:?} but fresh snake \
+                     rejected angle {} at step {}",
+                    &angles,
+                    a,
+                    i
+                );
+            }
+            assert_eq!(
+                fresh.is_closed(),
+                snake.is_closed(),
+                "fresh snake disagrees on is_closed for {:?}",
+                &angles
+            );
+        }
         if snake.is_closed() {
             gather.stats.closed += 1;
             let r = {
@@ -494,7 +563,7 @@ fn collect_seeds<ZZ: IsRing>(
             if snake.angles().len() >= split_depth {
                 gather.seeds.push(snake.angles().to_vec());
             } else {
-                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops);
+                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops, paranoid);
             }
         }
         snake.pop();
@@ -513,12 +582,16 @@ fn rat_enum_parallel<ZZ: IsRing>(
     ops: CanonicalOps,
     label: &str,
     prefix: &str,
+    paranoid: bool,
 ) -> (Vec<Vec<i8>>, DfsStats) {
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
     let branching = 2 * (hm1 / step.max(1) as usize) + 1;
     let split_depth = splitting_depth(n_threads, branching);
 
     println!("-------- {label} started --------");
+    if paranoid {
+        println!("paranoid: per-step fresh-snake cross-check enabled");
+    }
     println!("parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}");
 
     let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
@@ -531,7 +604,15 @@ fn rat_enum_parallel<ZZ: IsRing>(
             closed: &mut closed_main,
             stats: &mut seed_stats,
         };
-        collect_seeds::<ZZ>(&mut snake, max_steps, step, split_depth, &mut gather, ops);
+        collect_seeds::<ZZ>(
+            &mut snake,
+            max_steps,
+            step,
+            split_depth,
+            &mut gather,
+            ops,
+            paranoid,
+        );
     }
     println!("parallel: {} seed states collected", seeds.len());
 
@@ -551,7 +632,9 @@ fn rat_enum_parallel<ZZ: IsRing>(
                         break;
                     }
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
-                    rat_enum_step::<ZZ>(&mut snake, max_steps, step, &mut local, &mut stats, ops);
+                    rat_enum_step::<ZZ>(
+                        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+                    );
                 }
                 (local, stats)
             }));
@@ -589,6 +672,7 @@ fn enumerate_dispatch<ZZ: IsRing>(
     step: i8,
     n_threads: usize,
     dihedral: bool,
+    paranoid: bool,
 ) -> EnumResult {
     let ops = if dihedral {
         CanonicalOps {
@@ -610,9 +694,9 @@ fn enumerate_dispatch<ZZ: IsRing>(
     let prefix = if dihedral { "dihedral " } else { "" };
 
     if n_threads <= 1 {
-        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix)
+        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix, paranoid)
     } else {
-        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix)
+        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix, paranoid)
     }
 }
 
@@ -622,17 +706,36 @@ fn run_rat_enum_polylines(
     step: i8,
     n_threads: usize,
     dihedral: bool,
+    paranoid: bool,
 ) -> Vec<Vec<P64>> {
     match ring {
-        4 => polygons::<ZZ4>(enumerate_dispatch::<ZZ4>(max_steps, step, n_threads, dihedral).0),
-        8 => polygons::<ZZ8>(enumerate_dispatch::<ZZ8>(max_steps, step, n_threads, dihedral).0),
-        10 => polygons::<ZZ10>(enumerate_dispatch::<ZZ10>(max_steps, step, n_threads, dihedral).0),
-        12 => polygons::<ZZ12>(enumerate_dispatch::<ZZ12>(max_steps, step, n_threads, dihedral).0),
-        16 => polygons::<ZZ16>(enumerate_dispatch::<ZZ16>(max_steps, step, n_threads, dihedral).0),
-        20 => polygons::<ZZ20>(enumerate_dispatch::<ZZ20>(max_steps, step, n_threads, dihedral).0),
-        24 => polygons::<ZZ24>(enumerate_dispatch::<ZZ24>(max_steps, step, n_threads, dihedral).0),
-        32 => polygons::<ZZ32>(enumerate_dispatch::<ZZ32>(max_steps, step, n_threads, dihedral).0),
-        60 => polygons::<ZZ60>(enumerate_dispatch::<ZZ60>(max_steps, step, n_threads, dihedral).0),
+        4 => polygons::<ZZ4>(
+            enumerate_dispatch::<ZZ4>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        8 => polygons::<ZZ8>(
+            enumerate_dispatch::<ZZ8>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        10 => polygons::<ZZ10>(
+            enumerate_dispatch::<ZZ10>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        12 => polygons::<ZZ12>(
+            enumerate_dispatch::<ZZ12>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        16 => polygons::<ZZ16>(
+            enumerate_dispatch::<ZZ16>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        20 => polygons::<ZZ20>(
+            enumerate_dispatch::<ZZ20>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        24 => polygons::<ZZ24>(
+            enumerate_dispatch::<ZZ24>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        32 => polygons::<ZZ32>(
+            enumerate_dispatch::<ZZ32>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        60 => polygons::<ZZ60>(
+            enumerate_dispatch::<ZZ60>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
         _ => panic!("invalid ring selected"),
     }
 }
@@ -694,8 +797,9 @@ fn run_rat_enum_seqs(
     step: i8,
     n_threads: usize,
     dihedral: bool,
+    paranoid: bool,
 ) -> EnumResult {
-    let f: fn(usize, i8, usize, bool) -> EnumResult = match ring {
+    let f: fn(usize, i8, usize, bool, bool) -> EnumResult = match ring {
         4 => enumerate_dispatch::<ZZ4>,
         8 => enumerate_dispatch::<ZZ8>,
         10 => enumerate_dispatch::<ZZ10>,
@@ -707,7 +811,7 @@ fn run_rat_enum_seqs(
         60 => enumerate_dispatch::<ZZ60>,
         _ => panic!("invalid ring selected"),
     };
-    f(max_steps, step, n_threads, dihedral)
+    f(max_steps, step, n_threads, dihedral, paranoid)
 }
 
 // --------
@@ -773,6 +877,16 @@ struct Cli {
     /// the root.
     #[arg(long)]
     dihedral: bool,
+
+    /// After every successful `Snake::add`, replay the entire current
+    /// angle prefix in a fresh `Snake::new()` and assert that fresh
+    /// snake accepts the same prefix and reaches the same
+    /// `is_closed` state. Panics on any disagreement -- traps cases
+    /// where the stateful incremental check (post-pop grid state)
+    /// admits prefixes that a from-scratch check would reject.
+    /// Roughly O(n) extra work per step; expect ~2x slowdown.
+    #[arg(long)]
+    paranoid: bool,
 }
 
 /// Resolve the `--threads` CLI value to an actual worker count.
@@ -800,8 +914,14 @@ fn main() {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
-            let (rats, stats) =
-                run_rat_enum_seqs(cli.ring, cli.max_steps, cli.step, n_threads, cli.dihedral);
+            let (rats, stats) = run_rat_enum_seqs(
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                n_threads,
+                cli.dihedral,
+                cli.paranoid,
+            );
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
@@ -826,8 +946,14 @@ fn main() {
             }
         }
         Mode::Render => {
-            let rats: Vec<Vec<P64>> =
-                run_rat_enum_polylines(cli.ring, cli.max_steps, cli.step, n_threads, cli.dihedral);
+            let rats: Vec<Vec<P64>> = run_rat_enum_polylines(
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                n_threads,
+                cli.dihedral,
+                cli.paranoid,
+            );
 
             let Some(filename) = cli.filename else {
                 return;
@@ -880,7 +1006,165 @@ fn main() {
 #[cfg(test)]
 mod dihedral_tests {
     use super::*;
-    use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4, ZZ8};
+    use std::collections::HashMap;
+    use tilezz::cyclotomic::geometry::intersect;
+    use tilezz::cyclotomic::{IsRing, Units, ZZ12, ZZ4, ZZ8};
+
+    /// Independent validator: reconstruct the polygon from `angles` in
+    /// exact ring arithmetic and check three properties without any
+    /// dependence on `Snake::can_add`:
+    ///   (a) the walk closes at the origin;
+    ///   (b) the n vertices visited (origin + n-1 intermediates) are
+    ///       all pairwise distinct;
+    ///   (c) no two non-adjacent boundary edges share any point
+    ///       (proper crossing or shared interior).
+    fn validate_simple_polygon<ZZ: IsRing>(angles: &[i8]) -> Result<(), String> {
+        let n = angles.len();
+        if n < 3 {
+            return Err(format!("perimeter {n} < 3"));
+        }
+        // Reconstruct vertices.
+        let mut pts: Vec<ZZ> = Vec::with_capacity(n + 1);
+        pts.push(ZZ::zero());
+        let mut dir: i64 = 0;
+        for &a in angles {
+            dir = (dir + a as i64).rem_euclid(ZZ::turn() as i64);
+            let next = *pts.last().unwrap() + <ZZ as Units>::unit(dir as i8);
+            pts.push(next);
+        }
+        // (a) closes.
+        if !pts.last().unwrap().is_zero() {
+            return Err(format!("does not close: last={:?}", pts.last().unwrap()));
+        }
+        pts.pop(); // drop the closing duplicate; now pts has the n cycle vertices
+
+        // (b) distinct vertices. Use a HashMap to find duplicates and
+        // report both indices.
+        let mut seen: HashMap<ZZ, usize> = HashMap::new();
+        for (i, &p) in pts.iter().enumerate() {
+            if let Some(&j) = seen.get(&p) {
+                return Err(format!("duplicate vertex: pts[{j}] == pts[{i}]"));
+            }
+            seen.insert(p, i);
+        }
+
+        // (c) no two non-adjacent edges share any point. Brute O(n^2)
+        // check via `intersect`. Adjacent edges share an endpoint by
+        // construction, so we skip cyclically-adjacent pairs.
+        for i in 0..n {
+            let a1 = pts[i];
+            let a2 = pts[(i + 1) % n];
+            for j in (i + 2)..n {
+                // Skip the cyclic-adjacent pair (last edge vs first edge).
+                if i == 0 && j == n - 1 {
+                    continue;
+                }
+                let b1 = pts[j];
+                let b2 = pts[(j + 1) % n];
+                if intersect(&(a1, a2), &(b1, b2)) {
+                    return Err(format!(
+                        "edges {i} ({a1:?}->{a2:?}) and {j} ({b1:?}->{b2:?}) intersect/touch"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Per-boundary-length counts the ZZ12 dihedral enumeration must
+    /// match: OEIS A316192 "Number of self-avoiding polygons with
+    /// perimeter n and sides = 1 ... not counting rotations and
+    /// reflections as distinct" (the boundary path may nowhere touch
+    /// or intersect itself).
+    ///
+    /// Reference values, indexed by perimeter `n`:
+    ///   n=1..10 -> [0, 0, 1, 3, 4, 22, 69, 418, 2210, 14024]
+    ///
+    /// This test currently FAILS at n=9 (we report 2217 vs 2210)
+    /// and n=10 (14124 vs 14024). The extras are polygons whose
+    /// boundary has a T-touch -- a vertex of one edge sitting on the
+    /// interior of another edge -- which `intersect_unit_segments`
+    /// misses on ZZ12 because the strict CCW check treats
+    /// wedge == 0 the same as wedge < 0. See the focused unit test
+    /// `test_intersect_zz12_t_touch_endpoint_on_segment` in
+    /// `cyclotomic::geometry::tests`.
+    #[test]
+    fn test_oeis_a316192_zz12() {
+        const OEIS: &[(usize, usize)] = &[
+            (3, 1),
+            (4, 3),
+            (5, 4),
+            (6, 22),
+            (7, 69),
+            (8, 418),
+            (9, 2210),
+            (10, 14024),
+        ];
+        // Enumerate up to the largest n in the reference. The DFS
+        // walks the dihedral-canonical variant; output is bucketed
+        // per perimeter length.
+        let max_n = OEIS.iter().map(|&(n, _)| n).max().unwrap();
+        let (rats, _) = super::rat_enum_dihedral::<ZZ12>(max_n, 1);
+
+        // Bucket per perimeter length.
+        let mut by_len: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for seq in &rats {
+            *by_len.entry(seq.len()).or_insert(0) += 1;
+        }
+
+        let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();
+        for &(n, expected) in OEIS {
+            let got = by_len.get(&n).copied().unwrap_or(0);
+            if got != expected {
+                mismatches.push((n, got, expected));
+            }
+        }
+        if !mismatches.is_empty() {
+            for (n, got, expected) in &mismatches {
+                eprintln!(
+                    "n={n}: got {got}, expected (OEIS A316192) {expected}, diff {:+}",
+                    *got as i64 - *expected as i64
+                );
+            }
+            panic!(
+                "dihedral ZZ12 enumeration differs from OEIS A316192 at {} perimeter length(s)",
+                mismatches.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_dihedral_output_polygons_are_simple_and_unique() {
+        let (dihedral_rats, _) = super::rat_enum_dihedral::<ZZ12>(9, 1);
+
+        // (i) Encodings are pairwise distinct (the HashSet via which
+        // they were collected enforces this; assert defensively).
+        let unique: std::collections::HashSet<Vec<i8>> = dihedral_rats.iter().cloned().collect();
+        assert_eq!(
+            unique.len(),
+            dihedral_rats.len(),
+            "duplicate sequences in dihedral output"
+        );
+
+        // (ii) Every polygon is geometrically simple per the
+        // independent validator above. Collect failures so a single
+        // run reports every case.
+        let mut failures: Vec<(Vec<i8>, String)> = Vec::new();
+        for seq in &dihedral_rats {
+            if let Err(why) = validate_simple_polygon::<ZZ12>(seq) {
+                failures.push((seq.clone(), why));
+            }
+        }
+        if !failures.is_empty() {
+            eprintln!("{} polygons failed independent validation:", failures.len());
+            for (seq, why) in failures.iter().take(20) {
+                eprintln!("  {seq:?} -- {why}");
+            }
+            panic!("non-simple polygons in dihedral enumeration output");
+        }
+    }
 
     /// For a single `(ring, max_steps)` pair, check that the
     /// dihedral DFS output equals the rotation DFS output quotiented
