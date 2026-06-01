@@ -93,6 +93,8 @@
 //! it does NOT recover the single-threaded-per-process savings.
 
 use std::collections::HashSet;
+use std::fs::File;
+use std::io::BufWriter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -103,13 +105,21 @@ use clap::{Parser, ValueEnum};
 use tilezz::cyclotomic::*;
 use tilezz::geom::rat::{lex_min_rot, Rat};
 use tilezz::geom::snake::{Snake, Turtle};
-use tilezz::stringmatch::repetition_factor;
+use tilezz::stringmatch::{repetition_factor, RatDafsa};
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::{MarkerStyle, TileStyle};
 use tilezz::vis::plotutils::P64;
 use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
+
+/// When `true`, the DFS streams each newly-discovered rat to stdout as
+/// `RAT [...]` on the fly. This is the protocol used by `--seed` and
+/// `--mode bench`; modes like `--mode dafsa` that write a single binary
+/// artifact set this to `false` before enumerating to avoid millions of
+/// useless stdout lines. Default `true` to preserve the existing
+/// per-mode behaviour.
+static STREAM_RAT_LINES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 // -------- DFS stats --------
 
@@ -419,7 +429,9 @@ fn rat_enum_step<ZZ: IsRing>(
                 .canonical()
             };
             let seq = (ops.canonicalize)(r.seq());
-            if result.insert(seq.clone()) {
+            if result.insert(seq.clone())
+                && STREAM_RAT_LINES.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 println!("RAT {seq:?}");
             }
         } else {
@@ -649,7 +661,9 @@ fn collect_seeds<ZZ: IsRing>(
                 .canonical()
             };
             let seq = (ops.canonicalize)(r.seq());
-            if gather.closed.insert(seq.clone()) {
+            if gather.closed.insert(seq.clone())
+                && STREAM_RAT_LINES.load(std::sync::atomic::Ordering::Relaxed)
+            {
                 println!("RAT {seq:?}");
             }
         } else {
@@ -1161,6 +1175,12 @@ enum Mode {
     /// closed before reaching that depth as "RAT [...]". Use with
     /// `--seed` to dispatch per-prefix jobs externally and merge.
     ListSeeds,
+    /// Enumerate, then write a gzipped `RatDafsa` to the path given
+    /// by `-o`. The on-disk format is `tilezz-rat-dafsa`; assigned
+    /// external indices follow `(length asc, lex asc)` order. The
+    /// length-prefix encoding used internally is described in
+    /// `RatDafsa::JSON_SCHEMA_DOC`.
+    Dafsa,
 }
 
 #[derive(Parser, Debug)]
@@ -1175,7 +1195,11 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = Mode::Render)]
     mode: Mode,
 
-    #[arg(short = 'o', long, help = "Output GIF filename (render mode only)")]
+    #[arg(
+        short = 'o',
+        long,
+        help = "Output filename: GIF in --mode render, gzipped DAFSA JSON in --mode dafsa"
+    )]
     filename: Option<String>,
 
     #[arg(short, long)]
@@ -1330,6 +1354,53 @@ fn main() {
 
     match cli.mode {
         Mode::ListSeeds => unreachable!("handled above"),
+        Mode::Dafsa => {
+            let Some(filename) = cli.filename.as_deref() else {
+                eprintln!("--mode dafsa requires -o <output path>");
+                std::process::exit(2);
+            };
+
+            // The DFS streams each newly-found rat to stdout by
+            // default (for `--seed` / `--mode bench`); in dafsa mode
+            // the artifact is the binary file at `-o`, so silence the
+            // streaming lines before enumerating.
+            STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let t0 = Instant::now();
+            let (rats, _stats) = run_rat_enum_seqs(
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                n_threads,
+                cli.dihedral,
+                cli.paranoid,
+            );
+            eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
+
+            // `RatDafsa::from_rats` handles the (length, lex) sort,
+            // dedup, and length-prefix encoding internally; the
+            // resulting external index of each rat is its position in
+            // the (length, lex)-ordered sequence.
+            let t1 = Instant::now();
+            let dafsa = RatDafsa::from_rats(rats.iter().map(|r| r.as_slice()));
+            eprintln!(
+                "built RatDafsa ({} entries) in {:?}",
+                dafsa.len(),
+                t1.elapsed()
+            );
+
+            let t2 = Instant::now();
+            let file = File::create(filename).expect("create output file");
+            dafsa
+                .write_json_gz(BufWriter::new(file))
+                .expect("write gzipped RatDafsa");
+            let bytes = std::fs::metadata(filename).map(|m| m.len()).unwrap_or(0);
+            eprintln!("wrote {filename} ({bytes} bytes) in {:?}", t2.elapsed());
+
+            if cli.stats {
+                print_stats(&rats);
+            }
+        }
         Mode::Bench => {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
