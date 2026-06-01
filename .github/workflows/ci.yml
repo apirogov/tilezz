@@ -1,8 +1,20 @@
 name: CI
 
+# Avoid running CI twice for branches with an open PR: `push` is
+# scoped to the default branch and release tags (so merges to main
+# and tag pushes still get CI), while feature branches get CI
+# exclusively through `pull_request`.
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+
+# Cancel any still-running CI for the same workflow + ref when a new
+# push lands; amend/force-push cycles no longer queue up obsolete runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
