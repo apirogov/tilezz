@@ -27,6 +27,8 @@ mod cyclic;
 mod dafsa;
 mod extend;
 mod period;
+mod rat_dafsa;
+mod rat_dafsa_lazy;
 
 pub use bitparallel::BitParallelMatcher;
 pub use cyclic::cyclic_contains;
@@ -35,6 +37,10 @@ pub use dafsa::{
 };
 pub use extend::{forward_match_length, match_length};
 pub use period::repetition_factor;
+pub use rat_dafsa::{RatDafsa, JSON_SCHEMA_DOC as RAT_DAFSA_JSON_SCHEMA_DOC};
+pub use rat_dafsa_lazy::{
+    BlockManifest, LazyRatDafsa, JSON_SCHEMA_DOC as LAZY_RAT_DAFSA_JSON_SCHEMA_DOC,
+};
 
 // A maximal reverse-complementary match between two cyclic angle sequences
 // is the crate-wide `TileMatch` type; re-exported here for ergonomic

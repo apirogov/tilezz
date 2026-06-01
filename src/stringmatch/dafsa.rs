@@ -115,7 +115,7 @@ pub struct Dafsa {
     /// accepting). `counts[0]` is the total number of accepted
     /// sequences; `counts[s]` lets [`Self::get`] navigate to the
     /// i-th sequence in O(seq length * fanout).
-    counts: Vec<usize>,
+    pub(crate) counts: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -241,6 +241,79 @@ impl Dafsa {
                 remaining -= n;
             }
         }
+    }
+
+    /// Number of states in the underlying automaton. Crate-private:
+    /// callers in `rat_dafsa_lazy` use it to slice the structure
+    /// into block files.
+    pub(crate) fn raw_n_states(&self) -> usize {
+        self.states.len()
+    }
+
+    /// Number of edges in the underlying automaton.
+    pub(crate) fn raw_n_edges(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// CSR row-pointer array: `edges_start[s]` is the index into the
+    /// edge array of state `s`'s first outgoing edge.
+    pub(crate) fn raw_edges_start(&self) -> Vec<u32> {
+        self.states.iter().map(|s| s.edges_start).collect()
+    }
+
+    /// Per-state accepting flag.
+    pub(crate) fn raw_is_accept(&self) -> Vec<bool> {
+        self.states.iter().map(|s| s.is_accept).collect()
+    }
+
+    /// Edge labels in stored order (sorted within each state's slice).
+    pub(crate) fn raw_labels(&self) -> Vec<i8> {
+        self.edges.iter().map(|e| e.label).collect()
+    }
+
+    /// Edge target state ids in stored order.
+    pub(crate) fn raw_targets(&self) -> Vec<u32> {
+        self.edges.iter().map(|e| e.target).collect()
+    }
+
+    /// Per-state subtree-acceptance counts.
+    pub(crate) fn raw_counts(&self) -> &[usize] {
+        &self.counts
+    }
+
+    /// Lex rank of `seq` if it is in the language. Inverse of
+    /// [`Self::get`].
+    ///
+    /// Walks the automaton along `seq` and accumulates, for each
+    /// state, the count of sequences in earlier-lex subtrees plus
+    /// the empty continuation if the state itself is accepting.
+    /// O(seq.len() * fanout).
+    pub fn lex_rank_of<S: AsRef<[i8]>>(&self, seq: S) -> Option<usize> {
+        let seq = seq.as_ref();
+        let mut s = 0u32;
+        let mut rank: usize = 0;
+        for &c in seq {
+            if self.states[s as usize].is_accept {
+                rank += 1;
+            }
+            let edges = &self.edges[self.edge_range(s)];
+            let mut next: Option<u32> = None;
+            for e in edges {
+                match e.label.cmp(&c) {
+                    std::cmp::Ordering::Less => rank += self.counts[e.target as usize],
+                    std::cmp::Ordering::Equal => {
+                        next = Some(e.target);
+                        break;
+                    }
+                    std::cmp::Ordering::Greater => return None,
+                }
+            }
+            s = next?;
+        }
+        if !self.states[s as usize].is_accept {
+            return None;
+        }
+        Some(rank)
     }
 
     /// Walk the prefix `prefix` and return the state reached, or
@@ -526,22 +599,42 @@ impl DafsaBuilder {
         let root_state = self.path.pop().unwrap();
         let root_id = self.freeze(root_state);
 
-        // Compact into CSR. Renumber so the root is state 0.
+        // Compact into CSR with a DFS pre-order renumbering from the
+        // root. This puts each parent at a lower id than its
+        // first-visited children, and (typically) at consecutive
+        // ids -- so a query walk visits monotonically increasing
+        // state ids, sequential in memory. The same locality
+        // benefits any blocked wire format we layer on top later
+        // (state s/BLOCK_SIZE points to the file holding it, and
+        // walks rarely cross block boundaries).
+        //
+        // States may be reached by multiple paths (suffix sharing);
+        // the first visit wins and pins the id, later visits skip.
         let n = self.frozen.len();
         let mut new_id = vec![u32::MAX; n];
-        new_id[root_id as usize] = 0;
         let mut order: Vec<u32> = Vec::with_capacity(n);
-        order.push(root_id);
-        // BFS-renumber in insertion (post-order) order isn't strictly
-        // necessary; any consistent renumbering works. Simplest:
-        // visit in declaration order, root first, then everyone else
-        // in their existing order minus the root.
-        for id in 0..n as u32 {
-            if id != root_id {
-                new_id[id as usize] = order.len() as u32;
-                order.push(id);
+        let mut stack: Vec<u32> = vec![root_id];
+        while let Some(orig) = stack.pop() {
+            if new_id[orig as usize] != u32::MAX {
+                continue;
+            }
+            new_id[orig as usize] = order.len() as u32;
+            order.push(orig);
+            // Push children in reverse so the first edge gets popped
+            // first; the DFS then descends edges in their stored
+            // (label-sorted) order.
+            let s = &self.frozen[orig as usize];
+            for &(_, child) in s.edges.iter().rev() {
+                if new_id[child as usize] == u32::MAX {
+                    stack.push(child);
+                }
             }
         }
+        debug_assert_eq!(
+            order.len(),
+            n,
+            "DFS pre-order must visit every reachable state"
+        );
 
         // Build the CSR.
         let mut states = Vec::with_capacity(n);
@@ -561,21 +654,13 @@ impl DafsaBuilder {
         }
 
         // Bottom-up count of accepted sequences reachable from each
-        // state. Edges only point to higher-numbered states because
-        // we renumber root-first and the graph is acyclic with root
-        // dominating -- so a single reverse pass over states fills
-        // `counts` in dependency order.
-        //
-        // To be safe across renumbering schemes, do a reverse-topological
-        // pass: iterate state ids in reverse since `frozen` was
-        // appended in finalization order (children before parents in
-        // Daciuk -- frozen[i]'s edges only point to frozen[j] with
-        // j < i). Renumbering preserves that order modulo the root
-        // swap. We compute via topological pass.
+        // Bottom-up subtree-acceptance count per state. Under DFS
+        // pre-order renumbering the parent always has a lower id
+        // than the children it visits first; suffix-shared
+        // descendants can have arbitrary ids, so we do not rely on
+        // any id-based ordering and compute via an explicit
+        // reverse-postorder DFS from the root.
         let mut counts = vec![0usize; n];
-        // Topological order: a parent has higher new_id than its children
-        // is NOT guaranteed by the simple renumber above (the root is
-        // forced to 0). Recompute counts via reverse-postorder DFS.
         Self::compute_counts(&states, &edges, &mut counts);
 
         Dafsa {
@@ -864,6 +949,28 @@ impl Dafsa {
         let form: DafsaSerForm = serde_json::from_reader(r)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Self::from_ser_form(form)
+    }
+
+    /// Stream a gzipped DAFSA JSON document into an `io::Write`. The
+    /// uncompressed content is exactly what [`Self::write_json`] would
+    /// emit; gzip absorbs whitespace, repeated field names, and runs
+    /// of small integers in the column-stored arrays (~50% on the
+    /// large ZZ12 dihedral n=16 set).
+    ///
+    /// Pair with [`Self::read_json_gz`] for the inverse direction.
+    pub fn write_json_gz<W: io::Write>(&self, w: W) -> io::Result<()> {
+        let mut enc = flate2::write::GzEncoder::new(w, flate2::Compression::default());
+        self.write_json(&mut enc)?;
+        enc.finish()?;
+        Ok(())
+    }
+
+    /// Parse a gzipped DAFSA JSON document from an `io::Read`. The
+    /// inverse of [`Self::write_json_gz`]: decompresses on the fly,
+    /// then parses the JSON exactly as [`Self::read_json`] would.
+    pub fn read_json_gz<R: io::Read>(r: R) -> io::Result<Self> {
+        let dec = flate2::read::GzDecoder::new(r);
+        Self::read_json(dec)
     }
 }
 
@@ -1328,5 +1435,23 @@ mod tests {
         assert!(json.contains("\"tilezz-dafsa\""));
         assert!(json.contains("\"version\":1"));
         assert!(json.contains("\"scalar\":\"i8\""));
+    }
+
+    /// `write_json_gz` -> `read_json_gz` round-trips through gzipped
+    /// bytes; the decoded DAFSA reproduces the input set in lex order.
+    #[test]
+    fn gz_roundtrip() {
+        let seqs: Vec<Vec<i8>> = vec![vec![1, 2], vec![1, 2, 3], vec![1, 3], vec![2], vec![2, 1]];
+        let dafsa = Dafsa::from_seqs(seqs.iter().map(|v| v.as_slice()));
+
+        let mut buf: Vec<u8> = Vec::new();
+        dafsa.write_json_gz(&mut buf).expect("write_json_gz");
+
+        // gzip magic bytes 0x1f 0x8b: the file really is compressed.
+        assert!(buf.starts_with(&[0x1f, 0x8b]), "missing gzip magic");
+
+        let decoded = Dafsa::read_json_gz(&buf[..]).expect("read_json_gz");
+        let out: Vec<Vec<i8>> = decoded.iter().collect();
+        assert_eq!(out, seqs);
     }
 }

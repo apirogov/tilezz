@@ -1,0 +1,109 @@
+tilezz-rat-dafsa-blocks asset schema (version 1)
+================================================
+
+A blocked rat-dafsa asset is laid out as a directory of static files
+designed for incremental fetching by a browser / WASM client. The
+entry point is the manifest file `block_index.json`; everything else
+is discoverable through it.
+
+Files
+-----
+
+  block_index.json     # manifest (JSON, small, fetched once)
+  block_<NNNNNN>.bin   # one file per block, gzip-compressed binary,
+                       # named via `block_filename_template` from the
+                       # manifest (default template uses six zero-
+                       # padded decimal digits).
+
+The manifest
+------------
+
+  {
+    "format":                   "tilezz-rat-dafsa-blocks",
+    "version":                  1,
+    "scalar":                   "i8",
+    "block_format":             "tilezz-rat-block",   // wire format of each block file
+    "block_version":            1,                    // bumped independently of "version"
+    "block_size":               <u32>,                // states per block (except the last)
+    "n_states":                 <u32>,                // total DAFSA states
+    "n_edges":                  <u32>,                // total DAFSA edges
+    "n_sequences":              <u32>,                // == counts[root_state]; the rat count
+    "n_blocks":                 <u32>,                // == ceil(n_states / block_size)
+    "root_state":               <u32>,                // always 0 in v1; recorded for clarity
+    "block_filename_template":  "block_{:06}.bin"     // printf-like; {} substituted with id
+  }
+
+Block ID lookup
+---------------
+
+State `s` (0 <= s < n_states) lives in block `s / block_size`, at
+local index `s % block_size`. A client that knows the target state
+id of an edge can compute the block file to fetch by integer
+division on `block_size` and substitute into
+`block_filename_template`.
+
+Block file format
+-----------------
+
+Each block file is a gzip stream wrapping the following binary
+layout. All multi-byte integers are little-endian.
+
+  Header (16 bytes):
+    magic           4 bytes ASCII  "TRB1"
+    first_state_id  u32            // == block_id * block_size
+    n_states        u32            // == block_size, except for the last block
+    n_edges         u32            // edges owned by the states in this block
+
+  State records (16 bytes each, n_states of them):
+    edges_offset    u32            // offset into THIS block's edges array
+    count           u64            // # accepted sequences reachable from this state,
+                                    //   including the empty continuation if accepting
+    is_accept       u8             // 0 or 1
+    padding         3 bytes        // zero-filled
+
+  Edge records (8 bytes each, n_edges of them):
+    label           i8             // input symbol
+    padding         3 bytes        // zero-filled
+    target          u32            // GLOBAL state id (not block-local)
+
+Edges of state `s` are the slice
+  [edges_offset, next_edges_offset)
+of this block's edge array, where `next_edges_offset` is the edges
+offset of state `s+1` in the same block, or `n_edges` if `s` is the
+last state in the block.
+
+Length-prefix convention
+------------------------
+
+This blocked format wraps a `tilezz-rat-dafsa`-flavored DAFSA, so
+the accepted sequences are length-prefixed angle sequences (see
+`rat_dafsa_schema.txt`):
+
+  stored_sequence(rat) = [len(rat), rat[0], rat[1], ...,
+                          rat[len(rat) - 1]]
+
+A consumer strips the first symbol of any sequence retrieved
+through DAFSA walks to recover the rat.
+
+Reading a query
+---------------
+
+Given a `rat` to look up, the consumer:
+
+  1. Prepend `len(rat)` to obtain `seq = [len, rat...]`.
+  2. Walk from `root_state` symbol-by-symbol:
+       a. block_id = current_state / block_size
+       b. Fetch and cache `block_<block_id>.bin` if not loaded.
+       c. Read state record at local index `current_state % block_size`.
+       d. Binary-search the block's edges in the slice
+            [state.edges_offset, next_edges_offset)
+          for label == symbol.
+       e. If found, follow `target`. If not, the rat is not in the
+          set; return None.
+  3. After consuming every symbol, check `is_accept` of the final
+     state. If true, the sequence is in the language.
+
+`get(i)` and `index_of(rat)` follow the same per-step pattern but
+use `count` to navigate to the i-th sequence in lex order
+(equivalent to `(length, lex)` order on raw rats; see
+`rat_dafsa_schema.txt`).
