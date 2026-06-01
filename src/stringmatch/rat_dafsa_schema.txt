@@ -1,0 +1,66 @@
+tilezz-rat-dafsa JSON schema (version 1)
+========================================
+
+A `tilezz-rat-dafsa` is a thin wrapper around a plain `tilezz-dafsa`
+that adds one piece of semantics: every sequence stored in the
+embedded automaton is the angle sequence of a rat with a length byte
+prepended. A reader strips that prefix byte to recover the rat.
+
+  {
+    "format":       "tilezz-rat-dafsa",  // discriminator
+    "version":      1,                    // u32, currently 1
+    "inner_format": "tilezz-dafsa",       // wire format of `dafsa`
+    "note":         "<prose reminder>",   // human-readable hint
+    "dafsa":        { ... }               // plain tilezz-dafsa
+                                          //  (see dafsa_schema.txt)
+  }
+
+The `dafsa` field is exactly a `tilezz-dafsa` v1 JSON object as
+documented in `dafsa_schema.txt`. Its accepted sequences are the
+length-prefixed encoding of the rat set:
+
+  stored_sequence(rat) = [len(rat), rat[0], rat[1], ..., rat[len(rat)-1]]
+
+where `len(rat)` is an i8 in `1..=127` (rats longer than 127 would
+overflow the prefix byte; cyclotomic enumerations cap far below
+this).
+
+Why length-prefix?
+------------------
+
+Lex order on prefixed sequences is the same as `(length ascending,
+then lex ascending)` order on the raw rats:
+
+  prefixed(a) < prefixed(b)  iff  len(a) < len(b)
+                              OR  (len(a) == len(b) AND a < b lex)
+
+So the DAFSA's natural lex traversal yields rats in `(length, lex)`
+order without any separate index permutation, and the i-th accepted
+sequence under that traversal is the rat at external index i.
+
+Reading the file
+----------------
+
+A consumer (Rust, JS, WASM) that opens a `tilezz-rat-dafsa`:
+
+  1. Validate `format == "tilezz-rat-dafsa"` and `version == 1`.
+  2. Validate `inner_format == "tilezz-dafsa"`.
+  3. Parse `dafsa` as a `tilezz-dafsa` per `dafsa_schema.txt`.
+  4. For each accepted sequence `seq` you obtain from the inner
+     DAFSA (via membership, indexed lookup, or enumeration), drop
+     `seq[0]` (the length byte) to obtain the rat.
+
+Index lookups
+-------------
+
+The Rust API exposes `index_of(rat) -> Option<u32>` (assigned index
+of a rat in `(length, lex)` order) and `get(i) -> Option<Vec<i8>>`
+(the rat at assigned index `i`). Both are thin wrappers over the
+inner DAFSA's lex-rank operations: `index_of(rat)` is the inner
+DAFSA's lex rank of `prefixed(rat)`, and `get(i)` is the inner
+DAFSA's i-th accepted sequence in lex order with `[0]` dropped.
+
+Membership and enumeration are similarly direct: `contains(rat)`
+prepends the length byte before calling the inner DAFSA's
+`contains`; `iter()` walks the inner DAFSA in lex order and strips
+the prefix byte on each yield.
