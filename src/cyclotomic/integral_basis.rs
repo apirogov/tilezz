@@ -28,6 +28,20 @@
 use num_complex::Complex64;
 
 // ----------------
+// Public trait for borrowing the raw integer-basis coefficients.
+
+/// Borrowed-slice view of a ring element's integer-basis coefficients.
+///
+/// Each ring's inherent `int_coeffs()` returns `[i64; PHI]` by value,
+/// which is per-type and so awkward in generic code. This trait
+/// provides a uniform `&[i64]` accessor that callers can use without
+/// committing to a fixed PHI; the slice has length PHI for the
+/// underlying ring.
+pub trait IntCoeffsSlice {
+    fn int_coeffs_slice(&self) -> &[i64];
+}
+
+// ----------------
 // Trivial linear ops.
 
 /// Coefficient-wise addition.
@@ -887,6 +901,17 @@ macro_rules! define_integral_zz {
             }
             fn is_imag(&self) -> bool {
                 <Self as $crate::cyclotomic::ReImSign>::re_sign(self) == 0
+            }
+        }
+
+        // ---- IntCoeffsSlice ----
+        // Borrowed-slice view of the integer-basis coefficients. Useful
+        // for generic code that needs the raw coords (e.g. modular
+        // pruning) without committing to a per-ring fixed PHI.
+        impl $crate::cyclotomic::integral_basis::IntCoeffsSlice for $name {
+            #[inline]
+            fn int_coeffs_slice(&self) -> &[i64] {
+                &self.coeffs
             }
         }
 

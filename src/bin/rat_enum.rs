@@ -130,12 +130,27 @@ struct DfsStats {
     too_far: u64,
     recursed: u64,
     canonical_skip: u64,
-}
+    /// Branches eliminated by the modular reachability prune (set via
+    /// `--mod-prune`). Always 0 when the prune is off, so the existing
+    /// bench output stays comparable.
+    mod_skip: u64,
+    /// Branches eliminated by the coordinate-projection prune (set via
+    /// passed first, so this reflects the ADDITIONAL pruning power on
+    /// top of the modular prune.
+    /// Branches eliminated by the closure-key prune (set via
+    /// `--closure-key-prune`). Counted only when all prior prunes
+    /// passed, so this reflects ADDITIONAL pruning power.
+    closure_key_skip: u64,}
 
 impl DfsStats {
     fn total(&self) -> u64 {
-        self.closed + self.intersected + self.too_far + self.recursed + self.canonical_skip
-    }
+        self.closed
+            + self.intersected
+            + self.too_far
+            + self.recursed
+            + self.canonical_skip
+            + self.mod_skip
+            + self.closure_key_skip    }
 
     fn merge(&mut self, other: &DfsStats) {
         self.closed += other.closed;
@@ -143,7 +158,8 @@ impl DfsStats {
         self.too_far += other.too_far;
         self.recursed += other.recursed;
         self.canonical_skip += other.canonical_skip;
-    }
+        self.mod_skip += other.mod_skip;
+        self.closure_key_skip += other.closure_key_skip;    }
 }
 
 impl std::fmt::Display for DfsStats {
@@ -174,13 +190,387 @@ impl std::fmt::Display for DfsStats {
             self.recursed,
             100.0 * self.recursed as f64 / t as f64
         )?;
-        write!(
+        writeln!(
             f,
             "  too_far:        {:>10} ({:>5.1}%)",
             self.too_far,
             100.0 * self.too_far as f64 / t as f64
-        )
+        )?;
+        write!(
+            f,
+            "  mod_skip:       {:>10} ({:>5.1}%)",
+            self.mod_skip,
+            100.0 * self.mod_skip as f64 / t as f64
+        )?;
+        writeln!(
+            f,
+        )?;
+        write!(
+            f,
+            "  closure_key_skip:{:>9} ({:>5.1}%)",
+            self.closure_key_skip,
+            100.0 * self.closure_key_skip as f64 / t as f64        )
     }
+}
+
+// -------- Modular reachability prune --------
+//
+// Optional, opt-in via `--mod-prune`. For each chosen modulus `m`, BFS
+// the set R_r^(m) ⊆ (Z/m)^phi of mod-m displacements reachable by sums
+// of EXACTLY r unit vectors, for r in 0..=max_steps. Then during DFS,
+// after the canonical / too-far prunes but before `Snake::add`:
+//
+//   - compute candidate new displacement `new_pt` (already done for
+//     the too-far check);
+//   - for each modulus, look up `pack(new_pt mod m)` in R_{r-1}^(m);
+//   - if any modulus misses, prune (no length-(r-1) suffix can sum
+//     to `-new_pt` mod m, so no closure is possible).
+//
+// The check uses one u64 hash lookup per modulus per DFS node. The
+// reachable sets are stored as `FxHashSet<u64>` where each `u64` packs
+// the mod-m coordinates as a base-`m` integer (so a `[i64; PHI]`
+// digest-vector becomes one `u64` -- saving an alloc per check and
+// keeping the hash hot in cache).
+//
+// We use a global `OnceLock<ModularPrune>` so the existing DFS
+// signatures don't grow an `Option<&ModularPrune>` argument; the DFS
+// reads from the static and pays nothing when the prune isn't set.
+
+/// Per-(modulus, remaining) reachable-displacement table for the
+/// modular prune.
+struct ModularPrune {
+    /// PHI (= basis dimension) of the underlying ring. Used to pack
+    /// candidate displacements into a `u64` key.
+    phi: usize,
+    /// Active moduli (those whose `m^PHI` fits the budget; smaller
+    /// rings get more moduli).
+    moduli: Vec<i64>,
+    /// `tables[i][r]` = set of packed mod-`moduli[i]` displacements
+    /// reachable by sums of exactly `r` unit vectors. A miss in
+    /// any modulus is a prune.
+    tables: Vec<Vec<rustc_hash::FxHashSet<u64>>>,
+}
+
+/// Bundle of all optional DFS prunes. Cloning is `Arc` clones, so
+/// snapshotting at DFS entry and passing `&Prunes` through recursion
+/// is cheap. Production: built once at `main`-time and stashed in
+/// `PRUNES`; the DFS top-level reads it via `snapshot_prunes()`.
+/// Tests: construct directly, pass to lower-level DFS functions
+/// without going through the global -- avoids the OnceLock-set-once
+/// limitation when running different combinations in the same
+/// process.
+#[derive(Clone, Default)]
+struct Prunes {
+    mod_prune: Option<std::sync::Arc<ModularPrune>>,
+    closure_key_prune: Option<std::sync::Arc<ClosureKeyPrune>>,
+}
+
+/// Single global `Prunes` configured by `main` from CLI flags.
+/// Tests bypass this; they build a local `Prunes` and pass it to
+/// DFS directly via [`run_rat_enum_seqs_with_prunes`].
+static PRUNES: Mutex<Option<Prunes>> = Mutex::new(None);
+
+fn snapshot_prunes() -> Prunes {
+    PRUNES.lock().unwrap().clone().unwrap_or_default()
+}
+
+/// Maximum `m^PHI` cell count we'll keep per modulus. ZZ16/20/24 at
+/// m=4 sits right at this budget; ZZ32/60 at m=2 fits comfortably.
+/// Larger moduli on higher-phi rings either saturate the prune (and
+/// stop being useful) or blow memory; this cutoff trades both off.
+const MOD_PRUNE_CELL_BUDGET: u64 = 1 << 16; // 65536
+
+impl ModularPrune {
+    /// Build the prune tables from a per-ring unit-vector list. `units`
+    /// is `n_units` slices each of length `phi`, holding the integer-
+    /// basis coefficients of `Units::unit(d)` for d in
+    /// `(-hturn+1)..hturn`.
+    ///
+    /// `moduli_override`, when present, replaces the default candidate
+    /// list (used by `--mod-prune-moduli` for A/B testing). Either way,
+    /// candidates are filtered by [`MOD_PRUNE_CELL_BUDGET`].
+    fn build(
+        units: &[Vec<i64>],
+        phi: usize,
+        max_steps: usize,
+        moduli_override: Option<&[i64]>,
+    ) -> Self {
+        // Default candidate list: small composites covering the
+        // common low-frequency arithmetic constraints (parity, 3-fold,
+        // 4-fold, 6-fold). A/B tested against the wider `{2..=16}`
+        // set on ZZ8/12/16 at n up to 15: extending the set finds
+        // marginally more skip opportunities but the per-node cost
+        // of extra hash lookups overshoots the savings -- wall time
+        // is equal or worse. The "right" knob is the number of
+        // moduli (~4 lookups balance lookup cost vs prune-rate);
+        // specific values within {2,3,4,5,6,...} barely matter.
+        // Override with `--mod-prune-moduli` to experiment.
+        let default_candidates: [i64; 4] = [2, 3, 4, 6];
+        let candidates: &[i64] = moduli_override.unwrap_or(&default_candidates);
+        let mut moduli: Vec<i64> = Vec::new();
+        for &m in candidates {
+            if m < 2 {
+                continue;
+            }
+            let cells = (m as u64).checked_pow(phi as u32).unwrap_or(u64::MAX);
+            if cells <= MOD_PRUNE_CELL_BUDGET {
+                moduli.push(m);
+            }
+        }
+
+        let mut tables: Vec<Vec<rustc_hash::FxHashSet<u64>>> = Vec::with_capacity(moduli.len());
+        for &m in &moduli {
+            tables.push(Self::build_one_modulus(units, phi, m, max_steps));
+        }
+
+        ModularPrune { phi, moduli, tables }
+    }
+
+    fn build_one_modulus(
+        units: &[Vec<i64>],
+        phi: usize,
+        m: i64,
+        max_steps: usize,
+    ) -> Vec<rustc_hash::FxHashSet<u64>> {
+        // We store CUMULATIVE reachability tables: `layers[r]` is the
+        // set of mod-`m` displacements reachable by sums of AT MOST
+        // `r` unit vectors. The prune check is "could we close in
+        // any number of steps from 0..=remaining_after?" -- not
+        // "exactly remaining_after", which would falsely reject any
+        // rat closing strictly before `max_steps`.
+        let total = (m as u64).pow(phi as u32);
+
+        let units_mod: Vec<Vec<i64>> = units
+            .iter()
+            .map(|u| u.iter().map(|&c| c.rem_euclid(m)).collect())
+            .collect();
+
+        let mut layers: Vec<rustc_hash::FxHashSet<u64>> = Vec::with_capacity(max_steps + 1);
+        // r=0: only the origin (sum of zero vectors).
+        let mut cumulative: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
+        cumulative.insert(0u64);
+        layers.push(cumulative.clone());
+
+        // Wavefront state for the exact-r BFS step (kept as `Vec<i64>`
+        // for simple add-and-reduce; packed only when folding into
+        // `cumulative`).
+        let mut current_vec: rustc_hash::FxHashSet<Vec<i64>> = rustc_hash::FxHashSet::default();
+        current_vec.insert(vec![0i64; phi]);
+
+        let mut saturated = cumulative.len() as u64 == total;
+        for _r in 1..=max_steps {
+            if saturated {
+                layers.push(layers.last().unwrap().clone());
+                continue;
+            }
+            let mut next: rustc_hash::FxHashSet<Vec<i64>> = rustc_hash::FxHashSet::default();
+            next.reserve(current_vec.len() * units_mod.len());
+            for v in &current_vec {
+                for u in &units_mod {
+                    let sum: Vec<i64> = v
+                        .iter()
+                        .zip(u.iter())
+                        .map(|(a, b)| (a + b).rem_euclid(m))
+                        .collect();
+                    next.insert(sum);
+                }
+            }
+            // Fold the new exact-r layer into the cumulative one.
+            for v in &next {
+                cumulative.insert(pack_coeffs(v, m));
+            }
+            layers.push(cumulative.clone());
+            current_vec = next;
+            if cumulative.len() as u64 == total {
+                saturated = true;
+            }
+        }
+        layers
+    }
+
+    /// Returns `true` if some sum of `remaining` unit vectors equals
+    /// the negation of `disp` (mod m) for every active modulus. When
+    /// `false`, no length-`remaining` suffix can close, so the caller
+    /// prunes. Hot path: one `FxHashSet<u64>::contains` per modulus.
+    #[inline]
+    fn allows_closure(&self, disp: &[i64], remaining: usize) -> bool {
+        // R_r is symmetric under negation (every unit vector u has -u
+        // in the direction set, so sums and their negations form the
+        // same set), so we can pack `disp` directly instead of `-disp`.
+        for (i, &m) in self.moduli.iter().enumerate() {
+            let key = pack_coeffs(disp, m);
+            let table = match self.tables[i].get(remaining) {
+                Some(t) => t,
+                None => continue, // remaining beyond max_steps: skip this modulus
+            };
+            if !table.contains(&key) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn cell_counts(&self) -> Vec<u64> {
+        self.moduli.iter().map(|&m| (m as u64).pow(self.phi as u32)).collect()
+    }
+}
+
+/// Pack a coefficient vector mod `m` as a base-`m` integer. Safe up
+/// to `m^PHI <= u64::MAX`. Caller guarantees by `MOD_PRUNE_CELL_BUDGET`.
+#[inline]
+fn pack_coeffs(coeffs: &[i64], m: i64) -> u64 {
+    let mut key = 0u64;
+    let mut mult = 1u64;
+    let m_u = m as u64;
+    for &c in coeffs {
+        let v = c.rem_euclid(m) as u64;
+        key += v * mult;
+        mult = mult.wrapping_mul(m_u);
+    }
+    key
+}
+
+/// Build the modular prune for ring `ring` with target `max_steps`,
+/// install into the global [`PRUNES`] bundle, and report the moduli
+/// kept. Idempotent within a process; replaces any previously
+/// installed modular prune. `moduli_override` lets the CLI A/B test
+/// by forcing a specific modulus list.
+fn install_mod_prune(ring: u8, max_steps: usize, moduli_override: Option<&[i64]>) {
+    let (units, phi) = unit_vectors_for_ring(ring);
+    let prune = ModularPrune::build(&units, phi, max_steps, moduli_override);
+    let cells = prune.cell_counts();
+    let summary: Vec<String> = prune
+        .moduli
+        .iter()
+        .zip(cells.iter())
+        .map(|(m, c)| format!("m={m} ({c} cells)"))
+        .collect();
+    eprintln!(
+        "mod-prune: ring={ring} phi={phi} max_steps={max_steps}: {}",
+        summary.join(", ")
+    );
+    let mut guard = PRUNES.lock().unwrap();
+    let mut current = guard.take().unwrap_or_default();
+    current.mod_prune = Some(std::sync::Arc::new(prune));
+    *guard = Some(current);
+}
+
+/// Per-ring extraction of unit vectors as integer coefficient arrays.
+/// Returns ALL `n` unit vectors `unit(0)..unit(n-1)` (not the DFS's
+/// `n-1`-direction window): a partial rat's cumulative facing can
+/// land on any absolute direction over enough turns, so closure
+/// feasibility must be assessed against the full set of possible
+/// unit vectors. Used by [`ModularPrune`] to feed its BFS over
+/// modular displacements.
+fn unit_vectors_for_ring(ring: u8) -> (Vec<Vec<i64>>, usize) {
+    fn extract<ZZ: IsRing, const PHI: usize, F>(coeffs_fn: F) -> (Vec<Vec<i64>>, usize)
+    where
+        F: Fn(&ZZ) -> [i64; PHI],
+    {
+        let mut out = Vec::new();
+        for d in 0..ZZ::turn() {
+            let u: ZZ = <ZZ as Units>::unit(d);
+            out.push(coeffs_fn(&u).to_vec());
+        }
+        (out, PHI)
+    }
+    match ring {
+        4 => extract::<ZZ4, 2, _>(|x| x.int_coeffs()),
+        8 => extract::<ZZ8, 4, _>(|x| x.int_coeffs()),
+        10 => extract::<ZZ10, 4, _>(|x| x.int_coeffs()),
+        12 => extract::<ZZ12, 4, _>(|x| x.int_coeffs()),
+        16 => extract::<ZZ16, 8, _>(|x| x.int_coeffs()),
+        20 => extract::<ZZ20, 8, _>(|x| x.int_coeffs()),
+        24 => extract::<ZZ24, 8, _>(|x| x.int_coeffs()),
+        32 => extract::<ZZ32, 16, _>(|x| x.int_coeffs()),
+        60 => extract::<ZZ60, 16, _>(|x| x.int_coeffs()),
+        _ => panic!("invalid ring selected"),
+    }
+}
+
+// -------- Closure-key prune --------
+//
+// Pre-pass: DFS-enumerate every simple open snake up to length L,
+// store the set of (endpoint, facing) pairs they reach (the "closure
+// keys" K_{<=L}). During the main DFS, when remaining_after <= L, the
+// candidate prefix can close iff its required suffix's (endpoint,
+// facing) is in K_{<=L} -- otherwise no length-(<=remaining_after)
+// continuation can complete it.
+//
+// This is strictly stronger than any modular projection (it sees
+// exact lattice + facing info, not just a quotient). The cost is
+// memory + pre-pass time + a ring multiplication per hot-path check
+// (to compute the target suffix endpoint via
+// target = -unit(-facing) * disp).
+
+struct ClosureKeyPrune {
+    /// Maximum tabulated suffix length. The prune fires only when
+    /// `remaining_after <= max_l`.
+    max_l: usize,
+    /// `K_{<=L} = {(endpoint coords, facing) : reachable by some
+    /// simple open snake of length 0..=L}`. Length 0 (empty snake,
+    /// key (0, 0)) is included so already-closed candidates aren't
+    /// incorrectly rejected.
+    keys: rustc_hash::FxHashSet<(Vec<i64>, i8)>,
+}
+
+fn collect_closure_keys_dfs<ZZ: IsRing>(
+    snake: &mut Snake<ZZ>,
+    max_l: usize,
+    keys: &mut rustc_hash::FxHashSet<(Vec<i64>, i8)>,
+) {
+    if snake.angles().len() >= max_l {
+        return;
+    }
+    let turn = ZZ::turn();
+    for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
+        if !snake.add(direction) {
+            continue;
+        }
+        // Normalize facing to 0..n-1: `Snake::direction` returns
+        // truncating-mod (can be negative for net-CW walks); the
+        // hot-path lookup uses `rem_euclid` (always 0..n-1), so we
+        // canonicalize here to make the hash keys compatible.
+        let facing = snake.direction().rem_euclid(turn);
+        keys.insert((snake.offset().int_coeffs_slice().to_vec(), facing));
+        collect_closure_keys_dfs::<ZZ>(snake, max_l, keys);
+        snake.pop();
+    }
+}
+
+fn collect_closure_keys<ZZ: IsRing>(max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
+    let mut keys = rustc_hash::FxHashSet::default();
+    // Empty snake's key: closure is already achieved.
+    let phi = <ZZ as Units>::unit(0).int_coeffs_slice().len();
+    keys.insert((vec![0i64; phi], 0));
+    let mut snake: Snake<ZZ> = Snake::new();
+    collect_closure_keys_dfs::<ZZ>(&mut snake, max_l, &mut keys);
+    keys
+}
+
+fn install_closure_key_prune(ring: u8, max_l: usize) {
+    let t0 = Instant::now();
+    let keys = match ring {
+        4 => collect_closure_keys::<ZZ4>(max_l),
+        8 => collect_closure_keys::<ZZ8>(max_l),
+        10 => collect_closure_keys::<ZZ10>(max_l),
+        12 => collect_closure_keys::<ZZ12>(max_l),
+        16 => collect_closure_keys::<ZZ16>(max_l),
+        20 => collect_closure_keys::<ZZ20>(max_l),
+        24 => collect_closure_keys::<ZZ24>(max_l),
+        32 => collect_closure_keys::<ZZ32>(max_l),
+        60 => collect_closure_keys::<ZZ60>(max_l),
+        _ => panic!("invalid ring selected"),
+    };
+    eprintln!(
+        "closure-key-prune: ring={ring} max_l={max_l}: {} distinct keys collected in {:?}",
+        keys.len(),
+        t0.elapsed(),
+    );
+    let mut guard = PRUNES.lock().unwrap();
+    let mut current = guard.take().unwrap_or_default();
+    current.closure_key_prune = Some(std::sync::Arc::new(ClosureKeyPrune { max_l, keys }));
+    *guard = Some(current);
 }
 
 // --------
@@ -285,6 +675,7 @@ fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) 
         "enumeration",
         "",
         false,
+        &Prunes::default(),
     )
 }
 
@@ -314,6 +705,7 @@ fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, D
         "dihedral enumeration",
         "dihedral ",
         false,
+        &Prunes::default(),
     )
 }
 
@@ -324,6 +716,7 @@ fn rat_enum_with<ZZ: IsRing>(
     label: &str,
     prefix: &str,
     paranoid: bool,
+    prunes: &Prunes,
 ) -> (Vec<Vec<i8>>, DfsStats) {
     let mut result: HashSet<Vec<i8>> = HashSet::new();
     let mut snake: Snake<ZZ> = Snake::new();
@@ -341,6 +734,7 @@ fn rat_enum_with<ZZ: IsRing>(
         &mut stats,
         ops,
         paranoid,
+        prunes,
     );
     println!(
         "-------- {label} completed --------\n{prefix}{} rats found",
@@ -360,6 +754,7 @@ fn rat_enum_step<ZZ: IsRing>(
     stats: &mut DfsStats,
     ops: CanonicalOps,
     paranoid: bool,
+    prunes: &Prunes,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -389,6 +784,36 @@ fn rat_enum_step<ZZ: IsRing>(
             continue;
         }
 
+        // Optional modular reachability prune (set via `--mod-prune`).
+        // After taking this direction, the snake will be at `new_pt`
+        // with `remaining - 1` directions still to add for closure.
+        // If no sum of (remaining-1) unit vectors equals `-new_pt`
+        // (modulo any active modulus), closure is impossible.
+        let remaining_after = (remaining as usize).saturating_sub(1);
+        if let Some(mp) = prunes.mod_prune.as_deref() {
+            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
+                stats.mod_skip += 1;
+                continue;
+            }
+        }
+        // Optional closure-key prune (set via `--closure-key-prune`).
+        // Only fires when `remaining_after <= max_l` (otherwise the
+        // tabulated suffix lengths aren't enough to cover the
+        // closing range, and pruning would be unsound).
+        if let Some(ck) = prunes.closure_key_prune.as_deref() {
+            if remaining_after <= ck.max_l {
+                let turn = ZZ::turn();
+                let new_facing = (snake.direction() + direction).rem_euclid(turn);
+                let neg_facing = (-new_facing).rem_euclid(turn);
+                // target suffix endpoint = -unit(-new_facing) * new_pt.
+                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
+                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
+                if !ck.keys.contains(&key) {
+                    stats.closure_key_skip += 1;
+                    continue;
+                }
+            }
+        }
         if !snake.add(direction) {
             stats.intersected += 1;
             continue;
@@ -436,7 +861,7 @@ fn rat_enum_step<ZZ: IsRing>(
             }
         } else {
             stats.recursed += 1;
-            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops, paranoid);
+            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops, paranoid, prunes);
         }
         snake.pop();
     }
@@ -601,6 +1026,7 @@ fn collect_seeds<ZZ: IsRing>(
     gather: &mut SeedGather<'_>,
     ops: CanonicalOps,
     paranoid: bool,
+    prunes: &Prunes,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -625,6 +1051,27 @@ fn collect_seeds<ZZ: IsRing>(
             continue;
         }
 
+        // Modular reachability prune (see `rat_enum_step`).
+        let remaining_after = (remaining as usize).saturating_sub(1);
+        if let Some(mp) = prunes.mod_prune.as_deref() {
+            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
+                gather.stats.mod_skip += 1;
+                continue;
+            }
+        }
+        if let Some(ck) = prunes.closure_key_prune.as_deref() {
+            if remaining_after <= ck.max_l {
+                let turn = ZZ::turn();
+                let new_facing = (snake.direction() + direction).rem_euclid(turn);
+                let neg_facing = (-new_facing).rem_euclid(turn);
+                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
+                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
+                if !ck.keys.contains(&key) {
+                    gather.stats.closure_key_skip += 1;
+                    continue;
+                }
+            }
+        }
         if !snake.add(direction) {
             gather.stats.intersected += 1;
             continue;
@@ -671,7 +1118,7 @@ fn collect_seeds<ZZ: IsRing>(
             if snake.angles().len() >= split_depth {
                 gather.seeds.push(snake.angles().to_vec());
             } else {
-                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops, paranoid);
+                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops, paranoid, prunes);
             }
         }
         snake.pop();
@@ -691,6 +1138,7 @@ fn rat_enum_parallel<ZZ: IsRing>(
     label: &str,
     prefix: &str,
     paranoid: bool,
+    prunes: &Prunes,
 ) -> (Vec<Vec<i8>>, DfsStats) {
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
     let branching = 2 * (hm1 / step.max(1) as usize) + 1;
@@ -720,6 +1168,7 @@ fn rat_enum_parallel<ZZ: IsRing>(
             &mut gather,
             ops,
             paranoid,
+            prunes,
         );
     }
     println!("parallel: {} seed states collected", seeds.len());
@@ -733,6 +1182,7 @@ fn rat_enum_parallel<ZZ: IsRing>(
         n_threads,
         ops,
         paranoid,
+        prunes,
     );
 
     println!(
@@ -766,6 +1216,7 @@ fn parallel_drain_seeds<ZZ: IsRing>(
     n_threads: usize,
     ops: CanonicalOps,
     paranoid: bool,
+    prunes: &Prunes,
 ) -> (HashSet<Vec<i8>>, DfsStats) {
     let next_idx = AtomicUsize::new(0);
     let next_ref = &next_idx;
@@ -783,7 +1234,7 @@ fn parallel_drain_seeds<ZZ: IsRing>(
                     }
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds[i]);
                     rat_enum_step::<ZZ>(
-                        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+                        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid, prunes,
                     );
                 }
                 (local, stats)
@@ -834,10 +1285,11 @@ fn enumerate_dispatch<ZZ: IsRing>(
     };
     let prefix = if dihedral { "dihedral " } else { "" };
 
+    let prunes = snapshot_prunes();
     if n_threads <= 1 {
-        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix, paranoid)
+        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix, paranoid, &prunes)
     } else {
-        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix, paranoid)
+        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix, paranoid, &prunes)
     }
 }
 
@@ -995,6 +1447,7 @@ fn collect_seed_prefixes<ZZ: IsRing>(
     dihedral: bool,
 ) -> (HashSet<Vec<i8>>, Vec<Vec<i8>>) {
     let ops = make_ops(dihedral);
+    let prunes = snapshot_prunes();
     let mut snake: Snake<ZZ> = Snake::new();
     let mut seeds: Vec<Vec<i8>> = Vec::new();
     let mut closed: HashSet<Vec<i8>> = HashSet::new();
@@ -1013,6 +1466,7 @@ fn collect_seed_prefixes<ZZ: IsRing>(
             &mut gather,
             ops,
             false,
+            &prunes,
         );
     }
     (closed, seeds)
@@ -1058,6 +1512,7 @@ fn enumerate_from_seed<ZZ: IsRing>(
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
     let ops = make_ops(dihedral);
+    let prunes = snapshot_prunes();
 
     if n_threads <= 1 {
         // Single-threaded fast path. No sub-split, no worker spawn:
@@ -1066,7 +1521,7 @@ fn enumerate_from_seed<ZZ: IsRing>(
         let mut local: HashSet<Vec<i8>> = HashSet::new();
         let mut stats = DfsStats::default();
         rat_enum_step::<ZZ>(
-            &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid,
+            &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid, &prunes,
         );
         return local;
     }
@@ -1096,6 +1551,7 @@ fn enumerate_from_seed<ZZ: IsRing>(
             &mut gather,
             ops,
             paranoid,
+            &prunes,
         );
     }
 
@@ -1108,6 +1564,7 @@ fn enumerate_from_seed<ZZ: IsRing>(
         n_threads,
         ops,
         paranoid,
+        &prunes,
     );
     merged
 }
@@ -1251,6 +1708,39 @@ struct Cli {
     #[arg(long)]
     paranoid: bool,
 
+    /// Enable the modular reachability prune. For each modulus
+    /// `m in {2..=16}` whose state space `m^phi` fits the cell
+    /// budget, precomputes the cumulative reachable mod-m
+    /// displacement set and rejects any candidate direction whose
+    /// post-extension displacement can't reach 0 mod m in any
+    /// number of remaining steps. Cheap per-node (one packed hash
+    /// lookup per modulus). See `--mode probe-modular` for the
+    /// per-ring saturation curves and `--mod-prune-moduli` for
+    /// A/B testing different modulus sets.
+    #[arg(long)]
+    mod_prune: bool,
+
+    /// Comma-separated list of moduli to use with `--mod-prune`
+    /// (default: 2..=16, filtered by ring's state-space budget).
+    /// Useful for A/B testing: e.g. `--mod-prune-moduli 2,3,4,6`
+    /// reproduces the original hardcoded set.
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    mod_prune_moduli: Option<Vec<i64>>,
+
+    /// Enable the closure-key prune: pre-enumerate every simple
+    /// open snake up to length L (= `--closure-key-depth`) and
+    /// store their (endpoint, facing) keys. During DFS, when the
+    /// remaining-after-this-direction count is <= L, the candidate
+    /// is pruned iff its required suffix's closure key isn't in
+    /// the precomputed set. Strictly stronger than any modular
+    /// projection (uses exact lattice + facing info). More memory
+    /// and pre-pass cost; per-node cost is one ring mul + one
+    /// hash lookup.
+    #[arg(long)]
+    closure_key_prune: bool,
+
+
+
     /// Resume the DFS from a specific seed prefix (comma-separated
     /// angles like `-5,3,-4`). When set, the DFS skips seed
     /// collection and resumes from this prefix; output is the same
@@ -1288,6 +1778,16 @@ fn main() {
 
     let n_threads = resolve_n_threads(cli.threads);
 
+    if cli.mod_prune {
+        install_mod_prune(
+            cli.ring,
+            cli.max_steps,
+            cli.mod_prune_moduli.as_deref(),
+        );
+    }
+    if cli.closure_key_prune {
+        install_closure_key_prune(cli.ring, cli.closure_key_depth);
+    }
     // `--mode list-seeds`: walk the DFS down to split_depth, print
     // alive prefixes as `SEED a,b,c` lines and any already-closed
     // polygons as `RAT [...]` lines, then exit. The split_depth
