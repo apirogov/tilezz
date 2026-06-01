@@ -283,6 +283,7 @@ pub trait IsRing:
     + IntRing
     + From<IntT>
     + From<<Self as InnerIntType>::IntType>
+    + crate::cyclotomic::integral_basis::IntCoeffsSlice
 {
 }
 
