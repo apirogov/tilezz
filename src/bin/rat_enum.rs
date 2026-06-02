@@ -2072,13 +2072,17 @@ mod dihedral_tests {
     /// Reference values, indexed by perimeter `n`:
     ///   n=1..10 -> [0, 0, 1, 3, 4, 22, 69, 418, 2210, 14024]
     ///
-    /// This test currently FAILS at n=9 (we report 2217 vs 2210)
-    /// and n=10 (14124 vs 14024). The extras are polygons whose
-    /// boundary has a T-touch -- a vertex of one edge sitting on the
-    /// interior of another edge -- which `intersect_unit_segments`
-    /// misses on ZZ12 because the strict CCW check treats
-    /// wedge == 0 the same as wedge < 0. See the focused unit test
-    /// `test_intersect_zz12_t_touch_endpoint_on_segment` in
+    /// Historical note: this test used to fail at n=9 (2217 vs 2210)
+    /// and n=10 (14124 vs 14024). The extras were polygons whose
+    /// boundary had a T-touch -- a vertex of one edge sitting on the
+    /// strict interior of another edge -- which the segment
+    /// intersection predicate missed because the orientation tests
+    /// collapsed `wedge == 0` ("on the line") into the same branch
+    /// as `wedge < 0` ("right side"). Fixed in `b2df8f4` by adding
+    /// explicit endpoint-on-other-segment checks for the colinear
+    /// case. T-touches first occur at n=9 on ZZ12, so this test now
+    /// covers the bug-sensitive range exactly. See the focused unit
+    /// test `test_intersect_zz12_t_touch_endpoint_on_segment` in
     /// `cyclotomic::geometry::tests`.
     #[test]
     fn test_oeis_a316192_zz12() {
@@ -2261,6 +2265,195 @@ mod dihedral_tests {
                          ({} prefixes + {} pre-closed)",
                         prefixes.len(),
                         seeded.len() - prefixes.iter().map(|_| 0).sum::<usize>(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Correctness tests for the optional DFS prunes.
+///
+/// For each ring x mode (rotation/dihedral) x thread-count, the test
+/// matrix runs the enumeration under every subset of the three
+/// optional prunes (`mod`, `coord-proj`, `closure-key`) and asserts
+/// the resulting canonical-rat set is bit-identical to the baseline
+/// (no prunes). A regression in any single prune -- or any
+/// composition -- shows up as a set-equality mismatch on these tests.
+///
+/// Caps: ring n is chosen so the full sweep stays under ~30 s on a
+/// release build. ZZ12 stops at n=8 (no T-touch bug); ZZ8 / ZZ4 go
+/// further within their compute budgets.
+#[cfg(test)]
+mod opt_correctness_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Dispatch helper: collect closure keys for `ring` up to length
+    /// `max_l`. Mirrors the per-ring match in `install_closure_key_prune`.
+    fn closure_keys_for(
+        ring: u8,
+        max_l: usize,
+    ) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
+        match ring {
+            4 => collect_closure_keys::<ZZ4>(max_l),
+            8 => collect_closure_keys::<ZZ8>(max_l),
+            10 => collect_closure_keys::<ZZ10>(max_l),
+            12 => collect_closure_keys::<ZZ12>(max_l),
+            16 => collect_closure_keys::<ZZ16>(max_l),
+            20 => collect_closure_keys::<ZZ20>(max_l),
+            24 => collect_closure_keys::<ZZ24>(max_l),
+            32 => collect_closure_keys::<ZZ32>(max_l),
+            60 => collect_closure_keys::<ZZ60>(max_l),
+            _ => panic!("unknown ring {ring}"),
+        }
+    }
+
+    /// Build a `Prunes` for testing per the chosen opt subset.
+    /// Both prunes are constructed against `(ring, max_steps)`
+    /// regardless of whether they're enabled, so each test case is
+    /// self-contained and independent of any global state.
+    fn build_prunes(
+        ring: u8,
+        max_steps: usize,
+        with_mod: bool,
+        with_ck: bool,
+    ) -> Prunes {
+        let (units, phi) = unit_vectors_for_ring(ring);
+        let mut prunes = Prunes::default();
+        if with_mod {
+            let mp = ModularPrune::build(&units, phi, max_steps, None);
+            prunes.mod_prune = Some(Arc::new(mp));
+        }
+        if with_ck {
+            let max_l = 4;
+            let keys = closure_keys_for(ring, max_l);
+            prunes.closure_key_prune = Some(Arc::new(ClosureKeyPrune { max_l, keys }));
+        }
+        prunes
+    }
+
+    /// Run the DFS with explicit prunes on ring `ZZ` and return the
+    /// resulting canonical-rat set. Bypasses the global PRUNES static
+    /// so different test cases don't fight over it.
+    fn run<ZZ: IsRing>(
+        max_steps: usize,
+        dihedral: bool,
+        n_threads: usize,
+        prunes: &Prunes,
+    ) -> std::collections::HashSet<Vec<i8>> {
+        let ops = make_ops(dihedral);
+        let (rats, _) = if n_threads <= 1 {
+            rat_enum_with::<ZZ>(max_steps, 1, ops, "test", "", false, prunes)
+        } else {
+            rat_enum_parallel::<ZZ>(max_steps, 1, n_threads, ops, "test", "", false, prunes)
+        };
+        rats.into_iter().collect()
+    }
+
+    /// Enumerate the 4 subsets of {mod, closure-key}.
+    fn opt_subsets() -> impl Iterator<Item = (bool, bool)> {
+        (0..4).map(|mask| (mask & 1 != 0, mask & 2 != 0))
+    }
+
+    /// Cross-validation matrix: every opt subset x every thread count
+    /// must produce the same canonical-rat set as the baseline.
+    fn check_ring<ZZ: IsRing>(ring: u8, max_steps: usize) {
+        for &dihedral in &[false, true] {
+            let baseline = run::<ZZ>(max_steps, dihedral, 1, &Prunes::default());
+            for (with_mod, with_ck) in opt_subsets() {
+                let prunes = build_prunes(ring, max_steps, with_mod, with_ck);
+                for &n_threads in &[1usize, 4] {
+                    let got = run::<ZZ>(max_steps, dihedral, n_threads, &prunes);
+                    assert_eq!(
+                        got,
+                        baseline,
+                        "ZZ{ring} n={max_steps} dihedral={dihedral} \
+                         mod={with_mod} ck={with_ck} threads={n_threads}: \
+                         result set differs from baseline ({} vs {} rats)",
+                        got.len(),
+                        baseline.len(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cross_validate_zz4() {
+        check_ring::<ZZ4>(4, 10);
+    }
+
+    #[test]
+    fn cross_validate_zz8() {
+        check_ring::<ZZ8>(8, 10);
+    }
+
+    #[test]
+    fn cross_validate_zz12() {
+        // Capped at n=8 for runtime budget -- the 32-combo matrix
+        // at higher n explodes runtime quickly. The OEIS test below
+        // covers ZZ12 dihedral up to n=10 for every opt combo,
+        // which is the bug-sensitive range (T-touches first occur
+        // at n=9 -- see the historical note in test_oeis_a316192_zz12).
+        check_ring::<ZZ12>(12, 8);
+    }
+
+    /// External anchor: OEIS A316192 per-length counts for ZZ12
+    /// dihedral matchstick polygons, n=3..=10. The range
+    /// deliberately includes n=9, 10 -- the T-touch-sensitive
+    /// lengths that the now-fixed segment-intersection bug used to
+    /// miscount. Every opt combination must reproduce the OEIS
+    /// reference there: a regression in any prune that re-introduces
+    /// the missed T-touch (or any other geometry weakness) shows up
+    /// as a count mismatch.
+    ///
+    /// Slow test (~60-90 s release): n=10 baseline alone is ~22s,
+    /// repeated across opt subsets. Worth it -- this is the one
+    /// test that ties our enumeration to a published external
+    /// reference at the bug-sensitive lengths.
+    #[test]
+    fn oeis_a316192_each_opt_combo() {
+        const OEIS: &[(usize, usize)] = &[
+            (3, 1),
+            (4, 3),
+            (5, 4),
+            (6, 22),
+            (7, 69),
+            (8, 418),
+            (9, 2210),  // T-touches first appear here; bug-fix-sensitive
+            (10, 14024), // bug-fix-sensitive
+        ];
+        let max_n = OEIS.iter().map(|&(n, _)| n).max().unwrap();
+
+        for (with_mod, with_ck) in opt_subsets() {
+            let prunes = build_prunes(12, max_n, with_mod, with_ck);
+            for &n_threads in &[1usize, 4] {
+                let rats = run::<ZZ12>(max_n, true, n_threads, &prunes);
+                let mut by_len: std::collections::BTreeMap<usize, usize> =
+                    std::collections::BTreeMap::new();
+                for seq in &rats {
+                    *by_len.entry(seq.len()).or_insert(0) += 1;
+                }
+
+                let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();
+                for &(n, expected) in OEIS {
+                    let got = by_len.get(&n).copied().unwrap_or(0);
+                    if got != expected {
+                        mismatches.push((n, got, expected));
+                    }
+                }
+                if !mismatches.is_empty() {
+                    for (n, got, expected) in &mismatches {
+                        eprintln!(
+                            "n={n}: got {got}, expected (OEIS A316192) {expected}, diff {:+}",
+                            *got as i64 - *expected as i64
+                        );
+                    }
+                    panic!(
+                        "OEIS mismatch with mod={with_mod} ck={with_ck} threads={n_threads}: \
+                         {} length(s) differ",
+                        mismatches.len()
                     );
                 }
             }
