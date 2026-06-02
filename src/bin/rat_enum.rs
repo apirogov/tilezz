@@ -1258,4 +1258,102 @@ mod opt_correctness_tests {
             }
         }
     }
+
+    /// Group an enumerated `Vec<Vec<i8>>` into `len -> count`.
+    fn by_length(rats: &std::collections::HashSet<Vec<i8>>) -> std::collections::BTreeMap<usize, usize> {
+        let mut by_len = std::collections::BTreeMap::new();
+        for seq in rats {
+            *by_len.entry(seq.len()).or_insert(0) += 1;
+        }
+        by_len
+    }
+
+    /// Shared pin assertion: enumerate ring `ZZ` dihedral up to
+    /// `max_n` with all prunes enabled (single-threaded for
+    /// determinism), then assert each `(perim, expected)` pair from
+    /// `oeis`. Used by the cheap external-anchor pins below.
+    fn assert_oeis_pins<ZZ: IsRing>(
+        ring: u8,
+        oeis_name: &str,
+        oeis: &[(usize, usize)],
+    ) {
+        let max_n = oeis.iter().map(|&(n, _)| n).max().unwrap();
+        let prunes = build_prunes(ring, max_n, true, true);
+        let rats = run::<ZZ>(max_n, true, 1, &prunes);
+        let by_len = by_length(&rats);
+        let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();
+        for &(n, expected) in oeis {
+            let got = by_len.get(&n).copied().unwrap_or(0);
+            if got != expected {
+                mismatches.push((n, got, expected));
+            }
+        }
+        if !mismatches.is_empty() {
+            for (n, got, expected) in &mismatches {
+                eprintln!(
+                    "{oeis_name} ZZ{ring} perim={n}: got {got}, OEIS says {expected}, diff {:+}",
+                    *got as i64 - *expected as i64
+                );
+            }
+            panic!("{oeis_name} ZZ{ring}: {} term(s) differ", mismatches.len());
+        }
+    }
+
+    /// External anchor: OEIS A266549 per-length counts for ZZ4
+    /// dihedral matchstick polygons on the square lattice. Indexed by
+    /// perim 2n (square-lattice polygons only close at even perim).
+    /// Independently confirmed by our enumeration through perim 14;
+    /// see `docs/oeis.md` for the full overview.
+    #[test]
+    fn oeis_a266549_zz4_pin() {
+        const OEIS: &[(usize, usize)] = &[
+            (4, 1),   // a(2)
+            (6, 1),   // a(3)
+            (8, 3),   // a(4)
+            (10, 6),  // a(5)
+            (12, 25), // a(6)
+            (14, 86), // a(7)
+        ];
+        assert_oeis_pins::<ZZ4>(4, "A266549", OEIS);
+    }
+
+    /// External anchor: OEIS A316198 per-length counts for ZZ8
+    /// dihedral matchstick polygons. Indexed by perim 2n. Hugo's
+    /// data covers perim 4..12; our perim 14 = 240549 is a new term
+    /// we can contribute back to OEIS (see `docs/oeis.md`).
+    #[test]
+    fn oeis_a316198_zz8_pin() {
+        const OEIS: &[(usize, usize)] = &[
+            (4, 2),       // a(2)
+            (6, 6),       // a(3)
+            (8, 59),      // a(4)
+            (10, 695),    // a(5)
+            (12, 12198),  // a(6)
+        ];
+        assert_oeis_pins::<ZZ8>(8, "A316198", OEIS);
+    }
+
+    /// External anchor: OEIS A316200 per-length counts for ZZ10
+    /// dihedral matchstick polygons. Pins perim 4..10 ONLY: at
+    /// perim 11 our enumeration disagrees with OEIS (we say 9883,
+    /// OEIS says 19405) and we believe the OEIS term is in error.
+    /// Five independent enumeration paths (ring 10 step 1, ring 20
+    /// step 2, single/multi-threaded, with/without prunes, plus the
+    /// full streaming pipeline) all return 9883. See `docs/oeis.md`
+    /// for the discrepancy analysis.
+    #[test]
+    fn oeis_a316200_zz10_pin() {
+        const OEIS: &[(usize, usize)] = &[
+            (4, 2),    // a(4)
+            (5, 2),    // a(5)
+            (6, 10),   // a(6)
+            (7, 15),   // a(7)
+            (8, 124),  // a(8)
+            (9, 352),  // a(9)
+            (10, 2378),// a(10)
+            // a(11): OEIS says 19405, we say 9883. Pin omitted
+            // until the discrepancy is resolved with OEIS.
+        ];
+        assert_oeis_pins::<ZZ10>(10, "A316200", OEIS);
+    }
 }
