@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
+use crate::cyclotomic::IsRing;
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
 use crate::rat_enum::dfs::{collect_seeds, rat_enum_step, SeedGather};
@@ -175,19 +175,10 @@ pub fn stream_enum_dispatch(
 ) -> std::io::Result<DfsStats> {
     let prunes = snapshot_prunes();
     let n = n_threads.max(1);
-    match ring {
-        4 => stream_enum_parallel::<ZZ4>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        6 => stream_enum_parallel::<ZZ6>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        8 => stream_enum_parallel::<ZZ8>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        10 => stream_enum_parallel::<ZZ10>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        12 => stream_enum_parallel::<ZZ12>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        16 => stream_enum_parallel::<ZZ16>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        20 => stream_enum_parallel::<ZZ20>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        24 => stream_enum_parallel::<ZZ24>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        32 => stream_enum_parallel::<ZZ32>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        60 => stream_enum_parallel::<ZZ60>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir),
-        _ => panic!("invalid ring selected"),
-    }
+    crate::dispatch_ring!(
+        ring,
+        stream_enum_parallel::<ZZ>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir)
+    )
 }
 
 #[cfg(test)]

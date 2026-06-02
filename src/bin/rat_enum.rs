@@ -1094,19 +1094,7 @@ mod opt_correctness_tests {
         ring: u8,
         max_l: usize,
     ) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
-        match ring {
-            4 => collect_closure_keys::<ZZ4>(max_l),
-            6 => collect_closure_keys::<ZZ6>(max_l),
-            8 => collect_closure_keys::<ZZ8>(max_l),
-            10 => collect_closure_keys::<ZZ10>(max_l),
-            12 => collect_closure_keys::<ZZ12>(max_l),
-            16 => collect_closure_keys::<ZZ16>(max_l),
-            20 => collect_closure_keys::<ZZ20>(max_l),
-            24 => collect_closure_keys::<ZZ24>(max_l),
-            32 => collect_closure_keys::<ZZ32>(max_l),
-            60 => collect_closure_keys::<ZZ60>(max_l),
-            _ => panic!("unknown ring {ring}"),
-        }
+        tilezz::dispatch_ring!(ring, collect_closure_keys::<ZZ>(max_l))
     }
 
     /// Build a `Prunes` for testing per the chosen opt subset.
