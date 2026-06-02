@@ -31,6 +31,7 @@ applicable a subring-step cross-check like ZZ20 step=2 = ZZ10 step=1).
 | **ZZ8** dihedral | [A316198] | perim 2n | a(2..6) = 2, 6, 59, 695, 12198 ✅ | **a(7) = 240549** (new, perim 14) |
 | **ZZ10** dihedral | [A316200] | perim n | a(4..10) = 2, 2, 10, 15, 124, 352, 2378 ✅ | **a(12..14)** once a(11) is resolved (see below) |
 | **ZZ12** dihedral | [A316192] | perim n | a(3..10) = 1, 3, 4, 22, 69, 418, 2210, 14024 ✅ (existing test) | **a(11) = 89075, a(12) = 597581, a(13) = 4076855, a(14) = 28499301** (sum 1..14 = 33,279,563, matches the streaming-pipeline total) |
+| **ZZ6** dihedral (triangular) | [A284869] | perim n | a(3..14) = 1, 1, 1, 4, 5, 16, 37, 120, 344, 1175, 3807, 13224 ✅ | OEIS publishes a(3..24); we have a(3..14) verified, deeper terms via further enumeration |
 
 [A266549]: https://oeis.org/A266549
 [A316192]: https://oeis.org/A316192
@@ -81,27 +82,54 @@ For each, our streaming pipeline can produce the full per-length table
 out to whatever perim we have compute budget for; submission requires
 just the sequence of counts plus a citation of the methodology.
 
-## Rings missing from our codebase, OEIS has oracles
+## Rings missing from our codebase
 
-These would unlock external cross-validation if we implement the rings
-(see the existing `define_integral_zz!` macro and the discussion in the
-ring-implementation notes for what's involved per ring):
+The Hugo-Pfoertner sequences for `n ∈ {14, 18, 22}` (A316197, A316199,
+A316201) all encode a **restricted subclass**, not the full ring — see
+the next section.
 
-| Ring | OEIS | Description | OEIS terms |
-|------|------|-------------|------------|
-| ZZ6 (triangular) | [A284869] | perim n | a(3..24), 22 terms |
-| ZZ14 | [A316197] | perim 2n | a(3..7), 5 terms |
-| ZZ18 | [A316199] | perim 2n | a(3..6), 4 terms |
-| ZZ22 | [A316201] | perim 2n | a(3..6), 4 terms |
+| Ring | Full-ring OEIS | Notes |
+|------|---------------|-------|
+| ~~ZZ6 (triangular)~~ | [A284869] | **implemented and pinned** — perim 3..14 confirmed against OEIS |
+| ZZ14 | **none** | full-ring counts not in OEIS; A316197 is the bipartite-subset variant |
+| ZZ18 | **none** | full-ring counts not in OEIS; A316199 is the bipartite-subset variant |
+| ZZ22 | **none** | full-ring counts not in OEIS; A316201 is the bipartite-subset variant |
 
 [A284869]: https://oeis.org/A284869
 [A316197]: https://oeis.org/A316197
 [A316199]: https://oeis.org/A316199
 [A316201]: https://oeis.org/A316201
 
-ZZ6 is the most useful addition by external-oracle coverage: A284869
-goes out to a(24), giving us a deep independent check that none of the
-other rings have. The rest are short pins but still independent.
+ZZ6 is therefore both an oracle (verifies the `define_integral_zz!`
+pipeline against 22 published terms) and a coverage step.
+ZZ14/ZZ18/ZZ22, once implemented, contribute **new full-ring sequences**
+to OEIS rather than matching existing ones — see "rings we have, OEIS
+doesn't" above.
+
+## Bipartite-subset variants (Hugo's A316195/197/199/201)
+
+A separate combinatorial object Hugo studied: matchstick polygons on
+the same lattices but with the turn set restricted to **odd multiples
+of π/k** only (so 0 and even-multiple turns are forbidden). Because
+the cumulative direction's parity flips at every step, the resulting
+walks live on a bipartite sublattice and Hugo published them as
+distinct sequences:
+
+| OEIS | Ring | Restricted turn set |
+|------|------|---------------------|
+| [A316195] | ZZ10 | ±π/5, ±3π/5 (4 turn angles, vs ZZ10 full 9) |
+| [A316197] | ZZ14 | ±π/7, ±3π/7, ±5π/7 (6 turn angles, vs ZZ14 full 13) |
+| [A316199] | ZZ18 | ±π/9, ±3π/9, ±5π/9, ±7π/9 (8 turn angles, vs ZZ18 full 17) |
+| [A316201] | ZZ22 | ±π/11, ±3π/11, ±5π/11, ±7π/11, ±9π/11 (10 turn angles, vs ZZ22 full 21) |
+
+[A316195]: https://oeis.org/A316195
+
+Matching any of these would require both the underlying ring AND a
+turn-set restriction mechanism in `rat_enum`. Today's `--step N`
+restricts to turns that are *multiples of* N (giving the even-only
+subset for `step=2`); the natural complement (odd-only) isn't
+expressible. Not on the current roadmap; documented here for
+completeness.
 
 ## "Non-dihedrally-reduced" (one-sided / rotation-canonical) variants
 
@@ -169,6 +197,7 @@ so they are not directly usable as oracles for our DFS:
 |------|----------|-------------|
 | `oeis_a316192_each_opt_combo` | `src/bin/rat_enum.rs` `opt_correctness_tests` | ZZ12 dihedral a(3..10) under every prune subset (~60–90 s) |
 | `oeis_a266549_zz4_pin` | same | ZZ4 dihedral a(2..7) (perim 4..14) |
+| `oeis_a284869_zz6_pin` | same | ZZ6 dihedral a(3..14) (12 terms — deepest oracle) |
 | `oeis_a316198_zz8_pin` | same | ZZ8 dihedral a(2..6) (perim 4..12), with a(7)=240549 documented as our extension |
 | `oeis_a316200_zz10_pin` | same | ZZ10 dihedral a(4..10) **only** (a(11) skipped pending OEIS resolution) |
 

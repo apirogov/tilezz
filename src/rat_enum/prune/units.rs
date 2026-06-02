@@ -1,6 +1,6 @@
 //! Per-ring extraction of unit-vector coefficient arrays.
 
-use crate::cyclotomic::{IsRing, Units, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use crate::cyclotomic::{IsRing, Units, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 
 /// Returns ALL `n` unit vectors `unit(0)..unit(n-1)` for the chosen
 /// ring (NOT just the DFS's `n-1`-direction window). A partial rat's
@@ -22,6 +22,7 @@ pub fn unit_vectors_for_ring(ring: u8) -> (Vec<Vec<i64>>, usize) {
     }
     match ring {
         4 => extract::<ZZ4, 2, _>(|x| x.int_coeffs()),
+        6 => extract::<ZZ6, 2, _>(|x| x.int_coeffs()),
         8 => extract::<ZZ8, 4, _>(|x| x.int_coeffs()),
         10 => extract::<ZZ10, 4, _>(|x| x.int_coeffs()),
         12 => extract::<ZZ12, 4, _>(|x| x.int_coeffs()),

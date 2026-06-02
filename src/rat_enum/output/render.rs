@@ -5,7 +5,7 @@
 //! `tilezz::vis`. `run_rat_enum_polylines` is the runtime-ring
 //! wrapper used by the CLI.
 
-use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 use crate::geom::rat::Rat;
 use crate::geom::snake::Turtle;
 use crate::rat_enum::enumerate_dispatch;
@@ -28,6 +28,9 @@ pub fn run_rat_enum_polylines(
     match ring {
         4 => polygons::<ZZ4>(
             enumerate_dispatch::<ZZ4>(max_steps, step, n_threads, dihedral, paranoid).0,
+        ),
+        6 => polygons::<ZZ6>(
+            enumerate_dispatch::<ZZ6>(max_steps, step, n_threads, dihedral, paranoid).0,
         ),
         8 => polygons::<ZZ8>(
             enumerate_dispatch::<ZZ8>(max_steps, step, n_threads, dihedral, paranoid).0,

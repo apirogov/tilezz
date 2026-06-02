@@ -1,6 +1,6 @@
 //! Cyclotomic-ring trait surface.
 //!
-//! Every `ZZn` ring (`n in {4, 8, 10, 12, 16, 20, 24, 32, 60}`) is generated
+//! Every `ZZn` ring (`n in {4, 6, 8, 10, 12, 16, 20, 24, 32, 60}`) is generated
 //! by `define_integral_zz!` in `integral_basis.rs` and lives in `rings.rs`.
 //! All trait declarations that those rings implement -- and the marker
 //! traits downstream code uses to constrain "is this a ring with feature
