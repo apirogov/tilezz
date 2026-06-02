@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
+use crate::cyclotomic::IsRing;
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
 use crate::rat_enum::dfs::{collect_seeds, hashset_recorder, rat_enum_step, SeedGather};
@@ -20,8 +20,6 @@ use crate::rat_enum::seed::parallel::{parallel_drain_seeds, splitting_depth};
 use crate::rat_enum::stats::DfsStats;
 
 type SeedListing = (HashSet<Vec<i8>>, Vec<Vec<i8>>);
-type CollectSeedFn = fn(usize, i8, usize, bool) -> SeedListing;
-type EnumFromSeedFn = fn(usize, i8, &[i8], usize, bool, bool) -> HashSet<Vec<i8>>;
 
 /// Walk the DFS down to `split_depth` and return
 /// `(closed, alive_prefixes)`. `closed` contains polygons that
@@ -177,20 +175,10 @@ pub fn dispatch_collect_seed_prefixes(
     split_depth: usize,
     dihedral: bool,
 ) -> SeedListing {
-    let f: CollectSeedFn = match ring {
-        4 => collect_seed_prefixes::<ZZ4>,
-        6 => collect_seed_prefixes::<ZZ6>,
-        8 => collect_seed_prefixes::<ZZ8>,
-        10 => collect_seed_prefixes::<ZZ10>,
-        12 => collect_seed_prefixes::<ZZ12>,
-        16 => collect_seed_prefixes::<ZZ16>,
-        20 => collect_seed_prefixes::<ZZ20>,
-        24 => collect_seed_prefixes::<ZZ24>,
-        32 => collect_seed_prefixes::<ZZ32>,
-        60 => collect_seed_prefixes::<ZZ60>,
-        _ => panic!("invalid ring selected"),
-    };
-    f(max_steps, step, split_depth, dihedral)
+    crate::dispatch_ring!(
+        ring,
+        collect_seed_prefixes::<ZZ>(max_steps, step, split_depth, dihedral)
+    )
 }
 
 /// Runtime-ring dispatch wrapper for [`enumerate_from_seed`].
@@ -203,18 +191,8 @@ pub fn dispatch_enumerate_from_seed(
     dihedral: bool,
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
-    let f: EnumFromSeedFn = match ring {
-        4 => enumerate_from_seed::<ZZ4>,
-        6 => enumerate_from_seed::<ZZ6>,
-        8 => enumerate_from_seed::<ZZ8>,
-        10 => enumerate_from_seed::<ZZ10>,
-        12 => enumerate_from_seed::<ZZ12>,
-        16 => enumerate_from_seed::<ZZ16>,
-        20 => enumerate_from_seed::<ZZ20>,
-        24 => enumerate_from_seed::<ZZ24>,
-        32 => enumerate_from_seed::<ZZ32>,
-        60 => enumerate_from_seed::<ZZ60>,
-        _ => panic!("invalid ring selected"),
-    };
-    f(max_steps, step, seed, n_threads, dihedral, paranoid)
+    crate::dispatch_ring!(
+        ring,
+        enumerate_from_seed::<ZZ>(max_steps, step, seed, n_threads, dihedral, paranoid)
+    )
 }

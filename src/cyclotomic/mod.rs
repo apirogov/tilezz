@@ -33,6 +33,8 @@ pub(crate) mod traits;
 
 mod rings;
 
+pub mod dispatch;
+
 pub mod integral_basis;
 
 // --------
