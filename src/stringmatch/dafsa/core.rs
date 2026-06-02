@@ -20,7 +20,7 @@
 //!
 //! Dumping enumerated polygon angle-sequence databases (rat_enum
 //! output) to a form that the browser-side interactive explorer can
-//! load without choking on raw size. For the dihedral-canonical
+//! load without choking on raw size. For the free (full dihedral symmetry reduction)
 //! ZZ12 sequences up to perimeter n=16 (~1.4B sequences in raw
 //! form), DAFSA's prefix+suffix sharing compresses the set
 //! 50-200x over packed-binary representations because of the small
@@ -955,7 +955,7 @@ impl Dafsa {
     /// uncompressed content is exactly what [`Self::write_json`] would
     /// emit; gzip absorbs whitespace, repeated field names, and runs
     /// of small integers in the column-stored arrays (~50% on the
-    /// large ZZ12 dihedral n=16 set).
+    /// large ZZ12 free n=16 set).
     ///
     /// Pair with [`Self::read_json_gz`] for the inverse direction.
     pub fn write_json_gz<W: io::Write>(&self, w: W) -> io::Result<()> {

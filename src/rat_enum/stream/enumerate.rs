@@ -41,17 +41,17 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
     prunes: &Prunes,
     out_dir: &Path,
 ) -> std::io::Result<DfsStats> {
-    let ops = make_ops(dihedral);
+    let ops = make_ops(free);
     let runs_dir = out_dir.join(RUNS_SUBDIR);
     std::fs::create_dir_all(&runs_dir)?;
 
-    let label = if dihedral {
-        "dihedral stream"
+    let label = if free {
+        "free stream"
     } else {
         "rotation stream"
     };
@@ -166,7 +166,7 @@ pub fn stream_enum_dispatch(
     max_steps: usize,
     step: i8,
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
     out_dir: &Path,
 ) -> std::io::Result<DfsStats> {
@@ -174,7 +174,7 @@ pub fn stream_enum_dispatch(
     let n = n_threads.max(1);
     crate::dispatch_ring!(
         ring,
-        stream_enum_parallel::<ZZ>(max_steps, step, n, dihedral, paranoid, &prunes, out_dir)
+        stream_enum_parallel::<ZZ>(max_steps, step, n, free, paranoid, &prunes, out_dir)
     )
 }
 
@@ -212,16 +212,16 @@ mod tests {
     fn check_stream_matches_baseline<ZZ: crate::cyclotomic::IsRing>(
         ring: u8,
         max_steps: usize,
-        dihedral: bool,
+        free: bool,
     ) {
         let dir = tempdir();
         let prunes = Prunes::default();
 
-        let stats = stream_enum_parallel::<ZZ>(max_steps, 1, 4, dihedral, false, &prunes, &dir)
+        let stats = stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir)
             .expect("stream_enum_parallel");
         assert!(stats.closed > 0, "no closures recorded -- did Stage 1 run?");
 
-        let cert = merge_runs(&dir, ring, max_steps, 1, dihedral).expect("merge_runs");
+        let cert = merge_runs(&dir, ring, max_steps, 1, free).expect("merge_runs");
         assert_eq!(
             cert.ring, ring,
             "certificate.ring does not match the request"
@@ -237,21 +237,21 @@ mod tests {
             "read_unique_records count diverges from certificate"
         );
 
-        let ops = canonical_make_ops(dihedral);
+        let ops = canonical_make_ops(free);
         let (baseline, _) = rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
         let expected = sort_by_len_then_lex(baseline);
 
         assert_eq!(
             from_stream.len(),
             expected.len(),
-            "stream/baseline cardinality mismatch (ZZ{ring} n={max_steps} dihedral={dihedral}): \
+            "stream/baseline cardinality mismatch (ZZ{ring} n={max_steps} free={free}): \
              {} vs {}",
             from_stream.len(),
             expected.len(),
         );
         assert_eq!(
             from_stream, expected,
-            "stream/baseline content mismatch (ZZ{ring} n={max_steps} dihedral={dihedral})"
+            "stream/baseline content mismatch (ZZ{ring} n={max_steps} free={free})"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -263,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_matches_baseline_zz8_n10_dihedral() {
+    fn stream_matches_baseline_zz8_n10_free() {
         check_stream_matches_baseline::<ZZ8>(8, 10, true);
     }
 
@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_matches_baseline_zz12_n8_dihedral() {
+    fn stream_matches_baseline_zz12_n8_free() {
         check_stream_matches_baseline::<ZZ12>(12, 8, true);
     }
 
@@ -287,16 +287,16 @@ mod tests {
     fn check_stream_build_matches_baseline<ZZ: crate::cyclotomic::IsRing>(
         ring: u8,
         max_steps: usize,
-        dihedral: bool,
+        free: bool,
     ) {
         use crate::stringmatch::RatDafsa;
 
         let dir = tempdir();
         let prunes = Prunes::default();
 
-        stream_enum_parallel::<ZZ>(max_steps, 1, 4, dihedral, false, &prunes, &dir)
+        stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir)
             .expect("stream_enum_parallel");
-        merge_runs(&dir, ring, max_steps, 1, dihedral).expect("merge_runs");
+        merge_runs(&dir, ring, max_steps, 1, free).expect("merge_runs");
 
         // Streaming build: feed unique.bin's records directly into
         // `from_sorted_unique_rats`. No Vec<Vec<i8>> in the middle.
@@ -306,7 +306,7 @@ mod tests {
         let streamed_dafsa = RatDafsa::from_sorted_unique_rats(records);
 
         // Reference: baseline DFS -> buffering `from_rats`.
-        let ops = canonical_make_ops(dihedral);
+        let ops = canonical_make_ops(free);
         let (baseline, _) = rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
         let buffered_dafsa = RatDafsa::from_rats(baseline.iter().map(|v| v.as_slice()));
 
@@ -315,13 +315,13 @@ mod tests {
         assert_eq!(
             streamed_dafsa.len(),
             buffered_dafsa.len(),
-            "stream-build/baseline cardinality mismatch (ZZ{ring} n={max_steps} dihedral={dihedral})"
+            "stream-build/baseline cardinality mismatch (ZZ{ring} n={max_steps} free={free})"
         );
         let streamed_iter: Vec<Vec<i8>> = streamed_dafsa.iter().collect();
         let buffered_iter: Vec<Vec<i8>> = buffered_dafsa.iter().collect();
         assert_eq!(
             streamed_iter, buffered_iter,
-            "stream-build/baseline iter mismatch (ZZ{ring} n={max_steps} dihedral={dihedral})"
+            "stream-build/baseline iter mismatch (ZZ{ring} n={max_steps} free={free})"
         );
         for rat in &streamed_iter {
             assert_eq!(
@@ -336,12 +336,12 @@ mod tests {
     }
 
     #[test]
-    fn stream_build_matches_baseline_zz8_n10_dihedral() {
+    fn stream_build_matches_baseline_zz8_n10_free() {
         check_stream_build_matches_baseline::<ZZ8>(8, 10, true);
     }
 
     #[test]
-    fn stream_build_matches_baseline_zz12_n8_dihedral() {
+    fn stream_build_matches_baseline_zz12_n8_free() {
         check_stream_build_matches_baseline::<ZZ12>(12, 8, true);
     }
 
@@ -356,7 +356,7 @@ mod tests {
     /// leaving stale state behind, file-creation races, or
     /// nondeterministic ordering inside the streaming dafsa builder.
     #[test]
-    fn pipeline_idempotent_rerun_zz8_n8_dihedral() {
+    fn pipeline_idempotent_rerun_zz8_n8_free() {
         use crate::stringmatch::RatDafsa;
 
         let dir = tempdir();

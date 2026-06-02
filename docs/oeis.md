@@ -9,7 +9,7 @@ lattice — is **Hugo Pfoertner's 2018 family of sequences**, all
 submitted on 2018-07-07 around the [Al Zimmermann "Snakes on a Plane"
 contest][snakes]. Hugo's source code is not public; the only artifact
 is the OEIS data and illustrations at [randomwalk.de][rwd]. Every
-sequence in the family encodes the **dihedral-canonical** count:
+sequence in the family encodes the **free** (also called **dihedral-canonical**) count:
 distinct polygons up to rotation *and* reflection of the angle
 sequence.
 
@@ -25,11 +25,11 @@ cross-check like ZZ20 step=2 = ZZ10 step=1).
 
 | Ring | OEIS | Description | OEIS terms (verified by us) | New terms we can contribute |
 |------|------|-------------|------------------------------|-----------------------------|
-| **ZZ4** dihedral | [A266549] | square lattice, perim 2n | a(2..7) = 1, 1, 3, 6, 25, 86 ✅ | a(8+) trivially (ring is small) |
-| **ZZ6** dihedral (triangular) | [A284869] | perim n | a(3..14) = 1, 1, 1, 4, 5, 16, 37, 120, 344, 1175, 3807, 13224 ✅ | OEIS publishes a(3..24); deeper terms via further enumeration |
-| **ZZ8** dihedral | [A316198] | perim 2n | a(2..6) = 2, 6, 59, 695, 12198 ✅ | **a(7) = 240549** (new, perim 14) |
-| **ZZ10** dihedral | [A316200] | perim n | a(4..10) = 2, 2, 10, 15, 124, 352, 2378 ✅ | **a(12..14)** once a(11) is resolved (see below) |
-| **ZZ12** dihedral | [A316192] | perim n | a(3..10) = 1, 3, 4, 22, 69, 418, 2210, 14024 ✅ | **a(11..14) = 89075, 597581, 4076855, 28499301** (sum 1..14 = 33,279,563, matches the streaming-pipeline total) |
+| **ZZ4** free | [A266549] | square lattice, perim 2n | a(2..7) = 1, 1, 3, 6, 25, 86 ✅ | a(8+) trivially (ring is small) |
+| **ZZ6** free (triangular) | [A284869] | perim n | a(3..14) = 1, 1, 1, 4, 5, 16, 37, 120, 344, 1175, 3807, 13224 ✅ | OEIS publishes a(3..24); deeper terms via further enumeration |
+| **ZZ8** free | [A316198] | perim 2n | a(2..6) = 2, 6, 59, 695, 12198 ✅ | **a(7) = 240549** (new, perim 14) |
+| **ZZ10** free | [A316200] | perim n | a(4..10) = 2, 2, 10, 15, 124, 352, 2378 ✅ | **a(12..14)** once a(11) is resolved (see below) |
+| **ZZ12** free | [A316192] | perim n | a(3..10) = 1, 3, 4, 22, 69, 418, 2210, 14024 ✅ | **a(11..14) = 89075, 597581, 4076855, 28499301** (sum 1..14 = 33,279,563, matches the streaming-pipeline total) |
 
 [A266549]: https://oeis.org/A266549
 [A284869]: https://oeis.org/A284869
@@ -38,7 +38,7 @@ cross-check like ZZ20 step=2 = ZZ10 step=1).
 [A316200]: https://oeis.org/A316200
 
 **Holes-allowed siblings.** Two OEIS sequences enumerate the same
-objects as our ZZ4 / ZZ6 dihedral matches but *additionally* include
+objects as our ZZ4 / ZZ6 free matches but *additionally* include
 polygons with holes (polyominoes with internal cavities):
 
 | Ring | "Holes allowed" sibling | First divergence |
@@ -61,13 +61,13 @@ either side gives a way to enumerate those if wanted.
 We get **9883**; Hugo's data says **19405**. Five independent paths
 of ours agree on 9883:
 
-- `--ring 10 --step 1 --dihedral -n 11`
-- `--ring 20 --step 2 --dihedral -n 11` (same set, separate code path)
+- `--ring 10 --step 1 --free -n 11`
+- `--ring 20 --step 2 --free -n 11` (same set, separate code path)
 - single-threaded, no prunes
 - 16-threaded, full prunes
 - full streaming pipeline (stream → merge → build)
 
-The OEIS value sits between our dihedral count (9883) and our
+The OEIS value sits between our free count (9883) and our
 rotation-canonical count (118 achiral + 2 × 9765 chiral pairs = 19648)
 and doesn't match any clean orbit-counting formula — suggesting a
 one-off computation or transcription error rather than a definitional
@@ -168,10 +168,10 @@ full trichotomy IS catalogued — fixed [A001168], one-sided
 would require post-processing by cell count rather than perimeter,
 which we don't currently do.
 
-From our dihedral output, both companions fall out for free if we
+From our free output, both companions fall out for free if we
 want to publish them:
 
-- One-sided: from dihedral count `D` (with `A` achiral entries),
+- One-sided: from free count `D` (with `A` achiral entries),
   `one-sided = 2D − A`. Sample for ZZ10:
 
   | perim | D | A | one-sided = 2D − A |
@@ -191,7 +191,7 @@ want to publish them:
 One further note:
 
 - **[A346132]** lists ZZ12 step counts at which *no* closed walk
-  exists. Trivially checkable: any n where ZZ12 dihedral returns
+  exists. Trivially checkable: any n where ZZ12 free returns
   zero rats is in A346132. A "must-be-empty" pin, not a count pin.
 
 [A001168]: https://oeis.org/A001168
@@ -222,11 +222,11 @@ OEIS sequences that came up during the crawl but enumerate
 
 | Test | What it pins |
 |------|-------------|
-| `oeis_a266549_zz4_pin` | ZZ4 dihedral a(2..7) (perim 4..14) |
-| `oeis_a284869_zz6_pin` | ZZ6 dihedral a(3..14) (12 terms — deepest oracle) |
-| `oeis_a316198_zz8_pin` | ZZ8 dihedral a(2..6) (perim 4..12); a(7)=240549 documented as our extension |
-| `oeis_a316200_zz10_pin` | ZZ10 dihedral a(4..10) **only** (a(11) skipped pending OEIS resolution) |
-| `oeis_a316192_each_opt_combo` | ZZ12 dihedral a(3..10) under every prune subset (~60–90 s) |
+| `oeis_a266549_zz4_pin` | ZZ4 free a(2..7) (perim 4..14) |
+| `oeis_a284869_zz6_pin` | ZZ6 free a(3..14) (12 terms — deepest oracle) |
+| `oeis_a316198_zz8_pin` | ZZ8 free a(2..6) (perim 4..12); a(7)=240549 documented as our extension |
+| `oeis_a316200_zz10_pin` | ZZ10 free a(4..10) **only** (a(11) skipped pending OEIS resolution) |
+| `oeis_a316192_each_opt_combo` | ZZ12 free a(3..10) under every prune subset (~60–90 s) |
 
 All live in `src/bin/rat_enum.rs` under `opt_correctness_tests`. Run
 with `cargo test --release --lib --bin rat_enum -- oeis_`.

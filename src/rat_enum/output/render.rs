@@ -22,11 +22,11 @@ pub fn run_rat_enum_polylines(
     max_steps: usize,
     step: i8,
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
 ) -> Vec<Vec<P64>> {
     crate::dispatch_ring!(
         ring,
-        polygons::<ZZ>(enumerate_dispatch::<ZZ>(max_steps, step, n_threads, dihedral, paranoid).0)
+        polygons::<ZZ>(enumerate_dispatch::<ZZ>(max_steps, step, n_threads, free, paranoid).0)
     )
 }
