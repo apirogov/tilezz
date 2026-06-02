@@ -58,7 +58,7 @@ pub mod seed;
 pub mod stats;
 pub mod stream;
 
-use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 use crate::rat_enum::canonical::make_ops;
 use crate::rat_enum::dfs::rat_enum_with;
 use crate::rat_enum::prune::snapshot_prunes;
@@ -110,6 +110,7 @@ pub fn run_rat_enum_seqs(
 ) -> EnumResult {
     let f: fn(usize, i8, usize, bool, bool) -> EnumResult = match ring {
         4 => enumerate_dispatch::<ZZ4>,
+        6 => enumerate_dispatch::<ZZ6>,
         8 => enumerate_dispatch::<ZZ8>,
         10 => enumerate_dispatch::<ZZ10>,
         12 => enumerate_dispatch::<ZZ12>,

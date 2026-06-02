@@ -248,6 +248,128 @@ impl_cell_floor_via_sign_verify!(ZZ4);
 crate::zz_integral_ring_tests!(name: ZZ4);
 
 // ----------------
+// ZZ6 -- Eisenstein integers Z[zeta_6].
+//
+// `zeta = e^(2*pi*i/6) = (1 + i*sqrt(3)) / 2`, `Phi_6(x) = x^2 - x + 1`,
+// so `zeta^2 = zeta - 1`. Storage: `[i64; 2]` over `{1, zeta}`. ZZ6 does
+// *not* contain `i` (= zeta_4), so there is no `From<(i64, i64)>` impl
+// and the triangular-lattice `CellFloor` uses exact sign comparisons
+// against `b*sqrt(3)/2` rather than constructing cartesian-integer corner
+// points the way the generic `impl_cell_floor_via_sign_verify!` macro does.
+//
+// The Re/Im decompositions share the `{sqrt(1), sqrt(3)}` basis with
+// implicit /2 denominator that ZZ12 uses, so the real-subring sign
+// function delegates directly to `sign_m_plus_n_sqrt3`.
+
+const ZZ6_CARTESIAN: [Complex64; 2] = {
+    // sqrt(3)/2 to f64, kept const-evaluable as a literal.
+    const HALF_SQRT_3: f64 = 0.866_025_403_784_438_6_f64;
+    [
+        // zeta^0 = 1
+        Complex64::new(1.0, 0.0),
+        // zeta^1 = 1/2 + i*sqrt(3)/2
+        Complex64::new(0.5, HALF_SQRT_3),
+    ]
+};
+
+#[inline]
+fn zz6_complex64(coeffs: &[i64; 2]) -> Complex64 {
+    // Re(a + b*zeta) = a + b/2; Im(a + b*zeta) = b*sqrt(3)/2.
+    const HALF_SQRT_3: f64 = 0.866_025_403_784_438_6_f64;
+    let [a, b] = *coeffs;
+    let (a, b) = (a as f64, b as f64);
+    let re = a + 0.5 * b;
+    let im = b * HALF_SQRT_3;
+    Complex64::new(re, im)
+}
+
+/// Display for ZZ6 against `{sqrt(1), sqrt(3)}` with implicit /2:
+///
+/// ```text
+///   z = a + b*zeta = (2a + b)/2 + (b/2)*i*sqrt(3)
+///   coefficient of sqrt(1)  = ((2a+b)/2,  0      )
+///   coefficient of sqrt(3)  = (0,          b/2   )
+/// ```
+fn zz6_display(coeffs: &[i64; 2], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [a, b] = *coeffs;
+    let half = Ratio::<i64>::new_raw(1, 2);
+    let c0 = gpair(
+        Ratio::<i64>::from_integer(2 * a + b) * half,
+        Ratio::<i64>::from_integer(0),
+    );
+    let c1 = gpair(
+        Ratio::<i64>::from_integer(0),
+        Ratio::<i64>::from_integer(b) * half,
+    );
+    format_symbolic(&[c0, c1], &["1", "3"], f)
+}
+
+/// ZZ6's K=2 real-subring sign on the `{1, sqrt(3)}` basis: same shape
+/// as ZZ12's, so it just delegates to `sign_m_plus_n_sqrt3`.
+#[inline]
+fn zz6_real_sign(x: &[i64; 2]) -> i8 {
+    sign_m_plus_n_sqrt3(x[0], x[1])
+}
+
+define_integral_zz! {
+    name: ZZ6,
+    n: 6,
+    phi: 2,
+    real_dim: 2,
+    // Phi_6(x) = x^2 - x + 1, so zeta^2 = zeta - 1 = -1 + 1*zeta.
+    reduction: [-1i64, 1],
+    // Re(zeta^k) in basis {sqrt(1), sqrt(3)} with implicit /2:
+    //   Re(zeta^0) = 1            -> [2, 0] / 2
+    //   Re(zeta^1) = 1/2          -> [1, 0] / 2
+    re_decomp: [[2i64, 0], [1, 0]],
+    // Im(zeta^k):
+    //   Im(zeta^0) = 0            -> [0, 0] / 2
+    //   Im(zeta^1) = sqrt(3)/2    -> [0, 1] / 2
+    im_decomp: [[0i64, 0], [0, 1]],
+    cartesian: ZZ6_CARTESIAN,
+    one_in_real_basis: [2i64, 0],
+    display_fn: zz6_display,
+    complex64_fn: zz6_complex64,
+    has: [HasZZ6Impl],
+}
+
+crate::impl_integral_units_via_basis!(ZZ6, 6);
+crate::impl_integral_mul_via_basis!(ZZ6, 2);
+crate::impl_integral_conj_via_basis!(ZZ6, 2);
+crate::impl_integral_re_im_sign_via_basis!(ZZ6, 2, 2, zz6_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ6, 2, 2, zz6_real_sign);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ6);
+
+// Hand-rolled `CellFloor` for ZZ6 -- the generic
+// `impl_cell_floor_via_sign_verify!` macro requires `From<(i64, i64)>`
+// to construct corner points at integer cartesian coordinates, which
+// ZZ6 lacks (no `i` in the ring). Instead we extract Re/Im components
+// directly off `int_coeffs` and verify the f64 floor against
+// `sign_m_plus_n_sqrt3`, mirroring the ZZ10 approach.
+impl crate::cyclotomic::CellFloor for ZZ6 {
+    #[inline]
+    fn cell_floor_exact(&self) -> (i64, i64) {
+        use crate::cyclotomic::SymNum;
+        let [a, b] = self.int_coeffs();
+        // Re(z) = a + b/2 = (2a + b)/2. Integer floor is exact:
+        let cx = a + b.div_euclid(2);
+        // Im(z) = b*sqrt(3)/2. Iteratively refine the f64 floor using
+        // sign(Im(z) - cy) = sign_m_plus_n_sqrt3(-2*cy, b).
+        let cf = self.complex64();
+        let mut cy = cf.im.floor() as i64;
+        while sign_m_plus_n_sqrt3(-2 * cy, b) < 0 {
+            cy -= 1;
+        }
+        while sign_m_plus_n_sqrt3(-2 * (cy + 1), b) >= 0 {
+            cy += 1;
+        }
+        (cx, cy)
+    }
+}
+
+crate::zz_integral_ring_tests!(name: ZZ6);
+
+// ----------------
 // ZZ8 -- compass integers Z[zeta_8].
 //
 // `zeta = e^(2*pi*i/8) = (sqrt(2) + i*sqrt(2)) / 2`, `Phi_8(x) = x^4 + 1`,

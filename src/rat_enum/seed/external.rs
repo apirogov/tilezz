@@ -11,7 +11,7 @@
 
 use std::collections::HashSet;
 
-use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
 use crate::rat_enum::dfs::{collect_seeds, hashset_recorder, rat_enum_step, SeedGather};
@@ -179,6 +179,7 @@ pub fn dispatch_collect_seed_prefixes(
 ) -> SeedListing {
     let f: CollectSeedFn = match ring {
         4 => collect_seed_prefixes::<ZZ4>,
+        6 => collect_seed_prefixes::<ZZ6>,
         8 => collect_seed_prefixes::<ZZ8>,
         10 => collect_seed_prefixes::<ZZ10>,
         12 => collect_seed_prefixes::<ZZ12>,
@@ -204,6 +205,7 @@ pub fn dispatch_enumerate_from_seed(
 ) -> HashSet<Vec<i8>> {
     let f: EnumFromSeedFn = match ring {
         4 => enumerate_from_seed::<ZZ4>,
+        6 => enumerate_from_seed::<ZZ6>,
         8 => enumerate_from_seed::<ZZ8>,
         10 => enumerate_from_seed::<ZZ10>,
         12 => enumerate_from_seed::<ZZ12>,

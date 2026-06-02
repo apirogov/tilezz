@@ -13,7 +13,7 @@
 //! compute the target suffix endpoint via
 //! `target = -unit(-facing) * disp`).
 
-use crate::cyclotomic::{IsRing, Units, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use crate::cyclotomic::{IsRing, Units, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 use crate::geom::snake::Snake;
 
 /// Set of closure keys indexed by ring-coefficient vector + facing.
@@ -71,6 +71,7 @@ pub fn collect_closure_keys_for_ring(
 ) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
     match ring {
         4 => collect_closure_keys::<ZZ4>(max_l),
+        6 => collect_closure_keys::<ZZ6>(max_l),
         8 => collect_closure_keys::<ZZ8>(max_l),
         10 => collect_closure_keys::<ZZ10>(max_l),
         12 => collect_closure_keys::<ZZ12>(max_l),

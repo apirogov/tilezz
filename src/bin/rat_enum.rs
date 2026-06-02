@@ -95,7 +95,7 @@ use tilezz::stringmatch::RatDafsa;
 #[cfg(test)]
 use std::collections::HashSet;
 #[cfg(test)]
-use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
 #[cfg(test)]
 use tilezz::rat_enum::canonical::{dihedral_canonical, make_ops};
 #[cfg(test)]
@@ -266,7 +266,7 @@ docstring in src/bin/rat_enum.rs for the full memory accounting.\n"
 )]
 struct Cli {
     /// Cyclotomic ring index n in `ZZn`. Supported:
-    /// 4, 8, 10, 12, 16, 20, 24, 32, 60.
+    /// 4, 6, 8, 10, 12, 16, 20, 24, 32, 60.
     #[arg(short = 'r', long)]
     ring: u8,
 
@@ -1096,6 +1096,7 @@ mod opt_correctness_tests {
     ) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
         match ring {
             4 => collect_closure_keys::<ZZ4>(max_l),
+            6 => collect_closure_keys::<ZZ6>(max_l),
             8 => collect_closure_keys::<ZZ8>(max_l),
             10 => collect_closure_keys::<ZZ10>(max_l),
             12 => collect_closure_keys::<ZZ12>(max_l),
@@ -1355,5 +1356,32 @@ mod opt_correctness_tests {
             // until the discrepancy is resolved with OEIS.
         ];
         assert_oeis_pins::<ZZ10>(10, "A316200", OEIS);
+    }
+
+    /// External anchor: OEIS A284869 per-length counts for ZZ6
+    /// dihedral matchstick polygons on the triangular lattice. This
+    /// is the deepest external oracle in our coverage -- A284869
+    /// publishes a(3..24), giving us 22 verification anchors against
+    /// an independent source. We pin perim 3..14 here (matches first
+    /// 12 of the 22 terms exactly) since enumeration past n=14 grows
+    /// by ~3-4x per step and becomes test-runtime expensive; deeper
+    /// terms are spot-checked manually rather than under CI.
+    #[test]
+    fn oeis_a284869_zz6_pin() {
+        const OEIS: &[(usize, usize)] = &[
+            (3, 1),     // a(3)
+            (4, 1),     // a(4)
+            (5, 1),     // a(5)
+            (6, 4),     // a(6)
+            (7, 5),     // a(7)
+            (8, 16),    // a(8)
+            (9, 37),    // a(9)
+            (10, 120),  // a(10)
+            (11, 344),  // a(11)
+            (12, 1175), // a(12)
+            (13, 3807), // a(13)
+            (14, 13224),// a(14)
+        ];
+        assert_oeis_pins::<ZZ6>(6, "A284869", OEIS);
     }
 }
