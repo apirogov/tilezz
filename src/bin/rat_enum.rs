@@ -87,25 +87,51 @@
 //! versus ~30-40 GB for the equivalent single-process run.
 //!
 //! `--seed <prefix> --threads N>1` exists (it routes through
-//! `enumerate_from_seed_parallel`) for environments where an
-//! orchestrator gives one big process at a time, but it has the
-//! same per-process memory profile as `--mode bench --threads N` --
-//! it does NOT recover the single-threaded-per-process savings.
+//! `enumerate_from_seed`'s sub-split + parallel-drain path) for
+//! environments where an orchestrator gives one big process at a
+//! time, but it has the same per-process memory profile as
+//! `--mode bench --threads N` -- it does NOT recover the
+//! single-threaded-per-process savings.
 
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::BufWriter;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::thread;
 use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
 
-use tilezz::cyclotomic::*;
-use tilezz::geom::rat::{lex_min_rot, Rat};
-use tilezz::geom::snake::{Snake, Turtle};
-use tilezz::stringmatch::{repetition_factor, RatDafsa};
+use tilezz::rat_enum::dfs::STREAM_RAT_LINES;
+use tilezz::rat_enum::output::{print_stats, run_rat_enum_polylines};
+use tilezz::rat_enum::prune::{install_closure_key_prune, install_mod_prune};
+use tilezz::rat_enum::run_rat_enum_seqs;
+use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_from_seed};
+use tilezz::stringmatch::RatDafsa;
+
+// Test-only imports. The two private test helpers below (`rat_enum`,
+// `rat_enum_dihedral`) and the `dihedral_tests` / `opt_correctness_tests`
+// modules pull these via `super::*`; in production code none of these
+// is referenced from the binary.
+#[cfg(test)]
+use std::collections::HashSet;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
+#[cfg(test)]
+use tilezz::rat_enum::canonical::{dihedral_canonical, make_ops};
+#[cfg(test)]
+use tilezz::rat_enum::dfs::rat_enum_with;
+#[cfg(test)]
+use tilezz::rat_enum::prune::{
+    closure_key::{collect_closure_keys, ClosureKeyPrune},
+    modular::ModularPrune,
+    units::unit_vectors_for_ring,
+    Prunes,
+};
+#[cfg(test)]
+use tilezz::rat_enum::seed::rat_enum_parallel;
+#[cfg(test)]
+use tilezz::rat_enum::stats::DfsStats;
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::{MarkerStyle, TileStyle};
 use tilezz::vis::plotutils::P64;
@@ -113,541 +139,6 @@ use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
-/// When `true`, the DFS streams each newly-discovered rat to stdout as
-/// `RAT [...]` on the fly. This is the protocol used by `--seed` and
-/// `--mode bench`; modes like `--mode dafsa` that write a single binary
-/// artifact set this to `false` before enumerating to avoid millions of
-/// useless stdout lines. Default `true` to preserve the existing
-/// per-mode behaviour.
-static STREAM_RAT_LINES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
-// -------- DFS stats --------
-
-#[derive(Default)]
-struct DfsStats {
-    closed: u64,
-    intersected: u64,
-    too_far: u64,
-    recursed: u64,
-    canonical_skip: u64,
-    /// Branches eliminated by the modular reachability prune (set via
-    /// `--mod-prune`). Always 0 when the prune is off, so the existing
-    /// bench output stays comparable.
-    mod_skip: u64,
-    /// Branches eliminated by the coordinate-projection prune (set via
-    /// passed first, so this reflects the ADDITIONAL pruning power on
-    /// top of the modular prune.
-    /// Branches eliminated by the closure-key prune (set via
-    /// `--closure-key-prune`). Counted only when all prior prunes
-    /// passed, so this reflects ADDITIONAL pruning power.
-    closure_key_skip: u64,}
-
-impl DfsStats {
-    fn total(&self) -> u64 {
-        self.closed
-            + self.intersected
-            + self.too_far
-            + self.recursed
-            + self.canonical_skip
-            + self.mod_skip
-            + self.closure_key_skip    }
-
-    fn merge(&mut self, other: &DfsStats) {
-        self.closed += other.closed;
-        self.intersected += other.intersected;
-        self.too_far += other.too_far;
-        self.recursed += other.recursed;
-        self.canonical_skip += other.canonical_skip;
-        self.mod_skip += other.mod_skip;
-        self.closure_key_skip += other.closure_key_skip;    }
-}
-
-impl std::fmt::Display for DfsStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let t = self.total();
-        writeln!(f, "DFS stats ({} total direction attempts):", t)?;
-        writeln!(
-            f,
-            "  canonical_skip:  {:>10} ({:>5.1}%)",
-            self.canonical_skip,
-            100.0 * self.canonical_skip as f64 / t as f64
-        )?;
-        writeln!(
-            f,
-            "  intersected:    {:>10} ({:>5.1}%)",
-            self.intersected,
-            100.0 * self.intersected as f64 / t as f64
-        )?;
-        writeln!(
-            f,
-            "  closed:         {:>10} ({:>5.1}%)",
-            self.closed,
-            100.0 * self.closed as f64 / t as f64
-        )?;
-        writeln!(
-            f,
-            "  recursed:       {:>10} ({:>5.1}%)",
-            self.recursed,
-            100.0 * self.recursed as f64 / t as f64
-        )?;
-        writeln!(
-            f,
-            "  too_far:        {:>10} ({:>5.1}%)",
-            self.too_far,
-            100.0 * self.too_far as f64 / t as f64
-        )?;
-        write!(
-            f,
-            "  mod_skip:       {:>10} ({:>5.1}%)",
-            self.mod_skip,
-            100.0 * self.mod_skip as f64 / t as f64
-        )?;
-        writeln!(
-            f,
-        )?;
-        write!(
-            f,
-            "  closure_key_skip:{:>9} ({:>5.1}%)",
-            self.closure_key_skip,
-            100.0 * self.closure_key_skip as f64 / t as f64        )
-    }
-}
-
-// -------- Modular reachability prune --------
-//
-// Optional, opt-in via `--mod-prune`. For each chosen modulus `m`, BFS
-// the set R_r^(m) ⊆ (Z/m)^phi of mod-m displacements reachable by sums
-// of EXACTLY r unit vectors, for r in 0..=max_steps. Then during DFS,
-// after the canonical / too-far prunes but before `Snake::add`:
-//
-//   - compute candidate new displacement `new_pt` (already done for
-//     the too-far check);
-//   - for each modulus, look up `pack(new_pt mod m)` in R_{r-1}^(m);
-//   - if any modulus misses, prune (no length-(r-1) suffix can sum
-//     to `-new_pt` mod m, so no closure is possible).
-//
-// The check uses one u64 hash lookup per modulus per DFS node. The
-// reachable sets are stored as `FxHashSet<u64>` where each `u64` packs
-// the mod-m coordinates as a base-`m` integer (so a `[i64; PHI]`
-// digest-vector becomes one `u64` -- saving an alloc per check and
-// keeping the hash hot in cache).
-//
-// We use a global `OnceLock<ModularPrune>` so the existing DFS
-// signatures don't grow an `Option<&ModularPrune>` argument; the DFS
-// reads from the static and pays nothing when the prune isn't set.
-
-/// Per-(modulus, remaining) reachable-displacement table for the
-/// modular prune.
-struct ModularPrune {
-    /// PHI (= basis dimension) of the underlying ring. Used to pack
-    /// candidate displacements into a `u64` key.
-    phi: usize,
-    /// Active moduli (those whose `m^PHI` fits the budget; smaller
-    /// rings get more moduli).
-    moduli: Vec<i64>,
-    /// `tables[i][r]` = set of packed mod-`moduli[i]` displacements
-    /// reachable by sums of exactly `r` unit vectors. A miss in
-    /// any modulus is a prune.
-    tables: Vec<Vec<rustc_hash::FxHashSet<u64>>>,
-}
-
-/// Bundle of all optional DFS prunes. Cloning is `Arc` clones, so
-/// snapshotting at DFS entry and passing `&Prunes` through recursion
-/// is cheap. Production: built once at `main`-time and stashed in
-/// `PRUNES`; the DFS top-level reads it via `snapshot_prunes()`.
-/// Tests: construct directly, pass to lower-level DFS functions
-/// without going through the global -- avoids the OnceLock-set-once
-/// limitation when running different combinations in the same
-/// process.
-#[derive(Clone, Default)]
-struct Prunes {
-    mod_prune: Option<std::sync::Arc<ModularPrune>>,
-    closure_key_prune: Option<std::sync::Arc<ClosureKeyPrune>>,
-}
-
-/// Single global `Prunes` configured by `main` from CLI flags.
-/// Tests bypass this; they build a local `Prunes` and pass it to
-/// DFS directly via [`run_rat_enum_seqs_with_prunes`].
-static PRUNES: Mutex<Option<Prunes>> = Mutex::new(None);
-
-fn snapshot_prunes() -> Prunes {
-    PRUNES.lock().unwrap().clone().unwrap_or_default()
-}
-
-/// Maximum `m^PHI` cell count we'll keep per modulus. ZZ16/20/24 at
-/// m=4 sits right at this budget; ZZ32/60 at m=2 fits comfortably.
-/// Larger moduli on higher-phi rings either saturate the prune (and
-/// stop being useful) or blow memory; this cutoff trades both off.
-const MOD_PRUNE_CELL_BUDGET: u64 = 1 << 16; // 65536
-
-impl ModularPrune {
-    /// Build the prune tables from a per-ring unit-vector list. `units`
-    /// is `n_units` slices each of length `phi`, holding the integer-
-    /// basis coefficients of `Units::unit(d)` for d in
-    /// `(-hturn+1)..hturn`.
-    ///
-    /// `moduli_override`, when present, replaces the default candidate
-    /// list (used by `--mod-prune-moduli` for A/B testing). Either way,
-    /// candidates are filtered by [`MOD_PRUNE_CELL_BUDGET`].
-    fn build(
-        units: &[Vec<i64>],
-        phi: usize,
-        max_steps: usize,
-        moduli_override: Option<&[i64]>,
-    ) -> Self {
-        // Default candidate list: small composites covering the
-        // common low-frequency arithmetic constraints (parity, 3-fold,
-        // 4-fold, 6-fold). A/B tested against the wider `{2..=16}`
-        // set on ZZ8/12/16 at n up to 15: extending the set finds
-        // marginally more skip opportunities but the per-node cost
-        // of extra hash lookups overshoots the savings -- wall time
-        // is equal or worse. The "right" knob is the number of
-        // moduli (~4 lookups balance lookup cost vs prune-rate);
-        // specific values within {2,3,4,5,6,...} barely matter.
-        // Override with `--mod-prune-moduli` to experiment.
-        let default_candidates: [i64; 4] = [2, 3, 4, 6];
-        let candidates: &[i64] = moduli_override.unwrap_or(&default_candidates);
-        let mut moduli: Vec<i64> = Vec::new();
-        for &m in candidates {
-            if m < 2 {
-                continue;
-            }
-            let cells = (m as u64).checked_pow(phi as u32).unwrap_or(u64::MAX);
-            if cells <= MOD_PRUNE_CELL_BUDGET {
-                moduli.push(m);
-            }
-        }
-
-        let mut tables: Vec<Vec<rustc_hash::FxHashSet<u64>>> = Vec::with_capacity(moduli.len());
-        for &m in &moduli {
-            tables.push(Self::build_one_modulus(units, phi, m, max_steps));
-        }
-
-        ModularPrune { phi, moduli, tables }
-    }
-
-    fn build_one_modulus(
-        units: &[Vec<i64>],
-        phi: usize,
-        m: i64,
-        max_steps: usize,
-    ) -> Vec<rustc_hash::FxHashSet<u64>> {
-        // We store CUMULATIVE reachability tables: `layers[r]` is the
-        // set of mod-`m` displacements reachable by sums of AT MOST
-        // `r` unit vectors. The prune check is "could we close in
-        // any number of steps from 0..=remaining_after?" -- not
-        // "exactly remaining_after", which would falsely reject any
-        // rat closing strictly before `max_steps`.
-        let total = (m as u64).pow(phi as u32);
-
-        let units_mod: Vec<Vec<i64>> = units
-            .iter()
-            .map(|u| u.iter().map(|&c| c.rem_euclid(m)).collect())
-            .collect();
-
-        let mut layers: Vec<rustc_hash::FxHashSet<u64>> = Vec::with_capacity(max_steps + 1);
-        // r=0: only the origin (sum of zero vectors).
-        let mut cumulative: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
-        cumulative.insert(0u64);
-        layers.push(cumulative.clone());
-
-        // Wavefront state for the exact-r BFS step (kept as `Vec<i64>`
-        // for simple add-and-reduce; packed only when folding into
-        // `cumulative`).
-        let mut current_vec: rustc_hash::FxHashSet<Vec<i64>> = rustc_hash::FxHashSet::default();
-        current_vec.insert(vec![0i64; phi]);
-
-        let mut saturated = cumulative.len() as u64 == total;
-        for _r in 1..=max_steps {
-            if saturated {
-                layers.push(layers.last().unwrap().clone());
-                continue;
-            }
-            let mut next: rustc_hash::FxHashSet<Vec<i64>> = rustc_hash::FxHashSet::default();
-            next.reserve(current_vec.len() * units_mod.len());
-            for v in &current_vec {
-                for u in &units_mod {
-                    let sum: Vec<i64> = v
-                        .iter()
-                        .zip(u.iter())
-                        .map(|(a, b)| (a + b).rem_euclid(m))
-                        .collect();
-                    next.insert(sum);
-                }
-            }
-            // Fold the new exact-r layer into the cumulative one.
-            for v in &next {
-                cumulative.insert(pack_coeffs(v, m));
-            }
-            layers.push(cumulative.clone());
-            current_vec = next;
-            if cumulative.len() as u64 == total {
-                saturated = true;
-            }
-        }
-        layers
-    }
-
-    /// Returns `true` if some sum of `remaining` unit vectors equals
-    /// the negation of `disp` (mod m) for every active modulus. When
-    /// `false`, no length-`remaining` suffix can close, so the caller
-    /// prunes. Hot path: one `FxHashSet<u64>::contains` per modulus.
-    #[inline]
-    fn allows_closure(&self, disp: &[i64], remaining: usize) -> bool {
-        // R_r is symmetric under negation (every unit vector u has -u
-        // in the direction set, so sums and their negations form the
-        // same set), so we can pack `disp` directly instead of `-disp`.
-        for (i, &m) in self.moduli.iter().enumerate() {
-            let key = pack_coeffs(disp, m);
-            let table = match self.tables[i].get(remaining) {
-                Some(t) => t,
-                None => continue, // remaining beyond max_steps: skip this modulus
-            };
-            if !table.contains(&key) {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn cell_counts(&self) -> Vec<u64> {
-        self.moduli.iter().map(|&m| (m as u64).pow(self.phi as u32)).collect()
-    }
-}
-
-/// Pack a coefficient vector mod `m` as a base-`m` integer. Safe up
-/// to `m^PHI <= u64::MAX`. Caller guarantees by `MOD_PRUNE_CELL_BUDGET`.
-#[inline]
-fn pack_coeffs(coeffs: &[i64], m: i64) -> u64 {
-    let mut key = 0u64;
-    let mut mult = 1u64;
-    let m_u = m as u64;
-    for &c in coeffs {
-        let v = c.rem_euclid(m) as u64;
-        key += v * mult;
-        mult = mult.wrapping_mul(m_u);
-    }
-    key
-}
-
-/// Build the modular prune for ring `ring` with target `max_steps`,
-/// install into the global [`PRUNES`] bundle, and report the moduli
-/// kept. Idempotent within a process; replaces any previously
-/// installed modular prune. `moduli_override` lets the CLI A/B test
-/// by forcing a specific modulus list.
-fn install_mod_prune(ring: u8, max_steps: usize, moduli_override: Option<&[i64]>) {
-    let (units, phi) = unit_vectors_for_ring(ring);
-    let prune = ModularPrune::build(&units, phi, max_steps, moduli_override);
-    let cells = prune.cell_counts();
-    let summary: Vec<String> = prune
-        .moduli
-        .iter()
-        .zip(cells.iter())
-        .map(|(m, c)| format!("m={m} ({c} cells)"))
-        .collect();
-    eprintln!(
-        "mod-prune: ring={ring} phi={phi} max_steps={max_steps}: {}",
-        summary.join(", ")
-    );
-    let mut guard = PRUNES.lock().unwrap();
-    let mut current = guard.take().unwrap_or_default();
-    current.mod_prune = Some(std::sync::Arc::new(prune));
-    *guard = Some(current);
-}
-
-/// Per-ring extraction of unit vectors as integer coefficient arrays.
-/// Returns ALL `n` unit vectors `unit(0)..unit(n-1)` (not the DFS's
-/// `n-1`-direction window): a partial rat's cumulative facing can
-/// land on any absolute direction over enough turns, so closure
-/// feasibility must be assessed against the full set of possible
-/// unit vectors. Used by [`ModularPrune`] to feed its BFS over
-/// modular displacements.
-fn unit_vectors_for_ring(ring: u8) -> (Vec<Vec<i64>>, usize) {
-    fn extract<ZZ: IsRing, const PHI: usize, F>(coeffs_fn: F) -> (Vec<Vec<i64>>, usize)
-    where
-        F: Fn(&ZZ) -> [i64; PHI],
-    {
-        let mut out = Vec::new();
-        for d in 0..ZZ::turn() {
-            let u: ZZ = <ZZ as Units>::unit(d);
-            out.push(coeffs_fn(&u).to_vec());
-        }
-        (out, PHI)
-    }
-    match ring {
-        4 => extract::<ZZ4, 2, _>(|x| x.int_coeffs()),
-        8 => extract::<ZZ8, 4, _>(|x| x.int_coeffs()),
-        10 => extract::<ZZ10, 4, _>(|x| x.int_coeffs()),
-        12 => extract::<ZZ12, 4, _>(|x| x.int_coeffs()),
-        16 => extract::<ZZ16, 8, _>(|x| x.int_coeffs()),
-        20 => extract::<ZZ20, 8, _>(|x| x.int_coeffs()),
-        24 => extract::<ZZ24, 8, _>(|x| x.int_coeffs()),
-        32 => extract::<ZZ32, 16, _>(|x| x.int_coeffs()),
-        60 => extract::<ZZ60, 16, _>(|x| x.int_coeffs()),
-        _ => panic!("invalid ring selected"),
-    }
-}
-
-// -------- Closure-key prune --------
-//
-// Pre-pass: DFS-enumerate every simple open snake up to length L,
-// store the set of (endpoint, facing) pairs they reach (the "closure
-// keys" K_{<=L}). During the main DFS, when remaining_after <= L, the
-// candidate prefix can close iff its required suffix's (endpoint,
-// facing) is in K_{<=L} -- otherwise no length-(<=remaining_after)
-// continuation can complete it.
-//
-// This is strictly stronger than any modular projection (it sees
-// exact lattice + facing info, not just a quotient). The cost is
-// memory + pre-pass time + a ring multiplication per hot-path check
-// (to compute the target suffix endpoint via
-// target = -unit(-facing) * disp).
-
-struct ClosureKeyPrune {
-    /// Maximum tabulated suffix length. The prune fires only when
-    /// `remaining_after <= max_l`.
-    max_l: usize,
-    /// `K_{<=L} = {(endpoint coords, facing) : reachable by some
-    /// simple open snake of length 0..=L}`. Length 0 (empty snake,
-    /// key (0, 0)) is included so already-closed candidates aren't
-    /// incorrectly rejected.
-    keys: rustc_hash::FxHashSet<(Vec<i64>, i8)>,
-}
-
-fn collect_closure_keys_dfs<ZZ: IsRing>(
-    snake: &mut Snake<ZZ>,
-    max_l: usize,
-    keys: &mut rustc_hash::FxHashSet<(Vec<i64>, i8)>,
-) {
-    if snake.angles().len() >= max_l {
-        return;
-    }
-    let turn = ZZ::turn();
-    for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
-        if !snake.add(direction) {
-            continue;
-        }
-        // Normalize facing to 0..n-1: `Snake::direction` returns
-        // truncating-mod (can be negative for net-CW walks); the
-        // hot-path lookup uses `rem_euclid` (always 0..n-1), so we
-        // canonicalize here to make the hash keys compatible.
-        let facing = snake.direction().rem_euclid(turn);
-        keys.insert((snake.offset().int_coeffs_slice().to_vec(), facing));
-        collect_closure_keys_dfs::<ZZ>(snake, max_l, keys);
-        snake.pop();
-    }
-}
-
-fn collect_closure_keys<ZZ: IsRing>(max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
-    let mut keys = rustc_hash::FxHashSet::default();
-    // Empty snake's key: closure is already achieved.
-    let phi = <ZZ as Units>::unit(0).int_coeffs_slice().len();
-    keys.insert((vec![0i64; phi], 0));
-    let mut snake: Snake<ZZ> = Snake::new();
-    collect_closure_keys_dfs::<ZZ>(&mut snake, max_l, &mut keys);
-    keys
-}
-
-fn install_closure_key_prune(ring: u8, max_l: usize) {
-    let t0 = Instant::now();
-    let keys = match ring {
-        4 => collect_closure_keys::<ZZ4>(max_l),
-        8 => collect_closure_keys::<ZZ8>(max_l),
-        10 => collect_closure_keys::<ZZ10>(max_l),
-        12 => collect_closure_keys::<ZZ12>(max_l),
-        16 => collect_closure_keys::<ZZ16>(max_l),
-        20 => collect_closure_keys::<ZZ20>(max_l),
-        24 => collect_closure_keys::<ZZ24>(max_l),
-        32 => collect_closure_keys::<ZZ32>(max_l),
-        60 => collect_closure_keys::<ZZ60>(max_l),
-        _ => panic!("invalid ring selected"),
-    };
-    eprintln!(
-        "closure-key-prune: ring={ring} max_l={max_l}: {} distinct keys collected in {:?}",
-        keys.len(),
-        t0.elapsed(),
-    );
-    let mut guard = PRUNES.lock().unwrap();
-    let mut current = guard.take().unwrap_or_default();
-    current.closure_key_prune = Some(std::sync::Arc::new(ClosureKeyPrune { max_l, keys }));
-    *guard = Some(current);
-}
-
-// --------
-
-/// Pair of canonical-check and output-mapping functions that parameterise
-/// the DFS.  Both rotation-canonical and dihedral-canonical enumeration
-/// share the same core walk; they differ only in which pair of functions
-/// they supply.
-///
-/// * `is_canonical` — prefix prune applied *before* `Snake::add`.
-///   Returns false when the extended walk cannot be the lex-min rotation
-///   (or dihedral image) of any closure it could grow into.
-/// * `canonicalize` — applied to the chirality-normalised canonical
-///   rotation at closure, producing the key inserted into the result
-///   `HashSet`.  For rotation-canonical this is the identity; for
-///   dihedral-canonical it picks the lex-min over rotations and
-///   reversed-rotations.
-#[derive(Clone, Copy)]
-struct CanonicalOps {
-    is_canonical: fn(&[i8], i8) -> bool,
-    canonicalize: fn(&[i8]) -> Vec<i8>,
-}
-
-/// Bind `prefix ++ [new]` so that index `i` (for `i < prefix.len() + 1`)
-/// resolves to the corresponding walk angle. Out-of-range indices are
-/// not handled -- callers must keep accesses within `0..d` where
-/// `d = prefix.len() + 1`.
-fn walk_get(prefix: &[i8], new: i8, i: usize) -> i8 {
-    if i < prefix.len() {
-        prefix[i]
-    } else {
-        // Caller must guarantee i == prefix.len(). debug_assert documents
-        // the boundary; release-mode behavior is still correct (returns
-        // `new`) but a violation indicates a bug in the caller.
-        debug_assert_eq!(i, prefix.len(), "walk_get: index past extended prefix");
-        new
-    }
-}
-
-/// For the extended walk `prefix ++ [new]` of length `d`, return
-/// `false` if some rotation `k > 0` makes the rotation lex-smaller
-/// than the identity within the fully-known comparable region. The
-/// caller pairs this with a complementary loop for the dihedral case
-/// (see [`is_dihedral_canonical_extended`]).
-fn rotation_lex_min_violated(prefix: &[i8], new: i8) -> bool {
-    let d = prefix.len() + 1;
-    for k in 1..d {
-        for i in 0..(d - k) {
-            match walk_get(prefix, new, k + i).cmp(&walk_get(prefix, new, i)) {
-                std::cmp::Ordering::Less => return true,
-                std::cmp::Ordering::Greater => break,
-                std::cmp::Ordering::Equal => continue,
-            }
-        }
-    }
-    false
-}
-
-/// Canonical-rotation prune for the open walk `prefix` virtually
-/// extended by one more angle `new`. Lets the caller skip walks
-/// that cannot be the lex-min cyclic rotation of any closure they
-/// could grow into, *before* paying the cyclotomic intersect cost
-/// of `Snake::add`.
-///
-/// Returns `false` when there's a rotation index `k > 0` such that
-/// the rotation `[prefix++new][k..]` is strictly lex-less than
-/// `[prefix++new][0..]` within the wrap-free comparable region; that
-/// decision is permanent (no future angles can flip it) so the
-/// eventual closed polygon's canonical rotation cannot start at
-/// position 0 -- pruning is safe.
-fn is_canonical_extended(prefix: &[i8], new: i8) -> bool {
-    !rotation_lex_min_violated(prefix, new)
-}
-
-fn canonical_identity(seq: &[i8]) -> Vec<i8> {
-    seq.to_vec()
-}
 
 /// Enumerate every simple polygon with boundary length up to
 /// `max_steps` over the cyclotomic ring `ZZ`, in canonical-CCW form.
@@ -668,10 +159,7 @@ fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) 
     rat_enum_with::<ZZ>(
         max_steps,
         step,
-        CanonicalOps {
-            is_canonical: is_canonical_extended,
-            canonicalize: canonical_identity,
-        },
+        make_ops(false),
         "enumeration",
         "",
         false,
@@ -698,10 +186,7 @@ fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, D
     rat_enum_with::<ZZ>(
         max_steps,
         step,
-        CanonicalOps {
-            is_canonical: is_dihedral_canonical_extended,
-            canonicalize: dihedral_canonical,
-        },
+        make_ops(true),
         "dihedral enumeration",
         "dihedral ",
         false,
@@ -709,915 +194,6 @@ fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, D
     )
 }
 
-fn rat_enum_with<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    ops: CanonicalOps,
-    label: &str,
-    prefix: &str,
-    paranoid: bool,
-    prunes: &Prunes,
-) -> (Vec<Vec<i8>>, DfsStats) {
-    let mut result: HashSet<Vec<i8>> = HashSet::new();
-    let mut snake: Snake<ZZ> = Snake::new();
-    let mut stats = DfsStats::default();
-
-    println!("-------- {label} started --------");
-    if paranoid {
-        println!("paranoid: per-step fresh-snake cross-check enabled");
-    }
-    rat_enum_step::<ZZ>(
-        &mut snake,
-        max_steps,
-        step,
-        &mut result,
-        &mut stats,
-        ops,
-        paranoid,
-        prunes,
-    );
-    println!(
-        "-------- {label} completed --------\n{prefix}{} rats found",
-        result.len()
-    );
-
-    let mut result: Vec<Vec<i8>> = result.into_iter().collect();
-    result.sort_by_key(|x| x.len());
-    (result, stats)
-}
-
-fn rat_enum_step<ZZ: IsRing>(
-    snake: &mut Snake<ZZ>,
-    max_steps: usize,
-    step: i8,
-    result: &mut HashSet<Vec<i8>>,
-    stats: &mut DfsStats,
-    ops: CanonicalOps,
-    paranoid: bool,
-    prunes: &Prunes,
-) {
-    let depth = snake.angles().len();
-    if depth >= max_steps {
-        return;
-    }
-    let remaining = (max_steps - depth) as i64;
-
-    for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
-        if direction.rem_euclid(step) != 0 {
-            continue;
-        }
-        // Canonical prune before the radius and geometry checks so
-        // that rejected branches pay nothing.
-        if !(ops.is_canonical)(snake.angles(), direction) {
-            stats.canonical_skip += 1;
-            continue;
-        }
-
-        // Early reachability prune: compute the next head position
-        // before paying the cyclotomic intersect cost of Snake::add.
-        // If the new point is too far from the origin to ever close,
-        // skip this direction entirely.
-        let new_pt = snake.offset()
-            + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
-        if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
-            stats.too_far += 1;
-            continue;
-        }
-
-        // Optional modular reachability prune (set via `--mod-prune`).
-        // After taking this direction, the snake will be at `new_pt`
-        // with `remaining - 1` directions still to add for closure.
-        // If no sum of (remaining-1) unit vectors equals `-new_pt`
-        // (modulo any active modulus), closure is impossible.
-        let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref() {
-            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
-                stats.mod_skip += 1;
-                continue;
-            }
-        }
-        // Optional closure-key prune (set via `--closure-key-prune`).
-        // Only fires when `remaining_after <= max_l` (otherwise the
-        // tabulated suffix lengths aren't enough to cover the
-        // closing range, and pruning would be unsound).
-        if let Some(ck) = prunes.closure_key_prune.as_deref() {
-            if remaining_after <= ck.max_l {
-                let turn = ZZ::turn();
-                let new_facing = (snake.direction() + direction).rem_euclid(turn);
-                let neg_facing = (-new_facing).rem_euclid(turn);
-                // target suffix endpoint = -unit(-new_facing) * new_pt.
-                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
-                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
-                if !ck.keys.contains(&key) {
-                    stats.closure_key_skip += 1;
-                    continue;
-                }
-            }
-        }
-        if !snake.add(direction) {
-            stats.intersected += 1;
-            continue;
-        }
-        if paranoid {
-            // After each successful add(), replay the entire current
-            // angle prefix in a fresh Snake. Any disagreement means
-            // the stateful incremental check accepts a prefix the
-            // from-scratch check rejects -- a Snake bug.
-            let angles = snake.angles().to_vec();
-            let mut fresh: Snake<ZZ> = Snake::new();
-            for (i, &a) in angles.iter().enumerate() {
-                assert!(
-                    fresh.add(a),
-                    "stateful snake accepted full prefix {:?} but fresh snake \
-                     rejected angle {} at step {}",
-                    &angles,
-                    a,
-                    i
-                );
-            }
-            assert_eq!(
-                fresh.is_closed(),
-                snake.is_closed(),
-                "fresh snake disagrees on is_closed for {:?}",
-                &angles
-            );
-        }
-        if snake.is_closed() {
-            stats.closed += 1;
-            let r = {
-                let tmp = Rat::from_unchecked(snake);
-                if tmp.chirality() > 0 {
-                    tmp
-                } else {
-                    tmp.reversed()
-                }
-                .canonical()
-            };
-            let seq = (ops.canonicalize)(r.seq());
-            if result.insert(seq.clone())
-                && STREAM_RAT_LINES.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                println!("RAT {seq:?}");
-            }
-        } else {
-            stats.recursed += 1;
-            rat_enum_step::<ZZ>(snake, max_steps, step, result, stats, ops, paranoid, prunes);
-        }
-        snake.pop();
-    }
-}
-
-// -------- dihedral-canonical enumeration --------
-//
-// Two-stage design: prefix pruning for speed + output dedup for
-// correctness.  The prefix prune alone is NOT sufficient to produce
-// exactly one representative per dihedral class.  Here is why.
-//
-// A polygon's dihedral images include all n rotations and all n
-// reflections.  For a chiral pair {P, mirror(P)}, both have distinct
-// rotation-canonical forms.  To produce dihedral classes, we must
-// keep exactly one.
-//
-// Stage 1 — is_dihedral_canonical_extended:
-//
-//   Compares the walk prefix against complement rotations (negated
-//   angle sequences).  At depth 0 this prunes all positive first
-//   angles (-a_0 < a_0), cutting the root branching factor roughly in
-//   half.  At deeper depths it prunes additional branches where a
-//   complement rotation is lex-smaller.
-//
-//   This is a HEURISTIC prefix prune, not a dihedral guarantee.  The
-//   check guards the raw walk prefix, but the DFS output at closure
-//   goes through chirality normalization (.reversed() if chirality <
-//   0) then canonical rotation (.canonical()).  These transformations
-//   produce a different sequence than what the prefix check was
-//   comparing, so both members of some chiral pairs still reach
-//   closure as distinct canonical-rotation outputs.
-//
-// Stage 2 — dihedral_canonical at closure:
-//
-//   Maps the chirality-normalized canonical rotation to the lex-min
-//   over all rotations AND reversed-rotations.  Both canonical
-//   rotations of a chiral pair map to the same dihedral-canonical
-//   form, so the HashSet deduplicates them.  Without this, the output
-//   would contain duplicate chiral pairs — valid polygons, but not
-//   dihedral-canonical.
-//
-// The speedup (~2.3x at ZZ12 n=10) comes from stage 1 reducing the
-// search tree.  Stage 2 is cheap (O(n^2) per closed polygon) and
-// handles the correctness gap left by stage 1.
-
-/// Heuristic dihedral prefix prune.  Like [`is_canonical_extended`]
-/// but also compares the walk prefix against complement rotations
-/// (negated angle sequences).  Returns `false` when any complement
-/// rotation of the eventual closure has a lex-smaller prefix than the
-/// identity walk, indicating the walk is suboptimal under the
-/// dihedral group.
-///
-/// This is sound (never prunes a walk that could produce the
-/// dihedral-min output) but incomplete (does not eliminate all
-/// chiral duplicates -- see module-level comment above).  At depth 0
-/// it prunes all positive first angles (`-a_0 < a_0`), roughly
-/// halving the root branching factor.
-///
-/// # Index bounds
-///
-/// Complement rotation `k` compares `-a_{k - i}` with `a_i` at
-/// positions `i = 0..=k`. Both sides are decided by the known walk
-/// only when `0 <= k - i < d` and `0 <= i < d`; for the inner-loop
-/// range `i = 0..=k` to stay within the prefix we need `k < d`.
-/// Hence the outer loop is `for k in 0..d` (NOT `0..=d`) -- accessing
-/// `walk_get(prefix, new, d)` would silently return `new` again for
-/// a position whose value is genuinely undetermined, which would
-/// over-prune.
-fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
-    if rotation_lex_min_violated(prefix, new) {
-        return false;
-    }
-
-    let d = prefix.len() + 1;
-    for k in 0..d {
-        for i in 0..=k {
-            match (-walk_get(prefix, new, k - i)).cmp(&walk_get(prefix, new, i)) {
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Greater => break,
-                std::cmp::Ordering::Equal => continue,
-            }
-        }
-    }
-
-    true
-}
-
-/// Correctness layer for the dihedral DFS.  Computes the lex-minimum
-/// over all cyclic rotations and reversed rotations of `seq`.
-///
-/// The inputs are already chirality-normalized to CW by the DFS
-/// before this function runs. Under that normalization, two mirror
-/// images of the same polygon shape (an enantiomer pair) end up as
-/// CW walks of the original and the mirror. Algebraically these CW
-/// walks differ by SEQUENCE REVERSAL (one polygon walked CW from
-/// vertex V0, vs its mirror walked CW from V0' = mirror of V0,
-/// gives sequences related by reverse). Plain reversal -- not
-/// revcomp -- is therefore the right relation here.
-///
-/// Both members of an enantiomer pair map to the same value, so the
-/// HashSet deduplicates them. Without this step, the output would
-/// contain both members of every non-achiral chiral pair.
-fn dihedral_canonical(seq: &[i8]) -> Vec<i8> {
-    let n = seq.len();
-    let mut best: Vec<i8> = seq.to_vec();
-    let mut rot: Vec<i8> = seq.to_vec();
-    for _ in 0..n {
-        if rot < best {
-            best = rot.clone();
-        }
-        let mut rev = rot.clone();
-        rev.reverse();
-        if rev < best {
-            best = rev.clone();
-        }
-        rot.rotate_left(1);
-    }
-    best
-}
-
-// -------- multi-threaded enumeration --------
-
-/// Pick a DFS splitting depth such that the seed-walk produces
-/// roughly `10 * n_threads` work units. With a branching factor of
-/// `b` candidate directions per level, depth `d` enumerates at most
-/// `b^d` seeds (the canonical-rotation + intersect + reachability
-/// prunes knock that down further, but the raw count is the right
-/// upper bound for sizing). We invert: `d = ceil(log_b(10 * threads))`.
-///
-/// `branching` is the per-level branching factor of the DFS:
-/// `2 * hturn - 1` for a ZZ ring (the loop walks `(-hturn+1)..hturn`).
-/// E.g. ZZ4 -> 3, ZZ12 -> 11, ZZ24 -> 23.
-fn splitting_depth(n_threads: usize, branching: usize) -> usize {
-    if n_threads <= 1 || branching <= 1 {
-        return 0;
-    }
-    let target = (10 * n_threads) as f64;
-    let depth = (target.ln() / (branching as f64).ln()).ceil() as usize;
-    depth.max(1)
-}
-
-/// Output accumulators for [`collect_seeds`]: incomplete-walk prefixes
-/// (seeds for worker threads), already-closed polygons, and DFS stats.
-struct SeedGather<'a> {
-    seeds: &'a mut Vec<Vec<i8>>,
-    closed: &'a mut HashSet<Vec<i8>>,
-    stats: &'a mut DfsStats,
-}
-
-/// Walk the existing DFS only down to `split_depth` and collect every
-/// alive snake state (angle prefix) that survives the canonical-rotation
-/// prune, the `Snake::add` self-intersect check, and the reachability
-/// heuristic. These are the seeds the worker threads will pick up.
-///
-/// Polygons that already close at or above `split_depth` are recorded
-/// directly into `gather.closed` -- they have no remaining work to delegate.
-fn collect_seeds<ZZ: IsRing>(
-    snake: &mut Snake<ZZ>,
-    max_steps: usize,
-    step: i8,
-    split_depth: usize,
-    gather: &mut SeedGather<'_>,
-    ops: CanonicalOps,
-    paranoid: bool,
-    prunes: &Prunes,
-) {
-    let depth = snake.angles().len();
-    if depth >= max_steps {
-        return;
-    }
-    let remaining = (max_steps - depth) as i64;
-
-    for direction in ((-ZZ::hturn() + 1)..ZZ::hturn()).rev() {
-        if direction.rem_euclid(step) != 0 {
-            continue;
-        }
-        if !(ops.is_canonical)(snake.angles(), direction) {
-            gather.stats.canonical_skip += 1;
-            continue;
-        }
-
-        // Early reachability prune (see `rat_enum_step`).
-        let new_pt = snake.offset()
-            + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
-        if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
-            gather.stats.too_far += 1;
-            continue;
-        }
-
-        // Modular reachability prune (see `rat_enum_step`).
-        let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref() {
-            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
-                gather.stats.mod_skip += 1;
-                continue;
-            }
-        }
-        if let Some(ck) = prunes.closure_key_prune.as_deref() {
-            if remaining_after <= ck.max_l {
-                let turn = ZZ::turn();
-                let new_facing = (snake.direction() + direction).rem_euclid(turn);
-                let neg_facing = (-new_facing).rem_euclid(turn);
-                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
-                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
-                if !ck.keys.contains(&key) {
-                    gather.stats.closure_key_skip += 1;
-                    continue;
-                }
-            }
-        }
-        if !snake.add(direction) {
-            gather.stats.intersected += 1;
-            continue;
-        }
-        if paranoid {
-            let angles = snake.angles().to_vec();
-            let mut fresh: Snake<ZZ> = Snake::new();
-            for (i, &a) in angles.iter().enumerate() {
-                assert!(
-                    fresh.add(a),
-                    "stateful snake accepted full prefix {:?} but fresh snake \
-                     rejected angle {} at step {}",
-                    &angles,
-                    a,
-                    i
-                );
-            }
-            assert_eq!(
-                fresh.is_closed(),
-                snake.is_closed(),
-                "fresh snake disagrees on is_closed for {:?}",
-                &angles
-            );
-        }
-        if snake.is_closed() {
-            gather.stats.closed += 1;
-            let r = {
-                let tmp = Rat::from_unchecked(snake);
-                if tmp.chirality() > 0 {
-                    tmp
-                } else {
-                    tmp.reversed()
-                }
-                .canonical()
-            };
-            let seq = (ops.canonicalize)(r.seq());
-            if gather.closed.insert(seq.clone())
-                && STREAM_RAT_LINES.load(std::sync::atomic::Ordering::Relaxed)
-            {
-                println!("RAT {seq:?}");
-            }
-        } else {
-            gather.stats.recursed += 1;
-            if snake.angles().len() >= split_depth {
-                gather.seeds.push(snake.angles().to_vec());
-            } else {
-                collect_seeds::<ZZ>(snake, max_steps, step, split_depth, gather, ops, paranoid, prunes);
-            }
-        }
-        snake.pop();
-    }
-}
-
-/// Parallel variant of [`rat_enum`]: splits the DFS at `split_depth`
-/// (selected via [`splitting_depth`]), then hands the resulting alive
-/// prefixes out to `n_threads` worker threads via a shared atomic
-/// counter. Each worker keeps its own `HashSet` and the main thread
-/// merges the per-worker sets at the end.
-fn rat_enum_parallel<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-    ops: CanonicalOps,
-    label: &str,
-    prefix: &str,
-    paranoid: bool,
-    prunes: &Prunes,
-) -> (Vec<Vec<i8>>, DfsStats) {
-    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
-    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
-    let split_depth = splitting_depth(n_threads, branching);
-
-    println!("-------- {label} started --------");
-    if paranoid {
-        println!("paranoid: per-step fresh-snake cross-check enabled");
-    }
-    println!("parallel: n_threads={n_threads} branching={branching} split_depth={split_depth}");
-
-    let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
-    let mut seeds: Vec<Vec<i8>> = Vec::new();
-    let mut seed_stats = DfsStats::default();
-    {
-        let mut snake: Snake<ZZ> = Snake::new();
-        let mut gather = SeedGather {
-            seeds: &mut seeds,
-            closed: &mut closed_main,
-            stats: &mut seed_stats,
-        };
-        collect_seeds::<ZZ>(
-            &mut snake,
-            max_steps,
-            step,
-            split_depth,
-            &mut gather,
-            ops,
-            paranoid,
-            prunes,
-        );
-    }
-    println!("parallel: {} seed states collected", seeds.len());
-
-    let (merged, worker_stats) = parallel_drain_seeds::<ZZ>(
-        &seeds,
-        closed_main,
-        seed_stats,
-        max_steps,
-        step,
-        n_threads,
-        ops,
-        paranoid,
-        prunes,
-    );
-
-    println!(
-        "-------- {label} completed --------\n{prefix}{} rats found",
-        merged.len()
-    );
-
-    let mut result: Vec<Vec<i8>> = merged.into_iter().collect();
-    result.sort_by_key(|x| x.len());
-    (result, worker_stats)
-}
-
-/// Dispatch a collected list of seed prefixes across `n_threads`
-/// worker threads via an atomic counter. Each worker takes seeds one
-/// at a time, runs `rat_enum_step` from the seed's snake state, and
-/// accumulates canonical sequences into a thread-local HashSet. At
-/// the end the locals are folded into `closed_main` (which already
-/// contains any polygons that closed during seed collection).
-///
-/// Used by both `rat_enum_parallel` (whole-tree enumeration, seeds
-/// collected from the root) and `enumerate_from_seed_parallel`
-/// (single-seed sub-tree enumeration, sub-seeds collected from a
-/// given prefix).
-#[allow(clippy::too_many_arguments)]
-fn parallel_drain_seeds<ZZ: IsRing>(
-    seeds: &[Vec<i8>],
-    closed_main: HashSet<Vec<i8>>,
-    seed_stats: DfsStats,
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-    ops: CanonicalOps,
-    paranoid: bool,
-    prunes: &Prunes,
-) -> (HashSet<Vec<i8>>, DfsStats) {
-    let next_idx = AtomicUsize::new(0);
-    let next_ref = &next_idx;
-
-    thread::scope(|s| {
-        let mut handles = Vec::with_capacity(n_threads);
-        for _ in 0..n_threads {
-            handles.push(s.spawn(move || -> (HashSet<Vec<i8>>, DfsStats) {
-                let mut local: HashSet<Vec<i8>> = HashSet::new();
-                let mut stats = DfsStats::default();
-                loop {
-                    let i = next_ref.fetch_add(1, Ordering::Relaxed);
-                    if i >= seeds.len() {
-                        break;
-                    }
-                    let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds[i]);
-                    rat_enum_step::<ZZ>(
-                        &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid, prunes,
-                    );
-                }
-                (local, stats)
-            }));
-        }
-        let mut merged = closed_main;
-        let mut total_stats = seed_stats;
-        for h in handles {
-            let (local, wstats) = h.join().expect("worker panic");
-            merged.extend(local);
-            total_stats.merge(&wstats);
-        }
-        (merged, total_stats)
-    })
-}
-
-fn polygons<ZZ: IsRing>(rats: Vec<Vec<i8>>) -> Vec<Vec<P64>> {
-    rats.into_iter()
-        .map(|seq| Rat::<ZZ>::from_slice_unchecked(&seq).to_polyline_f64(Turtle::default()))
-        .collect()
-}
-
-type EnumResult = (Vec<Vec<i8>>, DfsStats);
-
-fn enumerate_dispatch<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-    dihedral: bool,
-    paranoid: bool,
-) -> EnumResult {
-    let ops = if dihedral {
-        CanonicalOps {
-            is_canonical: is_dihedral_canonical_extended,
-            canonicalize: dihedral_canonical,
-        }
-    } else {
-        CanonicalOps {
-            is_canonical: is_canonical_extended,
-            canonicalize: canonical_identity,
-        }
-    };
-
-    let label = if dihedral {
-        "dihedral enumeration"
-    } else {
-        "enumeration"
-    };
-    let prefix = if dihedral { "dihedral " } else { "" };
-
-    let prunes = snapshot_prunes();
-    if n_threads <= 1 {
-        rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix, paranoid, &prunes)
-    } else {
-        rat_enum_parallel::<ZZ>(max_steps, step, n_threads, ops, label, prefix, paranoid, &prunes)
-    }
-}
-
-fn run_rat_enum_polylines(
-    ring: u8,
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-    dihedral: bool,
-    paranoid: bool,
-) -> Vec<Vec<P64>> {
-    match ring {
-        4 => polygons::<ZZ4>(
-            enumerate_dispatch::<ZZ4>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        8 => polygons::<ZZ8>(
-            enumerate_dispatch::<ZZ8>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        10 => polygons::<ZZ10>(
-            enumerate_dispatch::<ZZ10>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        12 => polygons::<ZZ12>(
-            enumerate_dispatch::<ZZ12>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        16 => polygons::<ZZ16>(
-            enumerate_dispatch::<ZZ16>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        20 => polygons::<ZZ20>(
-            enumerate_dispatch::<ZZ20>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        24 => polygons::<ZZ24>(
-            enumerate_dispatch::<ZZ24>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        32 => polygons::<ZZ32>(
-            enumerate_dispatch::<ZZ32>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        60 => polygons::<ZZ60>(
-            enumerate_dispatch::<ZZ60>(max_steps, step, n_threads, dihedral, paranoid).0,
-        ),
-        _ => panic!("invalid ring selected"),
-    }
-}
-
-/// True iff this canonical sequence equals the canonical form of its
-/// mirror image. The mirror polygon's CCW angle sequence is just
-/// `reverse(seq)` -- traversing the mirrored vertices in CCW order (in
-/// original coordinates) hits the original vertices in reverse order,
-/// and each turn keeps its sign because the mirror's orientation flip
-/// and the CCW-vs-CW flip cancel. Achiral polygons survive a chirality
-/// quotient as a single class.
-fn is_achiral(canonical: &[i8]) -> bool {
-    let mut reflected: Vec<i8> = canonical.iter().rev().copied().collect();
-    let offset = lex_min_rot(&reflected);
-    reflected.rotate_left(offset);
-    reflected == canonical
-}
-
-/// Print per-boundary-length statistics over the enumerated canonical
-/// sequences: total count, achiral count, and a histogram of cyclic
-/// rotational symmetry orders.
-fn print_stats(rats: &[Vec<i8>]) {
-    use std::collections::BTreeMap;
-    // length -> (total, achiral, rep_factor -> count)
-    let mut per_len: BTreeMap<usize, (usize, usize, BTreeMap<usize, usize>)> = BTreeMap::new();
-    for seq in rats {
-        let n = seq.len();
-        let entry = per_len.entry(n).or_default();
-        entry.0 += 1;
-        if is_achiral(seq) {
-            entry.1 += 1;
-        }
-        let rf = repetition_factor(seq);
-        *entry.2.entry(rf).or_insert(0) += 1;
-    }
-    println!("statistics by boundary length:");
-    println!("  length |  total | achiral (%) | rotational symmetry histogram (rep_factor: count)");
-    println!("  -------+--------+-------------+--------------------------------------------------");
-    for (n, (total, achiral, hist)) in &per_len {
-        let pct = if *total > 0 {
-            100.0 * (*achiral as f64) / (*total as f64)
-        } else {
-            0.0
-        };
-        let mut hist_str = String::new();
-        for (rf, cnt) in hist {
-            if !hist_str.is_empty() {
-                hist_str.push_str("  ");
-            }
-            hist_str.push_str(&format!("x{rf}={cnt}"));
-        }
-        println!("  {n:>6} | {total:>6} | {achiral:>5} ({pct:>5.1}%) | {hist_str}");
-    }
-}
-
-fn run_rat_enum_seqs(
-    ring: u8,
-    max_steps: usize,
-    step: i8,
-    n_threads: usize,
-    dihedral: bool,
-    paranoid: bool,
-) -> EnumResult {
-    let f: fn(usize, i8, usize, bool, bool) -> EnumResult = match ring {
-        4 => enumerate_dispatch::<ZZ4>,
-        8 => enumerate_dispatch::<ZZ8>,
-        10 => enumerate_dispatch::<ZZ10>,
-        12 => enumerate_dispatch::<ZZ12>,
-        16 => enumerate_dispatch::<ZZ16>,
-        20 => enumerate_dispatch::<ZZ20>,
-        24 => enumerate_dispatch::<ZZ24>,
-        32 => enumerate_dispatch::<ZZ32>,
-        60 => enumerate_dispatch::<ZZ60>,
-        _ => panic!("invalid ring selected"),
-    };
-    f(max_steps, step, n_threads, dihedral, paranoid)
-}
-
-// ---- Seed partitioning ----
-//
-// External-orchestration entry points. `--list-seeds` walks the DFS
-// down to `split_depth` and prints (1) "SEED <comma,sep,angles>"
-// lines for alive prefixes and (2) "RAT [...]" lines for polygons
-// that closed before reaching `split_depth`. `--seed <prefix>`
-// resumes the DFS from the given prefix and prints RAT lines for
-// what it finds. The two outputs together (one --list-seeds plus
-// per-seed jobs) are mergeable via `sort -u` on the RAT lines to
-// recover the one-shot result.
-
-/// Build the `CanonicalOps` pair for either rotation-canonical or
-/// dihedral-canonical enumeration.
-fn make_ops(dihedral: bool) -> CanonicalOps {
-    if dihedral {
-        CanonicalOps {
-            is_canonical: is_dihedral_canonical_extended,
-            canonicalize: dihedral_canonical,
-        }
-    } else {
-        CanonicalOps {
-            is_canonical: is_canonical_extended,
-            canonicalize: canonical_identity,
-        }
-    }
-}
-
-/// Walk the DFS down to `split_depth` and return
-/// `(closed, alive_prefixes)`. `closed` contains polygons that
-/// closed *during the seed walk* (perimeter <= split_depth). The
-/// caller is responsible for handling both: closed ones go straight
-/// into the final result; alive prefixes are the work units to be
-/// dispatched to per-seed jobs.
-fn collect_seed_prefixes<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    split_depth: usize,
-    dihedral: bool,
-) -> (HashSet<Vec<i8>>, Vec<Vec<i8>>) {
-    let ops = make_ops(dihedral);
-    let prunes = snapshot_prunes();
-    let mut snake: Snake<ZZ> = Snake::new();
-    let mut seeds: Vec<Vec<i8>> = Vec::new();
-    let mut closed: HashSet<Vec<i8>> = HashSet::new();
-    let mut stats = DfsStats::default();
-    {
-        let mut gather = SeedGather {
-            seeds: &mut seeds,
-            closed: &mut closed,
-            stats: &mut stats,
-        };
-        collect_seeds::<ZZ>(
-            &mut snake,
-            max_steps,
-            step,
-            split_depth,
-            &mut gather,
-            ops,
-            false,
-            &prunes,
-        );
-    }
-    (closed, seeds)
-}
-
-/// Resume the DFS from `seed` (a walked angle prefix) and return
-/// the unique canonical sequences found below it.
-///
-/// * `n_threads == 1` (recommended): single-threaded fast path. Runs
-///   `rat_enum_step` directly from the seed's snake state. Holds at
-///   most one `HashSet` (this seed's share of the final set).
-/// * `n_threads > 1`: sub-splits the seed's subtree at depth
-///   `seed.len() + splitting_depth(n_threads, branching)` (clamped
-///   to `max_steps`) to produce ~10*n_threads work units, then
-///   dispatches them across worker threads via `parallel_drain_seeds`.
-///
-/// # Memory profile and why separate processes are strictly better
-///
-/// **Single-threaded:** ~1x the final set size at peak (one HashSet,
-/// growing with resize transients to ~3x during a bucket-array
-/// doubling).
-///
-/// **Multi-threaded:** ~5x the final set size at peak. Each of
-/// `n_threads` workers holds a thread-local HashSet that lives for
-/// the whole DFS phase, plus the merge double-buffers as the main
-/// `closed_main` absorbs each local. This is the same memory profile
-/// as the whole-tree parallel mode.
-///
-/// **If memory matters and you have multiple seeds to process,
-/// running them as separate single-threaded processes (e.g.
-/// `xargs -P 16 ... --seed {} --threads 1`) is strictly better:**
-/// each process holds only its own share of the final set, and the
-/// OS reclaims everything (allocator arenas included) when each
-/// process exits. See the file-level docstring for the full
-/// accounting. Use `n_threads > 1` only when an orchestrator
-/// constrains you to one process at a time.
-fn enumerate_from_seed<ZZ: IsRing>(
-    max_steps: usize,
-    step: i8,
-    seed: &[i8],
-    n_threads: usize,
-    dihedral: bool,
-    paranoid: bool,
-) -> HashSet<Vec<i8>> {
-    let ops = make_ops(dihedral);
-    let prunes = snapshot_prunes();
-
-    if n_threads <= 1 {
-        // Single-threaded fast path. No sub-split, no worker spawn:
-        // just walk the DFS from this seed's snake state directly.
-        let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
-        let mut local: HashSet<Vec<i8>> = HashSet::new();
-        let mut stats = DfsStats::default();
-        rat_enum_step::<ZZ>(
-            &mut snake, max_steps, step, &mut local, &mut stats, ops, paranoid, &prunes,
-        );
-        return local;
-    }
-
-    // Multi-threaded: sub-split the seed's subtree to ~10*n_threads
-    // work units (capped at `max_steps`), then dispatch.
-    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
-    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
-    let sub_split = splitting_depth(n_threads, branching);
-    let split_depth = (seed.len() + sub_split).min(max_steps);
-
-    let mut closed_main: HashSet<Vec<i8>> = HashSet::new();
-    let mut sub_seeds: Vec<Vec<i8>> = Vec::new();
-    let mut seed_stats = DfsStats::default();
-    {
-        let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(seed);
-        let mut gather = SeedGather {
-            seeds: &mut sub_seeds,
-            closed: &mut closed_main,
-            stats: &mut seed_stats,
-        };
-        collect_seeds::<ZZ>(
-            &mut snake,
-            max_steps,
-            step,
-            split_depth,
-            &mut gather,
-            ops,
-            paranoid,
-            &prunes,
-        );
-    }
-
-    let (merged, _) = parallel_drain_seeds::<ZZ>(
-        &sub_seeds,
-        closed_main,
-        seed_stats,
-        max_steps,
-        step,
-        n_threads,
-        ops,
-        paranoid,
-        &prunes,
-    );
-    merged
-}
-
-type SeedListing = (HashSet<Vec<i8>>, Vec<Vec<i8>>);
-type CollectSeedFn = fn(usize, i8, usize, bool) -> SeedListing;
-type EnumFromSeedFn = fn(usize, i8, &[i8], usize, bool, bool) -> HashSet<Vec<i8>>;
-
-fn dispatch_collect_seed_prefixes(
-    ring: u8,
-    max_steps: usize,
-    step: i8,
-    split_depth: usize,
-    dihedral: bool,
-) -> SeedListing {
-    let f: CollectSeedFn = match ring {
-        4 => collect_seed_prefixes::<ZZ4>,
-        8 => collect_seed_prefixes::<ZZ8>,
-        10 => collect_seed_prefixes::<ZZ10>,
-        12 => collect_seed_prefixes::<ZZ12>,
-        16 => collect_seed_prefixes::<ZZ16>,
-        20 => collect_seed_prefixes::<ZZ20>,
-        24 => collect_seed_prefixes::<ZZ24>,
-        32 => collect_seed_prefixes::<ZZ32>,
-        60 => collect_seed_prefixes::<ZZ60>,
-        _ => panic!("invalid ring selected"),
-    };
-    f(max_steps, step, split_depth, dihedral)
-}
-
-fn dispatch_enumerate_from_seed(
-    ring: u8,
-    max_steps: usize,
-    step: i8,
-    seed: &[i8],
-    n_threads: usize,
-    dihedral: bool,
-    paranoid: bool,
-) -> HashSet<Vec<i8>> {
-    let f: EnumFromSeedFn = match ring {
-        4 => enumerate_from_seed::<ZZ4>,
-        8 => enumerate_from_seed::<ZZ8>,
-        10 => enumerate_from_seed::<ZZ10>,
-        12 => enumerate_from_seed::<ZZ12>,
-        16 => enumerate_from_seed::<ZZ16>,
-        20 => enumerate_from_seed::<ZZ20>,
-        24 => enumerate_from_seed::<ZZ24>,
-        32 => enumerate_from_seed::<ZZ32>,
-        60 => enumerate_from_seed::<ZZ60>,
-        _ => panic!("invalid ring selected"),
-    };
-    f(max_steps, step, seed, n_threads, dihedral, paranoid)
-}
 
 // --------
 
@@ -1641,24 +217,56 @@ enum Mode {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Compute all simple polygons over a ring with a maximal boundary length", long_about = None)]
+#[command(
+    version,
+    about = "Enumerate simple cyclotomic matchstick polygons (rats) up to a given perimeter",
+    long_about = "\
+Enumerate every simple polygon (closed self-avoiding boundary) of\n\
+unit-length edges on a cyclotomic ring `ZZn`, with perimeter up to `-n`.\n\
+\n\
+Output is selected via `--mode`:\n\
+  * bench         enumerate, time, report counts (default workflow)\n\
+  * render        enumerate and render the polygons as a GIF (`-o file.gif`)\n\
+  * dafsa         enumerate and write a gzipped DAFSA (`-o file.bin.gz`)\n\
+  * dafsa-blocks  same, but as a directory of lazy-loadable blocks\n\
+  * list-seeds    walk DFS to `--split-depth` and print SEED + RAT lines\n\
+                  (for external orchestration; see `--seed`)\n\
+\n\
+Performance opts (combine for maximum speedup):\n\
+  --mod-prune          modular reachability prune; up to 376x on some rings\n\
+  --closure-key-prune  exact lattice closure-key prune; another 2-5x on top\n\
+  --threads N          parallel DFS; sub-linear scaling due to set merging\n\
+  --dihedral           dihedral-canonical output (one rep per chiral pair);\n\
+                       also accelerates DFS via complement-reflection prune\n\
+\n\
+For memory at large n: prefer `--mode list-seeds` + per-seed processes\n\
+(via xargs / GNU parallel) over `--threads N>1`. See the file-level\n\
+docstring in src/bin/rat_enum.rs for the full memory accounting.\n"
+)]
 struct Cli {
+    /// Cyclotomic ring index n in `ZZn`. Supported:
+    /// 4, 8, 10, 12, 16, 20, 24, 32, 60.
     #[arg(short = 'r', long)]
     ring: u8,
 
+    /// Maximum boundary perimeter to enumerate up to (inclusive).
+    /// Memory and time scale exponentially in `n`; expect each
+    /// `+1` to multiply runtime by `~3-10` depending on ring.
     #[arg(short = 'n', long)]
     max_steps: usize,
 
+    /// Output mode. See the top-level `--help` for the menu.
     #[arg(long, value_enum, default_value_t = Mode::Render)]
     mode: Mode,
 
-    #[arg(
-        short = 'o',
-        long,
-        help = "Output filename: GIF in --mode render, gzipped DAFSA JSON in --mode dafsa"
-    )]
+    /// Output filename. Meaning depends on `--mode`:
+    ///   * render        path/to/file.gif
+    ///   * dafsa         path/to/file.bin.gz
+    ///   * dafsa-blocks  path/to/output_dir/ (will be created)
+    #[arg(short = 'o', long)]
     filename: Option<String>,
 
+    /// Print extra progress / diagnostic chatter.
     #[arg(short, long)]
     verbose: bool,
 
@@ -1739,7 +347,14 @@ struct Cli {
     #[arg(long)]
     closure_key_prune: bool,
 
-
+    /// Suffix-length cap for `--closure-key-prune`. Memory/pre-pass
+    /// cost scales as |S_L| ~ c^L (c ~ 5-10 for typical rings);
+    /// the prune only fires when `remaining_after <= L`. L=4 was
+    /// empirically optimal across ZZ8/12/16 at n=10..15: larger L
+    /// finds more skips but the table-build cost dominates the
+    /// per-node savings.
+    #[arg(long, default_value_t = 4)]
+    closure_key_depth: usize,
 
     /// Resume the DFS from a specific seed prefix (comma-separated
     /// angles like `-5,3,-4`). When set, the DFS skips seed
@@ -2244,14 +859,14 @@ mod dihedral_tests {
                     let one_shot: HashSet<Vec<i8>> = one_shot_seqs.into_iter().collect();
 
                     let (mut seeded, prefixes) =
-                        super::collect_seed_prefixes::<ZZ12>(n, 1, split_depth, dihedral);
+                        tilezz::rat_enum::seed::collect_seed_prefixes::<ZZ12>(n, 1, split_depth, dihedral);
                     for prefix in &prefixes {
                         // Sweep both branches of the n_threads dispatch
                         // (single-threaded direct path AND sub-split +
                         // parallel_drain_seeds) within the same test --
                         // they must produce the same set.
                         for nthreads in &[1usize, 4] {
-                            seeded.extend(super::enumerate_from_seed::<ZZ12>(
+                            seeded.extend(tilezz::rat_enum::seed::enumerate_from_seed::<ZZ12>(
                                 n, 1, prefix, *nthreads, dihedral, false,
                             ));
                         }
