@@ -1179,6 +1179,7 @@ dependencies = [
  "crossbeam",
  "flate2",
  "gif",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-rational",
