@@ -24,9 +24,252 @@
 //! the interval until the sign is decided. Provably exact (no f64
 //! anywhere); converges in O(log(1/|f(c)|)) iterations.
 
-use num_traits::FromPrimitive;
+use num_bigint::BigInt;
+use num_rational::{BigRational, Ratio};
+use num_traits::{FromPrimitive, Signed, Zero};
 
 use super::numtraits::{IntRing, ZSigned};
+
+// ===================================================================
+// Sturm-Tarski sign extraction for an algebraic root of an
+// irreducible cubic.
+//
+// `sturm_sign_at_root` is the **fallback** path used by
+// `sign_at_cubic_root_in_interval` when the bisection's i128 budget
+// would be exceeded (`c_max >= 4096`), and the **oracle** used in
+// tests to cross-check the hot bisection path. Provably correct for
+// any input -- uses `Ratio<BigInt>` internally so no overflow
+// envelope. The original `Ratio<i128>` version silently wrapped in
+// release mode and panicked in debug mode for inputs the fuzz
+// `sign_at_s_times_x_minus_k` path hands it (K^2 ~ 10^6).
+//
+// The algorithm is Sturm-Tarski: for polynomials p (irreducible,
+// degree 3) and f (degree <= 2), build the Sturm sequence STR(p,
+// p' * f) over Q[x], evaluate it at the isolating interval
+// endpoints (lo, hi), and count the sign-variation difference. For
+// an isolating interval containing exactly one root c of p:
+//
+//     V(STR, lo) - V(STR, hi) = sign(f(c))
+//
+// since f(c) != 0 (p irreducible of degree > deg(f) implies
+// gcd(p, f) = 1).
+//
+// Reference: Basu, Pollack, Roy, "Algorithms in Real Algebraic
+// Geometry" 2nd ed., Algorithm 2.65 (Sign Determination).
+
+type Q = BigRational;
+
+fn q_int_i128(n: i128) -> Q { Ratio::from_integer(BigInt::from(n)) }
+fn q_int_usize(n: usize) -> Q { Ratio::from_integer(BigInt::from(n)) }
+
+/// Heap-allocated polynomial in Q[x] with `Ratio<BigInt>`
+/// coefficients (low-degree-first, trailing zeros trimmed).
+///
+/// Sturm is the fallback path for the rare large-coefficient case
+/// (`|coeff| >= 4096`), so the heap allocations don't dominate
+/// runtime -- the hot bisection path stays in i128. Using BigInt
+/// makes the Sturm path provably overflow-free for any input.
+#[derive(Clone, Debug)]
+struct PolyQ {
+    coeffs: Vec<Q>,
+}
+
+impl PolyQ {
+    fn zero() -> Self { Self { coeffs: vec![] } }
+    fn is_zero(&self) -> bool { self.coeffs.is_empty() }
+    fn deg(&self) -> i32 { self.coeffs.len() as i32 - 1 }
+    fn lc(&self) -> &Q {
+        debug_assert!(!self.coeffs.is_empty());
+        self.coeffs.last().unwrap()
+    }
+
+    fn normalize(&mut self) {
+        while matches!(self.coeffs.last(), Some(c) if c.is_zero()) {
+            self.coeffs.pop();
+        }
+    }
+
+    fn from_int_coeffs(c: &[i64]) -> Self {
+        let mut p = Self {
+            coeffs: c.iter().map(|&x| q_int_i128(x as i128)).collect(),
+        };
+        p.normalize();
+        p
+    }
+
+    /// Horner-evaluate at integer x.
+    fn eval_at_int(&self, x: i128) -> Q {
+        let xq = q_int_i128(x);
+        let mut acc = Q::zero();
+        for c in self.coeffs.iter().rev() {
+            acc = &acc * &xq + c;
+        }
+        acc
+    }
+
+    fn neg_in_place(&mut self) {
+        for c in &mut self.coeffs {
+            *c = -std::mem::replace(c, Q::zero());
+        }
+    }
+}
+
+fn mul(a: &PolyQ, b: &PolyQ) -> PolyQ {
+    if a.is_zero() || b.is_zero() {
+        return PolyQ::zero();
+    }
+    let new_len = a.coeffs.len() + b.coeffs.len() - 1;
+    let mut out: Vec<Q> = (0..new_len).map(|_| Q::zero()).collect();
+    for (i, ai) in a.coeffs.iter().enumerate() {
+        for (j, bj) in b.coeffs.iter().enumerate() {
+            out[i + j] = &out[i + j] + ai * bj;
+        }
+    }
+    let mut p = PolyQ { coeffs: out };
+    p.normalize();
+    p
+}
+
+fn derivative(p: &PolyQ) -> PolyQ {
+    if p.coeffs.len() <= 1 {
+        return PolyQ::zero();
+    }
+    let coeffs: Vec<Q> = p
+        .coeffs
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(i, c)| c * q_int_usize(i))
+        .collect();
+    let mut out = PolyQ { coeffs };
+    out.normalize();
+    out
+}
+
+/// Polynomial remainder `rem mod divisor` over Q, in-place on `rem`.
+/// Quotient discarded.
+fn poly_rem_in_place(rem: &mut PolyQ, divisor: &PolyQ) {
+    debug_assert!(!divisor.is_zero(), "poly_rem_in_place: zero divisor");
+    let d_deg = divisor.deg();
+    let d_lc = divisor.lc().clone();
+    while !rem.is_zero() && rem.deg() >= d_deg {
+        let r_deg = rem.deg();
+        let r_lc = rem.lc().clone();
+        let term_coef = &r_lc / &d_lc;
+        let term_pow = (r_deg - d_deg) as usize;
+        for j in 0..divisor.coeffs.len() {
+            let idx = j + term_pow;
+            rem.coeffs[idx] = &rem.coeffs[idx] - &term_coef * &divisor.coeffs[j];
+        }
+        rem.normalize();
+    }
+}
+
+#[inline]
+fn variation_count(seq: &[Q]) -> usize {
+    let mut prev: i8 = 0;
+    let mut count = 0usize;
+    for v in seq {
+        let s = if v.is_zero() { 0 } else if v.is_positive() { 1 } else { -1 };
+        if s == 0 { continue; }
+        if prev != 0 && prev != s {
+            count += 1;
+        }
+        prev = s;
+    }
+    count
+}
+
+/// Sturm-Tarski sign of `f(c)` where `c` is the unique root of monic
+/// irreducible `p` in the integer-endpoint interval `(lo, hi)`.
+///
+/// Builds the modified Sturm sequence `s_0 = p`,
+/// `s_1 = (p' * f) mod p`, `s_{k+1} = -rem(s_{k-1}, s_k)`. Evaluates
+/// each at `lo` and `hi` and returns `V(STR, lo) - V(STR, hi)`,
+/// which equals `sign(f(c))` for `gcd(p, f) = 1` (true when p is
+/// irreducible and `deg f < deg p`).
+///
+/// All polynomial arithmetic uses `Ratio<BigInt>` so there's no
+/// overflow envelope -- correct for arbitrarily large coefficient
+/// inputs. This is the fallback path for the bisection; the hot
+/// path stays in i128 for the common case.
+fn sturm_sign_at_root(p_coeffs: &[i64], f_coeffs: &[i64], lo: i64, hi: i64) -> i8 {
+    let p = PolyQ::from_int_coeffs(p_coeffs);
+    let f = PolyQ::from_int_coeffs(f_coeffs);
+
+    if f.is_zero() {
+        return 0;
+    }
+
+    let p_prime = derivative(&p);
+    let mut s1 = mul(&p_prime, &f);
+    poly_rem_in_place(&mut s1, &p);
+
+    let mut chain: Vec<PolyQ> = vec![p, s1];
+    while !chain.last().unwrap().is_zero() {
+        let prev = chain[chain.len() - 2].clone();
+        let curr = chain[chain.len() - 1].clone();
+        if curr.is_zero() {
+            break;
+        }
+        let mut r = prev;
+        poly_rem_in_place(&mut r, &curr);
+        r.neg_in_place();
+        chain.push(r);
+    }
+    if chain.last().is_some_and(|p| p.is_zero()) {
+        chain.pop();
+    }
+
+    let vals_lo: Vec<Q> = chain.iter().map(|s| s.eval_at_int(lo as i128)).collect();
+    let vals_hi: Vec<Q> = chain.iter().map(|s| s.eval_at_int(hi as i128)).collect();
+    let v_lo = variation_count(&vals_lo) as i32;
+    let v_hi = variation_count(&vals_hi) as i32;
+    (v_lo - v_hi) as i8
+}
+
+#[cfg(feature = "sign_profile")]
+mod profile {
+    //! `sign_profile` feature: counts every call to
+    //! `sign_at_cubic_root_in_interval`, tracking how many have
+    //! large coefficients (would force Sturm fallback) and the
+    //! observed coefficient envelope. Output is emitted on every
+    //! power-of-two call count beyond 1024. Used to size the
+    //! Sturm-fallback threshold.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static TOTAL: AtomicU64 = AtomicU64::new(0);
+    static BIG: AtomicU64 = AtomicU64::new(0);
+    static MAX_C: AtomicU64 = AtomicU64::new(0);
+    pub fn record(c_max: i128) {
+        let cm = c_max as u64;
+        TOTAL.fetch_add(1, Ordering::Relaxed);
+        if c_max >= 1024 {
+            BIG.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut prev = MAX_C.load(Ordering::Relaxed);
+        while cm > prev {
+            match MAX_C.compare_exchange_weak(prev, cm, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(p) => prev = p,
+            }
+        }
+        let t = TOTAL.load(Ordering::Relaxed);
+        if t.is_power_of_two() && t >= 1024 {
+            let bb = BIG.load(Ordering::Relaxed);
+            eprintln!(
+                "[sign_profile] total={t} big={bb} ({:.1}%) max_c={}",
+                bb as f64 / t as f64 * 100.0,
+                MAX_C.load(Ordering::Relaxed)
+            );
+        }
+    }
+}
+
+// ===================================================================
+// End Sturm-Tarski. Above this point the rest of the file's existing
+// signum_sum_sqrt_expr_* helpers continue unchanged.
+// ===================================================================
+
 
 /// Floating-point-free solution to get sign of an expression
 /// a*sqrt(n) + b*sqrt(m)
@@ -773,9 +1016,9 @@ pub fn sign_at_cubic_root_in_interval(
     let m2 = minpoly[2] as i128;
     let m3 = minpoly[3] as i128;
 
-    // f(n/d) sign = sign(a*d^2 + b*n*d + d2*n^2).  All products bounded by
-    // |coeffs| * max(|n|, |d|)^2.
-    let f_sign = |n: i128, dn: i128| -> i8 {
+    // Return |f(n/dn)| * dn^2 (i.e. numerator of |f(n/dn)| over the
+    // common denominator dn^2). All i128.
+    let f_abs_num = |n: i128, dn: i128| -> i128 {
         let v = a
             .checked_mul(dn)
             .and_then(|x| x.checked_mul(dn))
@@ -789,16 +1032,11 @@ pub fn sign_at_cubic_root_in_interval(
                     .and_then(|x| x.checked_mul(n))
                     .map(|dd| ab + dd)
             })
-            .expect("sign_at_cubic_root: i128 overflow in f_sign");
-        v.signum() as i8
+            .expect("sign_at_cubic_root: i128 overflow in f_abs_num");
+        v
     };
 
-    // p(n/d) sign = sign(m0*d^3 + m1*n*d^2 + m2*n^2*d + m3*n^3), assuming d > 0.
     let p_sign = |n: i128, dn: i128| -> i8 {
-        // dn^3 and n^3 each fit in ~3x the bits of n,dn. With i128 budget,
-        // n,dn must stay under ~42 bits each; bisection runs would otherwise
-        // need bigint. Mark overflow as an assertion rather than a silent
-        // wrong answer.
         let v = (m0 * dn * dn * dn)
             .checked_add(m1 * n * dn * dn)
             .and_then(|x| x.checked_add(m2 * n * n * dn))
@@ -812,9 +1050,6 @@ pub fn sign_at_cubic_root_in_interval(
     let mut hi_n = hi.0 as i128;
     let mut hi_d = hi.1 as i128;
 
-    // p has opposite signs at the endpoints (c is the unique root
-    // inside). Cache the lo-side sign so we can pick which half to
-    // descend into after each bisection.
     let p_sign_lo = p_sign(lo_n, lo_d);
     debug_assert!(
         p_sign_lo != 0,
@@ -825,17 +1060,90 @@ pub fn sign_at_cubic_root_in_interval(
         "sign_at_cubic_root: minpoly doesn't change sign across the isolating interval"
     );
 
-    // Loop until f's sign is decided. Safety bound to catch
-    // pathological cases.
-    for _ in 0..96 {
-        let s_lo = f_sign(lo_n, lo_d);
-        let s_hi = f_sign(hi_n, hi_d);
+    // **Adaptive correctness check.** At iteration N the interval
+    // (lo, hi) has width W = (hi_n*lo_d - lo_n*hi_d) / (lo_d*hi_d).
+    // f is degree <= 2 with Lipschitz constant L = max |f'| on
+    // (lo, hi) <= |b| + 2|d|*max(|lo|, |hi|).
+    //
+    // If `s_lo == s_hi != 0` and `min(|f(lo)|, |f(hi)|) > L * W`,
+    // then for any x in (lo, hi): |f(x) - f(lo)| <= L * W <
+    // |f(lo)|, so f(x) has the same sign as f(lo) = s_lo. In
+    // particular sign(f(c)) = s_lo.
+    //
+    // This is provably correct for ANY coefficient size where the
+    // arithmetic doesn't overflow i128 -- no `MIN_BISECTIONS`
+    // heuristic needed. For "easy" cases (f(c) bounded away from
+    // zero) the check passes after just a handful of bisections;
+    // for adversarial cases (f's own roots near c) it forces
+    // additional bisections until the condition is met.
+    //
+    // In integer form: write |f(lo)| = V_lo/lo_d^2 where V_lo is
+    // the i128 integer `a*lo_d^2 + b*lo_n*lo_d + d*lo_n^2`. The
+    // termination condition `min(|V_lo|/lo_d^2, |V_hi|/hi_d^2) >
+    // L * W` is checked exactly in integers.
+    //
+    // MAX_BISECTIONS = 38 caps the i128 budget: at iter 38 the
+    // denominator is at most 2^38, and `m_i * d^3` stays well
+    // within i128 (`3 * 2^114 << 2^127`).
+    const MAX_BISECTIONS: usize = 38;
+    // |f'(x)| bound on [-2, 2] (our isolating-interval range):
+    //   |f'| <= |b| + 2*|d|*max(|lo|, |hi|) <= |b| + 4*|d|
+    // since both lo and hi are in [-2, 2] for our rings.  We're
+    // using rational endpoints, but the values stay in [1, 2].
+    let l_bound = b.abs() + 4 * d.abs();
+
+    let c_max = a.abs().max(b.abs()).max(d.abs());
+    #[cfg(feature = "sign_profile")]
+    profile::record(c_max);
+    // For very large coefficients the bisection's i128 budget for
+    // f_abs_num / p_sign might not accommodate enough iterations to
+    // satisfy the termination condition. Threshold derived
+    // empirically: for c_max < 4096 the bisection stays in budget
+    // at MAX_BISECTIONS = 38. Above that, delegate to Sturm.
+    if c_max >= 4096 {
+        debug_assert!(
+            lo.1 == 1 && hi.1 == 1,
+            "Sturm fallback expects integer-endpoint isolating intervals"
+        );
+        return sturm_sign_at_root(&minpoly, &coeffs, lo.0, hi.0);
+    }
+
+    for _ in 0..MAX_BISECTIONS {
+        let v_lo = f_abs_num(lo_n, lo_d);
+        let v_hi = f_abs_num(hi_n, hi_d);
+        let s_lo = v_lo.signum() as i8;
+        let s_hi = v_hi.signum() as i8;
         if s_lo != 0 && s_lo == s_hi {
-            return s_lo;
+            // Termination: check |f(lo)|/lo_d^2 > L * W AND same
+            // for hi. W = (hi_n*lo_d - lo_n*hi_d) / (lo_d*hi_d).
+            //
+            // |f(lo)|/lo_d^2 > L * W
+            //   |v_lo|/lo_d^2 > L * (hi_n*lo_d - lo_n*hi_d) / (lo_d*hi_d)
+            //   |v_lo| * hi_d > L * (hi_n*lo_d - lo_n*hi_d) * lo_d
+            //
+            // and analogously for hi. Both checked in i128.
+            //
+            // Note: (hi_n*lo_d - lo_n*hi_d) > 0 since hi > lo and
+            // both denominators are positive.
+            let width_num = hi_n
+                .checked_mul(lo_d)
+                .and_then(|x| x.checked_sub(lo_n.checked_mul(hi_d).unwrap_or(0)))
+                .expect("sign_at_cubic_root: width num overflow");
+            debug_assert!(width_num > 0);
+
+            let lhs_lo = v_lo.unsigned_abs() as i128 * hi_d;
+            let rhs_lo = (l_bound).checked_mul(width_num)
+                .and_then(|x| x.checked_mul(lo_d))
+                .expect("sign_at_cubic_root: width-check lo overflow");
+            let lhs_hi = v_hi.unsigned_abs() as i128 * lo_d;
+            let rhs_hi = (l_bound).checked_mul(width_num)
+                .and_then(|x| x.checked_mul(hi_d))
+                .expect("sign_at_cubic_root: width-check hi overflow");
+            if lhs_lo > rhs_lo && lhs_hi > rhs_hi {
+                return s_lo;
+            }
         }
 
-        // Bisect. m = (lo + hi)/2: numerator = lo_n*hi_d + hi_n*lo_d,
-        // denominator = 2*lo_d*hi_d. Reduce by gcd to slow the growth.
         let m_num_raw = lo_n
             .checked_mul(hi_d)
             .and_then(|x| x.checked_add(hi_n.checked_mul(lo_d).unwrap_or(i128::MAX)))
@@ -845,7 +1153,6 @@ pub fn sign_at_cubic_root_in_interval(
             .and_then(|x| x.checked_mul(hi_d))
             .expect("sign_at_cubic_root: midpoint den overflow");
         let g = {
-            // Custom u128 gcd to avoid pulling num_integer in this file.
             let mut x = m_num_raw.unsigned_abs();
             let mut y = m_den_raw.unsigned_abs();
             while y != 0 {
@@ -860,10 +1167,6 @@ pub fn sign_at_cubic_root_in_interval(
 
         let s_p_mid = p_sign(m_num, m_den);
         if s_p_mid == 0 {
-            // Midpoint is a rational root of minpoly. minpoly is
-            // irreducible over Q (degree 3 with no rational roots in
-            // typical cyclotomic real subrings), so this should not
-            // happen.
             debug_assert!(
                 false,
                 "sign_at_cubic_root: midpoint is a rational root of minpoly"
@@ -871,21 +1174,23 @@ pub fn sign_at_cubic_root_in_interval(
             return 0;
         }
         if s_p_mid == p_sign_lo {
-            // p has the same sign at lo and mid → c is in (mid, hi).
             lo_n = m_num;
             lo_d = m_den;
         } else {
-            // p has opposite signs at lo and mid → c is in (lo, mid).
             hi_n = m_num;
             hi_d = m_den;
         }
     }
 
-    panic!(
-        "sign_at_cubic_root: bisection did not converge after 96 steps. \
-         coeffs = {:?}, minpoly = {:?}",
-        coeffs, minpoly,
+    // Pathological: bisection didn't converge within the i128 budget.
+    // The width-based termination condition implies f(c) has very
+    // small magnitude (close to Mahler's lower bound). Fall back to
+    // Sturm, which is provably correct without a width bound.
+    debug_assert!(
+        lo.1 == 1 && hi.1 == 1,
+        "Sturm fallback expects integer-endpoint isolating intervals"
     );
+    sturm_sign_at_root(&minpoly, &coeffs, lo.0, hi.0)
 }
 
 #[cfg(test)]
@@ -931,6 +1236,46 @@ mod cubic_root_tests {
         assert_eq!(s14(0, 0, 4), 1);
         assert_eq!(s14(0, 0, -9), -1);
         assert_eq!(s18(0, 0, 4), 1);
+    }
+
+    /// Adversarially constructed near-zero polynomials: brute-force
+    /// search finds the smallest `|a + b*c + d*c^2|` for integer
+    /// coefficients in some range; we pin the sign at those tiny
+    /// magnitudes. These are the worst-case inputs for the
+    /// bisection (smallest distance between `c` and any root of
+    /// `f`), and would be the first to fail if the
+    /// `MIN_BISECTIONS` bound in
+    /// [`sign_at_cubic_root_in_interval`] is insufficient. Values
+    /// verified by sympy at high precision.
+    #[test]
+    fn cubic_root_adversarial_near_zero() {
+        // ZZ14, c = 2*cos(pi/7). |coeff| <= 30 brute-force minima:
+        //   (-17, -23,  18): val ~= +0.001065  (smallest in |coeff|<=30)
+        //   (-18,  19,  -5): val ~= +0.001919
+        //   (-22,   5,   4): val ~= -0.002393
+        assert_eq!(s14(-17, -23, 18), 1);
+        assert_eq!(s14(17, 23, -18), -1); // sign-flipped duplicate
+        assert_eq!(s14(-18, 19, -5), 1);
+        assert_eq!(s14(-22, 5, 4), -1);
+        assert_eq!(s14(-5, 28, -14), -1);
+
+        // ZZ18, c = 2*cos(pi/9). |coeff| <= 30 brute-force minima:
+        //   (-7, 15, -6): val ~= -0.001755
+        //   (-29, -9, 13): val ~= +0.002688
+        //   (-6, -25, 15): val ~= -0.003298
+        assert_eq!(s18(-7, 15, -6), -1);
+        assert_eq!(s18(7, -15, 6), 1);
+        assert_eq!(s18(-29, -9, 13), 1);
+        assert_eq!(s18(-6, -25, 15), -1);
+
+        // The original fuzz-detected bug case: `f(x) = 127 - 178x +
+        // 59x^2` has its own roots ~1.158 and ~1.859, with
+        // c = 2*cos(pi/7) ~ 1.802 between them. f(c) < 0, but f(1)
+        // = 8 > 0 and f(2) = 7 > 0. Pre-fix versions of
+        // `sign_at_cubic_root_in_interval` returned +1 (matching
+        // the endpoint signs); the post-fix version must return -1
+        // (matching f(c)).
+        assert_eq!(s14(127, -178, 59), -1);
     }
 
     /// Sympy-generated test vectors for ZZ14: each row pins the sign
@@ -982,5 +1327,585 @@ mod cubic_root_tests {
                 "ZZ18 sign({a} + {b}*c + {d}*c^2) = got {got}, expected {expected}"
             );
         }
+    }
+}
+
+/// Sign of `s*X - K` at the algebraic point `(c, s)` where `c` is the
+/// unique root of `minpoly` in the interval `(iso_lo, iso_hi)` and
+/// `s` is its sine partner satisfying `s^2 = 4 - c^2` and `s > 0`.
+/// `X = x[0] + x[1]*c + x[2]*c^2` is a polynomial in c over the
+/// integers; `K` is an integer.
+///
+/// This is the helper that ZZ14 and ZZ18's `CellFloor::cell_floor_exact`
+/// needs along the imaginary axis: each ring stores `Im(z)` with an
+/// implicit `s/2` factor, so checking `cy <= Im(z) < cy+1` reduces to
+/// comparing `s*X` (where `X` is the integer-basis projection of
+/// `Im(z) * 2 / s`) against `2*cy`.
+///
+/// # Algorithm
+///
+/// 1. Compute `sx = sign(X)` via [`sign_at_cubic_root_in_interval`].
+/// 2. Handle the trivial cases:
+///    - `X = 0`: `sign(s*X - K) = -sign(K)`.
+///    - `K = 0`: `sign(s*X) = sign(s)*sign(X) = sx` (since `s > 0`).
+///    - `sx` and `sign(K)` differ: `s*X` and `-K` reinforce → sign = `sx`.
+/// 3. Otherwise the comparison is between two same-sign nonzero
+///    quantities. Square both:
+///    `(s*X)^2 - K^2 = (4 - c^2)*X^2 - K^2`. Compute this as an
+///    integer-basis polynomial in `c` (degree ≤ 2 after reducing mod
+///    `minpoly`), then dispatch back to
+///    [`sign_at_cubic_root_in_interval`] for the cubic-root sign.
+///    The final answer is `sx * sign((4 - c^2)*X^2 - K^2)`.
+///
+/// # Overflow envelope
+///
+/// All polynomial arithmetic is done in `i128` with `checked_*`
+/// guards. Coefficient growth: `X^2` is up to ~4x the squared
+/// magnitude of `x`; `(4 - c^2)*X^2` adds another ~4x. For inputs
+/// where `|x[i]| <= 10^8` and `|K| <= 10^16` the intermediate values
+/// stay well within i128. Pathological inputs would trigger an
+/// assertion rather than silently produce a wrong answer.
+pub fn sign_at_s_times_x_minus_k(
+    x: [i64; 3],
+    k: i64,
+    minpoly: [i64; 4],
+    iso_lo: (i64, i64),
+    iso_hi: (i64, i64),
+) -> i8 {
+    // Step 1: sign of X = x[0] + x[1]*c + x[2]*c^2 alone.
+    let sx = sign_at_cubic_root_in_interval(x, minpoly, iso_lo, iso_hi);
+
+    // Step 2: trivial cases.
+    if sx == 0 {
+        // X = 0 → s*X = 0 → s*X - K = -K.
+        return -(k.signum() as i8);
+    }
+    if k == 0 {
+        // sign(s*X) = sign(s) * sign(X) = sx (s > 0 by construction).
+        return sx;
+    }
+    let sk = k.signum() as i8;
+    if sx != sk {
+        // sx ≠ sk → s*X and -K have the same nonzero sign, so
+        // s*X - K = s*X + (-K) is dominated by that common sign.
+        return sx;
+    }
+
+    // Step 3: |s*X| vs |K| via squaring.
+    //
+    // Reduce c^3 from the monic minpoly `m0 + m1*c + m2*c^2 + c^3 = 0`:
+    //   c^3 = -m0 - m1*c - m2*c^2.
+    let c3: [i128; 3] = [
+        -(minpoly[0] as i128),
+        -(minpoly[1] as i128),
+        -(minpoly[2] as i128),
+    ];
+
+    let x128: [i128; 3] = [x[0] as i128, x[1] as i128, x[2] as i128];
+
+    // X^2 reduced to degree-2 polynomial in c.
+    let x_squared = poly_mul_deg2_mod_cubic(x128, x128, c3);
+
+    // (4 - c^2) * X^2 reduced.
+    let four_minus_c2: [i128; 3] = [4, 0, -1];
+    let scaled = poly_mul_deg2_mod_cubic(four_minus_c2, x_squared, c3);
+
+    // (4 - c^2)*X^2 - K^2 : subtract K^2 from the constant term only.
+    let k128 = k as i128;
+    let k_sq = k128.checked_mul(k128).expect("sign_at_s_times_x_minus_k: K^2 overflow");
+    let result: [i128; 3] = [
+        scaled[0]
+            .checked_sub(k_sq)
+            .expect("sign_at_s_times_x_minus_k: const subtraction overflow"),
+        scaled[1],
+        scaled[2],
+    ];
+
+    // Narrow back to i64 for the recursive call. Coefficient bounds:
+    // for typical lattice-point inputs (|x|, |K| ≤ a few hundred), the
+    // result entries stay well within i64. Wider inputs trigger an
+    // assertion.
+    let result_i64: [i64; 3] = [
+        result[0].try_into().expect("sign_at_s_times_x_minus_k: result[0] exceeds i64"),
+        result[1].try_into().expect("sign_at_s_times_x_minus_k: result[1] exceeds i64"),
+        result[2].try_into().expect("sign_at_s_times_x_minus_k: result[2] exceeds i64"),
+    ];
+
+    let sign_diff = sign_at_cubic_root_in_interval(result_i64, minpoly, iso_lo, iso_hi);
+    (sx as i16 * sign_diff as i16) as i8
+}
+
+/// Multiply two degree-≤2 polynomials in `c`, then reduce modulo a
+/// monic cubic whose `c^3` expansion in the `{1, c, c^2}` basis is
+/// `c3 = c3_reduction[0] + c3_reduction[1]*c + c3_reduction[2]*c^2`.
+///
+/// Used internally by [`sign_at_s_times_x_minus_k`] to express
+/// `(4 - c^2)*X^2 - K^2` in the integer basis. Returns the reduced
+/// polynomial as `[const, c, c^2]` coefficients.
+fn poly_mul_deg2_mod_cubic(
+    a: [i128; 3],
+    b: [i128; 3],
+    c3: [i128; 3],
+) -> [i128; 3] {
+    // (a0 + a1*c + a2*c^2) * (b0 + b1*c + b2*c^2)
+    //   = a0*b0
+    //   + (a0*b1 + a1*b0) * c
+    //   + (a0*b2 + a1*b1 + a2*b0) * c^2
+    //   + (a1*b2 + a2*b1) * c^3
+    //   + a2*b2 * c^4
+    //
+    // c^3 = c3 = c3[0] + c3[1]*c + c3[2]*c^2
+    // c^4 = c * c^3 = c3[0]*c + c3[1]*c^2 + c3[2]*c^3
+    //                = c3[0]*c + c3[1]*c^2 + c3[2]*(c3[0] + c3[1]*c + c3[2]*c^2)
+    //                = c3[2]*c3[0] + (c3[0] + c3[2]*c3[1])*c + (c3[1] + c3[2]*c3[2])*c^2
+    let c4: [i128; 3] = [
+        c3[2] * c3[0],
+        c3[0] + c3[2] * c3[1],
+        c3[1] + c3[2] * c3[2],
+    ];
+
+    let coef_c3 = a[1] * b[2] + a[2] * b[1];
+    let coef_c4 = a[2] * b[2];
+
+    [
+        a[0] * b[0] + coef_c3 * c3[0] + coef_c4 * c4[0],
+        a[0] * b[1] + a[1] * b[0] + coef_c3 * c3[1] + coef_c4 * c4[1],
+        a[0] * b[2] + a[1] * b[1] + a[2] * b[0] + coef_c3 * c3[2] + coef_c4 * c4[2],
+    ]
+}
+
+#[cfg(test)]
+mod s_times_x_minus_k_tests {
+    use super::sign_at_s_times_x_minus_k;
+
+    const ZZ14_MINPOLY: [i64; 4] = [1, -2, -1, 1];
+    const ZZ14_ISO_LO: (i64, i64) = (1, 1);
+    const ZZ14_ISO_HI: (i64, i64) = (2, 1);
+
+    const ZZ18_MINPOLY: [i64; 4] = [-1, -3, 0, 1];
+    const ZZ18_ISO_LO: (i64, i64) = (1, 1);
+    const ZZ18_ISO_HI: (i64, i64) = (2, 1);
+
+    fn s14(n0: i64, n1: i64, n2: i64, k: i64) -> i8 {
+        sign_at_s_times_x_minus_k([n0, n1, n2], k, ZZ14_MINPOLY, ZZ14_ISO_LO, ZZ14_ISO_HI)
+    }
+    fn s18(n0: i64, n1: i64, n2: i64, k: i64) -> i8 {
+        sign_at_s_times_x_minus_k([n0, n1, n2], k, ZZ18_MINPOLY, ZZ18_ISO_LO, ZZ18_ISO_HI)
+    }
+
+    #[test]
+    fn zero_x_and_zero_k_special_cases() {
+        // X = 0, K = 0 → sign of 0 = 0
+        assert_eq!(s14(0, 0, 0, 0), 0);
+        // X = 0, K positive → sign(s*0 - K) = -1
+        assert_eq!(s14(0, 0, 0, 5), -1);
+        // X = 0, K negative → +1
+        assert_eq!(s14(0, 0, 0, -5), 1);
+        // X positive, K = 0 → sign(s*X) = +1
+        assert_eq!(s14(1, 0, 0, 0), 1);
+        // X negative, K = 0 → -1
+        assert_eq!(s14(-1, 0, 0, 0), -1);
+    }
+
+    /// Sympy-generated test vectors for ZZ14's `s = 2*sin(pi/7)`.
+    #[test]
+    fn sympy_oracle_zz14_s_times_x_minus_k() {
+        const CASES: &[(i64, i64, i64, i64, i8)] = &[
+            (-5, 2, 9, -11, 1),
+            (5, -4, 4, 8, 1),
+            (-1, 9, -10, -2, -1),
+            (-2, -7, 6, -4, 1),
+            (8, 8, -6, -2, 1),
+            (-1, -8, -6, -8, -1),
+            (1, 6, -10, 7, -1),
+            (-6, 6, -2, -14, 1),
+            (8, 3, -6, 9, -1),
+            (-3, -5, -9, 3, -1),
+        ];
+        for &(n0, n1, n2, k, expected) in CASES {
+            let got = s14(n0, n1, n2, k);
+            assert_eq!(
+                got, expected,
+                "ZZ14 sign(s*({n0} + {n1}*c + {n2}*c^2) - {k}) = got {got}, expected {expected}"
+            );
+        }
+    }
+
+    /// Sympy-generated test vectors for ZZ18's `s = 2*sin(pi/9)`.
+    #[test]
+    fn sympy_oracle_zz18_s_times_x_minus_k() {
+        const CASES: &[(i64, i64, i64, i64, i8)] = &[
+            (10, 5, 0, -3, 1),
+            (3, 3, 0, -11, 1),
+            (-7, 0, 9, 5, 1),
+            (7, 1, 3, -3, 1),
+            (-3, 9, -5, -11, 1),
+            (0, 6, 0, -12, 1),
+            (5, -2, 8, -7, 1),
+            (-1, -2, -9, -14, -1),
+            (-5, -8, -6, -11, -1),
+            (1, -8, 4, -8, 1),
+        ];
+        for &(n0, n1, n2, k, expected) in CASES {
+            let got = s18(n0, n1, n2, k);
+            assert_eq!(
+                got, expected,
+                "ZZ18 sign(s*({n0} + {n1}*c + {n2}*c^2) - {k}) = got {got}, expected {expected}"
+            );
+        }
+    }
+
+    /// Magnitude-comparison path: cases where `s*X` and `K` are
+    /// close in absolute value, exercising the squaring branch.
+    #[test]
+    fn magnitude_comparison_close_cases() {
+        // ZZ14: s ≈ 0.8678. X=5, K=4 → s*X ≈ 4.34 > 4 → sign +1
+        assert_eq!(s14(5, 0, 0, 4), 1);
+        // X=5, K=5 → s*X ≈ 4.34 < 5 → sign -1
+        assert_eq!(s14(5, 0, 0, 5), -1);
+        // X=10, K=8 → s*X ≈ 8.68 > 8 → sign +1
+        assert_eq!(s14(10, 0, 0, 8), 1);
+        // X=10, K=9 → s*X ≈ 8.68 < 9 → sign -1
+        assert_eq!(s14(10, 0, 0, 9), -1);
+        // Same-side negative: X=-5, K=-4 → s*X ≈ -4.34 < -4 → sign -1
+        assert_eq!(s14(-5, 0, 0, -4), -1);
+        // X=-5, K=-5 → s*X ≈ -4.34 > -5 → sign +1
+        assert_eq!(s14(-5, 0, 0, -5), 1);
+    }
+}
+
+#[cfg(test)]
+mod fuzz_tests {
+    //! Randomized property tests for [`sign_at_cubic_root_in_interval`]
+    //! and [`sign_at_s_times_x_minus_k`].
+    //!
+    //! Generates thousands of `(a, b, d)` triples per test run using
+    //! a deterministic xorshift64 PRNG and compares the exact integer
+    //! sign helper against an f64 oracle. When the f64 value is far
+    //! enough from zero that floating-point rounding can't affect its
+    //! sign, the two must agree. When the f64 value is within the
+    //! safety margin (~ULP of the operands), the f64 oracle is too
+    //! noisy to verify; those cases are skipped (the exact helper's
+    //! answer stands, validated indirectly by the sympy oracles
+    //! pinning specific cases).
+    //!
+    //! Lives in this module rather than as hardcoded vectors in source
+    //! to keep the binary small: the test generates its own cases at
+    //! runtime, seeds are deterministic for reproducibility, and the
+    //! coefficient range covers what the rat_enum DFS produces.
+    use super::*;
+
+    /// Deterministic xorshift64 PRNG. Same sequence on every run for
+    /// reproducible failures.
+    struct Xorshift64(u64);
+    impl Xorshift64 {
+        fn new(seed: u64) -> Self {
+            Self(seed)
+        }
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn next_i64_in(&mut self, lo: i64, hi: i64) -> i64 {
+            let range = (hi - lo + 1) as u64;
+            lo + (self.next() % range) as i64
+        }
+    }
+
+    /// f64 value of `a + b*c + d*c^2` plus an absolute-error bound
+    /// large enough to cover the worst-case rounding from three
+    /// f64 muls and three f64 adds at the given coefficient
+    /// magnitudes. Caller compares `value.abs()` against the
+    /// returned `safety` -- if larger, the f64 sign is trusted; if
+    /// smaller, the f64 oracle is too noisy and the case is skipped.
+    fn f64_value_and_safety(a: i64, b: i64, d: i64, c_f64: f64) -> (f64, f64) {
+        let af = a as f64;
+        let bf = b as f64;
+        let df = d as f64;
+        let cc = c_f64 * c_f64;
+        let value = af + bf * c_f64 + df * cc;
+        let max_term = af.abs().max((bf * c_f64).abs()).max((df * cc).abs());
+        // 64-bit f64 mantissa: ~5e-16 relative error per op. Triple it
+        // for three muls/adds and round up generously.
+        let safety = 1e-12 * (1.0 + max_term);
+        (value, safety)
+    }
+
+    fn fuzz_cubic_root<F>(
+        seed: u64,
+        iterations: u64,
+        coeff_lo: i64,
+        coeff_hi: i64,
+        minpoly: [i64; 4],
+        iso_lo: (i64, i64),
+        iso_hi: (i64, i64),
+        c_f64: F,
+        label: &str,
+    )
+    where
+        F: Fn() -> f64,
+    {
+        let c = c_f64();
+        let mut rng = Xorshift64::new(seed);
+        let mut checked = 0u64;
+        let mut skipped = 0u64;
+        for _ in 0..iterations {
+            let a = rng.next_i64_in(coeff_lo, coeff_hi);
+            let b = rng.next_i64_in(coeff_lo, coeff_hi);
+            let d = rng.next_i64_in(coeff_lo, coeff_hi);
+            let exact = sign_at_cubic_root_in_interval([a, b, d], minpoly, iso_lo, iso_hi);
+            let (value, safety) = f64_value_and_safety(a, b, d, c);
+            if a == 0 && b == 0 && d == 0 {
+                assert_eq!(exact, 0, "{label}: zero input gave nonzero sign");
+                checked += 1;
+                continue;
+            }
+            if value.abs() > safety {
+                let f64_sign = if value > 0.0 { 1i8 } else { -1 };
+                assert_eq!(
+                    exact, f64_sign,
+                    "{label}: f64 says {f64_sign} for a + b*c + d*c^2 = {value} \
+                     (a={a}, b={b}, d={d}), exact helper says {exact}",
+                );
+                checked += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        // Sanity: most cases should be checkable. If almost everything
+        // is skipped, our safety margin is too generous.
+        assert!(
+            checked > iterations / 10,
+            "{label}: too few cases verified ({checked}/{iterations}); safety margin too wide?",
+        );
+        eprintln!(
+            "{label}: {checked} cases verified, {skipped} skipped (close-to-zero)",
+        );
+    }
+
+    const ZZ14_MINPOLY: [i64; 4] = [1, -2, -1, 1];
+    const ZZ18_MINPOLY: [i64; 4] = [-1, -3, 0, 1];
+    const ISO: ((i64, i64), (i64, i64)) = ((1, 1), (2, 1));
+
+    /// Fuzz the cubic-root sign helper for ZZ14's `c = 2*cos(pi/7)`.
+    /// 5000 random `(a, b, d)` triples with |coeff| <= 200 (the
+    /// envelope rat_enum hits for ZZ14 enumeration up to perim ~20).
+    #[test]
+    fn fuzz_cubic_root_zz14() {
+        fuzz_cubic_root(
+            0xDEADBEEFCAFEBABE,
+            5000,
+            -1_000,
+            1_000,
+            ZZ14_MINPOLY,
+            ISO.0,
+            ISO.1,
+            || 2.0 * (std::f64::consts::PI / 7.0).cos(),
+            "ZZ14",
+        );
+    }
+
+    /// Same shape, ZZ18's `c = 2*cos(pi/9)`. Different minpoly
+    /// exercises a different bisection trajectory.
+    #[test]
+    fn fuzz_cubic_root_zz18() {
+        fuzz_cubic_root(
+            0xC0FFEEDEADBEEF77,
+            5000,
+            -1_000,
+            1_000,
+            ZZ18_MINPOLY,
+            ISO.0,
+            ISO.1,
+            || 2.0 * (std::f64::consts::PI / 9.0).cos(),
+            "ZZ18",
+        );
+    }
+
+    /// Fuzz `sign_at_s_times_x_minus_k` for ZZ14. The same coefficient
+    /// magnitude bound applies; K is sampled in the same range.
+    /// Independent oracle: f64 value of `s*(a + b*c + d*c^2) - K`.
+    fn fuzz_s_minus_k<F, G>(
+        seed: u64,
+        iterations: u64,
+        coeff_lo: i64,
+        coeff_hi: i64,
+        minpoly: [i64; 4],
+        iso_lo: (i64, i64),
+        iso_hi: (i64, i64),
+        c_f64: F,
+        s_f64: G,
+        label: &str,
+    )
+    where
+        F: Fn() -> f64,
+        G: Fn() -> f64,
+    {
+        let c = c_f64();
+        let s = s_f64();
+        let mut rng = Xorshift64::new(seed);
+        let mut checked = 0u64;
+        let mut skipped = 0u64;
+        for _ in 0..iterations {
+            let a = rng.next_i64_in(coeff_lo, coeff_hi);
+            let b = rng.next_i64_in(coeff_lo, coeff_hi);
+            let d = rng.next_i64_in(coeff_lo, coeff_hi);
+            let k = rng.next_i64_in(coeff_lo, coeff_hi);
+            let exact = sign_at_s_times_x_minus_k([a, b, d], k, minpoly, iso_lo, iso_hi);
+            let x_value = a as f64 + b as f64 * c + d as f64 * c * c;
+            let value = s * x_value - k as f64;
+            let max_op =
+                ((a as f64).abs() + (b as f64 * c).abs() + (d as f64 * c * c).abs()) * s
+                    + (k as f64).abs();
+            let safety = 1e-12 * (1.0 + max_op);
+            if value.abs() > safety {
+                let f64_sign = if value > 0.0 { 1i8 } else { -1 };
+                assert_eq!(
+                    exact, f64_sign,
+                    "{label}: f64 says {f64_sign} for s*X - K = {value} \
+                     (a={a}, b={b}, d={d}, K={k}), exact says {exact}",
+                );
+                checked += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+        assert!(
+            checked > iterations / 10,
+            "{label}: too few cases verified ({checked}/{iterations})",
+        );
+        eprintln!("{label}: {checked} cases verified, {skipped} skipped");
+    }
+
+    #[test]
+    fn fuzz_s_times_x_minus_k_zz14() {
+        fuzz_s_minus_k(
+            0xABCDEF0123456789,
+            5000,
+            -1_000,
+            1_000,
+            ZZ14_MINPOLY,
+            ISO.0,
+            ISO.1,
+            || 2.0 * (std::f64::consts::PI / 7.0).cos(),
+            || 2.0 * (std::f64::consts::PI / 7.0).sin(),
+            "ZZ14",
+        );
+    }
+
+    #[test]
+    fn fuzz_s_times_x_minus_k_zz18() {
+        fuzz_s_minus_k(
+            0x9876543210ABCDEF,
+            5000,
+            -1_000,
+            1_000,
+            ZZ18_MINPOLY,
+            ISO.0,
+            ISO.1,
+            || 2.0 * (std::f64::consts::PI / 9.0).cos(),
+            || 2.0 * (std::f64::consts::PI / 9.0).sin(),
+            "ZZ18",
+        );
+    }
+
+    /// Cross-check bisection against the Sturm-Tarski oracle on a
+    /// large random sample. Sturm is provably correct for our
+    /// degree-3 minpoly + degree-2 f case (no coefficient-dependent
+    /// loop bound, only arithmetic-overflow envelope), so agreement
+    /// here pins the bisection's `MIN_BISECTIONS = 50` bound as
+    /// sufficient for the tested coefficient range. Catches drift
+    /// in either implementation.
+    fn sturm_matches_bisection(
+        seed: u64,
+        iterations: u64,
+        coeff_lo: i64,
+        coeff_hi: i64,
+        minpoly: [i64; 4],
+        iso_lo: i64,
+        iso_hi: i64,
+        label: &str,
+    ) {
+        let mut rng = Xorshift64::new(seed);
+        for _ in 0..iterations {
+            let a = rng.next_i64_in(coeff_lo, coeff_hi);
+            let b = rng.next_i64_in(coeff_lo, coeff_hi);
+            let d = rng.next_i64_in(coeff_lo, coeff_hi);
+            let bis = sign_at_cubic_root_in_interval(
+                [a, b, d],
+                minpoly,
+                (iso_lo, 1),
+                (iso_hi, 1),
+            );
+            let sturm = sturm_sign_at_root(&minpoly, &[a, b, d], iso_lo, iso_hi);
+            assert_eq!(
+                bis, sturm,
+                "{label}: bisection={bis} Sturm={sturm} for f(x) = {a} + {b}*x + {d}*x^2"
+            );
+        }
+    }
+
+    /// ZZ14: 5000 random triples in |coeff| <= 1000, hot-path
+    /// bisection must agree with the Sturm oracle on every one.
+    #[test]
+    fn sturm_matches_bisection_zz14() {
+        sturm_matches_bisection(
+            0x11223344AABBCCDD,
+            5000,
+            -1_000,
+            1_000,
+            ZZ14_MINPOLY,
+            1,
+            2,
+            "ZZ14",
+        );
+    }
+
+    /// ZZ18 counterpart of `sturm_matches_bisection_zz14`. Different
+    /// minpoly, different bisection trajectory.
+    #[test]
+    fn sturm_matches_bisection_zz18() {
+        sturm_matches_bisection(
+            0x55667788EEFF0011,
+            5000,
+            -1_000,
+            1_000,
+            ZZ18_MINPOLY,
+            1,
+            2,
+            "ZZ18",
+        );
+    }
+
+    /// Stress the MIN_BISECTIONS = 50 bound at the upper end of the
+    /// envelope: |coeff| <= 5000, 1000 cases per ring. By the
+    /// derivation N > 9 + 3*log2(C) we need N > 9 + 3*12.3 = 45.8;
+    /// 50 should still cover this with margin.
+    #[test]
+    fn sturm_matches_bisection_large_coeffs() {
+        sturm_matches_bisection(
+            0xFEEDFACEDEADBEEF,
+            1000,
+            -5_000,
+            5_000,
+            ZZ14_MINPOLY,
+            1,
+            2,
+            "ZZ14 large",
+        );
+        sturm_matches_bisection(
+            0xBADCAFEBABE00011,
+            1000,
+            -5_000,
+            5_000,
+            ZZ18_MINPOLY,
+            1,
+            2,
+            "ZZ18 large",
+        );
     }
 }

@@ -103,9 +103,19 @@ macro_rules! dispatch_ring {
                 #[allow(dead_code)] const PHI: usize = 4;
                 $body
             }
+            14 => {
+                #[allow(dead_code)] type ZZ = $crate::cyclotomic::ZZ14;
+                #[allow(dead_code)] const PHI: usize = 6;
+                $body
+            }
             16 => {
                 #[allow(dead_code)] type ZZ = $crate::cyclotomic::ZZ16;
                 #[allow(dead_code)] const PHI: usize = 8;
+                $body
+            }
+            18 => {
+                #[allow(dead_code)] type ZZ = $crate::cyclotomic::ZZ18;
+                #[allow(dead_code)] const PHI: usize = 6;
                 $body
             }
             20 => {
@@ -136,7 +146,7 @@ macro_rules! dispatch_ring {
 /// The set of ring numbers `dispatch_ring!` knows about. Useful for
 /// CLI argument validation, doc generation, and tests that iterate
 /// over every supported ring.
-pub const SUPPORTED_RINGS: [u8; 10] = [4, 6, 8, 10, 12, 16, 20, 24, 32, 60];
+pub const SUPPORTED_RINGS: [u8; 12] = [4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 32, 60];
 
 #[cfg(test)]
 mod tests {
@@ -178,6 +188,7 @@ mod tests {
         match ring {
             4 | 6 => 2,
             8 | 10 | 12 => 4,
+            14 | 18 => 6,
             16 | 20 | 24 => 8,
             32 | 60 => 16,
             _ => panic!("unreachable"),

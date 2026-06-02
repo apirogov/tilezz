@@ -815,6 +815,533 @@ impl crate::cyclotomic::CellFloor for ZZ12 {
 crate::zz_integral_ring_tests!(name: ZZ12);
 
 // ----------------
+// ZZ14 -- heptagonal-ish integers Z[zeta_14].
+//
+// `zeta = e^(2*pi*i/14) = e^(i*pi/7)`, `Phi_14(x) = x^6 - x^5 + x^4 - x^3 + x^2 - x + 1`,
+// so `zeta^6 = zeta^5 - zeta^4 + zeta^3 - zeta^2 + zeta - 1`. Storage:
+// `[i64; 6]` over `{1, zeta, ..., zeta^5}`. ZZ14 does *not* contain `i`
+// (zeta_4 is not in this ring), so there is no `From<(i64, i64)>` impl
+// and the `CellFloor` is hand-rolled, mirroring the ZZ10 pattern.
+//
+// The real subring is `Z[c]` of rank 3 where `c = 2*cos(pi/7)` is a
+// root of the irreducible cubic `c^3 - c^2 - 2c + 1 = 0`. There is no
+// nested-square-root expression for `c`, so none of the
+// `signum_sum_sqrt_expr_*` helpers in `sign.rs` apply. Sign extraction
+// uses [`sign_at_cubic_root_in_interval`] (rational-interval bisection)
+// and, for the imaginary axis, [`sign_at_s_times_x_minus_k`] (squared-
+// magnitude reduction). Both are sympy-verified exact and avoid f64.
+//
+// Basis for the real/imag decomposition tables: `{1, c, c^2, s, c*s,
+// c^2*s}` where `s = 2*sin(pi/7)` and `s^2 = 4 - c^2`. The first three
+// span the real subring `Z[c]`; the last three are `s` times the same.
+// Implicit `/2` denominator throughout.
+
+const ZZ14_CARTESIAN: [Complex64; 6] = {
+    // cos(k*pi/7) and sin(k*pi/7) for k = 0..5, computed at high
+    // precision and embedded as f64 literals. Used only for the f64
+    // projection `complex64()`; algebraic sign extraction is exact.
+    [
+        Complex64::new(1.0, 0.0),                       // zeta^0
+        Complex64::new(0.9009688679024191, 0.4338837391175581),  // zeta^1
+        Complex64::new(0.6234898018587336, 0.7818314824680298),  // zeta^2
+        Complex64::new(0.22252093395631434, 0.9749279121818236), // zeta^3
+        Complex64::new(-0.22252093395631434, 0.9749279121818236),// zeta^4
+        Complex64::new(-0.6234898018587336, 0.7818314824680298), // zeta^5
+    ]
+};
+
+#[inline]
+fn zz14_complex64(coeffs: &[i64; 6]) -> Complex64 {
+    let mut re = 0.0_f64;
+    let mut im = 0.0_f64;
+    for (k, &ck) in coeffs.iter().enumerate() {
+        let ck = ck as f64;
+        re += ck * ZZ14_CARTESIAN[k].re;
+        im += ck * ZZ14_CARTESIAN[k].im;
+    }
+    Complex64::new(re, im)
+}
+
+/// Display for ZZ14: project to (Ratio, Ratio) pairs against the
+/// symbolic 6-element basis `{1, c, c^2, s, c*s, c^2*s}` with implicit
+/// `/2`. For each `i` in `0..6` of `int_coeffs`, distribute its
+/// contribution across the basis via `re_decomp` and `im_decomp` rows
+/// (the per-element values are pre-tabulated by the macro).
+fn zz14_display(coeffs: &[i64; 6], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [c0, c1, c2, c3, c4, c5] = *coeffs;
+    let half = Ratio::<i64>::new_raw(1, 2);
+
+    // Real part components in basis {1, c, c^2}: m0 + m1*c + m2*c^2, all /2.
+    let m0 = Ratio::<i64>::from_integer(2 * c0 - 2 * c2 - c3 + c4 + 2 * c5) * half;
+    let m1 = Ratio::<i64>::from_integer(c1 - c3 + c4) * half;
+    let m2 = Ratio::<i64>::from_integer(c2 + c3 - c4 - c5) * half;
+    // Imag part components in basis {s, c*s, c^2*s}: n0 + n1*c + n2*c^2 prefixed with s,
+    // each /2 implicit.
+    let n0 = Ratio::<i64>::from_integer(c1 - c3 - c4) * half;
+    let n1 = Ratio::<i64>::from_integer(c2 + c5) * half;
+    let n2 = Ratio::<i64>::from_integer(c3 + c4) * half;
+
+    let c_pair_1 = gpair(m0, Ratio::<i64>::from_integer(0));
+    let c_pair_c = gpair(m1, Ratio::<i64>::from_integer(0));
+    let c_pair_c2 = gpair(m2, Ratio::<i64>::from_integer(0));
+    let c_pair_s = gpair(Ratio::<i64>::from_integer(0), n0);
+    let c_pair_cs = gpair(Ratio::<i64>::from_integer(0), n1);
+    let c_pair_c2s = gpair(Ratio::<i64>::from_integer(0), n2);
+
+    format_symbolic(
+        &[c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s],
+        &["1", "c7", "c7^2", "s7", "c7*s7", "c7^2*s7"],
+        f,
+    )
+}
+
+/// ZZ14 minimal polynomial of `c = 2*cos(pi/7)`: `c^3 - c^2 - 2c + 1`.
+/// Coefficient order is `[m0, m1, m2, m3]` for `m0 + m1*c + m2*c^2 + m3*c^3 = 0`.
+const ZZ14_MINPOLY: [i64; 4] = [1, -2, -1, 1];
+/// Isolating interval `(1, 2)` for `c = 2*cos(pi/7) ≈ 1.802`. The
+/// other two roots of the minpoly (`2*cos(3*pi/7) ≈ 0.445` and
+/// `2*cos(5*pi/7) ≈ -1.247`) lie outside `(1, 2)`.
+const ZZ14_ISO_LO: (i64, i64) = (1, 1);
+const ZZ14_ISO_HI: (i64, i64) = (2, 1);
+
+/// ZZ14 real-subring K=6 sign function.
+///
+/// The 6-element K-vector `[a, b, d, e, f, g]` represents
+/// `(a + b*c + d*c^2) + s*(e + f*c + g*c^2)` in the basis
+/// `{1, c, c^2, s, c*s, c^2*s}`. In production callers
+/// (`re_sign_basis` / `im_sign_basis` from `integral_basis.rs`), one
+/// of the two halves is always zero -- the projection lands either
+/// entirely in the real subring (first 3 nonzero) or entirely in the
+/// `s`-prefixed subspace (last 3 nonzero). The mixed case isn't
+/// currently exercised by the DFS and panics if encountered (so a
+/// regression flagging it is visible rather than silent).
+fn zz14_real_sign(x: &[i64; 6]) -> i8 {
+    let [a, b, d, e, f, g] = *x;
+    let real_zero = a == 0 && b == 0 && d == 0;
+    let s_zero = e == 0 && f == 0 && g == 0;
+    if real_zero && s_zero {
+        return 0;
+    }
+    if s_zero {
+        return crate::cyclotomic::sign::sign_at_cubic_root_in_interval(
+            [a, b, d],
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        );
+    }
+    if real_zero {
+        // s > 0, so sign(s * X) = sign(X).
+        return crate::cyclotomic::sign::sign_at_cubic_root_in_interval(
+            [e, f, g],
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        );
+    }
+    // Mixed: would need sign((A + s*B)) where both halves nonzero.
+    // The reduction is (4 - c^2) * B^2 vs A^2; achievable but the DFS
+    // doesn't currently produce this combination, so we panic to make
+    // a future regression visible.
+    panic!(
+        "zz14_real_sign called with mixed real+imaginary K-vector: {:?} -- \
+         the DFS shouldn't produce this; please investigate the caller",
+        x
+    );
+}
+
+define_integral_zz! {
+    name: ZZ14,
+    n: 14,
+    phi: 6,
+    real_dim: 6,
+    // Phi_14(x) = x^6 - x^5 + x^4 - x^3 + x^2 - x + 1, so
+    // zeta^6 = -1 + zeta - zeta^2 + zeta^3 - zeta^4 + zeta^5.
+    reduction: [-1i64, 1, -1, 1, -1, 1],
+    // Re(zeta^k) in basis {1, c, c^2} (first 3 slots), implicit /2:
+    //   Re(zeta^0) = 1                = [2, 0, 0]/2
+    //   Re(zeta^1) = cos(pi/7) = c/2  = [0, 1, 0]/2
+    //   Re(zeta^2) = (c^2 - 2)/2      = [-2, 0, 1]/2
+    //   Re(zeta^3) = (c^2 - c - 1)/2  = [-1, -1, 1]/2
+    //   Re(zeta^4) = -Re(zeta^3)      = [1, 1, -1]/2
+    //   Re(zeta^5) = -Re(zeta^2)      = [2, 0, -1]/2
+    re_decomp: [
+        [2i64, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+        [-2, 0, 1, 0, 0, 0],
+        [-1, -1, 1, 0, 0, 0],
+        [1, 1, -1, 0, 0, 0],
+        [2, 0, -1, 0, 0, 0],
+    ],
+    // Im(zeta^k) in basis {s, c*s, c^2*s} (last 3 slots), implicit /2:
+    //   Im(zeta^0) = 0                          = [0, 0, 0]/2
+    //   Im(zeta^1) = sin(pi/7) = s/2            = [1, 0, 0]/2
+    //   Im(zeta^2) = sin(2*pi/7) = c*s/2        = [0, 1, 0]/2
+    //   Im(zeta^3) = sin(3*pi/7) = (c^2*s - s)/2= [-1, 0, 1]/2
+    //   Im(zeta^4) = Im(zeta^3)                 = [-1, 0, 1]/2
+    //   Im(zeta^5) = Im(zeta^2)                 = [0, 1, 0]/2
+    im_decomp: [
+        [0i64, 0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0],
+        [0, 0, 0, -1, 0, 1],
+        [0, 0, 0, -1, 0, 1],
+        [0, 0, 0, 0, 1, 0],
+    ],
+    cartesian: ZZ14_CARTESIAN,
+    one_in_real_basis: [2i64, 0, 0, 0, 0, 0],
+    display_fn: zz14_display,
+    complex64_fn: zz14_complex64,
+    has: [],
+}
+
+crate::impl_integral_units_via_basis!(ZZ14, 14);
+crate::impl_integral_mul_via_basis!(ZZ14, 6);
+crate::impl_integral_conj_via_basis!(ZZ14, 6);
+crate::impl_integral_re_im_sign_via_basis!(ZZ14, 6, 6, zz14_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ14, 6, 6, zz14_real_sign);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ14);
+
+/// Hand-rolled `CellFloor` for ZZ14 (no `i` in the ring, mirroring the
+/// ZZ10 pattern but with cubic-root-based sign helpers).
+impl crate::cyclotomic::CellFloor for ZZ14 {
+    #[inline]
+    fn cell_floor_exact(&self) -> (i64, i64) {
+        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
+        use crate::cyclotomic::SymNum;
+        let [c0, c1, c2, c3, c4, c5] = self.int_coeffs();
+        // Re(z) = (m0 + m1*c + m2*c^2) / 2.
+        let m0 = 2 * c0 - 2 * c2 - c3 + c4 + 2 * c5;
+        let m1 = c1 - c3 + c4;
+        let m2 = c2 + c3 - c4 - c5;
+        // Im(z) = s * (n0 + n1*c + n2*c^2) / 2.
+        let n0 = c1 - c3 - c4;
+        let n1 = c2 + c5;
+        let n2 = c3 + c4;
+
+        let cf = self.complex64();
+        let mut cx = cf.re.floor() as i64;
+        let mut cy = cf.im.floor() as i64;
+
+        // Re axis: refine cx until cx <= Re(z) < cx + 1.
+        // Re(z) - cx = ((m0 - 2*cx) + m1*c + m2*c^2) / 2.
+        while sign_at_cubic_root_in_interval(
+            [m0 - 2 * cx, m1, m2],
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        ) < 0
+        {
+            cx -= 1;
+        }
+        while sign_at_cubic_root_in_interval(
+            [m0 - 2 * (cx + 1), m1, m2],
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        ) >= 0
+        {
+            cx += 1;
+        }
+
+        // Im axis: Im(z) = s * X / 2 where X = n0 + n1*c + n2*c^2.
+        // Im(z) - cy = (s*X - 2*cy) / 2.
+        while sign_at_s_times_x_minus_k(
+            [n0, n1, n2],
+            2 * cy,
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        ) < 0
+        {
+            cy -= 1;
+        }
+        while sign_at_s_times_x_minus_k(
+            [n0, n1, n2],
+            2 * (cy + 1),
+            ZZ14_MINPOLY,
+            ZZ14_ISO_LO,
+            ZZ14_ISO_HI,
+        ) >= 0
+        {
+            cy += 1;
+        }
+
+        (cx, cy)
+    }
+
+    /// Override the default `cell_floor` (which floors the f64
+    /// projection) because ZZ14 lattice points combine 6 basis
+    /// components and the f64 sum suffers from cancellation when
+    /// terms align to land exactly on an integer cell boundary --
+    /// the floor then lands on the wrong side. The exact bisection
+    /// is the only safe answer. Slower than the f64 path, but ZZ14
+    /// isn't on the rat_enum hot path the way ZZ12 is.
+    #[inline]
+    fn cell_floor(&self) -> (i64, i64) {
+        self.cell_floor_exact()
+    }
+}
+
+crate::zz_integral_ring_tests!(name: ZZ14);
+
+// ----------------
+// ZZ18 -- nonagonal-ish integers Z[zeta_18].
+//
+// `zeta = e^(2*pi*i/18) = e^(i*pi/9)`, `Phi_18(x) = x^6 - x^3 + 1`, so
+// `zeta^6 = -1 + zeta^3`. Storage: `[i64; 6]` over `{1, zeta, ..., zeta^5}`.
+// ZZ18 contains ZZ6 (since 6 | 18), but does *not* contain `i` (4 does
+// not divide 18). Hand-rolled `CellFloor`, mirroring ZZ14.
+//
+// The real subring is `Z[c]` of rank 3 where `c = 2*cos(pi/9)` is a
+// root of the irreducible cubic `c^3 - 3c - 1 = 0`. Same algebraic
+// shape as ZZ14 (irreducible-cubic minpoly), so the cubic-root and
+// multivariate sign helpers from `sign.rs` apply directly -- only the
+// minpoly coefficients differ.
+//
+// Basis for the real/imag decomposition: `{1, c, c^2, s, c*s, c^2*s}`
+// where `s = 2*sin(pi/9)` and `s^2 = 4 - c^2`. Implicit `/2`.
+
+const ZZ18_CARTESIAN: [Complex64; 6] = {
+    // cos(k*pi/9) and sin(k*pi/9) for k = 0..5.
+    //
+    // zeta^0 = 1                  -- both components exactly representable.
+    // zeta^3 = (1/2, sqrt(3)/2)   -- Re is exactly representable in f64,
+    //                                so hard-coded as 0.5 (not the Python-
+    //                                computed 0.5000000000000001 which has
+    //                                1-ULP error). Im uses the existing
+    //                                HALF_SQRT_3 constant from ZZ12.
+    //
+    // The hard-coded 0.5 matters for lattice points like `3 - 2*zeta^3 =
+    // (2, -sqrt(3))` which have Re landing EXACTLY on an integer cell
+    // boundary. With the 1-ULP-off table value, the f64 fast path of
+    // `cell_floor` underestimates Re by ~2e-16 and crosses to the wrong
+    // cell, which then disagrees with the exact path's correct answer.
+    const HALF_SQRT_3: f64 = 0.866_025_403_784_438_6_f64;
+    [
+        Complex64::new(1.0, 0.0),                                // zeta^0
+        Complex64::new(0.9396926207859084, 0.3420201433256687),  // zeta^1
+        Complex64::new(0.766044443118978, 0.6427876096865393),   // zeta^2
+        Complex64::new(0.5, HALF_SQRT_3),                        // zeta^3
+        Complex64::new(0.17364817766693041, 0.984807753012208),  // zeta^4
+        Complex64::new(-0.17364817766693036, 0.984807753012208), // zeta^5
+    ]
+};
+
+#[inline]
+fn zz18_complex64(coeffs: &[i64; 6]) -> Complex64 {
+    let mut re = 0.0_f64;
+    let mut im = 0.0_f64;
+    for (k, &ck) in coeffs.iter().enumerate() {
+        let ck = ck as f64;
+        re += ck * ZZ18_CARTESIAN[k].re;
+        im += ck * ZZ18_CARTESIAN[k].im;
+    }
+    Complex64::new(re, im)
+}
+
+fn zz18_display(coeffs: &[i64; 6], f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let [c0, c1, c2, c3, c4, c5] = *coeffs;
+    let half = Ratio::<i64>::new_raw(1, 2);
+
+    // Re(z) components against basis {1, c, c^2}, implicit /2.
+    // From sympy-derived re_decomp:
+    //   m0 = 2*c0 - 2*c2 + c3 + 2*c4 - 2*c5
+    //   m1 = c1 + c4 - c5
+    //   m2 = c2 - c4 + c5
+    let m0 = Ratio::<i64>::from_integer(2 * c0 - 2 * c2 + c3 + 2 * c4 - 2 * c5) * half;
+    let m1 = Ratio::<i64>::from_integer(c1 + c4 - c5) * half;
+    let m2 = Ratio::<i64>::from_integer(c2 - c4 + c5) * half;
+    // Im(z) components against basis {s, c*s, c^2*s}, implicit /2.
+    // From sympy-derived im_decomp:
+    //   n0 = c1 - c3 + c4 + c5
+    //   n1 = c2 + c4 + c5
+    //   n2 = c3
+    let n0 = Ratio::<i64>::from_integer(c1 - c3 + c4 + c5) * half;
+    let n1 = Ratio::<i64>::from_integer(c2 + c4 + c5) * half;
+    let n2 = Ratio::<i64>::from_integer(c3) * half;
+
+    let c_pair_1 = gpair(m0, Ratio::<i64>::from_integer(0));
+    let c_pair_c = gpair(m1, Ratio::<i64>::from_integer(0));
+    let c_pair_c2 = gpair(m2, Ratio::<i64>::from_integer(0));
+    let c_pair_s = gpair(Ratio::<i64>::from_integer(0), n0);
+    let c_pair_cs = gpair(Ratio::<i64>::from_integer(0), n1);
+    let c_pair_c2s = gpair(Ratio::<i64>::from_integer(0), n2);
+
+    format_symbolic(
+        &[c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s],
+        &["1", "c9", "c9^2", "s9", "c9*s9", "c9^2*s9"],
+        f,
+    )
+}
+
+/// ZZ18 minimal polynomial of `c = 2*cos(pi/9)`: `c^3 - 3c - 1 = 0`.
+const ZZ18_MINPOLY: [i64; 4] = [-1, -3, 0, 1];
+/// Isolating interval `(1, 2)` for `c ≈ 1.879`. The other two roots
+/// (`2*cos(7*pi/9) ≈ -1.532`, `2*cos(5*pi/9) ≈ -0.347`) lie outside.
+const ZZ18_ISO_LO: (i64, i64) = (1, 1);
+const ZZ18_ISO_HI: (i64, i64) = (2, 1);
+
+fn zz18_real_sign(x: &[i64; 6]) -> i8 {
+    let [a, b, d, e, f, g] = *x;
+    let real_zero = a == 0 && b == 0 && d == 0;
+    let s_zero = e == 0 && f == 0 && g == 0;
+    if real_zero && s_zero {
+        return 0;
+    }
+    if s_zero {
+        return crate::cyclotomic::sign::sign_at_cubic_root_in_interval(
+            [a, b, d],
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        );
+    }
+    if real_zero {
+        return crate::cyclotomic::sign::sign_at_cubic_root_in_interval(
+            [e, f, g],
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        );
+    }
+    panic!(
+        "zz18_real_sign called with mixed real+imaginary K-vector: {:?} -- \
+         the DFS shouldn't produce this; please investigate the caller",
+        x
+    );
+}
+
+define_integral_zz! {
+    name: ZZ18,
+    n: 18,
+    phi: 6,
+    real_dim: 6,
+    // Phi_18(x) = x^6 - x^3 + 1, so zeta^6 = -1 + zeta^3.
+    reduction: [-1i64, 0, 0, 1, 0, 0],
+    // Re(zeta^k) in basis {1, c, c^2}, implicit /2 -- sympy-derived:
+    //   Re(zeta^0) = 1                  = [2, 0, 0]/2
+    //   Re(zeta^1) = c/2                = [0, 1, 0]/2
+    //   Re(zeta^2) = (c^2 - 2)/2        = [-2, 0, 1]/2
+    //   Re(zeta^3) = 1/2                = [1, 0, 0]/2
+    //   Re(zeta^4) = (2 + c - c^2)/2    = [2, 1, -1]/2
+    //   Re(zeta^5) = (c^2 - c - 2)/2    = [-2, -1, 1]/2
+    re_decomp: [
+        [2i64, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+        [-2, 0, 1, 0, 0, 0],
+        [1, 0, 0, 0, 0, 0],
+        [2, 1, -1, 0, 0, 0],
+        [-2, -1, 1, 0, 0, 0],
+    ],
+    // Im(zeta^k) in basis {s, c*s, c^2*s}, implicit /2 -- sympy-derived:
+    //   Im(zeta^0) = 0                  = [0, 0, 0]/2
+    //   Im(zeta^1) = s/2                = [1, 0, 0]/2
+    //   Im(zeta^2) = c*s/2              = [0, 1, 0]/2
+    //   Im(zeta^3) = (c^2*s - s)/2      = [-1, 0, 1]/2
+    //   Im(zeta^4) = (s + c*s)/2        = [1, 1, 0]/2
+    //   Im(zeta^5) = (s + c*s)/2        = [1, 1, 0]/2
+    im_decomp: [
+        [0i64, 0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, 0, 1, 0],
+        [0, 0, 0, -1, 0, 1],
+        [0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 1, 1, 0],
+    ],
+    cartesian: ZZ18_CARTESIAN,
+    one_in_real_basis: [2i64, 0, 0, 0, 0, 0],
+    display_fn: zz18_display,
+    complex64_fn: zz18_complex64,
+    has: [HasZZ6Impl],
+}
+
+crate::impl_integral_units_via_basis!(ZZ18, 18);
+crate::impl_integral_mul_via_basis!(ZZ18, 6);
+crate::impl_integral_conj_via_basis!(ZZ18, 6);
+crate::impl_integral_re_im_sign_via_basis!(ZZ18, 6, 6, zz18_real_sign);
+crate::impl_integral_intersect_unit_segments_via_basis!(ZZ18, 6, 6, zz18_real_sign);
+crate::impl_integral_within_radius_via_norm_sq!(ZZ18);
+
+/// Hand-rolled `CellFloor` for ZZ18 -- same shape as ZZ14, different
+/// minpoly + isolating interval.
+impl crate::cyclotomic::CellFloor for ZZ18 {
+    #[inline]
+    fn cell_floor_exact(&self) -> (i64, i64) {
+        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
+        use crate::cyclotomic::SymNum;
+        let [c0, c1, c2, c3, c4, c5] = self.int_coeffs();
+        // Re(z) = (m0 + m1*c + m2*c^2) / 2  with c = 2*cos(pi/9).
+        let m0 = 2 * c0 - 2 * c2 + c3 + 2 * c4 - 2 * c5;
+        let m1 = c1 + c4 - c5;
+        let m2 = c2 - c4 + c5;
+        // Im(z) = s * (n0 + n1*c + n2*c^2) / 2.
+        let n0 = c1 - c3 + c4 + c5;
+        let n1 = c2 + c4 + c5;
+        let n2 = c3;
+
+        let cf = self.complex64();
+        let mut cx = cf.re.floor() as i64;
+        let mut cy = cf.im.floor() as i64;
+
+        // Re axis: refine cx until cx <= Re(z) < cx + 1.
+        while sign_at_cubic_root_in_interval(
+            [m0 - 2 * cx, m1, m2],
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        ) < 0
+        {
+            cx -= 1;
+        }
+        while sign_at_cubic_root_in_interval(
+            [m0 - 2 * (cx + 1), m1, m2],
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        ) >= 0
+        {
+            cx += 1;
+        }
+
+        // Im axis: s*X - 2*cy.
+        while sign_at_s_times_x_minus_k(
+            [n0, n1, n2],
+            2 * cy,
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        ) < 0
+        {
+            cy -= 1;
+        }
+        while sign_at_s_times_x_minus_k(
+            [n0, n1, n2],
+            2 * (cy + 1),
+            ZZ18_MINPOLY,
+            ZZ18_ISO_LO,
+            ZZ18_ISO_HI,
+        ) >= 0
+        {
+            cy += 1;
+        }
+
+        (cx, cy)
+    }
+
+    /// Override the default `cell_floor`: see the equivalent
+    /// ZZ14 comment. ZZ18 hits the cancellation case more often
+    /// because it contains ZZ6 (`6 | 18`) and inherits the
+    /// rationally-aligned sub-lattice.
+    #[inline]
+    fn cell_floor(&self) -> (i64, i64) {
+        self.cell_floor_exact()
+    }
+}
+
+crate::zz_integral_ring_tests!(name: ZZ18);
+
+// ----------------
 // ZZ24 -- digiclock integers Z[zeta_24].
 //
 // `zeta = e^(2*pi*i/24) = cos(15) + i*sin(15)`, `Phi_24(x) = x^8 - x^4 + 1`,

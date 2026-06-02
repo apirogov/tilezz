@@ -88,27 +88,20 @@ use tilezz::rat_enum::run_rat_enum_seqs;
 use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_from_seed};
 use tilezz::stringmatch::RatDafsa;
 
-// Test-only imports. The two private test helpers below (`rat_enum`,
-// `rat_enum_dihedral`) and the `dihedral_tests` / `opt_correctness_tests`
-// modules pull these via `super::*`; in production code none of these
-// is referenced from the binary.
+// Test-only imports needed by the file-top helpers (`rat_enum`,
+// `rat_enum_dihedral`) which the test modules call via `super::`.
+// Imports used *only* inside a specific test module live inside that
+// module's `use super::*;` block rather than at file top.
 #[cfg(test)]
 use std::collections::HashSet;
 #[cfg(test)]
-use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
+use tilezz::cyclotomic::IsRing;
 #[cfg(test)]
 use tilezz::rat_enum::canonical::{dihedral_canonical, make_ops};
 #[cfg(test)]
 use tilezz::rat_enum::dfs::rat_enum_with;
 #[cfg(test)]
-use tilezz::rat_enum::prune::{
-    closure_key::{collect_closure_keys, ClosureKeyPrune},
-    modular::ModularPrune,
-    units::unit_vectors_for_ring,
-    Prunes,
-};
-#[cfg(test)]
-use tilezz::rat_enum::seed::rat_enum_parallel;
+use tilezz::rat_enum::prune::Prunes;
 #[cfg(test)]
 use tilezz::rat_enum::stats::DfsStats;
 use tilezz::vis::animation::render_gif;
@@ -1087,6 +1080,11 @@ mod dihedral_tests {
 mod opt_correctness_tests {
     use super::*;
     use std::sync::Arc;
+    use tilezz::cyclotomic::{ZZ10, ZZ12, ZZ14, ZZ18, ZZ4, ZZ6, ZZ8};
+    use tilezz::rat_enum::prune::closure_key::{collect_closure_keys, ClosureKeyPrune};
+    use tilezz::rat_enum::prune::modular::ModularPrune;
+    use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
+    use tilezz::rat_enum::seed::rat_enum_parallel;
 
     /// Dispatch helper: collect closure keys for `ring` up to length
     /// `max_l`. Mirrors the per-ring match in `install_closure_key_prune`.
@@ -1185,6 +1183,89 @@ mod opt_correctness_tests {
         // which is the bug-sensitive range (T-touches first occur
         // at n=9 -- see the historical note in test_oeis_a316192_zz12).
         check_ring::<ZZ12>(12, 8);
+    }
+
+    #[test]
+    fn cross_validate_zz14() {
+        // Capped at n=7 for runtime budget. ZZ14 has no OEIS oracle
+        // for the full-ring counts (A316197 is the bipartite subset),
+        // so cross-prune correctness is the strongest independent
+        // check we have. Even at n=7, the 32-combo matrix verifies
+        // that the cubic-root-based real_sign + multivariate-sign
+        // CellFloor produce a consistent rat set across all prune
+        // subsets.
+        check_ring::<ZZ14>(14, 7);
+    }
+
+    #[test]
+    fn cross_validate_zz18() {
+        // ZZ18 shares the cubic-root sign infrastructure with ZZ14
+        // (different minpoly, same algorithm). Same runtime-budget
+        // cap; no OEIS oracle for full-ring counts (A316199 is the
+        // bipartite subset).
+        check_ring::<ZZ18>(18, 7);
+    }
+
+    /// **External verification of ZZ18's sign infrastructure** via a
+    /// completely independent code path. ZZ18 contains ZZ6 (since
+    /// `6 | 18`), and `--step 3` on ZZ18 restricts the DFS to turns
+    /// that are multiples of `pi/3` -- which is exactly ZZ6's unit
+    /// turn angle. So ZZ18-step-3 enumerates the same polygons as
+    /// ZZ6-step-1, but through ZZ18's algebraic machinery (cubic-
+    /// root sign helper, multivariate sign helper, custom CellFloor).
+    ///
+    /// ZZ6 is OEIS-pinned to A284869 (12 published terms verified by
+    /// `oeis_a284869_zz6_pin`). If ZZ18-step-3 matches ZZ6, that
+    /// transitively verifies ZZ18's sign machinery against external
+    /// data -- otherwise the only oracle for ZZ18 is internal cross-
+    /// prune consistency, which uses the same sign code throughout
+    /// and so couldn't catch a sign-helper bug.
+    ///
+    /// Runs to perim 8 (~10 ms each) covering the bug-sensitive
+    /// range where our sign infrastructure differs structurally
+    /// from the simpler ZZ6 (which uses `sign_m_plus_n_sqrt3`).
+    #[test]
+    fn cross_validate_zz18_step3_matches_zz6() {
+        // ZZ6 reference enumeration (uses `sign_m_plus_n_sqrt3`,
+        // which is independently OEIS-verified).
+        let ops_zz6 = make_ops(true);
+        let (zz6_rats, _) = rat_enum_with::<ZZ6>(8, 1, ops_zz6, "zz6_ref", "", false, &Prunes::default());
+        let mut zz6_by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for r in &zz6_rats {
+            *zz6_by_len.entry(r.len()).or_insert(0) += 1;
+        }
+
+        // ZZ18 step=3 enumeration (uses our new cubic-root sign +
+        // multivariate sign + custom CellFloor for the imag axis).
+        let ops_zz18 = make_ops(true);
+        let (zz18_rats, _) = rat_enum_with::<ZZ18>(8, 3, ops_zz18, "zz18_step3", "", false, &Prunes::default());
+        let mut zz18_by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for r in &zz18_rats {
+            *zz18_by_len.entry(r.len()).or_insert(0) += 1;
+        }
+
+        // Compare per-length counts.
+        let mut all_lens: std::collections::BTreeSet<usize> =
+            zz6_by_len.keys().copied().collect();
+        all_lens.extend(zz18_by_len.keys().copied());
+        let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();
+        for &n in &all_lens {
+            let z6 = zz6_by_len.get(&n).copied().unwrap_or(0);
+            let z18 = zz18_by_len.get(&n).copied().unwrap_or(0);
+            if z6 != z18 {
+                mismatches.push((n, z6, z18));
+            }
+        }
+        if !mismatches.is_empty() {
+            for (n, z6, z18) in &mismatches {
+                eprintln!("perim={n}: ZZ6={z6}, ZZ18-step-3={z18}, diff={:+}", *z18 as i64 - *z6 as i64);
+            }
+            panic!(
+                "ZZ18-step-3 disagrees with ZZ6 at {} perimeter(s) -- sign helper or \
+                 cell_floor regression in ZZ18",
+                mismatches.len()
+            );
+        }
     }
 
     /// External anchor: OEIS A316192 per-length counts for ZZ12

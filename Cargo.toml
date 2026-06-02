@@ -15,6 +15,7 @@ edition = "2021"
 exclude = ["examples/*"]
 
 [dependencies]
+num-bigint = "0.4.6"
 num-complex = "0.4.6"
 num-integer = "0.1.46"
 num-rational = "0.4.2"
@@ -38,6 +39,9 @@ gif = { version = "0.13", optional = true }
 [features]
 default = ["examples"]
 pprof = ["dep:pprof"]
+# Emits log lines counting how many sign-at-cubic-root queries fall
+# through to the Sturm fallback. Used to size the bisection threshold.
+sign_profile = []
 # Enables the CLI binaries (clap + threading + gif/png output).
 examples = ["dep:clap", "dep:crossbeam", "dep:num_cpus", "animation"]
 # Pure-Rust raster output (PNG) via resvg + tiny-skia.
