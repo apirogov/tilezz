@@ -1456,7 +1456,7 @@ mod tests {
         // self-avoiding polygons. Closed-phase2 / blessed / free
         // categories are unchanged (the dropped entries were all
         // phase-1 dead/undead). See the OEIS A316192 test in
-        // `bin::rat_enum::dihedral_tests::test_oeis_a316192_zz12`
+        // `bin::rat_enum::free_tests::test_oeis_a316192_zz12`
         // for the downstream confirmation.
         assert_counts(spectre_idx(), 9976, 11171, 251, 5561, 1472, 1029, 1914);
     }

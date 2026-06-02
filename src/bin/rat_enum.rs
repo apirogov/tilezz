@@ -6,7 +6,7 @@
 //!
 //! The in-memory modes (`--mode bench`, `--mode render`, `--mode
 //! dafsa`, `--mode dafsa-blocks`) hold the entire result set as a
-//! `HashSet<Vec<i8>>` of canonical (or dihedral-canonical) angle
+//! `HashSet<Vec<i8>>` of canonical (or free, i.e. dihedral-reduced) angle
 //! sequences while the DFS runs. The *raw* payload is tiny (~`n`
 //! bytes per polygon), but several effects multiply peak RSS by
 //! ~50-100x:
@@ -24,7 +24,7 @@
 //! 5. **Glibc arena retention.** Per-thread arenas don't release
 //!    pages back to the OS once the high-water mark is reached.
 //!
-//! Empirically: ZZ12 dihedral n=13 (4.08M polygons, ~50 MB raw)
+//! Empirically: ZZ12 free n=13 (4.08M polygons, ~50 MB raw)
 //! peaks at **~5.5 GB** in a 16-thread `--mode bench`. n=14 (~30M
 //! polygons) is out of reach for any single in-memory run on a
 //! commodity workstation.
@@ -41,11 +41,11 @@
 //! invocation, no orchestrator:
 //!
 //! ```sh
-//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//! ./target/release/rat_enum --ring 12 -n 14 --free \
 //!     --mode stream -o out/ --threads 16
-//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//! ./target/release/rat_enum --ring 12 -n 14 --free \
 //!     --mode merge  -o out/
-//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//! ./target/release/rat_enum --ring 12 -n 14 --free \
 //!     --mode build  -o out/ --block-size 2048
 //! # out/dafsa/ now holds the blocked RatDafsa, readable by
 //! # LazyRatDafsa / LazyRatDafsaAsync. out/certificate.json
@@ -89,7 +89,7 @@ use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_
 use tilezz::stringmatch::RatDafsa;
 
 // Test-only imports needed by the file-top helpers (`rat_enum`,
-// `rat_enum_dihedral`) which the test modules call via `super::`.
+// `rat_enum_free`) which the test modules call via `super::`.
 // Imports used *only* inside a specific test module live inside that
 // module's `use super::*;` block rather than at file top.
 #[cfg(test)]
@@ -97,7 +97,7 @@ use std::collections::HashSet;
 #[cfg(test)]
 use tilezz::cyclotomic::IsRing;
 #[cfg(test)]
-use tilezz::rat_enum::canonical::{dihedral_canonical, make_ops};
+use tilezz::rat_enum::canonical::{free_canonical, make_ops};
 #[cfg(test)]
 use tilezz::rat_enum::dfs::rat_enum_with;
 #[cfg(test)]
@@ -138,28 +138,28 @@ fn rat_enum<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) 
     )
 }
 
-/// Dihedral-canonical variant of [`rat_enum`].
+/// Free variant of [`rat_enum`].
 ///
 /// Two-stage design (see module-level comment above for rationale):
 ///
-/// 1. [`is_dihedral_canonical_extended`] prunes walk prefixes whose
+/// 1. [`is_free_canonical_extended`] prunes walk prefixes whose
 ///    complement rotation is lex-smaller, reducing the search tree
 ///    (~2.3x speedup at ZZ12 n=10).
 ///
-/// 2. [`dihedral_canonical`] at closure maps the chirality-normalized
-///    canonical rotation to the lex-min dihedral form, so both
+/// 2. [`free_canonical`] at closure maps the chirality-normalized
+///    canonical rotation to the free (lex-min dihedral) form, so both
 ///    surviving members of each chiral pair hash to the same key.
 ///
 /// Returns the same set as running [`rat_enum`] and quotienting by
-/// dihedral equivalence.
+/// free equivalence.
 #[cfg(test)]
-fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) {
+fn rat_enum_free<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, DfsStats) {
     rat_enum_with::<ZZ>(
         max_steps,
         step,
         make_ops(true),
-        "dihedral enumeration",
-        "dihedral ",
+        "free enumeration",
+        "free ",
         false,
         &Prunes::default(),
     )
@@ -208,7 +208,7 @@ enum Mode {
     /// `<-o dir>/certificate.json` with the BLAKE3 hash + headline
     /// counts. Doesn't re-run the DFS -- just folds existing run
     /// files. Requires the same `--ring`, `-n`, `--step`,
-    /// `--dihedral` flags as the producing `--mode stream` call (they
+    /// `--free` flags as the producing `--mode stream` call (they
     /// are recorded in the certificate verbatim).
     Merge,
     /// Stage 3 of the streaming pipeline. Reads `<-o dir>/unique.bin`
@@ -248,8 +248,10 @@ Performance opts (combine for maximum speedup):\n\
   --closure-key-prune  exact lattice closure-key prune; another 2-5x on top\n\
   --threads N          parallel DFS; near-linear in streaming modes,\n\
                        sub-linear in HashSet modes (set-merge overhead)\n\
-  --dihedral           dihedral-canonical output (one rep per chiral pair);\n\
-                       also accelerates DFS via complement-reflection prune\n\
+  --free               free (= full dihedral reduction) output:\n\
+                       one rep per chiral pair (lex-min over rotations and\n\
+                       reflections); also accelerates DFS via\n\
+                       complement-reflection prune\n\
 \n\
 For memory at large n: prefer the streaming pipeline (`--mode stream`\n\
 then `--mode merge`) over `--mode bench --threads N`. See the file-level\n\
@@ -313,13 +315,13 @@ struct Cli {
     #[arg(long, default_value_t = 1)]
     step: i8,
 
-    /// Use dihedral-canonical enumeration: outputs one representative
-    /// per chiral pair (lex-min over rotations and reflections).
-    /// Faster than the default rotation-canonical DFS because
-    /// complement-reflection pruning halves the search space at
-    /// the root.
+    /// Free (= full dihedral symmetry reduction) enumeration: outputs
+    /// one representative per chiral pair (lex-min over rotations
+    /// AND reflections). Faster than the default rotation-canonical
+    /// DFS because complement-reflection pruning halves the search
+    /// space at the root.
     #[arg(long)]
-    dihedral: bool,
+    free: bool,
 
     /// After every successful `Snake::add`, replay the entire current
     /// angle prefix in a fresh `Snake::new()` and assert that fresh
@@ -432,7 +434,7 @@ fn main() {
             cli.max_steps,
             cli.step,
             split_depth,
-            cli.dihedral,
+            cli.free,
         );
         for prefix in &seeds {
             let s = prefix
@@ -479,7 +481,7 @@ fn main() {
             cli.step,
             seed,
             n_threads,
-            cli.dihedral,
+            cli.free,
             cli.paranoid,
         );
         let dt = t0.elapsed();
@@ -554,7 +556,7 @@ fn main() {
                 cli.ring,
                 cli.max_steps,
                 cli.step,
-                cli.dihedral,
+                cli.free,
             )
             .expect("merge_runs");
             let dt = t0.elapsed();
@@ -578,7 +580,7 @@ fn main() {
                 cli.max_steps,
                 cli.step,
                 n_threads,
-                cli.dihedral,
+                cli.free,
                 cli.paranoid,
                 std::path::Path::new(out_dir),
             )
@@ -608,7 +610,7 @@ fn main() {
                 cli.max_steps,
                 cli.step,
                 n_threads,
-                cli.dihedral,
+                cli.free,
                 cli.paranoid,
             );
             eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
@@ -651,7 +653,7 @@ fn main() {
                 cli.max_steps,
                 cli.step,
                 n_threads,
-                cli.dihedral,
+                cli.free,
                 cli.paranoid,
             );
             eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
@@ -696,7 +698,7 @@ fn main() {
                 cli.max_steps,
                 cli.step,
                 n_threads,
-                cli.dihedral,
+                cli.free,
                 cli.paranoid,
             );
             let dt = t0.elapsed();
@@ -728,7 +730,7 @@ fn main() {
                 cli.max_steps,
                 cli.step,
                 n_threads,
-                cli.dihedral,
+                cli.free,
                 cli.paranoid,
             );
 
@@ -781,7 +783,7 @@ fn main() {
 }
 
 #[cfg(test)]
-mod dihedral_tests {
+mod free_tests {
     use super::*;
     use std::collections::HashMap;
     use tilezz::cyclotomic::geometry::intersect;
@@ -849,7 +851,7 @@ mod dihedral_tests {
         Ok(())
     }
 
-    /// Per-boundary-length counts the ZZ12 dihedral enumeration must
+    /// Per-boundary-length counts the ZZ12 free enumeration must
     /// match: OEIS A316192 "Number of self-avoiding polygons with
     /// perimeter n and sides = 1 ... not counting rotations and
     /// reflections as distinct" (the boundary path may nowhere touch
@@ -883,10 +885,10 @@ mod dihedral_tests {
             (10, 14024),
         ];
         // Enumerate up to the largest n in the reference. The DFS
-        // walks the dihedral-canonical variant; output is bucketed
+        // walks the free variant; output is bucketed
         // per perimeter length.
         let max_n = OEIS.iter().map(|&(n, _)| n).max().unwrap();
-        let (rats, _) = super::rat_enum_dihedral::<ZZ12>(max_n, 1);
+        let (rats, _) = super::rat_enum_free::<ZZ12>(max_n, 1);
 
         // Bucket per perimeter length.
         let mut by_len: std::collections::BTreeMap<usize, usize> =
@@ -910,30 +912,30 @@ mod dihedral_tests {
                 );
             }
             panic!(
-                "dihedral ZZ12 enumeration differs from OEIS A316192 at {} perimeter length(s)",
+                "free ZZ12 enumeration differs from OEIS A316192 at {} perimeter length(s)",
                 mismatches.len()
             );
         }
     }
 
     #[test]
-    fn test_dihedral_output_polygons_are_simple_and_unique() {
-        let (dihedral_rats, _) = super::rat_enum_dihedral::<ZZ12>(9, 1);
+    fn test_free_output_polygons_are_simple_and_unique() {
+        let (free_rats, _) = super::rat_enum_free::<ZZ12>(9, 1);
 
         // (i) Encodings are pairwise distinct (the HashSet via which
         // they were collected enforces this; assert defensively).
-        let unique: std::collections::HashSet<Vec<i8>> = dihedral_rats.iter().cloned().collect();
+        let unique: std::collections::HashSet<Vec<i8>> = free_rats.iter().cloned().collect();
         assert_eq!(
             unique.len(),
-            dihedral_rats.len(),
-            "duplicate sequences in dihedral output"
+            free_rats.len(),
+            "duplicate sequences in free output"
         );
 
         // (ii) Every polygon is geometrically simple per the
         // independent validator above. Collect failures so a single
         // run reports every case.
         let mut failures: Vec<(Vec<i8>, String)> = Vec::new();
-        for seq in &dihedral_rats {
+        for seq in &free_rats {
             if let Err(why) = validate_simple_polygon::<ZZ12>(seq) {
                 failures.push((seq.clone(), why));
             }
@@ -943,24 +945,24 @@ mod dihedral_tests {
             for (seq, why) in failures.iter().take(20) {
                 eprintln!("  {seq:?} -- {why}");
             }
-            panic!("non-simple polygons in dihedral enumeration output");
+            panic!("non-simple polygons in free enumeration output");
         }
     }
 
     /// For a single `(ring, max_steps)` pair, check that the
-    /// dihedral DFS output equals the rotation DFS output quotiented
-    /// by `dihedral_canonical`. Stage-1 over-pruning shows up as
-    /// MISSING dihedral classes; stage-2 under-deduplication shows
+    /// free DFS output equals the rotation DFS output quotiented
+    /// by `free_canonical`. Stage-1 over-pruning shows up as
+    /// MISSING free classes; stage-2 under-deduplication shows
     /// up as EXTRA. The body prints both lists before asserting so
     /// any future regression is diagnosable from the test log.
     fn check_quotient_match<ZZ: IsRing>(ring_label: &str, max_steps: usize) {
         let (all_rats, _) = super::rat_enum::<ZZ>(max_steps, 1);
         let mut expected: HashSet<Vec<i8>> = HashSet::new();
         for seq in &all_rats {
-            expected.insert(super::dihedral_canonical(seq));
+            expected.insert(super::free_canonical(seq));
         }
-        let (dihedral_rats, _) = super::rat_enum_dihedral::<ZZ>(max_steps, 1);
-        let actual: HashSet<Vec<i8>> = dihedral_rats.into_iter().collect();
+        let (free_rats, _) = super::rat_enum_free::<ZZ>(max_steps, 1);
+        let actual: HashSet<Vec<i8>> = free_rats.into_iter().collect();
 
         if expected != actual {
             for s in expected.difference(&actual) {
@@ -972,10 +974,10 @@ mod dihedral_tests {
         }
         assert_eq!(
             expected, actual,
-            "{ring_label} n={max_steps}: dihedral DFS != rotation DFS / dihedral",
+            "{ring_label} n={max_steps}: free DFS != rotation DFS / free",
         );
         eprintln!(
-            "[{ring_label} n={max_steps}] OK -- {} dihedral classes from {} rotation-canonical rats",
+            "[{ring_label} n={max_steps}] OK -- {} free classes from {} rotation-canonical rats",
             actual.len(),
             all_rats.len(),
         );
@@ -987,7 +989,7 @@ mod dihedral_tests {
     /// are more constrained and an off-by-one in the prefix prune is
     /// easier to spot than at ZZ12.
     #[test]
-    fn test_dihedral_enum_matches_dfs_quotient() {
+    fn test_free_enum_matches_dfs_quotient() {
         for n in [4, 5, 6, 7, 8, 9] {
             check_quotient_match::<ZZ12>("ZZ12", n);
         }
@@ -1005,7 +1007,7 @@ mod dihedral_tests {
     /// then enumerating from each seed and union-ing with the
     /// already-closed polygons. Tested across:
     ///   * small `max_steps` (5-7) for tractable runtime;
-    ///   * dihedral on AND off (each uses a different `CanonicalOps`
+    ///   * free on AND off (each uses a different `CanonicalOps`
     ///     pair and a different dedup hash);
     ///   * `split_depth` in 1-3 (1: every root-direction branch is a
     ///     seed; 3: small polygons close before split, exercising
@@ -1017,13 +1019,13 @@ mod dihedral_tests {
     #[test]
     fn test_seed_partitioning_matches_one_shot() {
         for &n in &[5usize, 6, 7] {
-            for &dihedral in &[false, true] {
+            for &free in &[false, true] {
                 for &split_depth in &[1usize, 2, 3] {
                     if split_depth >= n {
                         continue;
                     }
-                    let (one_shot_seqs, _) = if dihedral {
-                        super::rat_enum_dihedral::<ZZ12>(n, 1)
+                    let (one_shot_seqs, _) = if free {
+                        super::rat_enum_free::<ZZ12>(n, 1)
                     } else {
                         super::rat_enum::<ZZ12>(n, 1)
                     };
@@ -1031,7 +1033,7 @@ mod dihedral_tests {
 
                     let (mut seeded, prefixes) = tilezz::rat_enum::seed::collect_seed_prefixes::<
                         ZZ12,
-                    >(n, 1, split_depth, dihedral);
+                    >(n, 1, split_depth, free);
                     for prefix in &prefixes {
                         // Sweep both branches of the n_threads dispatch
                         // (single-threaded direct path AND sub-split +
@@ -1039,7 +1041,7 @@ mod dihedral_tests {
                         // they must produce the same set.
                         for nthreads in &[1usize, 4] {
                             seeded.extend(tilezz::rat_enum::seed::enumerate_from_seed::<ZZ12>(
-                                n, 1, prefix, *nthreads, dihedral, false,
+                                n, 1, prefix, *nthreads, free, false,
                             ));
                         }
                     }
@@ -1047,7 +1049,7 @@ mod dihedral_tests {
                     assert_eq!(
                         one_shot,
                         seeded,
-                        "n={n} dihedral={dihedral} split_depth={split_depth}: \
+                        "n={n} free={free} split_depth={split_depth}: \
                          seed-partitioned != one-shot \
                          ({} prefixes + {} pre-closed)",
                         prefixes.len(),
@@ -1061,7 +1063,7 @@ mod dihedral_tests {
 
 /// Correctness tests for the optional DFS prunes.
 ///
-/// For each ring x mode (rotation/dihedral) x thread-count, the test
+/// For each ring x mode (rotation/free) x thread-count, the test
 /// matrix runs the enumeration under every subset of the optional
 /// prunes (`mod`, `closure-key`) and asserts the resulting
 /// canonical-rat set is bit-identical to the baseline (no prunes). A
@@ -1111,11 +1113,11 @@ mod opt_correctness_tests {
     /// so different test cases don't fight over it.
     fn run<ZZ: IsRing>(
         max_steps: usize,
-        dihedral: bool,
+        free: bool,
         n_threads: usize,
         prunes: &Prunes,
     ) -> std::collections::HashSet<Vec<i8>> {
-        let ops = make_ops(dihedral);
+        let ops = make_ops(free);
         let (rats, _) = if n_threads <= 1 {
             rat_enum_with::<ZZ>(max_steps, 1, ops, "test", "", false, prunes)
         } else {
@@ -1132,16 +1134,16 @@ mod opt_correctness_tests {
     /// Cross-validation matrix: every opt subset x every thread count
     /// must produce the same canonical-rat set as the baseline.
     fn check_ring<ZZ: IsRing>(ring: u8, max_steps: usize) {
-        for &dihedral in &[false, true] {
-            let baseline = run::<ZZ>(max_steps, dihedral, 1, &Prunes::default());
+        for &free in &[false, true] {
+            let baseline = run::<ZZ>(max_steps, free, 1, &Prunes::default());
             for (with_mod, with_ck) in opt_subsets() {
                 let prunes = build_prunes(ring, max_steps, with_mod, with_ck);
                 for &n_threads in &[1usize, 4] {
-                    let got = run::<ZZ>(max_steps, dihedral, n_threads, &prunes);
+                    let got = run::<ZZ>(max_steps, free, n_threads, &prunes);
                     assert_eq!(
                         got,
                         baseline,
-                        "ZZ{ring} n={max_steps} dihedral={dihedral} \
+                        "ZZ{ring} n={max_steps} free={free} \
                          mod={with_mod} ck={with_ck} threads={n_threads}: \
                          result set differs from baseline ({} vs {} rats)",
                         got.len(),
@@ -1166,7 +1168,7 @@ mod opt_correctness_tests {
     fn cross_validate_zz12() {
         // Capped at n=8 for runtime budget -- the 32-combo matrix
         // at higher n explodes runtime quickly. The OEIS test below
-        // covers ZZ12 dihedral up to n=10 for every opt combo,
+        // covers ZZ12 free up to n=10 for every opt combo,
         // which is the bug-sensitive range (T-touches first occur
         // at n=9 -- see the historical note in test_oeis_a316192_zz12).
         check_ring::<ZZ12>(12, 8);
@@ -1262,7 +1264,7 @@ mod opt_correctness_tests {
     }
 
     /// External anchor: OEIS A316192 per-length counts for ZZ12
-    /// dihedral matchstick polygons, n=3..=10. The range
+    /// free matchstick polygons, n=3..=10. The range
     /// deliberately includes n=9, 10 -- the T-touch-sensitive
     /// lengths that the now-fixed segment-intersection bug used to
     /// miscount. Every opt combination must reproduce the OEIS
@@ -1333,7 +1335,7 @@ mod opt_correctness_tests {
         by_len
     }
 
-    /// Shared pin assertion: enumerate ring `ZZ` dihedral up to
+    /// Shared pin assertion: enumerate ring `ZZ` in free mode up to
     /// `max_n` with all prunes enabled (single-threaded for
     /// determinism), then assert each `(perim, expected)` pair from
     /// `oeis`. Used by the cheap external-anchor pins below.
@@ -1361,7 +1363,7 @@ mod opt_correctness_tests {
     }
 
     /// External anchor: OEIS A266549 per-length counts for ZZ4
-    /// dihedral matchstick polygons on the square lattice. Indexed by
+    /// free matchstick polygons on the square lattice. Indexed by
     /// perim 2n (square-lattice polygons only close at even perim).
     /// Independently confirmed by our enumeration through perim 14;
     /// see `docs/oeis.md` for the full overview.
@@ -1379,7 +1381,7 @@ mod opt_correctness_tests {
     }
 
     /// External anchor: OEIS A316198 per-length counts for ZZ8
-    /// dihedral matchstick polygons. Indexed by perim 2n. Hugo's
+    /// free matchstick polygons. Indexed by perim 2n. Hugo's
     /// data covers perim 4..12; our perim 14 = 240549 is a new term
     /// we can contribute back to OEIS (see `docs/oeis.md`).
     #[test]
@@ -1395,7 +1397,7 @@ mod opt_correctness_tests {
     }
 
     /// External anchor: OEIS A316200 per-length counts for ZZ10
-    /// dihedral matchstick polygons. Pins perim 4..10 ONLY: at
+    /// free matchstick polygons. Pins perim 4..10 ONLY: at
     /// perim 11 our enumeration disagrees with OEIS (we say 9883,
     /// OEIS says 19405) and we believe the OEIS term is in error.
     /// Five independent enumeration paths (ring 10 step 1, ring 20
@@ -1419,7 +1421,7 @@ mod opt_correctness_tests {
     }
 
     /// External anchor: OEIS A284869 per-length counts for ZZ6
-    /// dihedral matchstick polygons on the triangular lattice. This
+    /// free matchstick polygons on the triangular lattice. This
     /// is the deepest external oracle in our coverage -- A284869
     /// publishes a(3..24), giving us 22 verification anchors against
     /// an independent source. We pin perim 3..14 here (matches first

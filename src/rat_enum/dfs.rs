@@ -45,9 +45,9 @@ pub static STREAM_RAT_LINES: AtomicBool = AtomicBool::new(true);
 /// snake, runs the recursive DFS, returns the `(sorted-by-length)
 /// list, stats)` pair.
 ///
-/// `label` is the header to print at start/end (e.g. `"dihedral
+/// `label` is the header to print at start/end (e.g. `"free
 /// enumeration"`); `prefix` is the prefix for the closing summary
-/// line (e.g. `"dihedral "`).
+/// line (e.g. `"free "`).
 pub fn rat_enum_with<ZZ: IsRing>(
     max_steps: usize,
     step: i8,

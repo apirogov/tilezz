@@ -47,8 +47,8 @@ pub struct Certificate {
     pub max_steps: usize,
     /// Direction step (typically 1; > 1 restricts to a subset).
     pub step: i8,
-    /// Whether the source enumeration was dihedral-canonical.
-    pub dihedral: bool,
+    /// Whether the source enumeration was free (dihedral-reduced).
+    pub free: bool,
     /// Number of run files consumed by the merge.
     pub run_files: usize,
     /// Total records observed across all run files (duplicates
@@ -132,7 +132,7 @@ impl RunReader {
 /// dedup as we go. Writes `out_dir/certificate.json` with the
 /// BLAKE3 hash of unique.bin and the headline counts.
 ///
-/// `ring`, `max_steps`, `step`, `dihedral` are recorded in the
+/// `ring`, `max_steps`, `step`, `free` are recorded in the
 /// certificate verbatim -- they are not re-derived from the runs
 /// (the runs themselves carry no metadata).
 #[allow(clippy::too_many_arguments)]
@@ -141,7 +141,7 @@ pub fn merge_runs(
     ring: u8,
     max_steps: usize,
     step: i8,
-    dihedral: bool,
+    free: bool,
 ) -> std::io::Result<Certificate> {
     let runs_dir = out_dir.join(crate::rat_enum::stream::enumerate::RUNS_SUBDIR);
     let run_files = list_run_files(&runs_dir)?;
@@ -216,7 +216,7 @@ pub fn merge_runs(
         ring,
         max_steps,
         step,
-        dihedral,
+        free,
         run_files: run_files.len(),
         total_input_records: total_in,
         unique_records: unique_out,

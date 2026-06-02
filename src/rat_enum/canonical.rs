@@ -10,11 +10,11 @@
 //!   prefix is monotone: a rotation that already lost can never
 //!   recover). `canonicalize` is the identity.
 //!
-//! - **Dihedral-canonical**: one rep per cyclic + reflection class.
+//! - **Free (full dihedral)**: one rep per cyclic + reflection class.
 //!   Prefix prune is sound but **incomplete** -- reflection involves
 //!   the unknown tail of the walk, so we can only check against
 //!   complement (negated) rotations at the prefix level. The closure-
-//!   time mapper [`dihedral_canonical`] picks up the slack by mapping
+//!   time mapper [`free_canonical`] picks up the slack by mapping
 //!   every chirality-normalized rotation to its lex-min dihedral
 //!   form, so both members of every chiral pair hash to the same
 //!   bucket.
@@ -32,14 +32,14 @@
 //!   every position lies in the unknown future of the current walk.
 //!   There is no comparable region until N is known.
 //!
-//! The closure-time `dihedral_canonical` mapping handles what the
+//! The closure-time `free_canonical` mapping handles what the
 //! prefix prune can't see: it maps every closed canonical rotation
 //! to the lex-min over rotations AND reversed rotations, so both
 //! members of every chiral pair collapse to one rep in the result
 //! HashSet.
 
 /// Pair of canonical-check and output-mapping functions that
-/// parameterise the DFS. Both rotation-canonical and dihedral-
+/// parameterise the DFS. Both rotation-canonical and free-
 /// canonical enumeration share the same core walk; they differ only
 /// in which pair of functions they supply.
 ///
@@ -49,7 +49,7 @@
 /// * `canonicalize` -- applied to the chirality-normalised canonical
 ///   rotation at closure, producing the key inserted into the result
 ///   `HashSet`. For rotation-canonical this is the identity; for
-///   dihedral-canonical it picks the lex-min over rotations and
+///   free (full dihedral symmetry reduction) it picks the lex-min over rotations and
 ///   reversed-rotations.
 #[derive(Clone, Copy)]
 pub struct CanonicalOps {
@@ -76,8 +76,8 @@ fn walk_get(prefix: &[i8], new: i8, i: usize) -> i8 {
 /// For the extended walk `prefix ++ [new]` of length `d`, return
 /// `false` if some rotation `k > 0` makes the rotation lex-smaller
 /// than the identity within the fully-known comparable region. The
-/// caller pairs this with a complementary loop for the dihedral case
-/// (see [`is_dihedral_canonical_extended`]).
+/// caller pairs this with a complementary loop for the free case
+/// (see [`is_free_canonical_extended`]).
 fn rotation_lex_min_violated(prefix: &[i8], new: i8) -> bool {
     let d = prefix.len() + 1;
     for k in 1..d {
@@ -120,7 +120,7 @@ pub fn canonical_identity(seq: &[i8]) -> Vec<i8> {
 /// dihedral group.
 ///
 /// This is sound (never prunes a walk that could produce the
-/// dihedral-min output) but incomplete (does not eliminate all
+/// free (lex-min) output) but incomplete (does not eliminate all
 /// chiral duplicates -- see module-level comment above). At depth 0
 /// it prunes all positive first angles (`-a_0 < a_0`), roughly
 /// halving the root branching factor.
@@ -135,7 +135,7 @@ pub fn canonical_identity(seq: &[i8]) -> Vec<i8> {
 /// `walk_get(prefix, new, d)` would silently return `new` again for
 /// a position whose value is genuinely undetermined, which would
 /// over-prune.
-pub fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
+pub fn is_free_canonical_extended(prefix: &[i8], new: i8) -> bool {
     if rotation_lex_min_violated(prefix, new) {
         return false;
     }
@@ -154,7 +154,7 @@ pub fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
     true
 }
 
-/// Correctness layer for the dihedral DFS. Computes the lex-minimum
+/// Correctness layer for the free DFS. Computes the lex-minimum
 /// over all cyclic rotations and reversed rotations of `seq`.
 ///
 /// The inputs are already chirality-normalized to CW by the DFS
@@ -169,7 +169,7 @@ pub fn is_dihedral_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// Both members of an enantiomer pair map to the same value, so the
 /// HashSet deduplicates them. Without this step, the output would
 /// contain both members of every non-achiral chiral pair.
-pub fn dihedral_canonical(seq: &[i8]) -> Vec<i8> {
+pub fn free_canonical(seq: &[i8]) -> Vec<i8> {
     let n = seq.len();
     let mut best: Vec<i8> = seq.to_vec();
     let mut rot: Vec<i8> = seq.to_vec();
@@ -187,12 +187,12 @@ pub fn dihedral_canonical(seq: &[i8]) -> Vec<i8> {
     best
 }
 
-/// Build the [`CanonicalOps`] pair from the `dihedral` CLI flag.
-pub fn make_ops(dihedral: bool) -> CanonicalOps {
-    if dihedral {
+/// Build the [`CanonicalOps`] pair from the `free` CLI flag.
+pub fn make_ops(free: bool) -> CanonicalOps {
+    if free {
         CanonicalOps {
-            is_canonical: is_dihedral_canonical_extended,
-            canonicalize: dihedral_canonical,
+            is_canonical: is_free_canonical_extended,
+            canonicalize: free_canonical,
         }
     } else {
         CanonicalOps {

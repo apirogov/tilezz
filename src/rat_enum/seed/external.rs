@@ -31,9 +31,9 @@ pub fn collect_seed_prefixes<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     split_depth: usize,
-    dihedral: bool,
+    free: bool,
 ) -> (HashSet<Vec<i8>>, Vec<Vec<i8>>) {
-    let ops = make_ops(dihedral);
+    let ops = make_ops(free);
     let prunes = snapshot_prunes();
     let mut snake: Snake<ZZ> = Snake::new();
     let mut seeds: Vec<Vec<i8>> = Vec::new();
@@ -95,10 +95,10 @@ pub fn enumerate_from_seed<ZZ: IsRing>(
     step: i8,
     seed: &[i8],
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
-    let ops = make_ops(dihedral);
+    let ops = make_ops(free);
     let prunes = snapshot_prunes();
 
     if n_threads <= 1 {
@@ -173,11 +173,11 @@ pub fn dispatch_collect_seed_prefixes(
     max_steps: usize,
     step: i8,
     split_depth: usize,
-    dihedral: bool,
+    free: bool,
 ) -> SeedListing {
     crate::dispatch_ring!(
         ring,
-        collect_seed_prefixes::<ZZ>(max_steps, step, split_depth, dihedral)
+        collect_seed_prefixes::<ZZ>(max_steps, step, split_depth, free)
     )
 }
 
@@ -188,11 +188,11 @@ pub fn dispatch_enumerate_from_seed(
     step: i8,
     seed: &[i8],
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
 ) -> HashSet<Vec<i8>> {
     crate::dispatch_ring!(
         ring,
-        enumerate_from_seed::<ZZ>(max_steps, step, seed, n_threads, dihedral, paranoid)
+        enumerate_from_seed::<ZZ>(max_steps, step, seed, n_threads, free, paranoid)
     )
 }

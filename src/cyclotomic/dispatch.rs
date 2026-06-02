@@ -24,7 +24,7 @@
 //!
 //! // Simple call with a single type-generic argument:
 //! let stats = dispatch_ring!(ring, enumerate_dispatch::<ZZ>(
-//!     max_steps, step, n_threads, dihedral, paranoid,
+//!     max_steps, step, n_threads, free, paranoid,
 //! ));
 //!
 //! // Both ZZ (type) and PHI (const) are in scope in the body:

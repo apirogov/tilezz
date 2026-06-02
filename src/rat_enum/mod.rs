@@ -77,16 +77,16 @@ pub fn enumerate_dispatch<ZZ: IsRing>(
     max_steps: usize,
     step: i8,
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
 ) -> EnumResult {
-    let ops = make_ops(dihedral);
-    let label = if dihedral {
-        "dihedral enumeration"
+    let ops = make_ops(free);
+    let label = if free {
+        "free enumeration"
     } else {
         "enumeration"
     };
-    let prefix = if dihedral { "dihedral " } else { "" };
+    let prefix = if free { "free " } else { "" };
     let prunes = snapshot_prunes();
     if n_threads <= 1 {
         rat_enum_with::<ZZ>(max_steps, step, ops, label, prefix, paranoid, &prunes)
@@ -105,11 +105,11 @@ pub fn run_rat_enum_seqs(
     max_steps: usize,
     step: i8,
     n_threads: usize,
-    dihedral: bool,
+    free: bool,
     paranoid: bool,
 ) -> EnumResult {
     crate::dispatch_ring!(
         ring,
-        enumerate_dispatch::<ZZ>(max_steps, step, n_threads, dihedral, paranoid)
+        enumerate_dispatch::<ZZ>(max_steps, step, n_threads, free, paranoid)
     )
 }

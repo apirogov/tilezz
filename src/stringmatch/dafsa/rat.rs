@@ -43,7 +43,7 @@ use super::core::Dafsa;
 /// Maximum rat length representable in a single i8 prefix byte. Rats
 /// longer than this cannot be stored in this format -- a build will
 /// panic. Cyclotomic enumerations cap out far below this in practice
-/// (n <= 16 for ZZ12 dihedral; 127 is plenty of headroom).
+/// (n <= 16 for ZZ12 free; 127 is plenty of headroom).
 const MAX_RAT_LEN: usize = i8::MAX as usize;
 
 /// File format identifier baked into every serialized `RatDafsa`.
