@@ -59,7 +59,7 @@ const FORMAT_VERSION: u32 = 1;
 /// Plain-text schema description bundled into the binary so anyone
 /// inspecting a serialized file (or this crate's docs) can decode
 /// it without the Rust source.
-pub const JSON_SCHEMA_DOC: &str = include_str!("rat_schema.txt");
+pub const JSON_SCHEMA_DOC: &str = include_str!("schemas/rat_schema.txt");
 
 #[derive(Debug, Clone)]
 pub struct RatDafsa {

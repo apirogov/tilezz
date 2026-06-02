@@ -421,8 +421,9 @@ mod tests {
 
         // Spot-check the first block file too; if the manifest is
         // identical and the block writer is deterministic, all
-        // blocks should be byte-identical.
-        let block_0_path = dafsa1_blocks_dir.join("block_000000.bin");
+        // blocks should be byte-identical. The default template
+        // places blocks in a `blocks/` subdir.
+        let block_0_path = dafsa1_blocks_dir.join("blocks/block_000000.bin");
         let block_0_1 = std::fs::read(&block_0_path).unwrap();
         // (read pass 2 -- already overwrote on second build)
         assert!(!block_0_1.is_empty(), "block_000000.bin missing");

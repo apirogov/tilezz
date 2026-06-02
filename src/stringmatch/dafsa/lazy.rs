@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 
 use super::rat::RatDafsa;
 
-pub const JSON_SCHEMA_DOC: &str = include_str!("blocks_schema.txt");
+pub const JSON_SCHEMA_DOC: &str = include_str!("schemas/blocks_schema.txt");
 
 const MANIFEST_FORMAT: &str = "tilezz-rat-dafsa-blocks";
 const MANIFEST_VERSION: u32 = 1;
@@ -42,7 +42,7 @@ const BLOCK_MAGIC: &[u8; 4] = b"TRB1";
 const SCALAR_TAG: &str = "i8";
 const BLOCK_FORMAT_TAG: &str = "tilezz-rat-block";
 const BLOCK_FORMAT_VERSION: u32 = 1;
-const DEFAULT_BLOCK_FILENAME_TEMPLATE: &str = "block_{:06}.bin";
+const DEFAULT_BLOCK_FILENAME_TEMPLATE: &str = "blocks/block_{:06}.bin";
 
 /// Bytes per state record on disk. See the schema for the layout.
 const STATE_RECORD_BYTES: usize = 16;
@@ -879,9 +879,13 @@ impl RatDafsa {
                 write_u32(&mut bytes, targets[i]);
             }
 
-            // Gzip and write.
+            // Gzip and write. The default template places blocks in
+            // a `blocks/` subdir, so ensure it exists once per call.
             let filename = render_template(DEFAULT_BLOCK_FILENAME_TEMPLATE, block_id);
-            let path = dir.join(filename);
+            let path = dir.join(&filename);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             let file = std::fs::File::create(&path)?;
             let mut enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
             io::Write::write_all(&mut enc, &bytes)?;
