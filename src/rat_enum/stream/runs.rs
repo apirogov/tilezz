@@ -47,11 +47,7 @@ impl RunWriter {
 
     /// Create a writer with a custom buffer-record threshold. Mainly
     /// for tests that want to force multiple flushes on small input.
-    pub fn with_threshold(
-        out_dir: impl Into<PathBuf>,
-        thread_id: usize,
-        threshold: usize,
-    ) -> Self {
+    pub fn with_threshold(out_dir: impl Into<PathBuf>, thread_id: usize, threshold: usize) -> Self {
         RunWriter {
             buffer: Vec::with_capacity(threshold.min(1 << 14)),
             threshold,
@@ -163,7 +159,10 @@ mod tests {
         assert_eq!(files.len(), 1);
 
         let mut buf = Vec::new();
-        File::open(&files[0]).unwrap().read_to_end(&mut buf).unwrap();
+        File::open(&files[0])
+            .unwrap()
+            .read_to_end(&mut buf)
+            .unwrap();
 
         // Decode the file's records.
         let mut decoded: Vec<Vec<i8>> = Vec::new();
@@ -187,13 +186,18 @@ mod tests {
         let mut w = RunWriter::with_threshold(&dir, 7, 3);
         w.record(&[1]);
         w.record(&[2]);
-        w.record(&[3]);  // hits threshold -> auto-flush
+        w.record(&[3]); // hits threshold -> auto-flush
         w.record(&[4]);
         // Drop will flush the second run.
         drop(w);
         let files = list_run_files(&dir).unwrap();
         assert_eq!(files.len(), 2, "expected 2 run files (auto-flush + drop)");
-        assert!(files[0].file_name().unwrap().to_str().unwrap().contains("t07"));
+        assert!(files[0]
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("t07"));
     }
 
     fn tempdir() -> PathBuf {

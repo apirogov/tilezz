@@ -841,12 +841,12 @@ const ZZ14_CARTESIAN: [Complex64; 6] = {
     // precision and embedded as f64 literals. Used only for the f64
     // projection `complex64()`; algebraic sign extraction is exact.
     [
-        Complex64::new(1.0, 0.0),                       // zeta^0
-        Complex64::new(0.9009688679024191, 0.4338837391175581),  // zeta^1
-        Complex64::new(0.6234898018587336, 0.7818314824680298),  // zeta^2
-        Complex64::new(0.22252093395631434, 0.9749279121818236), // zeta^3
-        Complex64::new(-0.22252093395631434, 0.9749279121818236),// zeta^4
-        Complex64::new(-0.6234898018587336, 0.7818314824680298), // zeta^5
+        Complex64::new(1.0, 0.0),                                 // zeta^0
+        Complex64::new(0.9009688679024191, 0.4338837391175581),   // zeta^1
+        Complex64::new(0.6234898018587336, 0.7818314824680298),   // zeta^2
+        Complex64::new(0.22252093395631434, 0.9749279121818236),  // zeta^3
+        Complex64::new(-0.22252093395631434, 0.9749279121818236), // zeta^4
+        Complex64::new(-0.6234898018587336, 0.7818314824680298),  // zeta^5
     ]
 };
 
@@ -889,7 +889,9 @@ fn zz14_display(coeffs: &[i64; 6], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     let c_pair_c2s = gpair(Ratio::<i64>::from_integer(0), n2);
 
     format_symbolic(
-        &[c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s],
+        &[
+            c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s,
+        ],
         &["1", "c7", "c7^2", "s7", "c7*s7", "c7^2*s7"],
         f,
     )
@@ -1169,7 +1171,9 @@ fn zz18_display(coeffs: &[i64; 6], f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     let c_pair_c2s = gpair(Ratio::<i64>::from_integer(0), n2);
 
     format_symbolic(
-        &[c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s],
+        &[
+            c_pair_1, c_pair_c, c_pair_c2, c_pair_s, c_pair_cs, c_pair_c2s,
+        ],
         &["1", "c9", "c9^2", "s9", "c9*s9", "c9^2*s9"],
         f,
     )

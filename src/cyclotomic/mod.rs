@@ -54,4 +54,4 @@ pub use traits::{
     IsZZ4, OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex,
 };
 
-pub use rings::{ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ6, ZZ8};
+pub use rings::{ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ4, ZZ6, ZZ60, ZZ8};

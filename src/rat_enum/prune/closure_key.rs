@@ -52,9 +52,7 @@ fn collect_closure_keys_dfs<ZZ: IsRing>(
     }
 }
 
-pub fn collect_closure_keys<ZZ: IsRing>(
-    max_l: usize,
-) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
+pub fn collect_closure_keys<ZZ: IsRing>(max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
     let mut keys = rustc_hash::FxHashSet::default();
     // Empty snake's key: closure is already achieved.
     let phi = <ZZ as Units>::unit(0).int_coeffs_slice().len();

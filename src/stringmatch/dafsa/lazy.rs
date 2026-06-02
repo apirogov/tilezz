@@ -737,11 +737,7 @@ impl LazyRatDafsaAsync {
     /// Walk the entire prefixed sequence; return the terminal state's
     /// record + edges (whether or not it accepts). Used by
     /// [`Self::contains`].
-    async fn walk<F, Fut>(
-        &self,
-        prefixed: &[i8],
-        fetch: &F,
-    ) -> Result<(StateRec, Vec<EdgeRec>), ()>
+    async fn walk<F, Fut>(&self, prefixed: &[i8], fetch: &F) -> Result<(StateRec, Vec<EdgeRec>), ()>
     where
         F: Fn(u32) -> Fut,
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,

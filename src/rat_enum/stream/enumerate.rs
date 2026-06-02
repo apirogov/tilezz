@@ -63,9 +63,7 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
     let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
     let branching = 2 * (hm1 / step.max(1) as usize) + 1;
     let split_depth = splitting_depth(n_threads.max(1), branching);
-    println!(
-        "stream: n_threads={n_threads} branching={branching} split_depth={split_depth}"
-    );
+    println!("stream: n_threads={n_threads} branching={branching} split_depth={split_depth}");
 
     // Seed walk -- alive prefixes for workers, plus a per-thread-0
     // writer for any polygons that close before reaching split_depth.
@@ -160,7 +158,6 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
     Ok(total_stats)
 }
 
-
 /// Runtime-ring dispatcher for [`stream_enum_parallel`]. Snapshots
 /// the global prune state, picks the typed ring impl, runs the
 /// stream.
@@ -220,10 +217,8 @@ mod tests {
         let dir = tempdir();
         let prunes = Prunes::default();
 
-        let stats = stream_enum_parallel::<ZZ>(
-            max_steps, 1, 4, dihedral, false, &prunes, &dir,
-        )
-        .expect("stream_enum_parallel");
+        let stats = stream_enum_parallel::<ZZ>(max_steps, 1, 4, dihedral, false, &prunes, &dir)
+            .expect("stream_enum_parallel");
         assert!(stats.closed > 0, "no closures recorded -- did Stage 1 run?");
 
         let cert = merge_runs(&dir, ring, max_steps, 1, dihedral).expect("merge_runs");
@@ -243,8 +238,7 @@ mod tests {
         );
 
         let ops = canonical_make_ops(dihedral);
-        let (baseline, _) =
-            rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
+        let (baseline, _) = rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
         let expected = sort_by_len_then_lex(baseline);
 
         assert_eq!(
@@ -313,8 +307,7 @@ mod tests {
 
         // Reference: baseline DFS -> buffering `from_rats`.
         let ops = canonical_make_ops(dihedral);
-        let (baseline, _) =
-            rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
+        let (baseline, _) = rat_enum_with::<ZZ>(max_steps, 1, ops, "baseline", "", false, &prunes);
         let buffered_dafsa = RatDafsa::from_rats(baseline.iter().map(|v| v.as_slice()));
 
         // Headline checks: same count, same (length, lex) iteration,
@@ -383,7 +376,9 @@ mod tests {
         let dafsa1 = RatDafsa::from_sorted_unique_rats(recs1.iter().map(|v| v.as_slice()));
         let dafsa1_blocks_dir = dir.join("dafsa");
         std::fs::create_dir_all(&dafsa1_blocks_dir).unwrap();
-        dafsa1.write_blocks(&dafsa1_blocks_dir, 8).expect("build pass 1");
+        dafsa1
+            .write_blocks(&dafsa1_blocks_dir, 8)
+            .expect("build pass 1");
         let manifest_1 = std::fs::read(dafsa1_blocks_dir.join("block_index.json")).unwrap();
 
         // Second full run -- same output directory, same params. The
@@ -400,7 +395,9 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         let dafsa2 = RatDafsa::from_sorted_unique_rats(recs2.iter().map(|v| v.as_slice()));
-        dafsa2.write_blocks(&dafsa1_blocks_dir, 8).expect("build pass 2");
+        dafsa2
+            .write_blocks(&dafsa1_blocks_dir, 8)
+            .expect("build pass 2");
         let manifest_2 = std::fs::read(dafsa1_blocks_dir.join("block_index.json")).unwrap();
 
         // unique.bin and certificate.blake3 must match across runs.
@@ -408,13 +405,19 @@ mod tests {
             cert1.unique_blake3, cert2.unique_blake3,
             "certificate BLAKE3 differs across reruns"
         );
-        assert_eq!(unique_bytes_1, unique_bytes_2, "unique.bin differs across reruns");
+        assert_eq!(
+            unique_bytes_1, unique_bytes_2,
+            "unique.bin differs across reruns"
+        );
         assert_eq!(cert1.unique_records, cert2.unique_records);
 
         // The block index manifest is structurally deterministic
         // (block IDs, states-per-block boundaries) and must round-trip
         // byte-for-byte on a same-params rerun.
-        assert_eq!(manifest_1, manifest_2, "block_index.json differs across reruns");
+        assert_eq!(
+            manifest_1, manifest_2,
+            "block_index.json differs across reruns"
+        );
 
         // Spot-check the first block file too; if the manifest is
         // identical and the block writer is deterministic, all

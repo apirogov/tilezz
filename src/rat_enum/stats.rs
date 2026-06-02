@@ -56,12 +56,47 @@ impl std::fmt::Display for DfsStats {
         let t = self.total();
         let pct = |n: u64| 100.0 * n as f64 / t as f64;
         writeln!(f, "DFS stats ({} total direction attempts):", t)?;
-        writeln!(f, "  canonical_skip:   {:>10} ({:>5.1}%)", self.canonical_skip, pct(self.canonical_skip))?;
-        writeln!(f, "  intersected:      {:>10} ({:>5.1}%)", self.intersected, pct(self.intersected))?;
-        writeln!(f, "  closed:           {:>10} ({:>5.1}%)", self.closed, pct(self.closed))?;
-        writeln!(f, "  recursed:         {:>10} ({:>5.1}%)", self.recursed, pct(self.recursed))?;
-        writeln!(f, "  too_far:          {:>10} ({:>5.1}%)", self.too_far, pct(self.too_far))?;
-        writeln!(f, "  mod_skip:         {:>10} ({:>5.1}%)", self.mod_skip, pct(self.mod_skip))?;
-        write!(f, "  closure_key_skip: {:>10} ({:>5.1}%)", self.closure_key_skip, pct(self.closure_key_skip))
+        writeln!(
+            f,
+            "  canonical_skip:   {:>10} ({:>5.1}%)",
+            self.canonical_skip,
+            pct(self.canonical_skip)
+        )?;
+        writeln!(
+            f,
+            "  intersected:      {:>10} ({:>5.1}%)",
+            self.intersected,
+            pct(self.intersected)
+        )?;
+        writeln!(
+            f,
+            "  closed:           {:>10} ({:>5.1}%)",
+            self.closed,
+            pct(self.closed)
+        )?;
+        writeln!(
+            f,
+            "  recursed:         {:>10} ({:>5.1}%)",
+            self.recursed,
+            pct(self.recursed)
+        )?;
+        writeln!(
+            f,
+            "  too_far:          {:>10} ({:>5.1}%)",
+            self.too_far,
+            pct(self.too_far)
+        )?;
+        writeln!(
+            f,
+            "  mod_skip:         {:>10} ({:>5.1}%)",
+            self.mod_skip,
+            pct(self.mod_skip)
+        )?;
+        write!(
+            f,
+            "  closure_key_skip: {:>10} ({:>5.1}%)",
+            self.closure_key_skip,
+            pct(self.closure_key_skip)
+        )
     }
 }

@@ -231,7 +231,11 @@ pub fn merge_runs(
         "merge: {} input records -> {} unique ({} bytes); blake3={}",
         cert.total_input_records, cert.unique_records, cert.unique_bytes, cert.unique_blake3
     );
-    println!("merge: wrote {} + {}", unique_path.display(), cert_path.display());
+    println!(
+        "merge: wrote {} + {}",
+        unique_path.display(),
+        cert_path.display()
+    );
 
     Ok(cert)
 }
@@ -328,7 +332,10 @@ mod tests {
         // Certificate hash is the BLAKE3 of unique.bin's bytes -- compute
         // it again and check.
         let bytes = std::fs::read(dir.join(UNIQUE_FILENAME)).unwrap();
-        assert_eq!(blake3::hash(&bytes).to_hex().to_string(), cert.unique_blake3);
+        assert_eq!(
+            blake3::hash(&bytes).to_hex().to_string(),
+            cert.unique_blake3
+        );
     }
 
     #[test]
@@ -373,7 +380,13 @@ mod tests {
         assert_eq!(cert1.unique_blake3, cert2.unique_blake3);
         assert_eq!(cert1.unique_records, cert2.unique_records);
         assert_eq!(cert1.total_input_records, cert2.total_input_records);
-        assert_eq!(unique_1, unique_2, "unique.bin not byte-identical across merges");
-        assert_eq!(cert_json_1, cert_json_2, "certificate.json not byte-identical across merges");
+        assert_eq!(
+            unique_1, unique_2,
+            "unique.bin not byte-identical across merges"
+        );
+        assert_eq!(
+            cert_json_1, cert_json_2,
+            "certificate.json not byte-identical across merges"
+        );
     }
 }

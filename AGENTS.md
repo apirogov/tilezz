@@ -124,10 +124,26 @@ helper, check whether one exists.
 
 ## Toolchain
 
-`cargo fmt && cargo clippy && cargo test --lib` before committing.
-Some tests are slow (~5 min); ask before running the full `cargo
-test` repeatedly. Brute completeness tests are `#[ignore]`-gated and
-need `cargo test --release ... -- --ignored`.
+**Pre-commit checklist, all three must be clean before `git commit`:**
+
+1. `cargo fmt --check` -- 0 lines of diff.
+2. `cargo clippy --all-targets` -- 0 warnings (not just 0 errors).
+   Test helpers exceeding the arg-count threshold get an explicit
+   `#[allow(clippy::too_many_arguments)]` at the function, not a
+   crate-wide allow.
+3. `cargo test --lib` -- **both** `--release` and debug. Release
+   silently wraps i128 arithmetic on overflow; debug panics. A test
+   that passes in `--release` but panics in debug means real
+   arithmetic is overflowing and the test's f64 oracle happened to
+   coincide with the wrapped value -- not a passing test.
+
+"It works on my machine" usually means "I only ran one of these."
+A green CI is the floor for opening a PR, not the ceiling.
+
+Some tests are slow (~5 min) -- prefer `cargo test --release` for
+those and ask before running the full `cargo test` repeatedly.
+Brute completeness tests are `#[ignore]`-gated and need
+`cargo test --release ... -- --ignored`.
 
 ## Conventions
 
