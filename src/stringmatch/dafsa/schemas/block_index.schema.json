@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://w3id.org/tilezz/schemas/block_index.schema.json",
+  "title": "tilezz-rat-dafsa-blocks manifest",
+  "description": "Block-index manifest for a tilezz-rat-dafsa-blocks asset directory. See blocks_schema.txt (alongside this file) for the full prose specification including the binary block file (`blocks/block_<NNNNNN>.bin`) wire format -- the JSON Schema here only covers the manifest JSON itself.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "scalar",
+    "block_format",
+    "block_version",
+    "block_size",
+    "n_states",
+    "n_edges",
+    "n_sequences",
+    "n_blocks",
+    "root_state",
+    "block_filename_template"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "tilezz-rat-dafsa-blocks",
+      "description": "Wire-format discriminator; must be exactly this literal."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "const": 1,
+      "description": "Manifest schema version. v1 = this schema."
+    },
+    "scalar": {
+      "type": "string",
+      "const": "i8",
+      "description": "Edge-label scalar type. Currently always 'i8'."
+    },
+    "block_format": {
+      "type": "string",
+      "const": "tilezz-rat-block",
+      "description": "Wire-format tag of each block file."
+    },
+    "block_version": {
+      "type": "integer",
+      "minimum": 1,
+      "const": 1,
+      "description": "Block file format version, bumped independently of the manifest 'version'."
+    },
+    "block_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of DAFSA states per block (except the last block, which may be smaller)."
+    },
+    "n_states": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Total DAFSA states across all blocks."
+    },
+    "n_edges": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total DAFSA edges across all blocks."
+    },
+    "n_sequences": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of accepted sequences (rats). Equal to counts[root_state]."
+    },
+    "n_blocks": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of block files. Equal to ceil(n_states / block_size)."
+    },
+    "root_state": {
+      "type": "integer",
+      "minimum": 0,
+      "const": 0,
+      "description": "DAFSA root state id. Always 0 in v1; recorded for clarity."
+    },
+    "block_filename_template": {
+      "type": "string",
+      "pattern": "^[^{}]*\\{:0[0-9]+\\}[^{}]*\\.bin$",
+      "description": "printf-like template for block file paths. The '{:0N}' substitution is filled with the zero-padded block id. Default: 'blocks/block_{:06}.bin'."
+    },
+    "max_indexed_length": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. Maximum length of any accepted sequence in this DAFSA. Allows clients to short-circuit out-of-range queries without walking the automaton. Absent in pre-v1.1 manifests; consumers should treat absence as 'unknown'."
+    }
+  }
+}

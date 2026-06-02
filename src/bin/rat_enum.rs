@@ -380,6 +380,23 @@ struct Cli {
     #[arg(long, default_value_t = 2048)]
     block_size: u32,
 
+    /// Skip emission of `ro-crate-metadata.json` and the `schemas/`
+    /// directory when writing a `--mode dafsa-blocks` asset. Default
+    /// is to write a self-describing RO-Crate 1.2 bundle alongside
+    /// the manifest and block files; this flag is the escape hatch
+    /// for callers that want only the bare wire format (e.g. an
+    /// internal test fixture).
+    #[arg(long)]
+    no_rocrate: bool,
+
+    /// Optional OEIS A-number this enumeration realises (e.g.
+    /// `A316192` for ZZ12 free dihedral). Surfaced into the
+    /// `ro-crate-metadata.json` as a `subjectOf` contextual entity
+    /// so an archivist can pivot from the asset to the OEIS
+    /// sequence. Honoured only with `--mode dafsa-blocks`.
+    #[arg(long)]
+    oeis_a_number: Option<String>,
+
     /// Resume the DFS from a specific seed prefix (comma-separated
     /// angles like `-5,3,-4`). When set, the DFS skips seed
     /// collection and resumes from this prefix; output is the same
@@ -530,14 +547,44 @@ fn main() {
             dafsa
                 .write_blocks(&blocks_dir, cli.block_size)
                 .expect("write_blocks");
-            let total_bytes: u64 = std::fs::read_dir(&blocks_dir)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter_map(|e| e.metadata().ok())
-                        .map(|m| m.len())
-                        .sum()
-                })
-                .unwrap_or(0);
+
+            // Same self-describing bundle as Mode::DafsaBlocks, but the
+            // reproduction recipe records the streaming pipeline's
+            // three-stage shape instead of a single --mode dafsa-blocks
+            // invocation.
+            if !cli.no_rocrate {
+                use tilezz::stringmatch::dafsa::{
+                    write_archival_extras, write_ro_crate, AssetParams, ProducedVia,
+                };
+                let params = AssetParams {
+                    ring: cli.ring,
+                    max_steps: cli.max_steps,
+                    step: cli.step,
+                    free: cli.free,
+                    block_size: cli.block_size,
+                    n_sequences: dafsa.len() as u32,
+                    oeis_a_number: cli.oeis_a_number.as_deref(),
+                    produced_via: ProducedVia::StreamingPipeline,
+                };
+                write_archival_extras(&blocks_dir, &params).expect("write archival extras");
+                write_ro_crate(&blocks_dir, &params).expect("write ro-crate-metadata.json");
+            }
+
+            fn dir_size_recursive(p: &std::path::Path) -> u64 {
+                let mut total = 0u64;
+                if let Ok(rd) = std::fs::read_dir(p) {
+                    for entry in rd.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            total += dir_size_recursive(&path);
+                        } else if let Ok(m) = entry.metadata() {
+                            total += m.len();
+                        }
+                    }
+                }
+                total
+            }
+            let total_bytes = dir_size_recursive(&blocks_dir);
             eprintln!(
                 "build: wrote {} ({} bytes) in {:?}",
                 blocks_dir.display(),
@@ -672,16 +719,53 @@ fn main() {
             dafsa
                 .write_blocks(path, cli.block_size)
                 .expect("write blocked RatDafsa");
-            let total_bytes: u64 = std::fs::read_dir(path)
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .filter_map(|e| e.metadata().ok())
-                        .map(|m| m.len())
-                        .sum()
-                })
-                .unwrap_or(0);
+
+            // Self-describing RO-Crate bundle: schemas/ + tools/decode.py
+            // + REPRODUCE.md + ro-crate-metadata.json. Skipped under
+            // --no-rocrate (e.g. internal test fixtures that want only
+            // the bare wire format).
+            if !cli.no_rocrate {
+                use tilezz::stringmatch::dafsa::{
+                    write_archival_extras, write_ro_crate, AssetParams, ProducedVia,
+                };
+                let params = AssetParams {
+                    ring: cli.ring,
+                    max_steps: cli.max_steps,
+                    step: cli.step,
+                    free: cli.free,
+                    block_size: cli.block_size,
+                    n_sequences: dafsa.len() as u32,
+                    oeis_a_number: cli.oeis_a_number.as_deref(),
+                    produced_via: ProducedVia::InMemory,
+                };
+                write_archival_extras(path, &params).expect("write archival extras");
+                write_ro_crate(path, &params).expect("write ro-crate-metadata.json");
+            }
+
+            // Walk the directory tree so the total includes blocks/
+            // and schemas/ subdir contents, not just top-level files.
+            fn dir_size(p: &std::path::Path) -> u64 {
+                let mut total = 0u64;
+                if let Ok(rd) = std::fs::read_dir(p) {
+                    for entry in rd.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            total += dir_size(&path);
+                        } else if let Ok(m) = entry.metadata() {
+                            total += m.len();
+                        }
+                    }
+                }
+                total
+            }
+            let total_bytes = dir_size(path);
+            let extras = if cli.no_rocrate {
+                ""
+            } else {
+                " + schemas + ro-crate-metadata"
+            };
             eprintln!(
-                "wrote {dir}/ ({total_bytes} bytes across block files) in {:?}",
+                "wrote {dir}/ ({total_bytes} bytes across manifest + blocks{extras}) in {:?}",
                 t2.elapsed()
             );
 

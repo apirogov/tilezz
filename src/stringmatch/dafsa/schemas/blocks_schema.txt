@@ -1,19 +1,82 @@
 tilezz-rat-dafsa-blocks asset schema (version 1)
 ================================================
 
-A blocked rat-dafsa asset is laid out as a directory of static files
-designed for incremental fetching by a browser / WASM client. The
-entry point is the manifest file `block_index.json`; everything else
-is discoverable through it.
+  Describes:  block_index.json    (manifest, JSON)
+              blocks/block_<NNNNNN>.bin  (binary block files, gzipped)
+  Within:     a tilezz-rat-dafsa-blocks asset directory
+              (RO-Crate entry point: ro-crate-metadata.json)
+  See also:   block_index.schema.json   (machine-checkable JSON Schema
+                                         for block_index.json only)
+              rat_schema.txt            (length-prefix convention used
+                                         inside accepted sequences)
+
+A blocked rat-dafsa asset is laid out as a directory of immutable
+static files: one small JSON manifest plus N gzipped binary blocks
+of DAFSA state and edge records. The entry point of the *DAFSA wire
+format* is the manifest file `block_index.json`; the entry point of
+the *archival package* is `ro-crate-metadata.json` (RO-Crate 1.2),
+which links every file listed below.
+
+Why this format
+---------------
+
+The original motivation was lazy on-demand fetching from a browser
+(WASM client over HTTP range requests), but the same shape carries
+its weight for any other consumer:
+
+* **Random-access queries**. A `get(i)` / `index_of(rat)` walk
+  fetches `O(depth)` blocks regardless of the asset's size, so a
+  10 GB enumeration responds to a query as cheaply as a 10 MB one.
+  A monolithic `*.json.gz` must be fully decompressed and held in
+  memory before any query can run.
+
+* **Stable, content-addressable state IDs**. State 0 is always the
+  root and state ids are assigned in build order, so block N
+  contains exactly states `[N*block_size, (N+1)*block_size)`. A
+  block's contents depend only on the DAFSA prefix that produced
+  it, which means published blocks are immutable: a SHA-256 of
+  `block_000007.bin` taken on the publisher uniquely names a
+  particular slab of the automaton across all mirrors.
+
+* **Forward-compatible extension**. Enumerating to a deeper perim
+  appends new states (and so new blocks) without changing any
+  existing block. Old consumers keep working; new consumers see
+  the larger asset. Same property used by package mirrors that
+  ship new tarballs without re-publishing the old ones.
+
+* **Independent per-block compression**. Each block file gzips on
+  its own. Compression ratio is still close to the bulk-gzip case
+  (blocks share short repeating patterns: same edge labels, dense
+  monotone target indices), but ratio trades against the
+  per-block index overhead via the manifest's `block_size`. Tunable.
+
+* **Cache-friendly and CDN-friendly serving**. Immutable named
+  static files at predictable URLs are exactly what HTTP caches,
+  GitHub Pages, S3 + CloudFront, IPFS, etc. expect. No special
+  server logic.
+
+* **Stream-built**. The asset can be produced incrementally during
+  enumeration (the `--mode build` step of the streaming pipeline),
+  so building the asset for n=14 doesn't require holding the
+  whole 30M-rat DAFSA in RAM.
+
+* **Cryptographically auditable**. Per-block SHA-256s recorded in
+  `ro-crate-metadata.json` mean a partial mirror can be verified
+  in isolation (no need to re-fetch the rest).
+
+The WASM frontend lives where these properties converge -- bounded
+memory, range-request fetches, static hosting, fast queries -- but
+they're useful in any environment.
 
 Files
 -----
 
-  block_index.json     # manifest (JSON, small, fetched once)
-  block_<NNNNNN>.bin   # one file per block, gzip-compressed binary,
-                       # named via `block_filename_template` from the
-                       # manifest (default template uses six zero-
-                       # padded decimal digits).
+  block_index.json            # manifest (JSON, small, fetched once)
+  blocks/block_<NNNNNN>.bin   # one file per block, gzip-compressed
+                              # binary, named via the manifest's
+                              # `block_filename_template` (default
+                              # template "blocks/block_{:06}.bin"
+                              # uses six zero-padded decimal digits).
 
 The manifest
 ------------
@@ -30,7 +93,7 @@ The manifest
     "n_sequences":              <u32>,                // == counts[root_state]; the rat count
     "n_blocks":                 <u32>,                // == ceil(n_states / block_size)
     "root_state":               <u32>,                // always 0 in v1; recorded for clarity
-    "block_filename_template":  "block_{:06}.bin"     // printf-like; {} substituted with id
+    "block_filename_template":  "blocks/block_{:06}.bin"  // printf-like; {} substituted with id
   }
 
 Block ID lookup

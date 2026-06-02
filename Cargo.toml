@@ -23,6 +23,7 @@ num-traits = "0.2.19"
 paste = "1.0.15"
 flate2 = "1.0"
 blake3 = "1.5"
+sha2 = "0.10"
 
 clap = { version = "4.5.27", features = ["derive"], optional = true }
 num_cpus = { version = "1.16.0", optional = true }
@@ -35,6 +36,12 @@ serde_json = "1.0"
 resvg = { version = "0.45", optional = true }
 tiny-skia = { version = "0.11", optional = true }
 gif = { version = "0.13", optional = true }
+
+[dev-dependencies]
+# Validates the produced block_index.json against
+# src/stringmatch/dafsa/schemas/block_index.schema.json. Test-only;
+# no runtime cost.
+jsonschema = { version = "0.34", default-features = false }
 
 [features]
 default = ["examples"]

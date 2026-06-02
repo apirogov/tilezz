@@ -1,6 +1,12 @@
 tilezz-dafsa JSON schema (version 1)
 ====================================
 
+  Describes:  the single-JSON serialization of a generic DAFSA
+              (`Dafsa::write_json`'s output; embedded as
+              `dafsa.inner` inside a tilezz-rat-dafsa).
+  Distinct from: tilezz-rat-dafsa-blocks (the multi-file blocked
+                 asset format -- see blocks_schema.txt for that one)
+
 A serialized DAFSA is a single JSON object with the following fields.
 All arrays use 0-based indexing. State 0 is always the root. The
 label alphabet is `i8`.

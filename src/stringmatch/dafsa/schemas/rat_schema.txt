@@ -1,6 +1,15 @@
 tilezz-rat-dafsa JSON schema (version 1)
 ========================================
 
+  Describes:  *.json output of `rat_enum --mode dafsa` (single-JSON
+              variant of a rat-DAFSA), and the length-prefix
+              convention used inside the accepted sequences of any
+              tilezz-rat-dafsa (including the blocked variant).
+  Used by:    blocks_schema.txt (re: length-prefix encoding inside
+              the DAFSA accepted-sequences alphabet)
+  Distinct from: tilezz-dafsa (the un-wrapped base DAFSA, used as
+                 `dafsa.inner` inside this format -- see core_schema.txt)
+
 A `tilezz-rat-dafsa` is a thin wrapper around a plain `tilezz-dafsa`
 that adds one piece of semantics: every sequence stored in the
 embedded automaton is the angle sequence of a rat with a length byte
