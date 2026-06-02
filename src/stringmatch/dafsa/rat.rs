@@ -38,7 +38,7 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::stringmatch::Dafsa;
+use super::core::Dafsa;
 
 /// Maximum rat length representable in a single i8 prefix byte. Rats
 /// longer than this cannot be stored in this format -- a build will
@@ -59,7 +59,7 @@ const FORMAT_VERSION: u32 = 1;
 /// Plain-text schema description bundled into the binary so anyone
 /// inspecting a serialized file (or this crate's docs) can decode
 /// it without the Rust source.
-pub const JSON_SCHEMA_DOC: &str = include_str!("rat_dafsa_schema.txt");
+pub const JSON_SCHEMA_DOC: &str = include_str!("rat_schema.txt");
 
 #[derive(Debug, Clone)]
 pub struct RatDafsa {
@@ -105,6 +105,52 @@ impl RatDafsa {
         prefixed.sort_unstable();
         prefixed.dedup();
         let inner = Dafsa::from_seqs(prefixed.iter().map(|v| v.as_slice()));
+        Self { inner }
+    }
+
+    /// Streaming constructor for rats already in `(length asc, lex
+    /// asc)` order with no duplicates. Length-prefixes each rat
+    /// on-the-fly and feeds the resulting byte sequences directly
+    /// into [`Dafsa::from_seqs`] without materializing the full set
+    /// in memory.
+    ///
+    /// This is the entry point for the streaming pipeline's Stage 3
+    /// (`--mode build`): `unique.bin` is already sorted and deduped
+    /// by Stage 2's k-way merge, so the per-element buffering
+    /// [`from_rats`] does to enforce that property would be pure
+    /// overhead. With this constructor a ZZ12 n=14 build's peak RSS
+    /// is bounded by the in-progress DAFSA structure rather than by
+    /// the input set.
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if `rats` is not strictly increasing
+    /// in `(length, lex)` order; release builds skip the check and
+    /// produce a DAFSA that accepts the input *as if* it were sorted
+    /// (i.e. silently wrong if it wasn't). Callers must guarantee
+    /// the ordering — `merge::read_unique_records` does.
+    ///
+    /// Also panics if any rat is longer than 127 angles (same
+    /// length-prefix limit as [`from_rats`]).
+    pub fn from_sorted_unique_rats<I, S>(rats: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<[i8]>,
+    {
+        let prefixed = rats.into_iter().map(|r| {
+            let r = r.as_ref();
+            assert!(
+                r.len() <= MAX_RAT_LEN,
+                "RatDafsa: rat length {} exceeds the single-byte length-prefix limit ({})",
+                r.len(),
+                MAX_RAT_LEN
+            );
+            let mut v = Vec::with_capacity(r.len() + 1);
+            v.push(r.len() as i8);
+            v.extend_from_slice(r);
+            v
+        });
+        let inner = Dafsa::from_seqs(prefixed);
         Self { inner }
     }
 
@@ -342,6 +388,63 @@ mod tests {
             assert_eq!(restored.get(i).as_ref(), Some(e));
             assert_eq!(restored.index_of(e.as_slice()), Some(i as u32));
         }
+    }
+
+    /// `from_sorted_unique_rats` builds the same observable RatDafsa
+    /// as `from_rats` when the input is already in `(length, lex)`
+    /// order without duplicates. The headline property: the
+    /// streaming constructor doesn't have to materialize anything
+    /// extra in memory, but it must produce a bit-identical result
+    /// to the buffering constructor for valid input.
+    #[test]
+    fn from_sorted_unique_matches_from_rats() {
+        let input: Vec<Vec<i8>> = vec![
+            vec![1, 2, 3],
+            vec![-1],
+            vec![-2, 1, 1],
+            vec![2],
+            vec![-2],
+            vec![1, 2],
+            vec![-1, 0, 1],
+            vec![0],
+        ];
+
+        // Buffering reference.
+        let buffered = RatDafsa::from_rats(input.iter().map(|v| v.as_slice()));
+
+        // Hand the streaming constructor the same set in the order
+        // it expects: (length asc, lex asc), already deduped.
+        let mut sorted = input.clone();
+        sorted.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        sorted.dedup();
+        let streamed = RatDafsa::from_sorted_unique_rats(sorted.iter().map(|v| v.as_slice()));
+
+        // Observational equivalence: same len, same iter, same get,
+        // same index_of.
+        assert_eq!(streamed.len(), buffered.len());
+        assert_eq!(
+            streamed.iter().collect::<Vec<_>>(),
+            buffered.iter().collect::<Vec<_>>()
+        );
+        for i in 0..buffered.len() {
+            assert_eq!(streamed.get(i), buffered.get(i));
+        }
+        for r in &sorted {
+            assert_eq!(streamed.index_of(r.as_slice()), buffered.index_of(r.as_slice()));
+        }
+    }
+
+    /// `from_sorted_unique_rats` debug-asserts strict-increasing
+    /// `(length, lex)` order. Out-of-order input must trip the
+    /// underlying `Dafsa::from_seqs` assertion in debug builds; in
+    /// release builds the contract is on the caller, so we don't
+    /// test that path.
+    #[test]
+    #[should_panic]
+    #[cfg(debug_assertions)]
+    fn from_sorted_unique_rejects_out_of_order_debug() {
+        let bad: Vec<&[i8]> = vec![&[1, 2][..], &[1, 1][..]]; // lex regression
+        let _ = RatDafsa::from_sorted_unique_rats(bad.iter().copied());
     }
 
     /// Duplicates in the input collapse to a single entry. The

@@ -14,9 +14,14 @@
 //! - [`collect_seeds`]: the parallel variant's seed-collection
 //!   prepass. Walks down to `split_depth` and accumulates alive
 //!   prefixes into [`SeedGather::seeds`]; polygons that close before
-//!   reaching the split land in [`SeedGather::closed`].
+//!   reaching the split are reported via [`SeedGather::record_closed`].
 //!
-//! All three respect the optional prunes through the [`Prunes`]
+//! Both [`rat_enum_step`] and [`SeedGather`] take a `&mut dyn
+//! FnMut(&[i8])` to receive closed canonical sequences, so the same
+//! engine drives the in-memory ([`hashset_recorder`]) and streaming
+//! ([`super::stream`]) sinks.
+//!
+//! All three respect the optional prunes through the [`prune::Prunes`]
 //! parameter; see [`super::prune`] for what each prune does.
 
 use std::collections::HashSet;
