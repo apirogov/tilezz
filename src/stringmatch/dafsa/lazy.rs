@@ -32,9 +32,9 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::stringmatch::RatDafsa;
+use super::rat::RatDafsa;
 
-pub const JSON_SCHEMA_DOC: &str = include_str!("rat_dafsa_blocks_schema.txt");
+pub const JSON_SCHEMA_DOC: &str = include_str!("blocks_schema.txt");
 
 const MANIFEST_FORMAT: &str = "tilezz-rat-dafsa-blocks";
 const MANIFEST_VERSION: u32 = 1;
@@ -68,6 +68,14 @@ pub struct BlockManifest {
     pub n_blocks: u32,
     pub root_state: u32,
     pub block_filename_template: String,
+    /// Maximum rat length covered by the asset (= the largest length
+    /// byte appearing as a root-edge label, i.e. the maximum of the
+    /// length-prefix encoding). A consumer can short-circuit queries
+    /// for longer inputs without walking the DAFSA at all. Optional
+    /// for backwards compatibility with manifests emitted before this
+    /// field was added; readers should treat absence as "unknown".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_indexed_length: Option<u32>,
 }
 
 impl BlockManifest {
@@ -529,6 +537,282 @@ where
     }
 }
 
+// ---- Async (future-based) reader ----
+
+/// Mirror of [`LazyRatDafsa`] for environments where block fetching is
+/// inherently asynchronous (browsers / WASM / async Rust runtimes).
+/// The struct is *not* generic over the fetcher type: each query
+/// (`contains` / `get` / `index_of`) takes the fetcher as an
+/// argument, so callers can construct one inline (e.g. capturing the
+/// asset URL prefix from outer scope) without having to store an
+/// owned closure inside the reader. Block cache and validation
+/// semantics match the sync version exactly.
+///
+/// Borrows on the block cache never cross `.await`: each lookup pulls
+/// out an owned `(StateRec, Vec<EdgeRec>)` copy of the relevant
+/// state's data and drops the borrow before the next await point, so
+/// the type is sound under single-threaded WASM concurrency where
+/// multiple in-flight queries interleave at await boundaries.
+pub struct LazyRatDafsaAsync {
+    manifest: BlockManifest,
+    cache: RefCell<HashMap<u32, Block>>,
+}
+
+impl LazyRatDafsaAsync {
+    /// Parse the JSON manifest and construct an empty-cache reader.
+    /// No blocks are fetched until the first query runs.
+    pub fn open(manifest_json: &str) -> io::Result<Self> {
+        let manifest: BlockManifest = serde_json::from_str(manifest_json)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if manifest.format != MANIFEST_FORMAT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "LazyRatDafsaAsync: bad manifest format (expected '{}', got '{}')",
+                    MANIFEST_FORMAT, manifest.format
+                ),
+            ));
+        }
+        if manifest.version != MANIFEST_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "LazyRatDafsaAsync: unsupported manifest version (expected {}, got {})",
+                    MANIFEST_VERSION, manifest.version
+                ),
+            ));
+        }
+        if manifest.scalar != SCALAR_TAG {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "LazyRatDafsaAsync: scalar mismatch (file is '{}', expected '{}')",
+                    manifest.scalar, SCALAR_TAG
+                ),
+            ));
+        }
+        if manifest.block_format != BLOCK_FORMAT_TAG {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "LazyRatDafsaAsync: bad block format tag (expected '{}', got '{}')",
+                    BLOCK_FORMAT_TAG, manifest.block_format
+                ),
+            ));
+        }
+        if manifest.block_version != BLOCK_FORMAT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "LazyRatDafsaAsync: unsupported block format version (expected {}, got {})",
+                    BLOCK_FORMAT_VERSION, manifest.block_version
+                ),
+            ));
+        }
+        if manifest.block_size == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "LazyRatDafsaAsync: block_size must be >= 1",
+            ));
+        }
+        Ok(Self {
+            manifest,
+            cache: RefCell::new(HashMap::new()),
+        })
+    }
+
+    pub fn manifest(&self) -> &BlockManifest {
+        &self.manifest
+    }
+
+    pub fn len(&self) -> usize {
+        self.manifest.n_sequences as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Set membership: is `rat` in the stored set?
+    pub async fn contains<S, F, Fut>(&self, rat: S, fetch: &F) -> bool
+    where
+        S: AsRef<[i8]>,
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        let prefixed = prefix(rat.as_ref());
+        match self.walk(&prefixed, fetch).await {
+            Ok((rec, _)) => rec.is_accept,
+            Err(_) => false,
+        }
+    }
+
+    /// Assigned (length, lex)-rank index of `rat`, or `None` if it
+    /// is not in the set or is longer than the asset's
+    /// `max_indexed_length` (when that hint is present).
+    pub async fn index_of<S, F, Fut>(&self, rat: S, fetch: &F) -> Option<u32>
+    where
+        S: AsRef<[i8]>,
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        let rat_slice = rat.as_ref();
+        if let Some(max) = self.manifest.max_indexed_length {
+            if rat_slice.len() as u32 > max {
+                return None;
+            }
+        }
+        let prefixed = prefix(rat_slice);
+        let mut state = self.manifest.root_state;
+        let mut rank: u32 = 0;
+        for &symbol in &prefixed {
+            let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
+            if rec.is_accept {
+                rank = rank.checked_add(1)?;
+            }
+            let mut next: Option<u32> = None;
+            for e in edges {
+                match e.label.cmp(&symbol) {
+                    std::cmp::Ordering::Less => {
+                        let (sub_rec, _) = self.lookup_state(e.target, fetch).await.ok()?;
+                        rank = rank.checked_add(sub_rec.count as u32)?;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        next = Some(e.target);
+                        break;
+                    }
+                    std::cmp::Ordering::Greater => return None,
+                }
+            }
+            state = next?;
+        }
+        let (rec, _) = self.lookup_state(state, fetch).await.ok()?;
+        if !rec.is_accept {
+            return None;
+        }
+        Some(rank)
+    }
+
+    /// Rat at assigned index `i` in (length, lex) order.
+    pub async fn get<F, Fut>(&self, i: usize, fetch: &F) -> Option<Vec<i8>>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        if i >= self.len() {
+            return None;
+        }
+        let mut out: Vec<i8> = Vec::new();
+        let mut state = self.manifest.root_state;
+        let mut remaining = i as u64;
+        loop {
+            let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
+            if rec.is_accept {
+                if remaining == 0 {
+                    if !out.is_empty() {
+                        out.remove(0);
+                    }
+                    return Some(out);
+                }
+                remaining -= 1;
+            }
+            let mut descended = false;
+            for e in edges {
+                let (sub_rec, _) = self.lookup_state(e.target, fetch).await.ok()?;
+                let n = sub_rec.count;
+                if remaining < n {
+                    out.push(e.label);
+                    state = e.target;
+                    descended = true;
+                    break;
+                }
+                remaining -= n;
+            }
+            if !descended {
+                return None;
+            }
+        }
+    }
+
+    /// Walk the entire prefixed sequence; return the terminal state's
+    /// record + edges (whether or not it accepts). Used by
+    /// [`Self::contains`].
+    async fn walk<F, Fut>(
+        &self,
+        prefixed: &[i8],
+        fetch: &F,
+    ) -> Result<(StateRec, Vec<EdgeRec>), ()>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        let mut state = self.manifest.root_state;
+        for &symbol in prefixed {
+            let (_, edges) = self.lookup_state(state, fetch).await.map_err(|_| ())?;
+            let mut next: Option<u32> = None;
+            for e in &edges {
+                match e.label.cmp(&symbol) {
+                    std::cmp::Ordering::Less => continue,
+                    std::cmp::Ordering::Equal => {
+                        next = Some(e.target);
+                        break;
+                    }
+                    std::cmp::Ordering::Greater => return Err(()),
+                }
+            }
+            state = next.ok_or(())?;
+        }
+        self.lookup_state(state, fetch).await.map_err(|_| ())
+    }
+
+    async fn lookup_state<F, Fut>(
+        &self,
+        state_id: u32,
+        fetch: &F,
+    ) -> io::Result<(StateRec, Vec<EdgeRec>)>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        let block_id = state_id / self.manifest.block_size;
+        let local = (state_id % self.manifest.block_size) as usize;
+        self.ensure_block_loaded(block_id, fetch).await?;
+        let cache = self.cache.borrow();
+        let block = cache
+            .get(&block_id)
+            .expect("ensure_block_loaded just populated it");
+        let rec = block.states[local];
+        let edges = block.edges_for(local).to_vec();
+        Ok((rec, edges))
+    }
+
+    async fn ensure_block_loaded<F, Fut>(&self, block_id: u32, fetch: &F) -> io::Result<()>
+    where
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        // Quick check; we drop the borrow before awaiting so the
+        // RefCell doesn't bridge an await point.
+        if self.cache.borrow().contains_key(&block_id) {
+            return Ok(());
+        }
+        let bytes = fetch(block_id).await?;
+        let block = Block::from_gz_bytes(&bytes)?;
+        let expected_first = block_id * self.manifest.block_size;
+        if block.first_state_id != expected_first {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "block {block_id} declares first_state_id {} but should be {expected_first}",
+                    block.first_state_id
+                ),
+            ));
+        }
+        self.cache.borrow_mut().insert(block_id, block);
+        Ok(())
+    }
+}
+
 // ---- Writer ----
 
 impl RatDafsa {
@@ -610,6 +894,22 @@ impl RatDafsa {
 
         // Write the manifest last so the reader never sees an index
         // pointing at a block that hasn't been flushed yet.
+        // Maximum rat length covered = the largest label on a root
+        // edge (each root edge's label is the length-prefix byte of
+        // a stored rat). Lets consumers short-circuit oversized
+        // queries without walking.
+        let root_first = edges_start[0] as usize;
+        let root_last = if n_states > 1 {
+            edges_start[1] as usize
+        } else {
+            n_edges as usize
+        };
+        let max_indexed_length = labels[root_first..root_last]
+            .iter()
+            .copied()
+            .max()
+            .map(|v| v as u32);
+
         let manifest = BlockManifest {
             format: MANIFEST_FORMAT.to_string(),
             version: MANIFEST_VERSION,
@@ -623,6 +923,7 @@ impl RatDafsa {
             n_blocks,
             root_state: 0,
             block_filename_template: DEFAULT_BLOCK_FILENAME_TEMPLATE.to_string(),
+            max_indexed_length,
         };
         let manifest_path = dir.join("block_index.json");
         let manifest_file = std::fs::File::create(&manifest_path)?;
@@ -901,6 +1202,7 @@ mod tests {
             n_blocks: 2,
             root_state: 0,
             block_filename_template: DEFAULT_BLOCK_FILENAME_TEMPLATE.to_string(),
+            max_indexed_length: None,
         };
         let unused = |_: u32| -> io::Result<Vec<u8>> {
             Err(io::Error::other(

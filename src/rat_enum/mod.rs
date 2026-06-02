@@ -30,8 +30,19 @@
 //!
 //! Driven by the binary's `--mode` flag (see `Mode` in
 //! `src/bin/rat_enum.rs`); the library exposes the underlying
-//! functions independent of any CLI framing. See submodule docs for
-//! the specific contracts.
+//! functions independent of any CLI framing.
+//!
+//! - In-memory: [`enumerate_dispatch`] / [`run_rat_enum_seqs`]
+//!   return the full set as `Vec<Vec<i8>>`. Fine up to ~5 GB of
+//!   peak RSS.
+//! - Streaming (memory-bounded, for large `n`): [`stream`] runs the
+//!   same DFS but routes closures through `FnMut(&[i8])` callbacks
+//!   into per-thread sort-buffer run files, then a k-way merge
+//!   stage produces a deduplicated sorted artifact plus a BLAKE3
+//!   certificate. See [`stream::stream_enum_dispatch`] and
+//!   [`stream::merge_runs`].
+//!
+//! See submodule docs for the specific contracts.
 //!
 //! # Correctness
 //!
@@ -45,6 +56,7 @@ pub mod output;
 pub mod prune;
 pub mod seed;
 pub mod stats;
+pub mod stream;
 
 use crate::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
 use crate::rat_enum::canonical::make_ops;

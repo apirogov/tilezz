@@ -1,97 +1,78 @@
 //! `rat_enum`: enumerate every simple polygon on a cyclotomic-ring
-//! lattice with boundary length up to `n`. Output mode (Render/Bench/
-//! ListSeeds) is controlled by `--mode`.
+//! lattice with boundary length up to `n`. Output is controlled by
+//! `--mode` -- see the `Mode` enum for the full menu.
 //!
-//! # Memory profile and how to scale to large `n`
+//! # Scaling to large `n`
 //!
-//! The result set is a `HashSet<Vec<i8>>` of canonical (or
-//! dihedral-canonical) angle sequences. The *raw* sequence data is
-//! tiny (`n` bytes per polygon), but several effects multiply the
-//! peak memory of a single process by ~50-100x:
+//! The in-memory modes (`--mode bench`, `--mode render`, `--mode
+//! dafsa`, `--mode dafsa-blocks`) hold the entire result set as a
+//! `HashSet<Vec<i8>>` of canonical (or dihedral-canonical) angle
+//! sequences while the DFS runs. The *raw* payload is tiny (~`n`
+//! bytes per polygon), but several effects multiply peak RSS by
+//! ~50-100x:
 //!
-//! 1. **HashSet bucket overhead.** Hashbrown stores each entry with
-//!    a control byte, a cached hash, and the `Vec<i8>` header (24
-//!    bytes pointer/len/cap). The `Vec`'s heap allocation is
-//!    malloc-rounded (~16-32 bytes for an n=13 payload). With load
-//!    factor ~0.875, one fully-populated set is ~80 bytes per
-//!    polygon -- already 6x the raw payload.
+//! 1. **HashSet bucket overhead.** Per-entry control byte + cached
+//!    hash + `Vec<i8>` header (24 B) + the malloc-rounded heap slab
+//!    for the angles. ~80 bytes per polygon at typical loads.
+//! 2. **Hashbrown doubling resize.** Mid-resize, both old and new
+//!    bucket arrays are live: ~3x transient blowup per set.
+//! 3. **Per-thread duplication.** Each parallel worker keeps a
+//!    private HashSet for the whole DFS; final merge fans them in.
+//! 4. **Final-merge double-buffer.** Worker locals sit in their
+//!    `JoinHandle`s while the main set grows by `extend`; peak
+//!    adds another ~2x.
+//! 5. **Glibc arena retention.** Per-thread arenas don't release
+//!    pages back to the OS once the high-water mark is reached.
 //!
-//! 2. **Hashbrown grows by doubling.** Inside a resize from 2^k to
-//!    2^(k+1) buckets, *both* arrays are alive while entries are
-//!    copied. A set that just resized briefly holds ~3x its final
-//!    structure size. When 16 worker threads are all near the same
-//!    fill level (atomic-counter dispatch keeps work balanced),
-//!    several can resize concurrently.
+//! Empirically: ZZ12 dihedral n=13 (4.08M polygons, ~50 MB raw)
+//! peaks at **~5.5 GB** in a 16-thread `--mode bench`. n=14 (~30M
+//! polygons) is out of reach for any single in-memory run on a
+//! commodity workstation.
 //!
-//! 3. **Per-thread duplication during parallel DFS.** In
-//!    `rat_enum_parallel`, each of `n_threads` workers maintains its
-//!    own thread-local `HashSet`. These sets are live for the entire
-//!    DFS phase and only consolidated at the end. Peak during DFS:
-//!    `n_threads * per-thread-final-size * resize-factor`.
+//! # Recommendation: the streaming pipeline (`--mode stream` then
+//! `--mode merge`)
 //!
-//! 4. **Merge double-buffer.** Once workers complete, the main
-//!    thread folds each local into a `merged` set via `extend`.
-//!    The local being drained is freed only at end of the
-//!    for-iteration; the others sit in their `JoinHandle`s until
-//!    consumed. Right before the last drain: 1 unconsumed local,
-//!    plus `merged` at ~final size, plus a transient resize buffer
-//!    inside `merged` -- another ~2x at peak.
-//!
-//! 5. **glibc malloc arena retention.** Each worker thread's malloc
-//!    arena keeps its high-water-mark pages mapped, even after the
-//!    transient `Vec<i8>` allocations from inside the close-event
-//!    closure are freed. This isn't huge per thread, but it does
-//!    add up at scale.
-//!
-//! Empirically at ZZ12 dihedral n=13 (4.08M polygons, ~50 MB raw),
-//! single-process 16-thread peak is **~5.5 GB** -- a ~100x blowup.
-//!
-//! # Recommendation: separate processes
-//!
-//! **Running N independent single-threaded processes is strictly
-//! better than running one process with `--threads N`** for memory:
-//!
-//! * Each process holds only its share of the polygons (~1x final
-//!   set size for that share, plus the resize transient: peak ~3x).
-//! * No per-thread duplication: there's only one HashSet per
-//!   process.
-//! * No cross-thread merge double-buffer: each process's final set
-//!   *is* the final set for that share.
-//! * On process exit, the OS reclaims **every page** (arenas
-//!   included). Sequential or wall-clock-parallel batches never
-//!   share memory across batches.
-//!
-//! Mechanics: use `--mode list-seeds` to emit a list of work-unit
-//! prefixes, then run one `--seed <prefix> --threads 1` process per
-//! prefix. An external orchestrator (`xargs -P N`, GNU `parallel`,
-//! Slurm, etc.) picks how many run concurrently -- and that becomes
-//! the only knob that affects total wall time. Per-process peak
-//! memory is *unchanged* by orchestrator parallelism, because each
-//! process holds only its own share.
-//!
-//! Example for n=14 at ZZ12 with 16 cores:
+//! Workers stream closures to per-thread, bounded sort-buffer run
+//! files instead of accumulating in HashSets; a separate merge
+//! pass k-way dedupes the runs into a single sorted `unique.bin`
+//! plus a `certificate.json` with the BLAKE3 hash. Memory is
+//! bounded by `n_threads * buffer_size` (~16 MB/worker default),
+//! regardless of the final rat count. Single host, single
+//! invocation, no orchestrator:
 //!
 //! ```sh
 //! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
-//!     --mode list-seeds > listing.txt
-//! grep '^SEED ' listing.txt | sed 's/SEED //' | \
-//!   xargs -I{} -P 16 \
-//!     ./target/release/rat_enum --ring 12 -n 14 --dihedral \
-//!     --seed "{}" --threads 1 \
-//!   > all_rats.txt
-//! { grep '^RAT ' listing.txt; cat all_rats.txt; } \
-//!   | sort -u | grep -c '^RAT '
+//!     --mode stream -o out/ --threads 16
+//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//!     --mode merge  -o out/
+//! ./target/release/rat_enum --ring 12 -n 14 --dihedral \
+//!     --mode build  -o out/ --block-size 2048
+//! # out/dafsa/ now holds the blocked RatDafsa, readable by
+//! # LazyRatDafsa / LazyRatDafsaAsync. out/certificate.json
+//! # carries the BLAKE3 of unique.bin so the build is auditable.
 //! ```
 //!
-//! Peak memory: ~16 processes * ~50-100 MB each ≈ ~1 GB total,
-//! versus ~30-40 GB for the equivalent single-process run.
+//! Stage 3 (`--mode build`) reads `unique.bin` and streams each
+//! record straight through `RatDafsa::from_sorted_unique_rats`
+//! into a DAFSA builder, so peak RSS scales with the compressed
+//! automaton (~12-32 bytes per state) rather than with the input
+//! set (~80 bytes per HashSet entry).
 //!
-//! `--seed <prefix> --threads N>1` exists (it routes through
-//! `enumerate_from_seed`'s sub-split + parallel-drain path) for
-//! environments where an orchestrator gives one big process at a
-//! time, but it has the same per-process memory profile as
-//! `--mode bench --threads N` -- it does NOT recover the
-//! single-threaded-per-process savings.
+//! # Alternative: multi-host distribution (`--mode list-seeds`)
+//!
+//! Still relevant when you want to fan one enumeration out across
+//! multiple machines (each runs `--seed <prefix> --threads 1` on
+//! its share of the seed list). Per-process memory stays bounded
+//! by that process's share -- the same multipliers above apply,
+//! just to a smaller subset. For a single host though, prefer the
+//! streaming pipeline: tighter memory bound, no result-set
+//! concatenation step needed.
+//!
+//! `--seed <prefix> --threads N>1` exists for environments where
+//! the orchestrator hands you one big slot at a time, but it has
+//! the same per-process memory profile as `--mode bench --threads
+//! N` -- it does NOT recover the single-threaded-per-process
+//! savings.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -113,8 +94,6 @@ use tilezz::stringmatch::RatDafsa;
 // is referenced from the binary.
 #[cfg(test)]
 use std::collections::HashSet;
-#[cfg(test)]
-use std::sync::Arc;
 #[cfg(test)]
 use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ4, ZZ60, ZZ8};
 #[cfg(test)]
@@ -214,6 +193,41 @@ enum Mode {
     /// length-prefix encoding used internally is described in
     /// `RatDafsa::JSON_SCHEMA_DOC`.
     Dafsa,
+    /// Enumerate, then write a blocked (lazy-loadable) `RatDafsa`
+    /// asset directory at the path given by `-o`. Produces
+    /// `block_index.json` + `block_NNNNNN.bin` gzipped files
+    /// readable by [`tilezz::stringmatch::LazyRatDafsa`] (or an
+    /// async equivalent). Pair with `--block-size` if the default
+    /// is too coarse or too fine for your set size.
+    DafsaBlocks,
+    /// Stage 1 of the streaming pipeline. Runs the parallel DFS but
+    /// writes each worker's closures to per-thread sort-buffer runs
+    /// under `-o <dir>/runs/run_tNN_rMM.bin`, instead of accumulating
+    /// in an in-memory HashSet. Memory is bounded by the per-thread
+    /// buffer (~16 MB/worker default), so very large enumerations
+    /// (e.g. ZZ12 n=15+) fit on a commodity workstation. Pair with
+    /// `--mode merge` to fold the runs into a single sorted
+    /// `unique.bin` + `certificate.json`, then `--mode build` to
+    /// produce the blocked `RatDafsa` asset under `<-o dir>/dafsa/`
+    /// without materialising the full set in memory.
+    Stream,
+    /// Stage 2 of the streaming pipeline. K-way merges `<-o
+    /// dir>/runs/*.bin` (produced by `--mode stream`) into
+    /// `<-o dir>/unique.bin` (deduped, sorted) and writes
+    /// `<-o dir>/certificate.json` with the BLAKE3 hash + headline
+    /// counts. Doesn't re-run the DFS -- just folds existing run
+    /// files. Requires the same `--ring`, `-n`, `--step`,
+    /// `--dihedral` flags as the producing `--mode stream` call (they
+    /// are recorded in the certificate verbatim).
+    Merge,
+    /// Stage 3 of the streaming pipeline. Reads `<-o dir>/unique.bin`
+    /// (produced by `--mode merge`), streams the records through
+    /// `RatDafsa::from_sorted_unique_rats`, and writes the blocked
+    /// asset to `<-o dir>/dafsa/` via `RatDafsa::write_blocks`. Pair
+    /// with `--block-size`. Does not run the DFS or re-merge; it's
+    /// the streaming-friendly equivalent of `--mode dafsa-blocks` for
+    /// inputs too large to fit in memory as a Vec<Vec<i8>>.
+    Build,
 }
 
 #[derive(Parser, Debug)]
@@ -224,23 +238,30 @@ enum Mode {
 Enumerate every simple polygon (closed self-avoiding boundary) of\n\
 unit-length edges on a cyclotomic ring `ZZn`, with perimeter up to `-n`.\n\
 \n\
-Output is selected via `--mode`:\n\
-  * bench         enumerate, time, report counts (default workflow)\n\
+Output is selected via `--mode` (default: render):\n\
   * render        enumerate and render the polygons as a GIF (`-o file.gif`)\n\
+  * bench         enumerate, time, report counts (no -o needed)\n\
   * dafsa         enumerate and write a gzipped DAFSA (`-o file.bin.gz`)\n\
   * dafsa-blocks  same, but as a directory of lazy-loadable blocks\n\
+  * stream        stage 1 of the streaming pipeline: write per-thread runs\n\
+                  to `<-o dir>/runs/run_tNN_rMM.bin` (bounded memory)\n\
+  * merge         stage 2 of the streaming pipeline: k-way merge runs into\n\
+                  `<-o dir>/unique.bin` + `certificate.json`\n\
+  * build         stage 3 of the streaming pipeline: stream `unique.bin`\n\
+                  through a DAFSA builder and write blocks to `<-o dir>/dafsa/`\n\
   * list-seeds    walk DFS to `--split-depth` and print SEED + RAT lines\n\
-                  (for external orchestration; see `--seed`)\n\
+                  (for multi-host orchestration; see `--seed`)\n\
 \n\
 Performance opts (combine for maximum speedup):\n\
   --mod-prune          modular reachability prune; up to 376x on some rings\n\
   --closure-key-prune  exact lattice closure-key prune; another 2-5x on top\n\
-  --threads N          parallel DFS; sub-linear scaling due to set merging\n\
+  --threads N          parallel DFS; near-linear in streaming modes,\n\
+                       sub-linear in HashSet modes (set-merge overhead)\n\
   --dihedral           dihedral-canonical output (one rep per chiral pair);\n\
                        also accelerates DFS via complement-reflection prune\n\
 \n\
-For memory at large n: prefer `--mode list-seeds` + per-seed processes\n\
-(via xargs / GNU parallel) over `--threads N>1`. See the file-level\n\
+For memory at large n: prefer the streaming pipeline (`--mode stream`\n\
+then `--mode merge`) over `--mode bench --threads N`. See the file-level\n\
 docstring in src/bin/rat_enum.rs for the full memory accounting.\n"
 )]
 struct Cli {
@@ -263,6 +284,9 @@ struct Cli {
     ///   * render        path/to/file.gif
     ///   * dafsa         path/to/file.bin.gz
     ///   * dafsa-blocks  path/to/output_dir/ (will be created)
+    ///   * stream        path/to/output_dir/ (will be created; runs go in `<dir>/runs/`)
+    ///   * merge         path/to/output_dir/ (same one used by `--mode stream`)
+    ///   * build         path/to/output_dir/ (same; blocks go in `<dir>/dafsa/`)
     #[arg(short = 'o', long)]
     filename: Option<String>,
 
@@ -322,9 +346,8 @@ struct Cli {
     /// displacement set and rejects any candidate direction whose
     /// post-extension displacement can't reach 0 mod m in any
     /// number of remaining steps. Cheap per-node (one packed hash
-    /// lookup per modulus). See `--mode probe-modular` for the
-    /// per-ring saturation curves and `--mod-prune-moduli` for
-    /// A/B testing different modulus sets.
+    /// lookup per modulus). Use `--mod-prune-moduli` to A/B test
+    /// different modulus sets.
     #[arg(long)]
     mod_prune: bool,
 
@@ -355,6 +378,14 @@ struct Cli {
     /// per-node savings.
     #[arg(long, default_value_t = 4)]
     closure_key_depth: usize,
+
+    /// States per block when writing the `--mode dafsa-blocks` asset.
+    /// Small enough that walks fetch only a few blocks; large enough
+    /// that per-block overhead doesn't dominate. 2048 is a sane
+    /// default for the few-million-state range; reduce for tiny
+    /// example assets so the test fans out across multiple blocks.
+    #[arg(long, default_value_t = 2048)]
+    block_size: u32,
 
     /// Resume the DFS from a specific seed prefix (comma-separated
     /// angles like `-5,3,-4`). When set, the DFS skips seed
@@ -446,8 +477,13 @@ fn main() {
     // With `--threads N>1`, the seed's subtree is itself sub-split
     // for in-process parallelism -- useful when an orchestrator
     // gives one big process at a time, but per-process memory is
-    // ~N x higher. See the file-level docstring for why separate
-    // processes are strictly better for memory.
+    // ~N x higher because this path still uses the HashSet-backed
+    // `enumerate_from_seed` (i.e. it's bench-shaped, not stream-
+    // shaped). For memory-bounded large-n enumeration, prefer
+    // `--mode stream` instead, where multi-threading within one
+    // process and multi-process orchestration have ~the same
+    // memory profile (no per-thread result accumulation to
+    // multiply).
     if let Some(seed) = cli.seed.as_deref() {
         let t0 = Instant::now();
         let rats = dispatch_enumerate_from_seed(
@@ -469,6 +505,104 @@ fn main() {
 
     match cli.mode {
         Mode::ListSeeds => unreachable!("handled above"),
+        Mode::Build => {
+            let Some(out_dir) = cli.filename.as_deref() else {
+                eprintln!("--mode build requires -o <output directory>");
+                std::process::exit(2);
+            };
+            let out_dir = std::path::Path::new(out_dir);
+            let unique_path = out_dir.join(tilezz::rat_enum::stream::UNIQUE_FILENAME);
+            if !unique_path.exists() {
+                eprintln!(
+                    "--mode build: {} not found; run `--mode merge` first",
+                    unique_path.display()
+                );
+                std::process::exit(2);
+            }
+
+            let t0 = Instant::now();
+            // Stream records straight into the streaming DAFSA
+            // builder. Peak RSS scales with the in-progress
+            // automaton, not with the input set.
+            let records = tilezz::rat_enum::stream::read_unique_records(&unique_path)
+                .expect("open unique.bin")
+                .map(|r| r.expect("read unique record"));
+            let dafsa = RatDafsa::from_sorted_unique_rats(records);
+            let t_build = t0.elapsed();
+            eprintln!(
+                "build: streamed {} rats into RatDafsa in {:?}",
+                dafsa.len(),
+                t_build
+            );
+
+            let blocks_dir = out_dir.join("dafsa");
+            std::fs::create_dir_all(&blocks_dir).expect("create dafsa/");
+            let t1 = Instant::now();
+            dafsa
+                .write_blocks(&blocks_dir, cli.block_size)
+                .expect("write_blocks");
+            let total_bytes: u64 = std::fs::read_dir(&blocks_dir)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter_map(|e| e.metadata().ok())
+                        .map(|m| m.len())
+                        .sum()
+                })
+                .unwrap_or(0);
+            eprintln!(
+                "build: wrote {} ({} bytes) in {:?}",
+                blocks_dir.display(),
+                total_bytes,
+                t1.elapsed()
+            );
+        }
+        Mode::Merge => {
+            let Some(out_dir) = cli.filename.as_deref() else {
+                eprintln!("--mode merge requires -o <output directory>");
+                std::process::exit(2);
+            };
+            let t0 = Instant::now();
+            let cert = tilezz::rat_enum::stream::merge_runs(
+                std::path::Path::new(out_dir),
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                cli.dihedral,
+            )
+            .expect("merge_runs");
+            let dt = t0.elapsed();
+            println!(
+                "merge: ring={} step={} max_steps={} -> {} unique rats in {:?}",
+                cli.ring, cli.step, cli.max_steps, cert.unique_records, dt
+            );
+        }
+        Mode::Stream => {
+            let Some(out_dir) = cli.filename.as_deref() else {
+                eprintln!("--mode stream requires -o <output directory>");
+                std::process::exit(2);
+            };
+            // Stage 1 is artifact-producing; don't double up by also
+            // dumping RAT lines on stdout.
+            STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let t0 = Instant::now();
+            let stats = tilezz::rat_enum::stream::stream_enum_dispatch(
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                n_threads,
+                cli.dihedral,
+                cli.paranoid,
+                std::path::Path::new(out_dir),
+            )
+            .expect("stream_enum_dispatch");
+            let dt = t0.elapsed();
+            println!(
+                "stream: ring={} step={} max_steps={} -> wrote runs to {} in {:?}",
+                cli.ring, cli.step, cli.max_steps, out_dir, dt
+            );
+            println!("{stats}");
+        }
         Mode::Dafsa => {
             let Some(filename) = cli.filename.as_deref() else {
                 eprintln!("--mode dafsa requires -o <output path>");
@@ -511,6 +645,56 @@ fn main() {
                 .expect("write gzipped RatDafsa");
             let bytes = std::fs::metadata(filename).map(|m| m.len()).unwrap_or(0);
             eprintln!("wrote {filename} ({bytes} bytes) in {:?}", t2.elapsed());
+
+            if cli.stats {
+                print_stats(&rats);
+            }
+        }
+        Mode::DafsaBlocks => {
+            let Some(dir) = cli.filename.as_deref() else {
+                eprintln!("--mode dafsa-blocks requires -o <output directory>");
+                std::process::exit(2);
+            };
+
+            STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let t0 = Instant::now();
+            let (rats, _stats) = run_rat_enum_seqs(
+                cli.ring,
+                cli.max_steps,
+                cli.step,
+                n_threads,
+                cli.dihedral,
+                cli.paranoid,
+            );
+            eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
+
+            let t1 = Instant::now();
+            let dafsa = RatDafsa::from_rats(rats.iter().map(|r| r.as_slice()));
+            eprintln!(
+                "built RatDafsa ({} entries) in {:?}",
+                dafsa.len(),
+                t1.elapsed()
+            );
+
+            let t2 = Instant::now();
+            let path = std::path::Path::new(dir);
+            std::fs::create_dir_all(path).expect("create output dir");
+            dafsa
+                .write_blocks(path, cli.block_size)
+                .expect("write blocked RatDafsa");
+            let total_bytes: u64 = std::fs::read_dir(path)
+                .map(|rd| {
+                    rd.filter_map(|e| e.ok())
+                        .filter_map(|e| e.metadata().ok())
+                        .map(|m| m.len())
+                        .sum()
+                })
+                .unwrap_or(0);
+            eprintln!(
+                "wrote {dir}/ ({total_bytes} bytes across block files) in {:?}",
+                t2.elapsed()
+            );
 
             if cli.stats {
                 print_stats(&rats);
@@ -890,11 +1074,11 @@ mod dihedral_tests {
 /// Correctness tests for the optional DFS prunes.
 ///
 /// For each ring x mode (rotation/dihedral) x thread-count, the test
-/// matrix runs the enumeration under every subset of the three
-/// optional prunes (`mod`, `coord-proj`, `closure-key`) and asserts
-/// the resulting canonical-rat set is bit-identical to the baseline
-/// (no prunes). A regression in any single prune -- or any
-/// composition -- shows up as a set-equality mismatch on these tests.
+/// matrix runs the enumeration under every subset of the optional
+/// prunes (`mod`, `closure-key`) and asserts the resulting
+/// canonical-rat set is bit-identical to the baseline (no prunes). A
+/// regression in any single prune -- or any composition -- shows up
+/// as a set-equality mismatch on these tests.
 ///
 /// Caps: ring n is chosen so the full sweep stays under ~30 s on a
 /// release build. ZZ12 stops at n=8 (no T-touch bug); ZZ8 / ZZ4 go

@@ -763,7 +763,7 @@ const FORMAT_VERSION: u32 = 1;
 /// by label; validating that on read is a small additional pass we
 /// currently skip in favor of a debug-mode invariant check on the
 /// writer side.
-pub const JSON_SCHEMA_DOC: &str = include_str!("dafsa_schema.txt");
+pub const JSON_SCHEMA_DOC: &str = include_str!("core_schema.txt");
 
 /// Stable identifier for the label scalar type baked into every
 /// serialized document. The reader rejects files whose `scalar`
