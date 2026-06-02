@@ -22,7 +22,10 @@ pub const ANGLE_BIAS: i16 = 128;
 /// `1 + canonical.len()` bytes total.
 #[inline]
 pub fn encode_record(canonical: &[i8], out: &mut Vec<u8>) {
-    debug_assert!(canonical.len() <= u8::MAX as usize, "record longer than 255");
+    debug_assert!(
+        canonical.len() <= u8::MAX as usize,
+        "record longer than 255"
+    );
     out.push(canonical.len() as u8);
     for &a in canonical {
         out.push((a as i16 + ANGLE_BIAS) as u8);
@@ -55,12 +58,7 @@ mod tests {
     /// Round-trip: encode then decode recovers the input.
     #[test]
     fn round_trip() {
-        let cases: &[&[i8]] = &[
-            &[],
-            &[0],
-            &[-5, 3, -2, 4],
-            &[127, -128, 0, 1, -1],
-        ];
+        let cases: &[&[i8]] = &[&[], &[0], &[-5, 3, -2, 4], &[127, -128, 0, 1, -1]];
         for &seq in cases {
             let mut buf = Vec::new();
             encode_record(seq, &mut buf);

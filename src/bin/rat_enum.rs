@@ -111,7 +111,6 @@ use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
 
-
 /// Enumerate every simple polygon with boundary length up to
 /// `max_steps` over the cyclotomic ring `ZZ`, in canonical-CCW form.
 ///
@@ -165,7 +164,6 @@ fn rat_enum_dihedral<ZZ: IsRing>(max_steps: usize, step: i8) -> (Vec<Vec<i8>>, D
         &Prunes::default(),
     )
 }
-
 
 // --------
 
@@ -418,11 +416,7 @@ fn main() {
     let n_threads = resolve_n_threads(cli.threads);
 
     if cli.mod_prune {
-        install_mod_prune(
-            cli.ring,
-            cli.max_steps,
-            cli.mod_prune_moduli.as_deref(),
-        );
+        install_mod_prune(cli.ring, cli.max_steps, cli.mod_prune_moduli.as_deref());
     }
     if cli.closure_key_prune {
         install_closure_key_prune(cli.ring, cli.closure_key_depth);
@@ -1035,8 +1029,9 @@ mod dihedral_tests {
                     };
                     let one_shot: HashSet<Vec<i8>> = one_shot_seqs.into_iter().collect();
 
-                    let (mut seeded, prefixes) =
-                        tilezz::rat_enum::seed::collect_seed_prefixes::<ZZ12>(n, 1, split_depth, dihedral);
+                    let (mut seeded, prefixes) = tilezz::rat_enum::seed::collect_seed_prefixes::<
+                        ZZ12,
+                    >(n, 1, split_depth, dihedral);
                     for prefix in &prefixes {
                         // Sweep both branches of the n_threads dispatch
                         // (single-threaded direct path AND sub-split +
@@ -1088,10 +1083,7 @@ mod opt_correctness_tests {
 
     /// Dispatch helper: collect closure keys for `ring` up to length
     /// `max_l`. Mirrors the per-ring match in `install_closure_key_prune`.
-    fn closure_keys_for(
-        ring: u8,
-        max_l: usize,
-    ) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
+    fn closure_keys_for(ring: u8, max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
         tilezz::dispatch_ring!(ring, collect_closure_keys::<ZZ>(max_l))
     }
 
@@ -1099,12 +1091,7 @@ mod opt_correctness_tests {
     /// Both prunes are constructed against `(ring, max_steps)`
     /// regardless of whether they're enabled, so each test case is
     /// self-contained and independent of any global state.
-    fn build_prunes(
-        ring: u8,
-        max_steps: usize,
-        with_mod: bool,
-        with_ck: bool,
-    ) -> Prunes {
+    fn build_prunes(ring: u8, max_steps: usize, with_mod: bool, with_ck: bool) -> Prunes {
         let (units, phi) = unit_vectors_for_ring(ring);
         let mut prunes = Prunes::default();
         if with_mod {
@@ -1229,8 +1216,10 @@ mod opt_correctness_tests {
         // ZZ6 reference enumeration (uses `sign_m_plus_n_sqrt3`,
         // which is independently OEIS-verified).
         let ops_zz6 = make_ops(true);
-        let (zz6_rats, _) = rat_enum_with::<ZZ6>(8, 1, ops_zz6, "zz6_ref", "", false, &Prunes::default());
-        let mut zz6_by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let (zz6_rats, _) =
+            rat_enum_with::<ZZ6>(8, 1, ops_zz6, "zz6_ref", "", false, &Prunes::default());
+        let mut zz6_by_len: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
         for r in &zz6_rats {
             *zz6_by_len.entry(r.len()).or_insert(0) += 1;
         }
@@ -1238,15 +1227,16 @@ mod opt_correctness_tests {
         // ZZ18 step=3 enumeration (uses our new cubic-root sign +
         // multivariate sign + custom CellFloor for the imag axis).
         let ops_zz18 = make_ops(true);
-        let (zz18_rats, _) = rat_enum_with::<ZZ18>(8, 3, ops_zz18, "zz18_step3", "", false, &Prunes::default());
-        let mut zz18_by_len: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let (zz18_rats, _) =
+            rat_enum_with::<ZZ18>(8, 3, ops_zz18, "zz18_step3", "", false, &Prunes::default());
+        let mut zz18_by_len: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
         for r in &zz18_rats {
             *zz18_by_len.entry(r.len()).or_insert(0) += 1;
         }
 
         // Compare per-length counts.
-        let mut all_lens: std::collections::BTreeSet<usize> =
-            zz6_by_len.keys().copied().collect();
+        let mut all_lens: std::collections::BTreeSet<usize> = zz6_by_len.keys().copied().collect();
         all_lens.extend(zz18_by_len.keys().copied());
         let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();
         for &n in &all_lens {
@@ -1258,7 +1248,10 @@ mod opt_correctness_tests {
         }
         if !mismatches.is_empty() {
             for (n, z6, z18) in &mismatches {
-                eprintln!("perim={n}: ZZ6={z6}, ZZ18-step-3={z18}, diff={:+}", *z18 as i64 - *z6 as i64);
+                eprintln!(
+                    "perim={n}: ZZ6={z6}, ZZ18-step-3={z18}, diff={:+}",
+                    *z18 as i64 - *z6 as i64
+                );
             }
             panic!(
                 "ZZ18-step-3 disagrees with ZZ6 at {} perimeter(s) -- sign helper or \
@@ -1290,7 +1283,7 @@ mod opt_correctness_tests {
             (6, 22),
             (7, 69),
             (8, 418),
-            (9, 2210),  // T-touches first appear here; bug-fix-sensitive
+            (9, 2210),   // T-touches first appear here; bug-fix-sensitive
             (10, 14024), // bug-fix-sensitive
         ];
         let max_n = OEIS.iter().map(|&(n, _)| n).max().unwrap();
@@ -1330,7 +1323,9 @@ mod opt_correctness_tests {
     }
 
     /// Group an enumerated `Vec<Vec<i8>>` into `len -> count`.
-    fn by_length(rats: &std::collections::HashSet<Vec<i8>>) -> std::collections::BTreeMap<usize, usize> {
+    fn by_length(
+        rats: &std::collections::HashSet<Vec<i8>>,
+    ) -> std::collections::BTreeMap<usize, usize> {
         let mut by_len = std::collections::BTreeMap::new();
         for seq in rats {
             *by_len.entry(seq.len()).or_insert(0) += 1;
@@ -1342,11 +1337,7 @@ mod opt_correctness_tests {
     /// `max_n` with all prunes enabled (single-threaded for
     /// determinism), then assert each `(perim, expected)` pair from
     /// `oeis`. Used by the cheap external-anchor pins below.
-    fn assert_oeis_pins<ZZ: IsRing>(
-        ring: u8,
-        oeis_name: &str,
-        oeis: &[(usize, usize)],
-    ) {
+    fn assert_oeis_pins<ZZ: IsRing>(ring: u8, oeis_name: &str, oeis: &[(usize, usize)]) {
         let max_n = oeis.iter().map(|&(n, _)| n).max().unwrap();
         let prunes = build_prunes(ring, max_n, true, true);
         let rats = run::<ZZ>(max_n, true, 1, &prunes);
@@ -1394,11 +1385,11 @@ mod opt_correctness_tests {
     #[test]
     fn oeis_a316198_zz8_pin() {
         const OEIS: &[(usize, usize)] = &[
-            (4, 2),       // a(2)
-            (6, 6),       // a(3)
-            (8, 59),      // a(4)
-            (10, 695),    // a(5)
-            (12, 12198),  // a(6)
+            (4, 2),      // a(2)
+            (6, 6),      // a(3)
+            (8, 59),     // a(4)
+            (10, 695),   // a(5)
+            (12, 12198), // a(6)
         ];
         assert_oeis_pins::<ZZ8>(8, "A316198", OEIS);
     }
@@ -1414,15 +1405,15 @@ mod opt_correctness_tests {
     #[test]
     fn oeis_a316200_zz10_pin() {
         const OEIS: &[(usize, usize)] = &[
-            (4, 2),    // a(4)
-            (5, 2),    // a(5)
-            (6, 10),   // a(6)
-            (7, 15),   // a(7)
-            (8, 124),  // a(8)
-            (9, 352),  // a(9)
-            (10, 2378),// a(10)
-            // a(11): OEIS says 19405, we say 9883. Pin omitted
-            // until the discrepancy is resolved with OEIS.
+            (4, 2),   // a(4)
+            (5, 2),   // a(5)
+            (6, 10),  // a(6)
+            (7, 15),  // a(7)
+            (8, 124), // a(8)
+            (9, 352), // a(9)
+            (10, 2378), // a(10)
+                      // a(11): OEIS says 19405, we say 9883. Pin omitted
+                      // until the discrepancy is resolved with OEIS.
         ];
         assert_oeis_pins::<ZZ10>(10, "A316200", OEIS);
     }
@@ -1438,18 +1429,18 @@ mod opt_correctness_tests {
     #[test]
     fn oeis_a284869_zz6_pin() {
         const OEIS: &[(usize, usize)] = &[
-            (3, 1),     // a(3)
-            (4, 1),     // a(4)
-            (5, 1),     // a(5)
-            (6, 4),     // a(6)
-            (7, 5),     // a(7)
-            (8, 16),    // a(8)
-            (9, 37),    // a(9)
-            (10, 120),  // a(10)
-            (11, 344),  // a(11)
-            (12, 1175), // a(12)
-            (13, 3807), // a(13)
-            (14, 13224),// a(14)
+            (3, 1),      // a(3)
+            (4, 1),      // a(4)
+            (5, 1),      // a(5)
+            (6, 4),      // a(6)
+            (7, 5),      // a(7)
+            (8, 16),     // a(8)
+            (9, 37),     // a(9)
+            (10, 120),   // a(10)
+            (11, 344),   // a(11)
+            (12, 1175),  // a(12)
+            (13, 3807),  // a(13)
+            (14, 13224), // a(14)
         ];
         assert_oeis_pins::<ZZ6>(6, "A284869", OEIS);
     }

@@ -430,7 +430,10 @@ mod tests {
             assert_eq!(streamed.get(i), buffered.get(i));
         }
         for r in &sorted {
-            assert_eq!(streamed.index_of(r.as_slice()), buffered.index_of(r.as_slice()));
+            assert_eq!(
+                streamed.index_of(r.as_slice()),
+                buffered.index_of(r.as_slice())
+            );
         }
     }
 

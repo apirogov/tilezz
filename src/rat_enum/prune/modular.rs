@@ -79,8 +79,7 @@ impl ModularPrune {
             }
         }
 
-        let mut tables: Vec<Vec<rustc_hash::FxHashSet<u64>>> =
-            Vec::with_capacity(moduli.len());
+        let mut tables: Vec<Vec<rustc_hash::FxHashSet<u64>>> = Vec::with_capacity(moduli.len());
         for &m in &moduli {
             tables.push(Self::build_one_modulus(units, phi, m, max_steps));
         }

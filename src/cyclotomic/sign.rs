@@ -59,8 +59,12 @@ use super::numtraits::{IntRing, ZSigned};
 
 type Q = BigRational;
 
-fn q_int_i128(n: i128) -> Q { Ratio::from_integer(BigInt::from(n)) }
-fn q_int_usize(n: usize) -> Q { Ratio::from_integer(BigInt::from(n)) }
+fn q_int_i128(n: i128) -> Q {
+    Ratio::from_integer(BigInt::from(n))
+}
+fn q_int_usize(n: usize) -> Q {
+    Ratio::from_integer(BigInt::from(n))
+}
 
 /// Heap-allocated polynomial in Q[x] with `Ratio<BigInt>`
 /// coefficients (low-degree-first, trailing zeros trimmed).
@@ -75,9 +79,15 @@ struct PolyQ {
 }
 
 impl PolyQ {
-    fn zero() -> Self { Self { coeffs: vec![] } }
-    fn is_zero(&self) -> bool { self.coeffs.is_empty() }
-    fn deg(&self) -> i32 { self.coeffs.len() as i32 - 1 }
+    fn zero() -> Self {
+        Self { coeffs: vec![] }
+    }
+    fn is_zero(&self) -> bool {
+        self.coeffs.is_empty()
+    }
+    fn deg(&self) -> i32 {
+        self.coeffs.len() as i32 - 1
+    }
     fn lc(&self) -> &Q {
         debug_assert!(!self.coeffs.is_empty());
         self.coeffs.last().unwrap()
@@ -170,8 +180,16 @@ fn variation_count(seq: &[Q]) -> usize {
     let mut prev: i8 = 0;
     let mut count = 0usize;
     for v in seq {
-        let s = if v.is_zero() { 0 } else if v.is_positive() { 1 } else { -1 };
-        if s == 0 { continue; }
+        let s = if v.is_zero() {
+            0
+        } else if v.is_positive() {
+            1
+        } else {
+            -1
+        };
+        if s == 0 {
+            continue;
+        }
         if prev != 0 && prev != s {
             count += 1;
         }
@@ -269,7 +287,6 @@ mod profile {
 // End Sturm-Tarski. Above this point the rest of the file's existing
 // signum_sum_sqrt_expr_* helpers continue unchanged.
 // ===================================================================
-
 
 /// Floating-point-free solution to get sign of an expression
 /// a*sqrt(n) + b*sqrt(m)
@@ -1019,8 +1036,7 @@ pub fn sign_at_cubic_root_in_interval(
     // Return |f(n/dn)| * dn^2 (i.e. numerator of |f(n/dn)| over the
     // common denominator dn^2). All i128.
     let f_abs_num = |n: i128, dn: i128| -> i128 {
-        let v = a
-            .checked_mul(dn)
+        a.checked_mul(dn)
             .and_then(|x| x.checked_mul(dn))
             .and_then(|aa| {
                 b.checked_mul(n)
@@ -1032,8 +1048,7 @@ pub fn sign_at_cubic_root_in_interval(
                     .and_then(|x| x.checked_mul(n))
                     .map(|dd| ab + dd)
             })
-            .expect("sign_at_cubic_root: i128 overflow in f_abs_num");
-        v
+            .expect("sign_at_cubic_root: i128 overflow in f_abs_num")
     };
 
     let p_sign = |n: i128, dn: i128| -> i8 {
@@ -1132,11 +1147,13 @@ pub fn sign_at_cubic_root_in_interval(
             debug_assert!(width_num > 0);
 
             let lhs_lo = v_lo.unsigned_abs() as i128 * hi_d;
-            let rhs_lo = (l_bound).checked_mul(width_num)
+            let rhs_lo = (l_bound)
+                .checked_mul(width_num)
                 .and_then(|x| x.checked_mul(lo_d))
                 .expect("sign_at_cubic_root: width-check lo overflow");
             let lhs_hi = v_hi.unsigned_abs() as i128 * lo_d;
-            let rhs_hi = (l_bound).checked_mul(width_num)
+            let rhs_hi = (l_bound)
+                .checked_mul(width_num)
                 .and_then(|x| x.checked_mul(hi_d))
                 .expect("sign_at_cubic_root: width-check hi overflow");
             if lhs_lo > rhs_lo && lhs_hi > rhs_hi {
@@ -1412,7 +1429,9 @@ pub fn sign_at_s_times_x_minus_k(
 
     // (4 - c^2)*X^2 - K^2 : subtract K^2 from the constant term only.
     let k128 = k as i128;
-    let k_sq = k128.checked_mul(k128).expect("sign_at_s_times_x_minus_k: K^2 overflow");
+    let k_sq = k128
+        .checked_mul(k128)
+        .expect("sign_at_s_times_x_minus_k: K^2 overflow");
     let result: [i128; 3] = [
         scaled[0]
             .checked_sub(k_sq)
@@ -1426,9 +1445,15 @@ pub fn sign_at_s_times_x_minus_k(
     // result entries stay well within i64. Wider inputs trigger an
     // assertion.
     let result_i64: [i64; 3] = [
-        result[0].try_into().expect("sign_at_s_times_x_minus_k: result[0] exceeds i64"),
-        result[1].try_into().expect("sign_at_s_times_x_minus_k: result[1] exceeds i64"),
-        result[2].try_into().expect("sign_at_s_times_x_minus_k: result[2] exceeds i64"),
+        result[0]
+            .try_into()
+            .expect("sign_at_s_times_x_minus_k: result[0] exceeds i64"),
+        result[1]
+            .try_into()
+            .expect("sign_at_s_times_x_minus_k: result[1] exceeds i64"),
+        result[2]
+            .try_into()
+            .expect("sign_at_s_times_x_minus_k: result[2] exceeds i64"),
     ];
 
     let sign_diff = sign_at_cubic_root_in_interval(result_i64, minpoly, iso_lo, iso_hi);
@@ -1442,11 +1467,7 @@ pub fn sign_at_s_times_x_minus_k(
 /// Used internally by [`sign_at_s_times_x_minus_k`] to express
 /// `(4 - c^2)*X^2 - K^2` in the integer basis. Returns the reduced
 /// polynomial as `[const, c, c^2]` coefficients.
-fn poly_mul_deg2_mod_cubic(
-    a: [i128; 3],
-    b: [i128; 3],
-    c3: [i128; 3],
-) -> [i128; 3] {
+fn poly_mul_deg2_mod_cubic(a: [i128; 3], b: [i128; 3], c3: [i128; 3]) -> [i128; 3] {
     // (a0 + a1*c + a2*c^2) * (b0 + b1*c + b2*c^2)
     //   = a0*b0
     //   + (a0*b1 + a1*b0) * c
@@ -1458,11 +1479,7 @@ fn poly_mul_deg2_mod_cubic(
     // c^4 = c * c^3 = c3[0]*c + c3[1]*c^2 + c3[2]*c^3
     //                = c3[0]*c + c3[1]*c^2 + c3[2]*(c3[0] + c3[1]*c + c3[2]*c^2)
     //                = c3[2]*c3[0] + (c3[0] + c3[2]*c3[1])*c + (c3[1] + c3[2]*c3[2])*c^2
-    let c4: [i128; 3] = [
-        c3[2] * c3[0],
-        c3[0] + c3[2] * c3[1],
-        c3[1] + c3[2] * c3[2],
-    ];
+    let c4: [i128; 3] = [c3[2] * c3[0], c3[0] + c3[2] * c3[1], c3[1] + c3[2] * c3[2]];
 
     let coef_c3 = a[1] * b[2] + a[2] * b[1];
     let coef_c4 = a[2] * b[2];
@@ -1635,6 +1652,7 @@ mod fuzz_tests {
         (value, safety)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fuzz_cubic_root<F>(
         seed: u64,
         iterations: u64,
@@ -1645,8 +1663,7 @@ mod fuzz_tests {
         iso_hi: (i64, i64),
         c_f64: F,
         label: &str,
-    )
-    where
+    ) where
         F: Fn() -> f64,
     {
         let c = c_f64();
@@ -1682,9 +1699,7 @@ mod fuzz_tests {
             checked > iterations / 10,
             "{label}: too few cases verified ({checked}/{iterations}); safety margin too wide?",
         );
-        eprintln!(
-            "{label}: {checked} cases verified, {skipped} skipped (close-to-zero)",
-        );
+        eprintln!("{label}: {checked} cases verified, {skipped} skipped (close-to-zero)",);
     }
 
     const ZZ14_MINPOLY: [i64; 4] = [1, -2, -1, 1];
@@ -1729,6 +1744,7 @@ mod fuzz_tests {
     /// Fuzz `sign_at_s_times_x_minus_k` for ZZ14. The same coefficient
     /// magnitude bound applies; K is sampled in the same range.
     /// Independent oracle: f64 value of `s*(a + b*c + d*c^2) - K`.
+    #[allow(clippy::too_many_arguments)]
     fn fuzz_s_minus_k<F, G>(
         seed: u64,
         iterations: u64,
@@ -1740,8 +1756,7 @@ mod fuzz_tests {
         c_f64: F,
         s_f64: G,
         label: &str,
-    )
-    where
+    ) where
         F: Fn() -> f64,
         G: Fn() -> f64,
     {
@@ -1758,9 +1773,8 @@ mod fuzz_tests {
             let exact = sign_at_s_times_x_minus_k([a, b, d], k, minpoly, iso_lo, iso_hi);
             let x_value = a as f64 + b as f64 * c + d as f64 * c * c;
             let value = s * x_value - k as f64;
-            let max_op =
-                ((a as f64).abs() + (b as f64 * c).abs() + (d as f64 * c * c).abs()) * s
-                    + (k as f64).abs();
+            let max_op = ((a as f64).abs() + (b as f64 * c).abs() + (d as f64 * c * c).abs()) * s
+                + (k as f64).abs();
             let safety = 1e-12 * (1.0 + max_op);
             if value.abs() > safety {
                 let f64_sign = if value > 0.0 { 1i8 } else { -1 };
@@ -1820,6 +1834,7 @@ mod fuzz_tests {
     /// here pins the bisection's `MIN_BISECTIONS = 50` bound as
     /// sufficient for the tested coefficient range. Catches drift
     /// in either implementation.
+    #[allow(clippy::too_many_arguments)]
     fn sturm_matches_bisection(
         seed: u64,
         iterations: u64,
@@ -1835,12 +1850,7 @@ mod fuzz_tests {
             let a = rng.next_i64_in(coeff_lo, coeff_hi);
             let b = rng.next_i64_in(coeff_lo, coeff_hi);
             let d = rng.next_i64_in(coeff_lo, coeff_hi);
-            let bis = sign_at_cubic_root_in_interval(
-                [a, b, d],
-                minpoly,
-                (iso_lo, 1),
-                (iso_hi, 1),
-            );
+            let bis = sign_at_cubic_root_in_interval([a, b, d], minpoly, (iso_lo, 1), (iso_hi, 1));
             let sturm = sturm_sign_at_root(&minpoly, &[a, b, d], iso_lo, iso_hi);
             assert_eq!(
                 bis, sturm,
