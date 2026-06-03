@@ -47,7 +47,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// The three prose / JSON schema files we ship inside every
@@ -1016,7 +1016,7 @@ if [ ! -d \"$SRC_DIR/.git\" ]; then
     git clone \"$REPO\" \"$SRC_DIR\"
 fi
 ( cd \"$SRC_DIR\" && git fetch && git checkout \"$COMMIT\" && \\
-  cargo build --release --bin rat_enum --features examples )
+  cargo build --release --bin rat_enum --features cli )
 
 # Run the reproduction step(s) relative to the source tree so the
 # `./target/release/rat_enum` path resolves.
@@ -1266,11 +1266,7 @@ fn current_year() -> i64 {
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    if month <= 2 {
-        y + 1
-    } else {
-        y
-    }
+    if month <= 2 { y + 1 } else { y }
 }
 
 #[cfg(test)]

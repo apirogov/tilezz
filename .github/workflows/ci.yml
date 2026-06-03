@@ -59,7 +59,7 @@ jobs:
           # invocation, and byte-identical re-emit. Total ~20s with
           # a warm cache.
           export SOURCE_DATE_EPOCH=1780000000
-          cargo build --release --bin rat_enum --features examples
+          cargo build --release --bin rat_enum --features cli
           rm -rf /tmp/asset-original /tmp/repro
           ./target/release/rat_enum \
               --ring 12 -n 7 --free \

@@ -12,7 +12,7 @@ struct ProfileStats {
 
 use clap::Parser;
 use tilezz::geom::angles::normalize_angle;
-use tilezz::geom::rat::{lex_min_rot, Rat};
+use tilezz::geom::rat::{Rat, lex_min_rot};
 use tilezz::geom::tiles;
 
 const HTURN: i8 = 2;
@@ -287,7 +287,7 @@ fn make_free(
 fn main() {
     let args = Args::parse();
 
-    #[cfg(feature = "pprof")]
+    #[cfg(feature = "debug")]
     let guard = pprof::ProfilerGuardBuilder::default()
         .frequency(1000)
         .blocklist(&["libc", "libgcc", "pthread", "vdso"])
@@ -344,7 +344,7 @@ fn main() {
         );
     }
 
-    #[cfg(feature = "pprof")]
+    #[cfg(feature = "debug")]
     {
         if let Ok(report) = guard.report().build() {
             let flamegraph_file = "flamegraph.svg";

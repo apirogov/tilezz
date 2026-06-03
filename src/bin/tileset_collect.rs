@@ -18,7 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
 use tilezz::analysis::neighborhood::{self, NeighborhoodIndex};
-use tilezz::analysis::seq_explorer::{self, check_fixed_point, SeqExplorer};
+use tilezz::analysis::seq_explorer::{self, SeqExplorer, check_fixed_point};
 use tilezz::analysis::vertextypes::{self, OpenVertexTypeIndex};
 use tilezz::cyclotomic::{IsRing, ZZ10, ZZ12};
 use tilezz::geom::rat::Rat;
@@ -47,7 +47,7 @@ enum Commands {
         kind: CollectKind,
         #[arg(long)]
         output: Option<String>,
-        #[arg(long, help = "Flamegraph output path (requires --features pprof)")]
+        #[arg(long, help = "Flamegraph output path (requires --features debug)")]
         pprof: Option<String>,
     },
     /// Replay a saved collection file: reconstruct its tileset from the

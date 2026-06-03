@@ -4,7 +4,7 @@
 //! pattern: start a `pprof::ProfilerGuard` at the top of `main`, write a
 //! flamegraph SVG to the requested path before exit, and silently no-op
 //! when the `pprof` cargo feature is disabled. This helper centralizes
-//! that pattern so the binaries stay free of `#[cfg(feature = "pprof")]`
+//! that pattern so the binaries stay free of `#[cfg(feature = "debug")]`
 //! ladders.
 //!
 //! Usage:
@@ -14,10 +14,10 @@
 //! guard.finish();
 //! ```
 
-#[cfg(feature = "pprof")]
+#[cfg(feature = "debug")]
 type Inner = Option<(pprof::ProfilerGuard<'static>, String)>;
 
-#[cfg(not(feature = "pprof"))]
+#[cfg(not(feature = "debug"))]
 type Inner = ();
 
 pub struct ProfileGuard {
@@ -30,7 +30,7 @@ impl ProfileGuard {
     /// the `pprof` feature is disabled, a warning is printed (when a
     /// path was requested) and the guard is a no-op.
     pub fn start(path: Option<&str>) -> Self {
-        #[cfg(feature = "pprof")]
+        #[cfg(feature = "debug")]
         {
             let inner = path.map(|p| {
                 let g = pprof::ProfilerGuardBuilder::default()
@@ -42,10 +42,10 @@ impl ProfileGuard {
             });
             Self { inner }
         }
-        #[cfg(not(feature = "pprof"))]
+        #[cfg(not(feature = "debug"))]
         {
             if path.is_some() {
-                eprintln!("warning: --pprof requires building with `--features pprof`");
+                eprintln!("warning: --pprof requires building with `--features debug`");
             }
             Self { inner: () }
         }
@@ -56,7 +56,7 @@ impl ProfileGuard {
     /// stderr but does not panic; profiling failures should not break
     /// the binary's primary output.
     pub fn finish(self) {
-        #[cfg(feature = "pprof")]
+        #[cfg(feature = "debug")]
         if let Some((g, path)) = self.inner {
             match g.report().build() {
                 Ok(report) => match std::fs::File::create(&path) {
