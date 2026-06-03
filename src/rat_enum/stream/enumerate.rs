@@ -420,13 +420,19 @@ mod tests {
         );
 
         // Spot-check the first block file too; if the manifest is
-        // identical and the block writer is deterministic, all
-        // blocks should be byte-identical. The default template
-        // places blocks in a `blocks/` subdir.
-        let block_0_path = dafsa1_blocks_dir.join("blocks/block_000000.bin");
-        let block_0_1 = std::fs::read(&block_0_path).unwrap();
-        // (read pass 2 -- already overwrote on second build)
-        assert!(!block_0_1.is_empty(), "block_000000.bin missing");
+        // identical and the block writer is deterministic, every
+        // block file (content-addressed by SHA-256) must exist on
+        // disk under `blocks/`.
+        let manifest: crate::stringmatch::dafsa::lazy::BlockManifest =
+            serde_json::from_slice(&manifest_1).unwrap();
+        assert!(!manifest.blocks.is_empty(), "no blocks emitted");
+        let first = &manifest.blocks[0];
+        let block_0_path = dafsa1_blocks_dir.join(manifest.block_filename(first));
+        let block_0_bytes = std::fs::read(&block_0_path).unwrap();
+        assert!(
+            !block_0_bytes.is_empty(),
+            "first block file missing: {block_0_path:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

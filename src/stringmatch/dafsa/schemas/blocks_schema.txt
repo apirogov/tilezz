@@ -1,14 +1,15 @@
 tilezz-rat-dafsa-blocks asset schema (version 1)
 ================================================
 
-  Describes:  block_index.json    (manifest, JSON)
-              blocks/block_<NNNNNN>.bin  (binary block files, gzipped)
+  Describes:  block_index.json         (manifest, JSON)
+              blocks/<sha256>.bin      (binary block files, gzipped;
+                                        filename = SHA-256 of file)
   Within:     a tilezz-rat-dafsa-blocks asset directory
               (RO-Crate entry point: ro-crate-metadata.json)
-  See also:   block_index.schema.json   (machine-checkable JSON Schema
-                                         for block_index.json only)
-              rat_schema.txt            (length-prefix convention used
-                                         inside accepted sequences)
+  See also:   block_index.schema.json  (machine-checkable JSON Schema
+                                        for block_index.json only)
+              rat_schema.txt           (length-prefix convention used
+                                        inside accepted sequences)
 
 A blocked rat-dafsa asset is laid out as a directory of immutable
 static files: one small JSON manifest plus N gzipped binary blocks
@@ -21,8 +22,8 @@ Why this format
 ---------------
 
 The original motivation was lazy on-demand fetching from a browser
-(WASM client over HTTP range requests), but the same shape carries
-its weight for any other consumer:
+(WASM client over HTTP), but the same shape carries its weight for
+any other consumer:
 
 * **Random-access queries**. A `get(i)` / `index_of(rat)` walk
   fetches `O(depth)` blocks regardless of the asset's size, so a
@@ -30,25 +31,28 @@ its weight for any other consumer:
   A monolithic `*.json.gz` must be fully decompressed and held in
   memory before any query can run.
 
-* **Stable, content-addressable state IDs**. State 0 is always the
-  root and state ids are assigned in build order, so block N
-  contains exactly states `[N*block_size, (N+1)*block_size)`. A
-  block's contents depend only on the DAFSA prefix that produced
-  it, which means published blocks are immutable: a SHA-256 of
-  `block_000007.bin` taken on the publisher uniquely names a
-  particular slab of the automaton across all mirrors.
+* **Content-addressed, permanently cacheable URLs**. Every block
+  file's name is the SHA-256 of its gzipped bytes. The file is its
+  own integrity proof and its own cache key: an HTTP cache can keep
+  any `blocks/<sha256>.bin` forever under `Cache-Control: immutable`
+  because the URL changes the instant the bytes do. Two assets that
+  contain byte-identical blocks reference the same URL.
 
 * **Forward-compatible extension**. Enumerating to a deeper perim
-  appends new states (and so new blocks) without changing any
-  existing block. Old consumers keep working; new consumers see
-  the larger asset. Same property used by package mirrors that
-  ship new tarballs without re-publishing the old ones.
+  appends new states and grows the root's outgoing edges. The root
+  state lives in the manifest (not in any block file), and inner
+  blocks' record layouts are determined purely by their inner DAFSA
+  content -- which is structurally stable across forward extensions.
+  In practice an upgrade rewrites the manifest, leaves every fully-
+  full inner block byte-identical, and only re-cuts the trailing
+  partial block (which gets a new SHA-256 / new URL). Every still-
+  valid URL stays valid; CDN caches stay warm.
 
 * **Independent per-block compression**. Each block file gzips on
-  its own. Compression ratio is still close to the bulk-gzip case
+  its own. Compression ratio stays close to the bulk-gzip case
   (blocks share short repeating patterns: same edge labels, dense
-  monotone target indices), but ratio trades against the
-  per-block index overhead via the manifest's `block_size`. Tunable.
+  monotone target indices); ratio trades against per-block
+  bookkeeping via the manifest's `target_block_bytes`. Tunable.
 
 * **Cache-friendly and CDN-friendly serving**. Immutable named
   static files at predictable URLs are exactly what HTTP caches,
@@ -60,50 +64,75 @@ its weight for any other consumer:
   so building the asset for n=14 doesn't require holding the
   whole 30M-rat DAFSA in RAM.
 
-* **Cryptographically auditable**. Per-block SHA-256s recorded in
-  `ro-crate-metadata.json` mean a partial mirror can be verified
-  in isolation (no need to re-fetch the rest).
+* **Cryptographically auditable**. Each block's SHA-256 is recorded
+  in the manifest *and* duplicated as the filename, plus a copy in
+  `ro-crate-metadata.json`. A partial mirror can be verified in
+  isolation (no need to re-fetch the rest); a tampered block fails
+  the hash check at read time.
 
 The WASM frontend lives where these properties converge -- bounded
-memory, range-request fetches, static hosting, fast queries -- but
-they're useful in any environment.
+memory, fetches over plain HTTP, static hosting, fast queries --
+but they're useful in any environment.
 
 Files
 -----
 
-  block_index.json            # manifest (JSON, small, fetched once)
-  blocks/block_<NNNNNN>.bin   # one file per block, gzip-compressed
-                              # binary, named via the manifest's
-                              # `block_filename_template` (default
-                              # template "blocks/block_{:06}.bin"
-                              # uses six zero-padded decimal digits).
+  block_index.json         # manifest (JSON, small, fetched once)
+  blocks/<sha256>.bin      # one file per block, gzip-compressed
+                           # binary. The filename stem is the
+                           # lowercase hex SHA-256 of the file's
+                           # gzipped bytes (also recorded in the
+                           # manifest's `blocks` array).
 
 The manifest
 ------------
 
   {
-    "format":                   "tilezz-rat-dafsa-blocks",
-    "version":                  1,
-    "scalar":                   "i8",
-    "block_format":             "tilezz-rat-block",   // wire format of each block file
-    "block_version":            1,                    // bumped independently of "version"
-    "block_size":               <u32>,                // states per block (except the last)
-    "n_states":                 <u32>,                // total DAFSA states
-    "n_edges":                  <u32>,                // total DAFSA edges
-    "n_sequences":              <u32>,                // == counts[root_state]; the rat count
-    "n_blocks":                 <u32>,                // == ceil(n_states / block_size)
-    "root_state":               <u32>,                // always 0 in v1; recorded for clarity
-    "block_filename_template":  "blocks/block_{:06}.bin"  // printf-like; {} substituted with id
+    "format":              "tilezz-rat-dafsa-blocks",
+    "version":             1,
+    "scalar":              "i8",
+    "block_format":        "tilezz-rat-block",  // wire format of each block file
+    "block_version":       1,                   // bumped independently of "version"
+    "target_block_bytes":  <u32>,               // writer's target on-disk bytes/block (hint)
+    "n_states":            <u32>,               // total states, including the root
+    "n_edges":             <u32>,               // total edges, including the root's
+    "n_sequences":         <u32>,               // == root.count; the rat count
+    "max_indexed_length":  <u32>,               // max label on a root edge (= max rat length)
+    "root": {                                   // state 0, inlined into the manifest
+      "count":       <u64>,                     // == n_sequences
+      "is_accept":   <bool>,                    // always false for a tilezz-rat-dafsa
+      "edges": [
+        { "label": <i8>, "target": <u32> },     // one entry per length class
+        ...
+      ]
+    },
+    "blocks": [                                 // content-addressed block index
+      {
+        "first_state": <u32>,                   // smallest state id in this block; >= 1
+        "sha256":      "<64-hex>",              // SHA-256 of the gzipped block file
+        "size":        <u32>                    // gzipped file size in bytes
+      },
+      ...
+    ]
   }
+
+`blocks` is sorted strictly ascending by `first_state`. Block N
+covers states `[blocks[N].first_state, blocks[N+1].first_state)`;
+the last block covers up to `n_states`. `blocks[0].first_state` is
+always 1 -- state 0 (the root) lives in `root`, not in any block
+file.
 
 Block ID lookup
 ---------------
 
-State `s` (0 <= s < n_states) lives in block `s / block_size`, at
-local index `s % block_size`. A client that knows the target state
-id of an edge can compute the block file to fetch by integer
-division on `block_size` and substitute into
-`block_filename_template`.
+State `s` (1 <= s < n_states) lives in the block at index
+`block_index_for_state(s)` = largest `i` with
+`blocks[i].first_state <= s`. With a sorted `blocks` array this is
+an O(log len(blocks)) binary search; the local index is
+`s - blocks[i].first_state`. State 0 is served directly from the
+manifest's `root` record without touching any block file.
+
+The block file lives at `blocks/<blocks[i].sha256>.bin`.
 
 Block file format
 -----------------
@@ -113,8 +142,8 @@ layout. All multi-byte integers are little-endian.
 
   Header (16 bytes):
     magic           4 bytes ASCII  "TRB1"
-    first_state_id  u32            // == block_id * block_size
-    n_states        u32            // == block_size, except for the last block
+    first_state_id  u32            // == manifest.blocks[i].first_state
+    n_states        u32            // states held by this block
     n_edges         u32            // edges owned by the states in this block
 
   State records (16 bytes each, n_states of them):
@@ -129,18 +158,27 @@ layout. All multi-byte integers are little-endian.
     padding         3 bytes        // zero-filled
     target          u32            // GLOBAL state id (not block-local)
 
-Edges of state `s` are the slice
-  [edges_offset, next_edges_offset)
+Edges of the local state at index `j` in a block are the slice
+  [states[j].edges_offset, next_edges_offset)
 of this block's edge array, where `next_edges_offset` is the edges
-offset of state `s+1` in the same block, or `n_edges` if `s` is the
+offset of state `j+1` in the same block, or `n_edges` if `j` is the
 last state in the block.
+
+Integrity check (mandatory)
+---------------------------
+
+After fetching a block file, a reader MUST verify that the
+SHA-256 of its bytes equals `manifest.blocks[i].sha256` before
+parsing the body. The hash is also the URL stem, so a tampered
+file is renamed, not modified -- the fetch URL itself encodes the
+content fingerprint.
 
 Length-prefix convention
 ------------------------
 
 This blocked format wraps a `tilezz-rat-dafsa`-flavored DAFSA, so
 the accepted sequences are length-prefixed angle sequences (see
-`rat_dafsa_schema.txt`):
+`rat_schema.txt`):
 
   stored_sequence(rat) = [len(rat), rat[0], rat[1], ...,
                           rat[len(rat) - 1]]
@@ -154,19 +192,78 @@ Reading a query
 Given a `rat` to look up, the consumer:
 
   1. Prepend `len(rat)` to obtain `seq = [len, rat...]`.
-  2. Walk from `root_state` symbol-by-symbol:
-       a. block_id = current_state / block_size
-       b. Fetch and cache `block_<block_id>.bin` if not loaded.
-       c. Read state record at local index `current_state % block_size`.
-       d. Binary-search the block's edges in the slice
-            [state.edges_offset, next_edges_offset)
-          for label == symbol.
-       e. If found, follow `target`. If not, the rat is not in the
-          set; return None.
-  3. After consuming every symbol, check `is_accept` of the final
+  2. Start at the root: read `manifest.root.count`, `is_accept`,
+     `edges`. The root never needs a block fetch.
+  3. For each symbol in `seq`:
+       a. Binary-search the current state's edges (sorted by
+          `label`) for `label == symbol`. If not found, the rat
+          is not in the set; return None.
+       b. Let `t = edge.target`. If `t == 0` the next state is the
+          root (only possible if seq is empty). Otherwise find
+          the block via `block_index_for_state(t)`:
+            * Find the largest `i` with `blocks[i].first_state <= t`.
+            * Fetch and cache `blocks/<blocks[i].sha256>.bin` if
+              not loaded. Verify SHA-256 against the manifest.
+            * Read state record at local index
+              `t - blocks[i].first_state`.
+  4. After consuming every symbol, check `is_accept` of the final
      state. If true, the sequence is in the language.
 
 `get(i)` and `index_of(rat)` follow the same per-step pattern but
 use `count` to navigate to the i-th sequence in lex order
 (equivalent to `(length, lex)` order on raw rats; see
-`rat_dafsa_schema.txt`).
+`rat_schema.txt`).
+
+Upgrading an existing asset
+---------------------------
+
+Datasets are extended by re-running the enumeration with a larger
+maximum perimeter (same ring, same canonicalization, larger `-n`).
+Because rats are inserted in `(length, lex)` order and Daciuk's
+minimization freezes each length class before the next is built,
+extending the enumeration to deeper perim adds strictly new length
+classes (= new root edges) and grows the automaton at the tail of
+the state-id space, leaving the existing inner sub-DAFSAs' state
+records byte-identical.
+
+Concretely, given a "small" asset and a "big" asset built from a
+superset of the small asset's input set (where every additional rat
+has a length strictly greater than every existing rat's length),
+the on-disk relationship is:
+
+  * The manifest is rewritten end to end. The `root.edges` array
+    gains the new length-class entries; `n_states`, `n_edges`,
+    `n_sequences`, `max_indexed_length`, and the `blocks` index
+    grow accordingly.
+
+  * Every fully-filled inner block of the small asset
+    (`blocks[0..len-1]`) is reproduced byte-identically in the big
+    asset. Its SHA-256 is unchanged; the file at
+    `blocks/<sha>.bin` continues to exist with the same bytes.
+
+  * Only the trailing partial block of the small asset is
+    affected: in the big asset it either fills up to the byte
+    target (becoming a different file under a new SHA-256) or is
+    extended into a chain of new blocks. New blocks appear at the
+    end of the `blocks` array.
+
+The cache-eviction consequence: any HTTP / CDN cache that holds an
+inner block file from the old asset stays warm under the new
+asset. Only the old trailing block's URL is replaced; all other
+URLs remain valid forever (or until the asset is rebuilt with a
+different `target_block_bytes`, which is a deliberate re-cut).
+
+Deployment recipe: regenerate the asset directory with the new
+`-n` value and atomically swap it in place of the old directory.
+No client coordination is required -- existing readers continue
+to load the (still-valid) blocks they had cached and pick up the
+new manifest on their next manifest fetch. The integrity-check
+step described above catches any partial overlay or stale
+manifest/block mismatch deterministically.
+
+This property is pinned by the
+`upgrade_path_preserves_inner_block_hashes` regression test in
+`src/stringmatch/dafsa/lazy.rs`: it builds two assets where the
+big one extends the small one with longer rats, slices both with
+the same `target_block_bytes`, and asserts byte-identical
+filenames + on-disk contents for every full inner block.
