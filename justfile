@@ -1,0 +1,52 @@
+# Default target: build everything and start a local server.
+default: dev
+
+# Compile the Rust crate to wasm32-unknown-unknown and stage the
+# JS bindings under web/pkg/. Equivalent for the GitHub Pages
+# workflow; tweak both together if the invocation changes.
+wasm:
+    wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer
+
+# Generate the small local test dataset the web app loads at
+# startup, plus the top-level RO-Crate that lists it. Mirrors the
+# Pages workflow: ZZ12 free up to n=10 (~50 KB, a few seconds to
+# build). Re-run after asset-format changes; otherwise once per
+# checkout is enough.
+data:
+    cargo build --release --bin rat_enum --bin build_web_rocrate --features cli,rat_explorer
+    rm -rf web/data/zz12_n10_free
+    ./target/release/rat_enum --ring 12 -n 10 --free \
+        --mode dafsa-blocks --threads 0 \
+        --oeis-a-number A316192 \
+        -o web/data/zz12_n10_free
+    ./target/release/build_web_rocrate --web-dir web/
+
+# Serve web/ via Python's stdlib http server. Open the printed URL.
+serve:
+    @echo "Open http://localhost:8000/"
+    cd web && python3 -m http.server 8000 --bind 127.0.0.1
+
+# Like `serve` but bound to 0.0.0.0 so phones / other devices on the
+# same LAN can hit the page at http://<this-machine-IP>:8000/.
+serve-lan:
+    @echo "LAN: open http://$(hostname -I | awk '{print $1}'):8000/ on the other device"
+    cd web && python3 -m http.server 8000 --bind 0.0.0.0
+
+# Build WASM + dataset + RO-Crate, then serve. One command from a
+# fresh checkout to a working page in the browser.
+dev: wasm data serve
+
+# Optional: rebuild WASM on every Rust edit. Run alongside `just serve`.
+# Requires `cargo install cargo-watch --locked`.
+watch:
+    cargo watch -s 'wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer'
+
+# Remove generated WASM artifacts only.
+clean:
+    rm -rf web/pkg
+
+# Remove WASM artifacts + the generated datasets + top-level RO-Crate.
+# Use after touching the asset format so stale on-disk data doesn't
+# poison the next `just dev`.
+clean-all: clean
+    rm -rf web/data web/ro-crate-metadata.json

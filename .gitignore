@@ -1,6 +1,7 @@
 /target
 .vscode/
 scratch*
+/web/pkg/
 .ipynb_checkpoints/
 flamegraph*.svg
 perf.data
@@ -9,3 +10,5 @@ literature/
 snapshots/
 .claude/*.local.json
 .claude/*.lock
+/web/data/
+/web/ro-crate-metadata.json

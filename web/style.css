@@ -1,0 +1,510 @@
+:root {
+  --bg: #fafaf9;
+  --fg: #1f1f1f;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --border: #e5e7eb;
+  --error: #b91c1c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.45;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  /* Tight bottom margin so the subtitle (h4) sits visually attached
+     to the title; the h4 itself owns the spacing to whatever comes
+     after the header. */
+  margin: 0 0 .15rem;
+}
+
+header h4 {
+  margin: 0 0 .9rem;
+  font-size: 1rem;
+  font-weight: 400;
+  font-style: italic;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.repo-link {
+  color: var(--muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  transition: color .15s ease;
+}
+
+.repo-link:hover,
+.repo-link:focus-visible {
+  color: var(--fg);
+  outline: none;
+}
+
+.repo-link svg,
+.repo-link img { display: block; }
+
+/* The official RO-Crate logo has its own brand colors and shouldn't
+   inherit the muted->fg hover transition from .repo-link. Restore
+   it to full opacity on hover instead. */
+.rocrate-link { opacity: .75; transition: opacity .15s ease; }
+.rocrate-link:hover,
+.rocrate-link:focus-visible { opacity: 1; }
+
+.header-links {
+  display: inline-flex;
+  gap: .5rem;
+  align-items: center;
+}
+
+.hint {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: .95rem;
+}
+
+ul.hint {
+  padding-left: 1.25rem;
+  margin: 0 0 1.5rem;
+}
+
+ul.hint li {
+  margin: .2rem 0;
+}
+
+.hint-details {
+  margin: 0 0 1.5rem;
+}
+
+.hint-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .9rem;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  /* Hide the default marker; we draw our own rotating chevron. */
+  list-style: none;
+}
+
+.hint-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint-details > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 4px 0 4px 6px;
+  border-color: transparent transparent transparent currentColor;
+  transition: transform .15s ease;
+}
+
+.hint-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.hint-details > summary:hover {
+  color: var(--fg);
+}
+
+.hint-details > .hint {
+  margin: .6rem 0 0;
+}
+
+.hint code,
+.hint .example-link {
+  background: #f1f5f9;
+  padding: .1em .3em;
+  border-radius: 3px;
+  font-size: .9em;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.hint .example-link {
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  line-height: inherit;
+  /* Inherits parent's text wrapping. */
+}
+
+.hint .example-link:hover,
+.hint .example-link:focus-visible {
+  background: #cbd5e1;
+  outline: none;
+}
+
+.hint kbd {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 .3em;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: .85em;
+  color: var(--fg);
+}
+
+.controls {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 1.5rem;
+}
+
+.ctrl-block {
+  display: flex;
+  flex-direction: column;
+  font-size: .85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ctrl-block.grow { flex: 1; min-width: 280px; }
+
+.ctrl-block > label {
+  margin-bottom: .25rem;
+}
+
+.ctrl-block > select,
+.ctrl-block > input {
+  padding: .5rem .65rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white;
+  color: var(--fg);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.ctrl-block > select:focus,
+.ctrl-block > input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Glued horizontal group of inputs / icon buttons. Children sit
+   flush against each other (zero gap, shared border) so visually
+   they read as one compound control. Outer corners stay rounded;
+   inner edges square. */
+.input-group {
+  display: flex;
+}
+
+.input-group > * {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  margin: 0;
+  /* Match the standalone-input metrics so the row height is uniform. */
+  padding: .5rem .65rem;
+  font-size: 1rem;
+  line-height: 1.45;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  background: white;
+  color: var(--fg);
+}
+
+.input-group > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-group > :first-child {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+.input-group > :last-child {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+/* Collapse shared borders so the seam is a single line. */
+.input-group > * + * {
+  border-left: 0;
+}
+
+.input-group > *:focus,
+.input-group > *:focus-visible {
+  /* Lift the focused child above its neighbours so the focus ring
+     isn't clipped by the next-sibling's missing left border. */
+  z-index: 2;
+  position: relative;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Generic icon-only button inside a `.input-group`. Padding is
+   symmetrical so a 16x16 icon sits balanced; height matches the
+   adjacent text inputs because `.input-group > *` already pins the
+   shared metrics. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: .5rem !important;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.icon-btn:hover:not(:disabled) { background: #f1f5f9; }
+
+.icon-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.icon-btn svg { display: block; flex-shrink: 0; }
+
+/* "Copied" flash on the share button. */
+#share-btn.copied {
+  background: #d1fae5 !important;
+  border-color: #6ee7b7 !important;
+  color: #065f46;
+}
+
+.ctrl-block.db-control {
+  width: 9rem;
+}
+
+/* Custom tooltips: trigger via [data-tooltip] on any element, shown
+   on hover (desktop) or after a long-press (mobile, via the
+   `.tip-visible` class set by the JS long-press handler). We avoid
+   the native `title` attribute because mobile browsers don't expose
+   it. */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]:hover::after,
+[data-tooltip].tip-visible::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: .3rem;
+  z-index: 100;
+  background: #1f2937;
+  color: #f9fafb;
+  padding: .35rem .55rem;
+  border-radius: 4px;
+  font-size: .8rem;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.35;
+  white-space: normal;
+  max-width: 16rem;
+  min-width: max-content;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .15);
+}
+
+.db-label-hint {
+  /* Subtle dotted underline + help-cursor over the label text so it
+     reads as "hover me for more info" without screaming for
+     attention. Title attribute on the outer label provides the
+     actual tooltip text. */
+  text-decoration: underline dotted currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+.db-control.disabled {
+  opacity: .45;
+}
+.db-control.disabled .input-group {
+  pointer-events: none;
+}
+
+.db-id-invalid {
+  /* Brief red flash to signal an out-of-range ID lookup. The native
+     `title` on the label still shows the valid range; this is just
+     a transient visual cue. */
+  border-color: var(--error) !important;
+  background: #fef2f2 !important;
+  animation: db-id-flash .4s ease-out;
+}
+@keyframes db-id-flash {
+  from { background: #fee2e2; }
+  to   { background: #fef2f2; }
+}
+
+.db-note {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.db-na {
+  /* Same visual affordance as `.db-label-hint`: dotted underline
+     + help cursor signal "hover me for an explanation". The
+     `title` attribute carries the actual reason. */
+  text-decoration: underline dotted currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: help;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.db-bug {
+  /* Within-envelope DB miss -- almost certainly a bug. Distinct
+     red styling separates it from the muted `db-na` (which is a
+     legitimate out-of-envelope miss). Renders as an anchor with
+     a solid underline + pointer cursor so it reads as
+     "click me to do something" (file an issue), and the tooltip
+     spells out the bug-report framing. */
+  color: var(--error);
+  text-decoration: underline solid currentColor;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.db-bug:hover,
+.db-bug:focus {
+  /* Stronger emphasis on hover to reinforce that this is the bug
+     report path, not an ordinary link. */
+  color: var(--error);
+  filter: brightness(1.15);
+}
+
+.rat-explorer-info dl.db-row {
+  margin-top: 1rem;
+  padding-top: .8rem;
+  border-top: 1px solid var(--border);
+}
+
+.rat-explorer-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .rat-explorer-result { grid-template-columns: 1fr; }
+}
+
+.rat-explorer-svg {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  padding: .5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Reserve all touch gestures inside the SVG for the rat_explorer
+     swipe handler. The page can still be scrolled by touching
+     anywhere outside this box. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Make sure touch-action propagates to the inner <svg> and its
+   children -- some browsers consult the property on the actual
+   touch target rather than the ancestor. */
+.rat-explorer-svg, .rat-explorer-svg * {
+  touch-action: none;
+}
+
+/* The inner <svg> element is replaced on every preview update.
+   Mark it as `pointer-events: none` so the user's finger lands on
+   the stable wrapper div instead -- otherwise the touch target
+   gets detached on the first re-render, the browser fires
+   touchcancel, and no further touchmove events are delivered for
+   the gesture. */
+.rat-explorer-svg > svg {
+  pointer-events: none;
+}
+
+.rat-explorer-svg svg {
+  width: 100%;
+  height: auto;
+  max-width: 480px;
+}
+
+.rat-explorer-info {
+  padding: 1rem 1.25rem;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: .95rem;
+}
+
+.rat-explorer-info dl {
+  margin: 0;
+}
+
+.rat-explorer-info dl.info-notes {
+  margin-top: 1rem;
+  padding-top: .8rem;
+  border-top: 1px solid var(--border);
+}
+
+.rat-explorer-info dt {
+  color: var(--muted);
+  font-size: .8rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-top: .75rem;
+}
+
+.rat-explorer-info dl > dt:first-child { margin-top: 0; }
+
+.rat-explorer-info dd {
+  margin: .1rem 0 0;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.rat-explorer-info dd strong { color: var(--accent); }
+
+/* Inline copyable-and-clickable spans (canonical sequences, the
+   "chiral" label, ...). Subtle dotted underline hints at the
+   click target without preventing text selection -- selecting the
+   span to copy still works, only an empty-selection click loads. */
+.loadable {
+  cursor: pointer;
+  text-decoration: underline dotted currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.loadable:hover {
+  text-decoration-style: solid;
+  background: #fef3c7;
+  border-radius: 2px;
+}
+
+.rat-explorer-error { color: var(--error); }

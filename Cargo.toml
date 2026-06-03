@@ -29,9 +29,11 @@ include = [
     "/LICENSE",
 ]
 
-# All binaries are gated behind the `cli` feature so `cargo build` /
+# All binaries are gated behind a feature so `cargo build` /
 # `cargo install tilezz` (default features = empty) only build the
-# library. Pass `--features cli` to compile the CLI tooling.
+# library. Pass `--features cli` for the enumeration CLIs;
+# `build_web_rocrate` sits behind `rat_explorer` since it's part
+# of the web-app deploy pipeline, not the research tooling.
 [[bin]]
 name = "rat_enum"
 path = "src/bin/rat_enum.rs"
@@ -60,7 +62,10 @@ required-features = ["cli"]
 [[bin]]
 name = "build_web_rocrate"
 path = "src/bin/build_web_rocrate.rs"
-required-features = ["cli"]
+required-features = ["rat_explorer"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 num-bigint = "0.4.6"
@@ -84,6 +89,15 @@ serde_json = "1.0"
 resvg = { version = "0.45", optional = true }
 tiny-skia = { version = "0.11", optional = true }
 gif = { version = "0.13", optional = true }
+
+wasm-bindgen = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+  "Window", "Response", "Request", "RequestInit",
+] }
+serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [dev-dependencies]
 # Validates the produced block_index.json against
@@ -111,3 +125,18 @@ cli = ["dep:clap", "dep:crossbeam", "dep:num_cpus", "animation"]
 raster = ["dep:resvg", "dep:tiny-skia"]
 # Multi-frame GIF output. Implies `raster`.
 animation = ["raster", "dep:gif"]
+# The rat_explorer web app: WASM bindings consumed by the browser
+# page AND the native `build_web_rocrate` bin that the Pages deploy
+# pipeline runs. clap is in here too (for build_web_rocrate); the
+# wasm-* crates compile to no-ops on native so the native build of
+# build_web_rocrate doesn't pay for them. Build the browser bundle
+# with `wasm-pack build --target web --no-default-features --features rat_explorer`.
+rat_explorer = [
+  "dep:wasm-bindgen",
+  "dep:console_error_panic_hook",
+  "dep:wasm-bindgen-futures",
+  "dep:js-sys",
+  "dep:web-sys",
+  "dep:serde-wasm-bindgen",
+  "dep:clap",
+]

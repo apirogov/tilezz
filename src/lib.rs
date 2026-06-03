@@ -12,3 +12,6 @@ pub mod vis;
 
 #[cfg(feature = "cli")]
 pub mod rat_enum;
+
+#[cfg(feature = "rat_explorer")]
+pub mod web;
