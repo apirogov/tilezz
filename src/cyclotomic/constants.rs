@@ -10,7 +10,7 @@
 use num_traits::One;
 
 use super::rings::{ZZ10, ZZ20};
-use super::traits::{HasZZ10, HasZZ12, HasZZ8, IsRing, Units};
+use super::traits::{HasZZ8, HasZZ10, HasZZ12, IsRing, Units};
 
 /// Sum of all unit roots scaled by their angle index: `sum_k k * unit(k)`.
 /// Lands at a generic, "interesting" ring point useful for property tests.
@@ -64,7 +64,7 @@ pub fn zz20_half_sqrt_penta() -> ZZ20 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rings::{ZZ10, ZZ10_Y, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60, ZZ8};
+    use super::super::rings::{ZZ8, ZZ10, ZZ10_Y, ZZ12, ZZ16, ZZ20, ZZ24, ZZ32, ZZ60};
     use super::super::traits::SymNum;
     use super::*;
 

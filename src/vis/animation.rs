@@ -9,7 +9,7 @@
 //! All frames must use the same `Viewport` (pixel dimensions are
 //! baked into the GIF header). Per-frame delays are configurable.
 
-use super::raster::{default_options, render_to_pixmap, RasterError};
+use super::raster::{RasterError, default_options, render_to_pixmap};
 use super::scene::{Scene, Viewport};
 
 #[derive(Debug)]

@@ -1167,11 +1167,11 @@ mod tests {
         // Generate all length-3 non-decreasing sequences over {0,1,2,3}
         // on the fly; the iteration order is lex-sorted by construction
         // because the loops nest in that order.
-        let gen =
+        let generator =
             (0..4i8).flat_map(|a| (a..4).flat_map(move |b| (b..4).map(move |c| vec![a, b, c])));
-        let materialized: Vec<Vec<i8>> = gen.clone().collect();
+        let materialized: Vec<Vec<i8>> = generator.clone().collect();
         let mut b = Dafsa::builder();
-        for s in gen {
+        for s in generator {
             b.insert(&s);
         }
         let dafsa = b.finish();

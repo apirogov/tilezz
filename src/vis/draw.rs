@@ -6,7 +6,7 @@
 //! [`Scene`] turn one such bundle into the right sequence of
 //! [`Item`]s.
 
-use super::plotutils::{tile_centroid, P64};
+use super::plotutils::{P64, tile_centroid};
 use super::scene::{ArrowStyle, Color, Fill, Item, MarkerShape, Scene, Stroke, TextStyle};
 
 // ---- Marker style ----

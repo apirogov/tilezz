@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::cyclotomic::IsRing;
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
-use crate::rat_enum::dfs::{collect_seeds, hashset_recorder, rat_enum_step, SeedGather};
+use crate::rat_enum::dfs::{SeedGather, collect_seeds, hashset_recorder, rat_enum_step};
 use crate::rat_enum::prune::snapshot_prunes;
 use crate::rat_enum::seed::parallel::{parallel_drain_seeds, splitting_depth};
 use crate::rat_enum::stats::DfsStats;

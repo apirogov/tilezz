@@ -36,7 +36,7 @@ pub mod runs;
 
 pub use enumerate::{stream_enum_dispatch, stream_enum_parallel};
 pub use merge::{
-    merge_runs, read_unique_records, Certificate, CERTIFICATE_FILENAME, UNIQUE_FILENAME,
+    CERTIFICATE_FILENAME, Certificate, UNIQUE_FILENAME, merge_runs, read_unique_records,
 };
-pub use records::{decode_record, encode_record, ANGLE_BIAS};
+pub use records::{ANGLE_BIAS, decode_record, encode_record};
 pub use runs::RunWriter;

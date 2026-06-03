@@ -598,7 +598,7 @@ impl<T: IsRing> Display for Snake<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{Ccw, SymNum, ZZ12, ZZ4};
+    use crate::cyclotomic::{Ccw, SymNum, ZZ4, ZZ12};
     use num_traits::{One, Zero};
 
     #[test]

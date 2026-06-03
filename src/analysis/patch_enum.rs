@@ -110,7 +110,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::cyclotomic::{ZZ4, ZZ12};
     use crate::geom::tileset;
 
     /// Independent brute-force reference: for each size, glue every
