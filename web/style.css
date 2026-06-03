@@ -292,7 +292,22 @@ ul.hint li {
 }
 
 .ctrl-block.db-control {
-  width: 9rem;
+  width: 12rem;
+}
+
+/* Hide the native number spinners: desktop browsers render their own
+   up/down arrows inside the input while mobile ones render nothing,
+   so we'd get two pairs of steppers on PC and none on phones. The
+   explicit -/+ icon buttons flanking the input are the one stepper
+   UI shown everywhere. */
+#rat-id {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+#rat-id::-webkit-inner-spin-button,
+#rat-id::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* Custom tooltips: trigger via [data-tooltip] on any element, shown
