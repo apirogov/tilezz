@@ -1,0 +1,83 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deploy may be in-flight at once.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM bundle
+        run: wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Build rat_enum + build_web_rocrate (release)
+        run: |
+          cargo build --release \
+            --bin rat_enum --bin build_web_rocrate \
+            --features cli,rat_explorer
+
+      - name: Generate RatDB block assets
+        # Each line generates one (ring, n, mode) asset directory under
+        # web/data/. Keep the set small enough that the Pages upload
+        # stays comfortably under the 1 GB artifact limit -- ZZ12 n=10
+        # is ~55 KB; add new lines for larger rings/n once we have the
+        # asset-size budget worked out.
+        run: |
+          mkdir -p web/data
+          ./target/release/rat_enum --ring 12 -n 10 --free \
+            --mode dafsa-blocks --threads 0 \
+            --oeis-a-number A316192 \
+            -o web/data/zz12_n10_free
+
+      - name: Build top-level RO-Crate
+        # Aggregate every web/data/*/ro-crate-metadata.json into a
+        # single web/ro-crate-metadata.json. Crawlers (Google Dataset
+        # Search) follow `<link rel=describedby>` from index.html
+        # here; the explorer's JS reads `additionalProperty` from each
+        # hasPart stub to drive ring -> dataset discovery without any
+        # hardcoded paths.
+        run: |
+          ./target/release/build_web_rocrate \
+            --web-dir web/ \
+            --page-url "${{ steps.pages.outputs.base_url }}"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

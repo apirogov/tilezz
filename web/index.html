@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>tilezz - Rat Explorer</title>
+<meta name="description"
+      content="tilezz Rat Explorer: build and inspect simple matchstick polygons (closed self-avoiding polygons with unit-length edges and rational turn angles) on cyclotomic lattices Z[zeta_n]. Ships a queryable database of canonical polygons as a self-describing RO-Crate 1.2 asset." />
+<meta name="keywords"
+      content="combinatorial enumeration, self-avoiding polygon, cyclotomic lattice, matchstick polygon, DAFSA, RO-Crate, OEIS A316192, tilezz" />
+<meta name="author" content="Anton Pirogov" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="tilezz Rat Explorer" />
+<meta property="og:description"
+      content="Interactive explorer for simple matchstick polygons on cyclotomic lattices, with a self-describing RO-Crate-packaged database." />
+<link rel="describedby"
+      type="application/ld+json"
+      href="./ro-crate-metadata.json"
+      title="tilezz Rat Explorer -- RO-Crate metadata (page + datasets)" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<main>
+  <header>
+    <div class="header-row">
+      <h1>Rat Explorer</h1>
+      <nav class="header-links" aria-label="external metadata">
+        <a class="repo-link rocrate-link"
+           href="./ro-crate-metadata.json"
+           target="_blank"
+           rel="noopener noreferrer"
+           aria-label="view RO-Crate metadata"
+           title="view RO-Crate metadata (machine-readable dataset descriptor)">
+          <img src="./ro-crate-icon.svg" width="22" height="22"
+               alt="" aria-hidden="true" />
+        </a>
+        <a class="repo-link"
+           href="https://github.com/apirogov/tilezz"
+           target="_blank"
+           rel="noopener noreferrer"
+           aria-label="view tilezz on GitHub"
+           title="view tilezz on GitHub">
+          <svg viewBox="0 0 24 24" width="22" height="22"
+               fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.11.79-.25.79-.55 0-.27-.01-1-.02-1.96-3.2.69-3.88-1.54-3.88-1.54-.52-1.33-1.27-1.68-1.27-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.73-1.53-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 015.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.41-5.27 5.69.41.36.78 1.07.78 2.15 0 1.55-.01 2.81-.01 3.19 0 .31.21.67.8.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
+          </svg>
+        </a>
+      </nav>
+    </div>
+    <h4>explore simple cyclotomic matchstick polygons</h4>
+    <details class="hint-details">
+      <summary>how to use</summary>
+      <p class="hint">
+        A rational tile (<strong>rat</strong>) is a closed matchstick polygon
+        on the chosen cyclotomic ring &Zopf;[&zeta;<sub>n</sub>]: a boundary
+        of unit-length edges with turn angles in integer multiples of
+        360&deg;/n. We trace it turtle-style - starting at the origin
+        facing direction 0, each angle turns the facing direction by that many
+        ring units before we step one unit forward. A partial, not-yet-closed
+        sequence is a <strong>snake</strong>.
+      </p>
+      <p class="hint">
+        To inspect a polygon, enter a whitespace-separated angle sequence,
+        e.g. the Spectre tile (click to load):
+        <button type="button" class="example-link"
+        data-load-ring="12"
+        data-load-angles="3 2 0 2 -3 2 3 2 -3 2 3 -2 3 -2">3 2 0 2 -3 2 3 2
+        -3 2 3 -2 3 -2</button>
+      </p>
+      <p class="hint">
+        To build one interactively:
+      </p>
+      <ul class="hint">
+        <li><kbd>&larr;</kbd>/<kbd>&rarr;</kbd> select angle</li>
+        <li><kbd>&uarr;</kbd> confirm angle</li>
+        <li><kbd>&darr;</kbd> undo last angle</li>
+        <li><kbd>Esc</kbd> clear edge preview</li>
+        <li>Mobile: swipe horizontally to select, vertically to
+          confirm / undo.</li>
+      </ul>
+      <p class="hint">
+        When the polygon is closed, the panel shows additional
+        statistics and normal forms for the resulting rat.
+      </p>
+    </details>
+  </header>
+
+  <section class="controls">
+    <div class="ctrl-block">
+      <label for="ring">ring</label>
+      <select id="ring">
+        <option value="4">ℤ[ζ₄]</option>
+        <option value="8">ℤ[ζ₈]</option>
+        <option value="10">ℤ[ζ₁₀]</option>
+        <option value="12" selected>ℤ[ζ₁₂]</option>
+        <option value="16">ℤ[ζ₁₆]</option>
+        <option value="20">ℤ[ζ₂₀]</option>
+        <option value="24">ℤ[ζ₂₄]</option>
+        <option value="32">ℤ[ζ₃₂]</option>
+        <option value="60">ℤ[ζ₆₀]</option>
+      </select>
+    </div>
+
+    <div class="ctrl-block grow">
+      <label for="angles">angles</label>
+      <div class="input-group">
+        <button type="button" id="clear-btn" class="icon-btn"
+                aria-label="clear angles" title="clear the angle sequence">
+          <svg viewBox="0 0 24 24" width="16" height="16"
+               fill="currentColor" aria-hidden="true">
+            <path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+        </button>
+        <input id="angles"
+               type="text"
+               placeholder="3 2 0 2 -3 2 3 2 -3 2 3 -2 3 -2"
+               autocomplete="off"
+               spellcheck="false" />
+        <button type="button" id="share-btn" class="icon-btn"
+                aria-label="share"
+                title="copy a shareable URL to the clipboard">
+          <svg viewBox="0 0 24 24" width="16" height="16"
+               fill="currentColor" aria-hidden="true">
+            <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="ctrl-block db-control" id="db-control"
+         data-tooltip="no RatDB shipped for this ring">
+      <label for="rat-id">
+        <span class="db-label-hint">RatDB ID</span>
+      </label>
+      <div class="input-group">
+        <input id="rat-id"
+               type="number"
+               min="0"
+               step="1"
+               autocomplete="off"
+               disabled
+               placeholder="--" />
+        <button type="button" id="dice-btn" class="icon-btn"
+                aria-label="pick a random RatDB ID"
+                title="pick a random RatDB ID" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16"
+               fill="currentColor" aria-hidden="true">
+            <path d="M19 3H5c-1.11 0-2 .89-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.11-.9-2-2-2zM7.5 18c-.83 0-1.5-.67-1.5-1.5S6.67 15 7.5 15s1.5.67 1.5 1.5S8.33 18 7.5 18zm0-9C6.67 9 6 8.33 6 7.5S6.67 6 7.5 6 9 6.67 9 7.5 8.33 9 7.5 9zm4.5 4.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4.5 4.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm0-9c-.83 0-1.5-.67-1.5-1.5S15.67 6 16.5 6s1.5.67 1.5 1.5S17.33 9 16.5 9z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section id="out"></section>
+</main>
+
+<script type="module" src="./explorer.js"></script>
+</body>
+</html>

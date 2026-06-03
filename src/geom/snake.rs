@@ -601,6 +601,45 @@ mod tests {
     use crate::cyclotomic::{Ccw, SymNum, ZZ4, ZZ12};
     use num_traits::{One, Zero};
 
+    /// **T-touch regression pin** for the ZZ12 snake
+    /// `0 5 -2 5 -1 5 -5 4 1 1 1 5 -5 5` followed by angle `3`.
+    ///
+    /// Initially reported as a possible false-positive
+    /// self-intersection rejection (visual inspection in
+    /// `rat_explorer` suggested the new segment "shouldn't"
+    /// intersect anything). Closer analysis: the new segment ENDS
+    /// exactly on the interior of edge 9. Specifically:
+    ///
+    /// * `P9 = 3 - 2ζ - ζ² + ζ³`, `P10 = 3 - ζ - ζ² + ζ³`, so edge
+    ///   9 has direction `ζ` (unit length).
+    /// * Adding angle `3` after the 14-segment prefix produces
+    ///   `P15 = 4 - 3ζ + ζ³`.
+    /// * `P15 - P9 = 1 - ζ + ζ² = (√3 - 1)·ζ` exactly.
+    /// * Since `√3 - 1 ≈ 0.732 ∈ (0, 1)`, `P15` lies strictly
+    ///   inside edge 9 -- a T-touch. The resulting figure would
+    ///   not be a simple polygon, so the rejection is correct.
+    ///
+    /// Pins:
+    /// * All 14 prefix adds succeed.
+    /// * `add(3)` reports conflict at edge index 9 specifically
+    ///   (the edge whose interior is touched).
+    /// * The new segment is the one ending at `P15`.
+    #[test]
+    fn zz12_t_touch_rejected_at_edge_9() {
+        let mut s: Snake<ZZ12> = Snake::new();
+        let prefix: &[i8] = &[0, 5, -2, 5, -1, 5, -5, 4, 1, 1, 1, 5, -5, 5];
+        for (i, &a) in prefix.iter().enumerate() {
+            assert!(s.add(a), "ZZ12 prefix add #{i} (angle {a}) was rejected",);
+        }
+        assert_eq!(s.len(), prefix.len());
+        let conflict = s.add_diagnosed(3);
+        assert_eq!(
+            conflict,
+            Some(9),
+            "expected T-touch rejection at edge 9 (new endpoint = P9 + (√3-1)·ζ)"
+        );
+    }
+
     #[test]
     #[should_panic]
     fn test_add_invalid_angle() {
