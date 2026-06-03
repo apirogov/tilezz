@@ -110,6 +110,16 @@ class BlockedDafsa:
         if block_index in self._cache:
             return self._cache[block_index]
         entry = self.blocks_index[block_index]
+        if self.manifest.get("block_base_url"):
+            # Asset was published with blocks hosted off-tree (e.g.
+            # GitHub Releases). decode.py stays dependency-free and
+            # local-only by design; download the blocks alongside
+            # the manifest first, or use a real HTTP client.
+            raise NotImplementedError(
+                "manifest has block_base_url set; decode.py only reads local "
+                "blocks/<sha>.bin files. Fetch them locally (mkdir blocks && "
+                "curl ${base}{sha}.bin -o blocks/{sha}.bin) and rerun."
+            )
         path = self.dir / "blocks" / f"{entry['sha256']}.bin"
         gz = path.read_bytes()
         got = hashlib.sha256(gz).hexdigest()

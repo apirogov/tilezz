@@ -113,7 +113,8 @@ The manifest
         "size":        <u32>                    // gzipped file size in bytes
       },
       ...
-    ]
+    ],
+    "block_base_url": "<url>"                   // OPTIONAL: external host for block files
   }
 
 `blocks` is sorted strictly ascending by `first_state`. Block N
@@ -121,6 +122,38 @@ covers states `[blocks[N].first_state, blocks[N+1].first_state)`;
 the last block covers up to `n_states`. `blocks[0].first_state` is
 always 1 -- state 0 (the root) lives in `root`, not in any block
 file.
+
+Hosting blocks elsewhere
+------------------------
+
+The default block layout is co-located: `blocks/<sha256>.bin` lives
+in the same directory tree as `block_index.json` and is served by
+the same host. For deployments where the total block size exceeds
+the host's limit (GitHub Pages caps a deploy at 1 GB; ZZ12 around
+n=17 already crosses that), the optional manifest field
+`block_base_url` lets the manifest stay on the small-asset host
+while the block files move to a host with no size cap:
+
+  "block_base_url": "https://github.com/<user>/<repo>/releases/download/data-<tag>/"
+
+When the field is present, readers MUST fetch blocks from
+`{block_base_url}{sha256}.bin` instead of the relative
+`blocks/<sha256>.bin` path. The integrity check stays on the
+manifest -- the block's SHA-256 in `blocks[i].sha256` verifies the
+fetched bytes regardless of which host served them. So the trust
+anchor is the manifest URL (which the consumer already trusts);
+the block content host can be untrusted CDN storage.
+
+Suggested hosting targets:
+  - GitHub Releases (1 asset = 1 block; ~10k assets per release OK)
+  - S3 / Cloudflare R2 (content-addressed key per block; cheapest)
+  - IPFS via a public gateway (the sha256 doubles as the CID
+    hashing seed; native fit for content-addressed storage)
+
+The field is OPTIONAL. Consumers that don't recognise it MUST
+still parse the manifest -- it's prefixed with no other format
+changes -- but they won't know where to fetch blocks from. The
+JSON Schema marks it as not required; absence means "co-located".
 
 Block ID lookup
 ---------------
@@ -202,8 +235,12 @@ Given a `rat` to look up, the consumer:
           root (only possible if seq is empty). Otherwise find
           the block via `block_index_for_state(t)`:
             * Find the largest `i` with `blocks[i].first_state <= t`.
-            * Fetch and cache `blocks/<blocks[i].sha256>.bin` if
-              not loaded. Verify SHA-256 against the manifest.
+            * Resolve the fetch target:
+              - if `block_base_url` is set:
+                  `{block_base_url}{blocks[i].sha256}.bin`
+              - else, relative to the asset dir:
+                  `blocks/{blocks[i].sha256}.bin`
+              Fetch + cache. Verify SHA-256 against the manifest.
             * Read state record at local index
               `t - blocks[i].first_state`.
   4. After consuming every symbol, check `is_accept` of the final
