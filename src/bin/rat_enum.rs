@@ -395,7 +395,8 @@ struct Cli {
     /// `A316192` for ZZ12 free dihedral). Surfaced into the
     /// `ro-crate-metadata.json` as a `subjectOf` contextual entity
     /// so an archivist can pivot from the asset to the OEIS
-    /// sequence. Honoured only with `--mode dafsa-blocks`.
+    /// sequence. Honoured by the asset-writing modes (`--mode
+    /// dafsa-blocks` and the streaming pipeline's `--mode build`).
     #[arg(long)]
     oeis_a_number: Option<String>,
 
