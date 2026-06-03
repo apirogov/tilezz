@@ -70,6 +70,13 @@ const DECODER_PY: &str = include_str!("extras/decode.py");
 /// on mismatch.
 const VERIFY_SHA256_PY: &str = include_str!("extras/verify_sha256.py");
 
+/// Standalone Python per-length counter. Shipped at
+/// `tools/count_by_length.py` inside every asset so the
+/// exact-perimeter sequence counts (OEIS-style terms) can be read
+/// straight off the DAFSA's rank index -- the count-validation
+/// step of the publishing checklist (see MAINTENANCE.md).
+const COUNT_BY_LENGTH_PY: &str = include_str!("extras/count_by_length.py");
+
 /// How the dataset was produced. Determines what `reproduce.sh`
 /// emits (one-step in-memory build vs. three-stage streaming
 /// pipeline) and what the `CreateAction.description` records.
@@ -333,6 +340,10 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
         "tools/verify_sha256.py" => (
             "verify_sha256.py (Python 3 hash verifier)",
             "Standalone, dependency-free Python 3 script that checks every sha256 recorded in ro-crate-metadata.json against the on-disk file bytes. Run as `python3 tools/verify_sha256.py`; exits 0 on full match, 1 on mismatch.",
+        ),
+        "tools/count_by_length.py" => (
+            "count_by_length.py (Python 3 per-length counter)",
+            "Standalone Python 3 script (stdlib + sibling decode.py) that prints the number of stored sequences per exact perimeter length, one `<length> <count>` line each -- the OEIS-style terms this asset realises. Reads the counts off the DAFSA's rank index without decoding. Run as `python3 tools/count_by_length.py`.",
         ),
         "README.md" => (
             "README.md",
@@ -655,6 +666,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     std::fs::create_dir_all(&tools)?;
     std::fs::write(tools.join("decode.py"), DECODER_PY)?;
     std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
+    std::fs::write(tools.join("count_by_length.py"), COUNT_BY_LENGTH_PY)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
     std::fs::write(&sh_path, reproduce_sh(params))?;
@@ -1114,6 +1126,7 @@ to its schema.
   tools/
     decode.py               standalone Python 3 decoder (no deps)
     verify_sha256.py        SHA-256 verifier (no deps; exits 0 on full match)
+    count_by_length.py      per-exact-length counts (OEIS-style terms)
     reproduce.sh            executable rebuild script (clones + builds + runs)
 ```
 
@@ -1550,6 +1563,61 @@ mod tests {
                 "hasPart referent {pid} missing on disk"
             );
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The writer emits `tools/count_by_length.py`, the RO-Crate
+    /// describes it, and the script prints the per-exact-length
+    /// sequence counts (OEIS-style terms) for the asset. Needs
+    /// `python3` on PATH for the end-to-end half; skipped when
+    /// absent.
+    #[test]
+    fn count_by_length_prints_oeis_terms() {
+        let dir = build_test_asset();
+
+        let script = dir.join("tools/count_by_length.py");
+        assert!(script.exists(), "tools/count_by_length.py not emitted");
+        let meta: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let graph = meta["@graph"].as_array().expect("@graph array");
+        let entity = graph
+            .iter()
+            .find(|e| e["@id"] == "tools/count_by_length.py")
+            .expect("File entity for tools/count_by_length.py");
+        assert!(
+            entity["name"].as_str().is_some_and(|s| !s.is_empty()),
+            "count_by_length.py entity lacks a human label"
+        );
+
+        let have_python = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !have_python {
+            eprintln!("skipping end-to-end half: python3 not on PATH");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+
+        // The test asset's rats (see build_test_asset) are four
+        // 3-angle sequences and one 4-angle sequence.
+        let output = std::process::Command::new("python3")
+            .arg(&script)
+            .arg(&dir)
+            .output()
+            .expect("run count_by_length.py");
+        assert!(
+            output.status.success(),
+            "count_by_length.py failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(lines, vec!["3 4", "4 1"], "unexpected terms:\n{stdout}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
