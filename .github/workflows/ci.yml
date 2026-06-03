@@ -138,3 +138,47 @@ jobs:
           else
             cargo test --all-targets --all-features
           fi
+
+  # Tag-gated release pipeline. Fires only on `v*` pushes and only
+  # after `checks` + the full `test` matrix go green. Verifies the
+  # tag matches `Cargo.toml`'s version (so a stray `git tag v0.0.5`
+  # doesn't publish 0.0.4 by accident), then publishes the crate.
+  # Token: CARGO_REGISTRY_TOKEN repo secret (Settings -> Secrets
+  # and variables -> Actions). Default features are empty by design,
+  # so what lands on crates.io is the lean library; CLI binaries
+  # stay behind the explicit `cli` feature.
+  publish-crate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION="$(grep '^version *= *"' Cargo.toml | head -1 | cut -d'"' -f2)"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag is v$TAG_VERSION but Cargo.toml says version = \"$PKG_VERSION\". Bump one or the other."
+            exit 1
+          fi
+          echo "OK: publishing tilezz $PKG_VERSION from tag v$TAG_VERSION"
+
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
