@@ -50,16 +50,19 @@ jobs:
       - name: round-trip test (asset emit + tools/reproduce.sh + diff)
         run: |
           set -euo pipefail
-          # Small but non-trivial input so the asset has multiple
-          # blocks; ZZ12 n=7 enumerates 99 rats across ~3 blocks
-          # at block_size=64. Total round-trip ~20s with a warm
-          # cache.
+          # Small but non-trivial input: ZZ12 n=7 enumerates 99
+          # rats and the asset uses the CLI default
+          # `--target-block-bytes`, so it lands in a single block.
+          # The round-trip exercise still validates manifest shape,
+          # content-hash filenames, decode.py, reproduce.sh
+          # invocation, and byte-identical re-emit. Total ~20s with
+          # a warm cache.
           export SOURCE_DATE_EPOCH=1780000000
           cargo build --release --bin rat_enum --features examples
           rm -rf /tmp/asset-original /tmp/repro
           ./target/release/rat_enum \
               --ring 12 -n 7 --free \
-              --mode dafsa-blocks --block-size 64 --threads 0 \
+              --mode dafsa-blocks --threads 0 \
               --oeis-a-number A316192 \
               -o /tmp/asset-original
 
@@ -68,24 +71,10 @@ jobs:
           declared=$(python3 -c "import json; print(json.load(open('/tmp/asset-original/block_index.json'))['n_sequences'])")
           test "$decoded" = "$declared" || { echo "decode.py produced $decoded lines, manifest says $declared"; exit 1; }
 
-          # README's verification snippet: every recorded sha256
-          # matches actual on-disk bytes.
-          ( cd /tmp/asset-original && python3 - <<'PY'
-          import json, hashlib, pathlib, sys
-          meta = json.load(open('ro-crate-metadata.json'))
-          errs = 0
-          for entity in meta['@graph']:
-              rel = entity.get('@id', '')
-              want = entity.get('sha256')
-              if not want or rel.startswith('http') or rel.startswith('#'):
-                  continue
-              got = hashlib.sha256(pathlib.Path(rel).read_bytes()).hexdigest()
-              if got != want:
-                  print(f'{rel}: MISMATCH (got {got[:12]}, want {want[:12]})')
-                  errs += 1
-          sys.exit(1 if errs else 0)
-          PY
-          )
+          # README's verification recipe: tools/verify_sha256.py
+          # exits non-zero if any recorded sha256 disagrees with the
+          # on-disk bytes.
+          python3 /tmp/asset-original/tools/verify_sha256.py /tmp/asset-original
 
           # Run tools/reproduce.sh against the local checkout and
           # the same SOURCE_DATE_EPOCH. The pre-built target dir

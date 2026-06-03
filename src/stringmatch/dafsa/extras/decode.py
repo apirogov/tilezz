@@ -14,14 +14,16 @@ Or pass an explicit directory:
     python3 tools/decode.py path/to/asset > rats.txt
 
 No external Python dependencies; relies only on the stdlib (gzip,
-struct, json, pathlib). The full wire format is documented in
-schemas/blocks_schema.txt and schemas/rat_schema.txt next to this
+hashlib, struct, json, pathlib). The full wire format is documented
+in schemas/blocks_schema.txt and schemas/rat_schema.txt next to this
 file -- the code here is a literal transcription of those specs.
 """
 
 from __future__ import annotations
 
+import bisect
 import gzip
+import hashlib
 import json
 import struct
 import sys
@@ -54,24 +56,6 @@ def decode_block(raw: bytes) -> tuple[int, list[tuple[int, int, bool]], list[tup
     return first_state, states, edges
 
 
-def render_template(template: str, block_id: int) -> str:
-    """Substitute {:0N} placeholders in the manifest's filename template."""
-    open_brace = template.find("{")
-    if open_brace < 0:
-        return template
-    close_brace = template.find("}", open_brace)
-    if close_brace < 0:
-        return template
-    spec = template[open_brace + 1 : close_brace]
-    width = 6
-    if spec.startswith(":0"):
-        try:
-            width = int(spec[2:])
-        except ValueError:
-            pass
-    return template[:open_brace] + f"{block_id:0{width}d}" + template[close_brace + 1 :]
-
-
 class BlockedDafsa:
     """A minimal random-access reader for the blocked DAFSA format."""
 
@@ -79,38 +63,82 @@ class BlockedDafsa:
         self.dir = asset_dir
         with (asset_dir / "block_index.json").open() as f:
             self.manifest = json.load(f)
-        for required in ("format", "version", "block_size", "n_states", "root_state"):
+        for required in (
+            "format",
+            "version",
+            "scalar",
+            "block_format",
+            "block_version",
+            "n_states",
+            "n_edges",
+            "n_sequences",
+            "max_indexed_length",
+            "root",
+            "blocks",
+        ):
             if required not in self.manifest:
                 raise ValueError(f"manifest missing required field: {required}")
         if self.manifest["format"] != "tilezz-rat-dafsa-blocks":
             raise ValueError(f"unexpected format: {self.manifest['format']!r}")
         if self.manifest["version"] != 1:
             raise ValueError(f"unsupported manifest version: {self.manifest['version']}")
+        if self.manifest["scalar"] != "i8":
+            raise ValueError(f"unsupported scalar: {self.manifest['scalar']!r}")
         if self.manifest["block_format"] != "tilezz-rat-block":
             raise ValueError(f"unsupported block format: {self.manifest['block_format']!r}")
         if self.manifest["block_version"] != 1:
             raise ValueError(f"unsupported block version: {self.manifest['block_version']}")
-        self.block_size: int = self.manifest["block_size"]
         self.n_states: int = self.manifest["n_states"]
-        self.root: int = self.manifest["root_state"]
-        self.template: str = self.manifest["block_filename_template"]
+        self.root_record = self.manifest["root"]
+        self.blocks_index: list[dict] = self.manifest["blocks"]
+        # Pre-extract first_state in a flat list so bisect can run.
+        self._first_states: list[int] = [b["first_state"] for b in self.blocks_index]
         self._cache: dict[int, tuple[int, list, list]] = {}
 
-    def _get_block(self, block_id: int):
-        if block_id in self._cache:
-            return self._cache[block_id]
-        path = self.dir / render_template(self.template, block_id)
-        with gzip.open(path, "rb") as f:
-            raw = f.read()
+    def _block_index_for_state(self, state_id: int) -> int:
+        """Largest block index i with blocks[i].first_state <= state_id."""
+        if state_id == 0 or state_id >= self.n_states:
+            raise IndexError(f"state {state_id} not in any block (root + n_states={self.n_states})")
+        # bisect_right gives the count of entries with first_state <=
+        # state_id; we want the last such index.
+        pos = bisect.bisect_right(self._first_states, state_id)
+        if pos == 0:
+            raise IndexError(f"state {state_id}: no block has first_state <= state")
+        return pos - 1
+
+    def _get_block(self, block_index: int):
+        if block_index in self._cache:
+            return self._cache[block_index]
+        entry = self.blocks_index[block_index]
+        path = self.dir / "blocks" / f"{entry['sha256']}.bin"
+        gz = path.read_bytes()
+        got = hashlib.sha256(gz).hexdigest()
+        if got != entry["sha256"]:
+            raise ValueError(
+                f"block {block_index}: sha256 mismatch (got {got[:12]}, manifest wants {entry['sha256'][:12]})"
+            )
+        raw = gzip.decompress(gz)
         decoded = decode_block(raw)
-        self._cache[block_id] = decoded
+        if decoded[0] != entry["first_state"]:
+            raise ValueError(
+                f"block {block_index}: header first_state {decoded[0]} != manifest first_state {entry['first_state']}"
+            )
+        self._cache[block_index] = decoded
         return decoded
 
     def _state(self, state_id: int) -> tuple[int, int, bool, list[tuple[int, int]]]:
-        """Return (edges_offset, count, is_accept, [(label, target), ...]) for state_id."""
-        block_id = state_id // self.block_size
-        local = state_id % self.block_size
-        first_state, states, edges = self._get_block(block_id)
+        """Return (edges_offset, count, is_accept, [(label, target), ...]) for state_id.
+
+        State 0 (root) is served from the manifest's `root` record.
+        """
+        if state_id == 0:
+            r = self.root_record
+            edges = [(e["label"], e["target"]) for e in r["edges"]]
+            return 0, r["count"], bool(r["is_accept"]), edges
+        block_index = self._block_index_for_state(state_id)
+        entry = self.blocks_index[block_index]
+        first_state, states, edges = self._get_block(block_index)
+        local = state_id - entry["first_state"]
         edges_offset, count, is_accept = states[local]
         if local + 1 < len(states):
             next_offset = states[local + 1][0]
@@ -125,12 +153,14 @@ class BlockedDafsa:
         callers that want the raw rat can strip it (see iter_rats).
         """
         # Depth-first traversal of the DAFSA, emitting any accepted state.
-        stack: list[tuple[int, list[int], int]] = [(self.root, [], 0)]
+        # The root (state 0) cannot itself be accepting under the
+        # length-prefix convention, so we don't check it explicitly.
+        stack: list[tuple[int, list[int], int]] = [(0, [], 0)]
         # Each frame is (state_id, prefix_so_far, edge_cursor).
         while stack:
             state_id, prefix, cursor = stack[-1]
             edges_offset, count, is_accept, edges = self._state(state_id)
-            if cursor == 0 and is_accept:
+            if cursor == 0 and is_accept and prefix:
                 yield list(prefix)
             if cursor < len(edges):
                 stack[-1] = (state_id, prefix, cursor + 1)
@@ -158,7 +188,7 @@ def main(argv: list[str]) -> int:
     bd = BlockedDafsa(asset_dir)
     sys.stderr.write(
         f"# tilezz-rat-dafsa-blocks: {bd.manifest.get('n_sequences', '?')} sequences "
-        f"across {bd.manifest.get('n_blocks', '?')} block(s)\n"
+        f"across {len(bd.blocks_index)} block(s)\n"
     )
     out = sys.stdout
     for rat in bd.iter_rats():

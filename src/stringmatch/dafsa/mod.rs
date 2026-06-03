@@ -42,4 +42,6 @@ pub mod rocrate;
 pub use core::Dafsa;
 pub use lazy::{LazyRatDafsa, LazyRatDafsaAsync};
 pub use rat::RatDafsa;
-pub use rocrate::{write_archival_extras, write_ro_crate, AssetParams, ProducedVia};
+pub use rocrate::{
+    write_archival_extras, write_collection_ro_crate, write_ro_crate, AssetParams, ProducedVia,
+};

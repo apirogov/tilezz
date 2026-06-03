@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://w3id.org/tilezz/schemas/block_index.schema.json",
   "title": "tilezz-rat-dafsa-blocks manifest",
-  "description": "Block-index manifest for a tilezz-rat-dafsa-blocks asset directory. See blocks_schema.txt (alongside this file) for the full prose specification including the binary block file (`blocks/block_<NNNNNN>.bin`) wire format -- the JSON Schema here only covers the manifest JSON itself.",
+  "description": "Block-index manifest for a tilezz-rat-dafsa-blocks asset directory. See blocks_schema.txt (alongside this file) for the full prose specification including the binary block file (`blocks/<sha256>.bin`) wire format -- the JSON Schema here only covers the manifest JSON itself.",
   "type": "object",
   "required": [
     "format",
@@ -10,13 +10,13 @@
     "scalar",
     "block_format",
     "block_version",
-    "block_size",
+    "target_block_bytes",
     "n_states",
     "n_edges",
     "n_sequences",
-    "n_blocks",
-    "root_state",
-    "block_filename_template"
+    "max_indexed_length",
+    "root",
+    "blocks"
   ],
   "additionalProperties": false,
   "properties": {
@@ -47,46 +47,96 @@
       "const": 1,
       "description": "Block file format version, bumped independently of the manifest 'version'."
     },
-    "block_size": {
+    "target_block_bytes": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of DAFSA states per block (except the last block, which may be smaller)."
+      "description": "Writer's target uncompressed bytes per block file. Hint only -- the writer closes a block once its serialised size crosses this threshold, so real blocks may be larger or (for the last block) smaller. Recorded so the build pipeline is reproducible."
     },
     "n_states": {
       "type": "integer",
       "minimum": 1,
-      "description": "Total DAFSA states across all blocks."
+      "description": "Total DAFSA states including the root. State 0 lives in 'root'; states 1..n_states are covered by the entries in 'blocks'."
     },
     "n_edges": {
       "type": "integer",
       "minimum": 0,
-      "description": "Total DAFSA edges across all blocks."
+      "description": "Total DAFSA edges across the root and every block."
     },
     "n_sequences": {
       "type": "integer",
       "minimum": 0,
-      "description": "Number of accepted sequences (rats). Equal to counts[root_state]."
-    },
-    "n_blocks": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Number of block files. Equal to ceil(n_states / block_size)."
-    },
-    "root_state": {
-      "type": "integer",
-      "minimum": 0,
-      "const": 0,
-      "description": "DAFSA root state id. Always 0 in v1; recorded for clarity."
-    },
-    "block_filename_template": {
-      "type": "string",
-      "pattern": "^[^{}]*\\{:0[0-9]+\\}[^{}]*\\.bin$",
-      "description": "printf-like template for block file paths. The '{:0N}' substitution is filled with the zero-padded block id. Default: 'blocks/block_{:06}.bin'."
+      "description": "Number of accepted sequences (rats). Equal to root.count."
     },
     "max_indexed_length": {
       "type": "integer",
       "minimum": 0,
-      "description": "Optional. Maximum length of any accepted sequence in this DAFSA. Allows clients to short-circuit out-of-range queries without walking the automaton. Absent in pre-v1.1 manifests; consumers should treat absence as 'unknown'."
+      "description": "Maximum length of any accepted rat (= maximum label value of any root edge). Lets clients short-circuit queries for longer inputs without walking the automaton."
+    },
+    "root": {
+      "type": "object",
+      "description": "DAFSA root state (state 0), inlined into the manifest rather than in a block file. Lifting the root out keeps every block file's bytes determined purely by inner-DAFSA structure, which is stable across forward extensions (adding longer rats only touches the root's edges).",
+      "required": ["count", "is_accept", "edges"],
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of accepted sequences reachable from the root. Equal to n_sequences."
+        },
+        "is_accept": {
+          "type": "boolean",
+          "description": "Whether the root itself accepts. For a tilezz-rat-dafsa (length-prefixed) this is always false."
+        },
+        "edges": {
+          "type": "array",
+          "description": "Root outgoing edges. For a tilezz-rat-dafsa each edge.label is a length byte; edge.target is the entry state of that length class.",
+          "items": {
+            "type": "object",
+            "required": ["label", "target"],
+            "additionalProperties": false,
+            "properties": {
+              "label": {
+                "type": "integer",
+                "minimum": -128,
+                "maximum": 127,
+                "description": "Edge label as a signed 8-bit integer."
+              },
+              "target": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Target state id (>= 1; the root never points at itself)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "description": "Content-addressed block index. Sorted strictly ascending by 'first_state'. Block N covers states [blocks[N].first_state, blocks[N+1].first_state); the last block covers up to n_states. Filenames are SHA-256 hashes of the gzipped block bytes (= cache key), so any two assets that contain byte-identical blocks share URLs and CDN cache entries.",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["first_state", "sha256", "size"],
+        "additionalProperties": false,
+        "properties": {
+          "first_state": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Smallest state id this block contains. blocks[0].first_state MUST be 1 (the root is in 'root', not in a block)."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Lowercase hex SHA-256 of the gzipped block file. Doubles as the filename stem: the file lives at blocks/<sha256>.bin."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Gzipped block file size in bytes. Lets clients show progress / preallocate buffers before fetching."
+          }
+        }
+      }
     }
   }
 }

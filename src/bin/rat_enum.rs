@@ -46,7 +46,7 @@
 //! ./target/release/rat_enum --ring 12 -n 14 --free \
 //!     --mode merge  -o out/
 //! ./target/release/rat_enum --ring 12 -n 14 --free \
-//!     --mode build  -o out/ --block-size 2048
+//!     --mode build  -o out/ --target-block-bytes 1048576
 //! # out/dafsa/ now holds the blocked RatDafsa, readable by
 //! # LazyRatDafsa / LazyRatDafsaAsync. out/certificate.json
 //! # carries the BLAKE3 of unique.bin so the build is auditable.
@@ -186,10 +186,10 @@ enum Mode {
     Dafsa,
     /// Enumerate, then write a blocked (lazy-loadable) `RatDafsa`
     /// asset directory at the path given by `-o`. Produces
-    /// `block_index.json` + `block_NNNNNN.bin` gzipped files
+    /// `block_index.json` + `blocks/<sha256>.bin` gzipped files
     /// readable by [`tilezz::stringmatch::LazyRatDafsa`] (or an
-    /// async equivalent). Pair with `--block-size` if the default
-    /// is too coarse or too fine for your set size.
+    /// async equivalent). Pair with `--target-block-bytes` if the
+    /// default is too coarse or too fine for your set size.
     DafsaBlocks,
     /// Stage 1 of the streaming pipeline. Runs the parallel DFS but
     /// writes each worker's closures to per-thread sort-buffer runs
@@ -215,9 +215,10 @@ enum Mode {
     /// (produced by `--mode merge`), streams the records through
     /// `RatDafsa::from_sorted_unique_rats`, and writes the blocked
     /// asset to `<-o dir>/dafsa/` via `RatDafsa::write_blocks`. Pair
-    /// with `--block-size`. Does not run the DFS or re-merge; it's
-    /// the streaming-friendly equivalent of `--mode dafsa-blocks` for
-    /// inputs too large to fit in memory as a Vec<Vec<i8>>.
+    /// with `--target-block-bytes`. Does not run the DFS or
+    /// re-merge; it's the streaming-friendly equivalent of `--mode
+    /// dafsa-blocks` for inputs too large to fit in memory as a
+    /// Vec<Vec<i8>>.
     Build,
 }
 
@@ -372,13 +373,14 @@ struct Cli {
     #[arg(long, default_value_t = 4)]
     closure_key_depth: usize,
 
-    /// States per block when writing the `--mode dafsa-blocks` asset.
-    /// Small enough that walks fetch only a few blocks; large enough
-    /// that per-block overhead doesn't dominate. 2048 is a sane
-    /// default for the few-million-state range; reduce for tiny
-    /// example assets so the test fans out across multiple blocks.
-    #[arg(long, default_value_t = 2048)]
-    block_size: u32,
+    /// Target uncompressed bytes per block file when writing the
+    /// `--mode dafsa-blocks` asset. The writer closes a block once
+    /// its serialised size crosses this threshold (the final block
+    /// may be smaller). 1 MiB (1048576) is the sweet spot for HTTP-
+    /// served assets; reduce for tiny example assets so the test
+    /// fans out across multiple blocks.
+    #[arg(long, default_value_t = 1 << 20)]
+    target_block_bytes: u32,
 
     /// Skip emission of `ro-crate-metadata.json` and the `schemas/`
     /// directory when writing a `--mode dafsa-blocks` asset. Default
@@ -545,7 +547,7 @@ fn main() {
             std::fs::create_dir_all(&blocks_dir).expect("create dafsa/");
             let t1 = Instant::now();
             dafsa
-                .write_blocks(&blocks_dir, cli.block_size)
+                .write_blocks(&blocks_dir, cli.target_block_bytes)
                 .expect("write_blocks");
 
             // Same self-describing bundle as Mode::DafsaBlocks, but the
@@ -561,7 +563,7 @@ fn main() {
                     max_steps: cli.max_steps,
                     step: cli.step,
                     free: cli.free,
-                    block_size: cli.block_size,
+                    target_block_bytes: cli.target_block_bytes,
                     n_sequences: dafsa.len() as u32,
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::StreamingPipeline,
@@ -717,7 +719,7 @@ fn main() {
             let path = std::path::Path::new(dir);
             std::fs::create_dir_all(path).expect("create output dir");
             dafsa
-                .write_blocks(path, cli.block_size)
+                .write_blocks(path, cli.target_block_bytes)
                 .expect("write blocked RatDafsa");
 
             // Self-describing RO-Crate bundle: schemas/ + tools/decode.py
@@ -733,7 +735,7 @@ fn main() {
                     max_steps: cli.max_steps,
                     step: cli.step,
                     free: cli.free,
-                    block_size: cli.block_size,
+                    target_block_bytes: cli.target_block_bytes,
                     n_sequences: dafsa.len() as u32,
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::InMemory,

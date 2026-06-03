@@ -2,7 +2,7 @@
 //! metadata emitter for a `tilezz-rat-dafsa-blocks` asset directory.
 //!
 //! Pipeline: after [`RatDafsa::write_blocks`] populates `dir/` with
-//! `block_index.json` and `blocks/block_*.bin`, call
+//! `block_index.json` and `blocks/<sha256>.bin`, call
 //! [`write_archival_extras`] to add the self-description files, then
 //! [`write_ro_crate`] to write the RO-Crate 1.2 entry-point JSON.
 //!
@@ -15,11 +15,15 @@
 //!   deps) that walks the blocked DAFSA and prints every rat as a
 //!   line of plain text. Lets an archivist extract sequences
 //!   without having to compile Rust.
+//! - `tools/verify_sha256.py` -- standalone Python 3 script that
+//!   checks every sha256 recorded in `ro-crate-metadata.json`
+//!   against the on-disk file bytes. Same dependency-free shape
+//!   as decode.py.
 //! - `README.md` -- human-readable entry point: dataset summary,
 //!   author and copyright notice (required by CC-BY-SA's
 //!   attribution clause), the CC-BY-SA 4.0 license terms, an exact
 //!   rebuild recipe (repo URL, commit, CLI invocation), and a
-//!   SHA-256 verification snippet.
+//!   pointer at the verify script.
 //! - `ro-crate-metadata.json` -- the RO-Crate 1.2 entry point. The
 //!   single starting point an archivist needs: it links every file
 //!   above with sha256 / conformsTo / encodingFormat properties, and
@@ -59,6 +63,13 @@ const BLOCK_INDEX_SCHEMA_JSON: &str = include_str!("schemas/block_index.schema.j
 /// without compiling Rust.
 const DECODER_PY: &str = include_str!("extras/decode.py");
 
+/// Standalone Python SHA-256 verifier. Shipped at
+/// `tools/verify_sha256.py` inside every asset so an archivist can
+/// check the recorded hashes match on-disk bytes without copy-
+/// pasting a heredoc out of the README. Exits 0 on full match, 1
+/// on mismatch.
+const VERIFY_SHA256_PY: &str = include_str!("extras/verify_sha256.py");
+
 /// How the dataset was produced. Determines what `reproduce.sh`
 /// emits (one-step in-memory build vs. three-stage streaming
 /// pipeline) and what the `CreateAction.description` records.
@@ -92,11 +103,12 @@ pub struct AssetParams<'a> {
     /// `true` if the canonicalization was free (= full dihedral
     /// symmetry reduction), `false` for plain rotation-canonical.
     pub free: bool,
-    /// `--block-size` used when writing the blocks. Structurally
-    /// observable (changes how many block files appear and which
-    /// states each contains), so a faithful reproduction must use
-    /// the same value -- echoed back in the reproduce script.
-    pub block_size: u32,
+    /// `--target-block-bytes` used when writing the blocks.
+    /// Structurally observable (changes how many block files appear
+    /// and which states each contains), so a faithful reproduction
+    /// must use the same value -- echoed back in the reproduce
+    /// script.
+    pub target_block_bytes: u32,
     /// Final rat count, surfaced into the Dataset `description`.
     pub n_sequences: u32,
     /// Optional OEIS reference (e.g. `"A316192"`). Becomes a
@@ -300,7 +312,7 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
     match rel_path {
         "block_index.json" => (
             "block_index.json",
-            "Manifest for the tilezz-rat-dafsa-blocks asset (state / edge counts, block size, block-file template).",
+            "Manifest for the tilezz-rat-dafsa-blocks asset (state / edge counts, root state record, content-addressed block index).",
         ),
         "schemas/block_index.schema.json" => (
             "block_index.schema.json (JSON Schema)",
@@ -317,6 +329,10 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
         "tools/decode.py" => (
             "decode.py (Python 3 decoder)",
             "Standalone, dependency-free Python 3 script that walks the blocked DAFSA in this directory and prints every rat as a line of space-separated signed integers. Run as `python3 tools/decode.py > rats.txt`.",
+        ),
+        "tools/verify_sha256.py" => (
+            "verify_sha256.py (Python 3 hash verifier)",
+            "Standalone, dependency-free Python 3 script that checks every sha256 recorded in ro-crate-metadata.json against the on-disk file bytes. Run as `python3 tools/verify_sha256.py`; exits 0 on full match, 1 on mismatch.",
         ),
         "README.md" => (
             "README.md",
@@ -367,6 +383,31 @@ fn dataset_identifier(p: &AssetParams) -> String {
             step = p.step,
         )
     }
+}
+
+/// Structured, machine-readable parameters of an asset, rendered
+/// as a schema.org `PropertyValue` array. Used both inside the
+/// per-dataset RO-Crate's root Dataset and -- copied verbatim --
+/// inside the collection-level RO-Crate's per-dataset stubs.
+///
+/// Keys: `ring`, `maxPerimeter`, `canonicalization`,
+/// `nSequences`, `maxIndexedLength`. `canonicalization` is a
+/// string (`"free"` or `"onesided"`); the rest are integers.
+fn dataset_additional_properties(p: &AssetParams) -> Value {
+    json!([
+        {"@type": "PropertyValue", "name": "ring", "value": p.ring},
+        {"@type": "PropertyValue", "name": "maxPerimeter", "value": p.max_steps},
+        {
+            "@type": "PropertyValue",
+            "name": "canonicalization",
+            "value": if p.free { "free" } else { "onesided" },
+        },
+        {"@type": "PropertyValue", "name": "nSequences", "value": p.n_sequences},
+        // For the current enumeration shape, the maximum indexed
+        // rat length equals max_steps (every length up to that
+        // bound is present in the asset).
+        {"@type": "PropertyValue", "name": "maxIndexedLength", "value": p.max_steps},
+    ])
 }
 
 /// Write `ro-crate-metadata.json` into `dir`, describing every
@@ -433,6 +474,13 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams) -> io::Result<()> {
     );
     root.insert("mainEntity", json!({"@id": "block_index.json"}));
     root.insert("hasPart", json!(has_part));
+    // Structured, machine-readable parameters. Crawlers (Google
+    // Dataset Search etc.) ignore the inner shape but display the
+    // names/values. The collection-level RO-Crate emitted for the
+    // hosted page copies this array verbatim into its hasPart stubs
+    // so the JS explorer can drive off a single fetch without
+    // string-parsing identifiers.
+    root.insert("additionalProperty", dataset_additional_properties(p));
     // Author(s) -- the Person(s) credited under the CC-BY-SA
     // attribution clause. Distinct from `instrument` on the
     // CreateAction (= the rat_enum tool).
@@ -578,7 +626,7 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams) -> io::Result<()> {
 
 /// Emit all the archival-extras files that make the asset
 /// self-describing, beyond the bare `block_index.json` +
-/// `blocks/*.bin` wire format:
+/// `blocks/<sha256>.bin` wire format:
 ///
 /// - `schemas/blocks_schema.txt`, `schemas/rat_schema.txt`,
 ///   `schemas/block_index.schema.json` -- referenced by the
@@ -606,6 +654,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     let tools = dir.join("tools");
     std::fs::create_dir_all(&tools)?;
     std::fs::write(tools.join("decode.py"), DECODER_PY)?;
+    std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
     std::fs::write(&sh_path, reproduce_sh(params))?;
@@ -620,6 +669,240 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
         std::fs::set_permissions(&sh_path, perm)?;
     }
     Ok(())
+}
+
+/// Build the top-level RO-Crate that describes a hosted page (e.g.
+/// `web/`) and links the per-dataset crates it serves. The result
+/// is a single `web_dir/ro-crate-metadata.json` whose `@graph`
+/// contains:
+///
+/// * The page's root Dataset entity (`@id: "./"`) with `mainEntity`
+///   = the WebApplication and `hasPart` = one stub per dataset
+///   discovered under `web_dir/data/*/`.
+/// * The WebApplication entity (the explorer itself).
+/// * Person + SoftwareSourceCode contextual entities, sourced from
+///   Cargo.toml (same identities as the per-dataset crates use).
+/// * One Dataset stub per discovered dataset, carrying the
+///   `additionalProperty` array verbatim from the child crate so
+///   the JS UI can drive off a single fetch.
+///
+/// `web_dir` must already exist and contain `data/<name>/ro-crate-
+/// metadata.json` files (produced by [`write_ro_crate`]). Missing
+/// or malformed child crates are skipped with a warning to stderr;
+/// the function does not fail on them so a partial deploy still
+/// emits a usable top-level crate.
+///
+/// `page_url` is the canonical URL where the page is hosted. Used
+/// only to populate the WebApplication entity's `url` property; it
+/// does not affect file layout.
+pub fn write_collection_ro_crate(web_dir: &Path, page_url: &str) -> io::Result<()> {
+    let mut has_part_ids: Vec<Value> = Vec::new();
+    let mut child_stubs: Vec<Value> = Vec::new();
+
+    // Sorted directory scan so the resulting crate is deterministic
+    // regardless of filesystem enumeration order.
+    let data_dir = web_dir.join("data");
+    let mut child_dirs: Vec<std::path::PathBuf> = Vec::new();
+    if data_dir.is_dir() {
+        for entry in std::fs::read_dir(&data_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() && path.join("ro-crate-metadata.json").is_file() {
+                child_dirs.push(path);
+            }
+        }
+    }
+    child_dirs.sort();
+
+    for path in &child_dirs {
+        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let stub_id = format!("./data/{dir_name}/");
+        let manifest_id = format!("./data/{dir_name}/ro-crate-metadata.json");
+        let crate_path = path.join("ro-crate-metadata.json");
+        let bytes = match std::fs::read(&crate_path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("warn: cannot read {}: {e}", crate_path.display());
+                continue;
+            }
+        };
+        let crate_json: Value = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warn: {} is not valid JSON: {e}", crate_path.display());
+                continue;
+            }
+        };
+        let root = match find_root_dataset(&crate_json) {
+            Some(r) => r,
+            None => {
+                eprintln!(
+                    "warn: {} has no Dataset entity at @id \"./\"; skipping",
+                    crate_path.display()
+                );
+                continue;
+            }
+        };
+
+        // Build a stub. Keep schema.org-typed properties only;
+        // ignore RO-Crate-internal fields like hasPart (the stub
+        // points at the child crate's manifest, not at its files).
+        let mut stub = serde_json::Map::new();
+        stub.insert("@id".into(), json!(stub_id));
+        stub.insert("@type".into(), json!("Dataset"));
+        for key in [
+            "identifier",
+            "name",
+            "description",
+            "license",
+            "datePublished",
+            "version",
+            "keywords",
+            "creator",
+            "subjectOf",
+            "additionalProperty",
+        ] {
+            if let Some(v) = root.get(key) {
+                stub.insert(key.to_string(), v.clone());
+            }
+        }
+        stub.insert("encodingFormat".into(), json!("tilezz-rat-dafsa-blocks"));
+        // Distribution: a DataDownload pointing at the child crate's
+        // canonical, self-describing manifest. Crawlers follow it
+        // for the full file inventory + SHA-256s.
+        stub.insert(
+            "distribution".into(),
+            json!({
+                "@type": "DataDownload",
+                "encodingFormat": "application/ld+json",
+                "contentUrl": manifest_id.clone(),
+                "description": "RO-Crate 1.2 manifest for this dataset (canonical, self-describing).",
+            }),
+        );
+        has_part_ids.push(json!({"@id": stub_id}));
+        child_stubs.push(Value::Object(stub));
+    }
+
+    let mut graph: Vec<Value> = Vec::new();
+
+    // RO-Crate metadata file descriptor (required entity).
+    graph.push(json!({
+        "@type": "CreativeWork",
+        "@id": "ro-crate-metadata.json",
+        "conformsTo": {"@id": "https://w3id.org/ro/crate/1.2"},
+        "about": {"@id": "./"},
+    }));
+
+    // Page root Dataset.
+    let mut root: BTreeMap<&str, Value> = BTreeMap::new();
+    root.insert("@id", json!("./"));
+    root.insert("@type", json!("Dataset"));
+    root.insert("name", json!("tilezz Rat Explorer"));
+    root.insert(
+        "description",
+        json!(
+            "Interactive WebAssembly explorer for simple matchstick polygons on cyclotomic \
+             lattices Z[zeta_n]. Hosts a queryable database of canonical polygons; each \
+             dataset under data/ is a self-describing RO-Crate sub-dataset (follow its \
+             ro-crate-metadata.json for the full file inventory)."
+        ),
+    );
+    root.insert("identifier", json!(page_url));
+    root.insert("url", json!(page_url));
+    root.insert("datePublished", json!(build_endtime()));
+    root.insert("version", json!(PKG.commit));
+    root.insert("isBasedOn", json!({"@id": format!("#{}", PKG.name)}));
+    root.insert(
+        "creator",
+        Value::Array(
+            authors_as_ids()
+                .into_iter()
+                .map(|id| json!({"@id": id}))
+                .collect(),
+        ),
+    );
+    root.insert("mainEntity", json!({"@id": "#rat-explorer"}));
+    root.insert("hasPart", json!(has_part_ids));
+    graph.push(serde_json::Value::Object(
+        root.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+    ));
+
+    // WebApplication entity for the page itself.
+    graph.push(json!({
+        "@id": "#rat-explorer",
+        "@type": "WebApplication",
+        "name": "tilezz Rat Explorer",
+        "description": "Interactive explorer for simple matchstick polygons on cyclotomic lattices. Builds polygons from angle sequences and looks them up in a packaged RO-Crate database of canonical forms.",
+        "url": page_url,
+        "applicationCategory": "BrowserApplication",
+        "operatingSystem": "Any (browser with WebAssembly)",
+        "isBasedOn": {"@id": format!("#{}", PKG.name)},
+        "author": authors_as_ids().into_iter().map(|id| json!({"@id": id})).collect::<Vec<_>>(),
+        "license": {"@id": "https://opensource.org/license/mit"},
+    }));
+
+    // Person contextual entities, one per author. Identical to the
+    // per-dataset crate's #author-N identities, so a crawler that
+    // resolves both crates de-duplicates them via @id.
+    for (id, name, email) in parse_authors(PKG.authors) {
+        let mut p_obj: BTreeMap<&str, Value> = BTreeMap::new();
+        p_obj.insert("@id", json!(id));
+        p_obj.insert("@type", json!("Person"));
+        p_obj.insert("name", json!(name));
+        if let Some(e) = email {
+            p_obj.insert("email", json!(e));
+        }
+        graph.push(serde_json::Value::Object(
+            p_obj.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        ));
+    }
+
+    // SoftwareSourceCode entity. Distinct from the per-dataset
+    // crate's SoftwareApplication for rat_enum: here we describe
+    // the repository itself (a code artifact a developer can clone
+    // and build), not a particular CLI invocation.
+    graph.push(json!({
+        "@id": format!("#{}", PKG.name),
+        "@type": "SoftwareSourceCode",
+        "name": PKG.name,
+        "description": PKG.description,
+        "codeRepository": PKG.repository,
+        "programmingLanguage": "Rust",
+        "version": PKG.version,
+        "softwareVersion": PKG.commit,
+        "license": {"@id": "https://opensource.org/license/mit"},
+    }));
+
+    // Per-dataset stubs.
+    graph.extend(child_stubs);
+
+    let root_obj = json!({
+        "@context": "https://w3id.org/ro/crate/1.2/context",
+        "@graph": graph,
+    });
+    let out_path = web_dir.join("ro-crate-metadata.json");
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(&out_path)?);
+    serde_json::to_writer_pretty(&mut writer, &root_obj)
+        .map_err(|e| io::Error::other(format!("write {}: {e}", out_path.display())))?;
+    io::Write::write_all(&mut writer, b"\n")?;
+    Ok(())
+}
+
+/// Find the `@graph` entity that describes the root directory
+/// (`@id: "./"`) of a per-dataset RO-Crate. Returns `None` if the
+/// document is not shaped like an RO-Crate.
+fn find_root_dataset(crate_json: &Value) -> Option<&serde_json::Map<String, Value>> {
+    let graph = crate_json.get("@graph")?.as_array()?;
+    for entity in graph {
+        let obj = entity.as_object()?;
+        if obj.get("@id").and_then(|v| v.as_str()) == Some("./") {
+            return Some(obj);
+        }
+    }
+    None
 }
 
 /// Shared flag tail across all `rat_enum` invocations for a given
@@ -651,11 +934,11 @@ fn shared_flags(p: &AssetParams) -> String {
 fn reproduce_commands(p: &AssetParams) -> Vec<String> {
     let shared = shared_flags(p);
     let ident = dataset_identifier(p);
-    let bs = p.block_size;
+    let tbb = p.target_block_bytes;
     match p.produced_via {
         ProducedVia::InMemory => vec![format!(
             "./target/release/rat_enum {shared} --mode dafsa-blocks \
-                 --block-size {bs} --threads 0 -o {ident}"
+                 --target-block-bytes {tbb} --threads 0 -o {ident}"
         )],
         ProducedVia::StreamingPipeline => vec![
             format!(
@@ -668,7 +951,7 @@ fn reproduce_commands(p: &AssetParams) -> Vec<String> {
             ),
             format!(
                 "./target/release/rat_enum {shared} --mode build \
-                 --block-size {bs} -o {ident}-pipeline"
+                 --target-block-bytes {tbb} -o {ident}-pipeline"
             ),
             // After --mode build, the asset is at {ident}-pipeline/dafsa/.
             // The final mv lines mirror that into the canonical path so
@@ -821,15 +1104,16 @@ to its schema.
 {ident}/
   README.md               this file
   ro-crate-metadata.json  RO-Crate 1.2 manifest (start here for tooling)
-  block_index.json        DAFSA wire manifest (sizes, root, template)
+  block_index.json        DAFSA wire manifest (counts, root state, sha256 block index)
   schemas/
     block_index.schema.json  formal JSON Schema (draft 2020-12)
     blocks_schema.txt        prose spec covering JSON + .bin formats
     rat_schema.txt           length-prefix convention inside the DAFSA
   blocks/
-    block_000000.bin .. block_NNNNNN.bin  one gzipped DAFSA block each
+    <sha256>.bin            one gzipped DAFSA block each; filename = SHA-256 of file
   tools/
     decode.py               standalone Python 3 decoder (no deps)
+    verify_sha256.py        SHA-256 verifier (no deps; exits 0 on full match)
     reproduce.sh            executable rebuild script (clones + builds + runs)
 ```
 
@@ -848,25 +1132,14 @@ The line count of `rats.txt` must equal `n_sequences` from \
 ## Verifying SHA-256s
 
 Every File entity in `ro-crate-metadata.json` carries a `sha256` \
-that matches the on-disk bytes:
+that matches the on-disk bytes. `tools/verify_sha256.py` checks \
+the whole set:
 
 ```sh
-python3 - <<'PY'
-import json, hashlib, pathlib
-meta = json.load(open('ro-crate-metadata.json'))
-errs = 0
-for entity in meta['@graph']:
-    rel = entity.get('@id', '')
-    want = entity.get('sha256')
-    if not want or rel.startswith('http') or rel.startswith('#'):
-        continue
-    got = hashlib.sha256(pathlib.Path(rel).read_bytes()).hexdigest()
-    if got != want:
-        print(f'{{rel}}: MISMATCH (got {{got[:12]}}, want {{want[:12]}})')
-        errs += 1
-print(f'{{\"OK\" if errs == 0 else f\"{{errs}} mismatches\"}}')
-PY
+python3 tools/verify_sha256.py
 ```
+
+Exits 0 on full match, 1 on any mismatch.
 
 ## Reproducing from source
 
@@ -1022,7 +1295,7 @@ mod tests {
     fn encoding_format_table() {
         assert_eq!(encoding_format_of("block_index.json"), "application/json");
         assert_eq!(
-            encoding_format_of("blocks/block_000000.bin"),
+            encoding_format_of("blocks/abcdef0123456789.bin"),
             "application/gzip"
         );
         assert_eq!(
@@ -1040,7 +1313,7 @@ mod tests {
             max_steps: 10,
             step: 1,
             free: true,
-            block_size: 512,
+            target_block_bytes: 512,
             n_sequences: 16_751,
             oeis_a_number: Some("A316192"),
             produced_via: ProducedVia::InMemory,
@@ -1063,7 +1336,7 @@ mod tests {
             max_steps: 10,
             step: 1,
             free: true,
-            block_size: 512,
+            target_block_bytes: 512,
             n_sequences: 16_751,
             oeis_a_number: None,
             produced_via: ProducedVia::InMemory,
@@ -1117,7 +1390,7 @@ mod tests {
             max_steps: 4,
             step: 1,
             free: true,
-            block_size: 2,
+            target_block_bytes: 2,
             n_sequences: rats.len() as u32,
             oeis_a_number: Some("A316192"),
             produced_via: ProducedVia::InMemory,

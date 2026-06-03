@@ -7,11 +7,13 @@
 //! (one manifest file plus N gzipped block files) is described in
 //! the bundled schema [`JSON_SCHEMA_DOC`].
 //!
-//! The reader is parameterised over a `fetch_block: Fn(usize) ->
-//! io::Result<Vec<u8>>` callback. In tests we point it at a
-//! filesystem directory; in production a WASM port points it at
-//! `fetch(URL + template.format(id))`. The same `LazyRatDafsa`
-//! type works for both.
+//! The reader is parameterised over a `fetch_block: Fn(u32) ->
+//! io::Result<Vec<u8>>` callback that receives a block index into
+//! the manifest's `blocks` array. In tests we point it at a
+//! filesystem directory; in production a WASM port resolves the
+//! index to a URL via `manifest.block_filename(&manifest.blocks[i])`
+//! and calls `fetch(URL_PREFIX + filename)`. The same
+//! `LazyRatDafsa` type works for both.
 //!
 //! # API parity with [`RatDafsa`]
 //!
@@ -31,6 +33,7 @@ use std::collections::HashMap;
 use std::io;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::rat::RatDafsa;
 
@@ -42,7 +45,15 @@ const BLOCK_MAGIC: &[u8; 4] = b"TRB1";
 const SCALAR_TAG: &str = "i8";
 const BLOCK_FORMAT_TAG: &str = "tilezz-rat-block";
 const BLOCK_FORMAT_VERSION: u32 = 1;
-const DEFAULT_BLOCK_FILENAME_TEMPLATE: &str = "blocks/block_{:06}.bin";
+
+/// Default target on-disk block file size for the writer. Real
+/// blocks may be a bit larger (we close a block once the buffer
+/// crosses this threshold, after the next state's records are
+/// appended) and the final block can be smaller. 1 MiB is the
+/// sweet spot for HTTP-served assets: roughly a hundred files per
+/// gigabyte of dataset, each large enough that per-file overhead
+/// (gzip header, HTTP round-trip) is well amortised.
+pub const DEFAULT_TARGET_BLOCK_BYTES: u32 = 1 << 20;
 
 /// Bytes per state record on disk. See the schema for the layout.
 const STATE_RECORD_BYTES: usize = 16;
@@ -54,6 +65,24 @@ const BLOCK_HEADER_BYTES: usize = 4 + 4 + 4 + 4;
 /// The manifest file produced by [`RatDafsa::write_blocks`] and
 /// parsed by [`LazyRatDafsa::open`]. See [`JSON_SCHEMA_DOC`] for the
 /// authoritative wire description.
+///
+/// Key design properties:
+///
+/// * **Root state in the manifest, not in a block file.** State 0
+///   (the DAFSA root) is the one state whose record necessarily
+///   changes when extending the asset to deeper perim (it gains
+///   length-prefix edges for the new length classes). Keeping it
+///   out of the block files means every block file's bytes are
+///   determined purely by its inner-DAFSA content -- which is
+///   structurally stable across forward extensions.
+///
+/// * **Content-addressed block filenames.** Each block file's
+///   name is the SHA-256 of its gzipped bytes. Two assets that
+///   contain the same block (= same content range) reference the
+///   same URL. CDN caches keyed on URL stay valid forever; an
+///   asset extension that re-cuts the last partial block just
+///   produces a new SHA-256 / new URL, leaving every other URL
+///   untouched.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockManifest {
     pub format: String,
@@ -61,54 +90,121 @@ pub struct BlockManifest {
     pub scalar: String,
     pub block_format: String,
     pub block_version: u32,
-    pub block_size: u32,
+    /// Writer's target on-disk byte budget per block. Hint for the
+    /// build pipeline; readers don't enforce it. Real blocks vary
+    /// (the writer closes a block when its serialised size crosses
+    /// the threshold; the final block may be smaller).
+    pub target_block_bytes: u32,
+    /// Total DAFSA state count, including the root. Block files
+    /// cover states 1..n_states; state 0 lives in `root`.
     pub n_states: u32,
+    /// Total DAFSA edges, including the root's edges.
     pub n_edges: u32,
+    /// Number of accepted sequences (rats).
     pub n_sequences: u32,
-    pub n_blocks: u32,
-    pub root_state: u32,
-    pub block_filename_template: String,
-    /// Maximum rat length covered by the asset (= the largest length
-    /// byte appearing as a root-edge label, i.e. the maximum of the
-    /// length-prefix encoding). A consumer can short-circuit queries
-    /// for longer inputs without walking the DAFSA at all. Optional
-    /// for backwards compatibility with manifests emitted before this
-    /// field was added; readers should treat absence as "unknown".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_indexed_length: Option<u32>,
+    /// Maximum rat length covered by the asset (= the largest
+    /// label appearing on a root-edge, i.e. the maximum length
+    /// prefix). A consumer can short-circuit queries for longer
+    /// inputs without walking the DAFSA at all.
+    pub max_indexed_length: u32,
+    /// Root state record (state 0). Lives in the manifest rather
+    /// than in a block file so adding length classes doesn't
+    /// reshape any `blocks/*.bin`.
+    pub root: RootState,
+    /// Block index. Each entry names the block's first state ID
+    /// and its SHA-256 content hash (which is also its filename
+    /// stem in `blocks/`). Sorted strictly ascending by
+    /// `first_state`. Block N covers states
+    /// `[blocks[N].first_state, blocks[N+1].first_state)`; the
+    /// last block covers up to `n_states`.
+    pub blocks: Vec<BlockEntry>,
+}
+
+/// State 0 (root) record, inlined into the manifest. Same shape
+/// as a [`StateRec`] but rendered as JSON so a consumer that only
+/// fetched the manifest can already enumerate the language's
+/// length classes (via [`RootState::edges`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootState {
+    /// Number of accepted sequences reachable from the root.
+    /// Equal to `n_sequences`.
+    pub count: u64,
+    /// Whether the root itself is an accepting state. For a
+    /// `tilezz-rat-dafsa` (length-prefixed sequences) this is
+    /// always `false` since every rat has at least the length
+    /// byte; recorded explicitly for forward compatibility.
+    pub is_accept: bool,
+    /// Root's outgoing edges. For a `tilezz-rat-dafsa`, each
+    /// edge's `label` is the length byte of one length class and
+    /// `target` is the entry state of that class's sub-DAFSA.
+    pub edges: Vec<RootEdge>,
+}
+
+/// One root edge in the manifest. Same shape as an [`EdgeRec`]
+/// but rendered as JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RootEdge {
+    pub label: i8,
+    pub target: u32,
+}
+
+/// One entry in the manifest's `blocks` array.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockEntry {
+    /// Smallest state ID this block contains. Strictly greater
+    /// than the previous entry's `first_state` (sorted).
+    pub first_state: u32,
+    /// Lowercase hex SHA-256 of the gzipped block file. Doubles
+    /// as the filename stem: the block file lives at
+    /// `blocks/<sha256>.bin`.
+    pub sha256: String,
+    /// Gzipped block file size in bytes. Lets clients show
+    /// progress / preallocate buffers before fetching.
+    pub size: u32,
 }
 
 impl BlockManifest {
-    /// Render the canonical filename of a block file under this
-    /// manifest's template. Currently we only honour the `{:06}`
-    /// substitution; other format specs are not supported in v1 and
-    /// the reader will reject manifests whose template does not
-    /// match that pattern.
-    pub fn block_filename(&self, block_id: u32) -> String {
-        // Tiny templating: replace the first "{...}" occurrence with
-        // the zero-padded id. The only template shape we support in
-        // v1 is `block_{:06}.bin`, but allowing any width keeps the
-        // schema flexible without pulling in a full format parser.
-        if let Some(start) = self.block_filename_template.find('{') {
-            if let Some(end_rel) = self.block_filename_template[start..].find('}') {
-                let end = start + end_rel;
-                let spec = &self.block_filename_template[start + 1..end];
-                let width: usize = spec
-                    .strip_prefix(':')
-                    .and_then(|s| s.strip_prefix('0'))
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(6);
-                let rendered = format!("{:0>width$}", block_id, width = width);
-                let mut s = String::new();
-                s.push_str(&self.block_filename_template[..start]);
-                s.push_str(&rendered);
-                s.push_str(&self.block_filename_template[end + 1..]);
-                return s;
-            }
+    /// Canonical filename of one block file, relative to the asset
+    /// root. The SHA-256 stem is the same one used as the cache /
+    /// CDN key, so two assets that contain the same block file
+    /// share the same URL.
+    pub fn block_filename(&self, entry: &BlockEntry) -> String {
+        format!("blocks/{}.bin", entry.sha256)
+    }
+
+    /// Find which block holds `state_id`. Returns the index into
+    /// `self.blocks`, or `None` if `state_id == 0` (root, in the
+    /// manifest) or `state_id >= n_states`. O(log blocks.len()).
+    pub fn block_index_for_state(&self, state_id: u32) -> Option<usize> {
+        if state_id == 0 || state_id >= self.n_states {
+            return None;
         }
-        // No substitution slot; return the literal name and let the
-        // caller decide whether that's an error.
-        self.block_filename_template.clone()
+        // Largest i with blocks[i].first_state <= state_id. Since
+        // `blocks` is sorted and `first_state` starts at 1, the
+        // search returns at least 0 for any state_id >= 1.
+        let pos = self.blocks.partition_point(|b| b.first_state <= state_id);
+        // pos is the count of blocks whose first_state <= state_id;
+        // we want the largest such index, which is pos - 1.
+        if pos == 0 {
+            // No block has first_state <= state_id. Manifest is
+            // malformed (or state_id is < blocks[0].first_state,
+            // which means state_id == 0 -- already filtered above).
+            None
+        } else {
+            Some(pos - 1)
+        }
+    }
+
+    /// The state range a given block covers: `[first_state,
+    /// end_state)`. Convenience for readers.
+    pub fn block_state_range(&self, block_index: usize) -> Option<(u32, u32)> {
+        let entry = self.blocks.get(block_index)?;
+        let end = self
+            .blocks
+            .get(block_index + 1)
+            .map(|next| next.first_state)
+            .unwrap_or(self.n_states);
+        Some((entry.first_state, end))
     }
 }
 
@@ -311,12 +407,7 @@ where
                 ),
             ));
         }
-        if manifest.block_size == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "LazyRatDafsa: block_size must be >= 1",
-            ));
-        }
+        validate_block_index(&manifest)?;
         Ok(Self {
             manifest,
             fetch_block,
@@ -347,7 +438,7 @@ where
         let prefixed = prefix(rat.as_ref());
         // The inner DAFSA's lex rank of the prefixed sequence equals
         // the rat's (length, lex) rank.
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         let mut rank: u32 = 0;
         for &symbol in &prefixed {
             let (rec, edges) = self.lookup_state(state).ok()?;
@@ -384,7 +475,7 @@ where
             return None;
         }
         let mut out: Vec<i8> = Vec::new();
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         let mut remaining = i as u64;
         loop {
             let (rec, edges) = self.lookup_state(state).ok()?;
@@ -436,7 +527,7 @@ where
         let mut current: Vec<i8> = Vec::new();
         let mut stack: Vec<(Vec<EdgeRec>, usize)> = Vec::new();
 
-        let (root_rec, root_edges) = self.lookup_state(self.manifest.root_state)?;
+        let (root_rec, root_edges) = self.lookup_state(0u32)?;
         if root_rec.is_accept {
             // Defensive: a root accept implies an empty prefixed
             // sequence, which `RatDafsa::from_rats` cannot legally
@@ -480,7 +571,7 @@ where
     /// inspects `rec.is_accept` to decide membership. Returns
     /// `Err(())` if the walk falls off the language at any step.
     fn walk(&self, prefixed: &[i8]) -> Result<(StateRec, Vec<EdgeRec>), ()> {
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         for &symbol in prefixed {
             let (_, edges) = self.lookup_state(state).map_err(|_| ())?;
             let mut next: Option<u32> = None;
@@ -504,35 +595,60 @@ where
     /// for the duration of the copy, so callers can chain
     /// `lookup_state` calls without RefCell-borrow conflicts.
     fn lookup_state(&self, state_id: u32) -> io::Result<(StateRec, Vec<EdgeRec>)> {
-        let block_id = state_id / self.manifest.block_size;
-        let local = (state_id % self.manifest.block_size) as usize;
-        self.ensure_block_loaded(block_id)?;
+        // State 0 (root) lives in the manifest; serve it without
+        // touching the block cache.
+        if state_id == 0 {
+            return Ok((
+                root_as_state_rec(&self.manifest.root),
+                root_edges(&self.manifest.root),
+            ));
+        }
+        let block_index = self
+            .manifest
+            .block_index_for_state(state_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "state_id {state_id} not within asset (n_states = {})",
+                        self.manifest.n_states
+                    ),
+                )
+            })?;
+        let entry = &self.manifest.blocks[block_index];
+        let local = (state_id - entry.first_state) as usize;
+        self.ensure_block_loaded(block_index)?;
         let cache = self.cache.borrow();
         let block = cache
-            .get(&block_id)
+            .get(&(block_index as u32))
             .expect("ensure_block_loaded just populated it");
         let rec = block.states[local];
         let edges = block.edges_for(local).to_vec();
         Ok((rec, edges))
     }
 
-    fn ensure_block_loaded(&self, block_id: u32) -> io::Result<()> {
-        if self.cache.borrow().contains_key(&block_id) {
+    fn ensure_block_loaded(&self, block_index: usize) -> io::Result<()> {
+        let key = block_index as u32;
+        if self.cache.borrow().contains_key(&key) {
             return Ok(());
         }
-        let bytes = (self.fetch_block)(block_id)?;
+        let entry = &self.manifest.blocks[block_index];
+        // The fetcher receives the BLOCK INDEX (not a u32 ID derived
+        // from state numbering as before). Callers translate it to a
+        // URL via the manifest's `block_filename(entry)`.
+        let bytes = (self.fetch_block)(block_index as u32)?;
+        verify_block_hash(&bytes, &entry.sha256, block_index)?;
         let block = Block::from_gz_bytes(&bytes)?;
-        let expected_first = block_id * self.manifest.block_size;
-        if block.first_state_id != expected_first {
+        if block.first_state_id != entry.first_state {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "block {block_id} declares first_state_id {} but should be {expected_first}",
-                    block.first_state_id
+                    "block {block_index} declares first_state_id {} but manifest says {}",
+                    block.first_state_id, entry.first_state
                 ),
             ));
         }
-        self.cache.borrow_mut().insert(block_id, block);
+        self.cache.borrow_mut().insert(key, block);
         Ok(())
     }
 }
@@ -609,12 +725,7 @@ impl LazyRatDafsaAsync {
                 ),
             ));
         }
-        if manifest.block_size == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "LazyRatDafsaAsync: block_size must be >= 1",
-            ));
-        }
+        validate_block_index(&manifest)?;
         Ok(Self {
             manifest,
             cache: RefCell::new(HashMap::new()),
@@ -657,13 +768,11 @@ impl LazyRatDafsaAsync {
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
     {
         let rat_slice = rat.as_ref();
-        if let Some(max) = self.manifest.max_indexed_length {
-            if rat_slice.len() as u32 > max {
-                return None;
-            }
+        if rat_slice.len() as u32 > self.manifest.max_indexed_length {
+            return None;
         }
         let prefixed = prefix(rat_slice);
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         let mut rank: u32 = 0;
         for &symbol in &prefixed {
             let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
@@ -703,7 +812,7 @@ impl LazyRatDafsaAsync {
             return None;
         }
         let mut out: Vec<i8> = Vec::new();
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         let mut remaining = i as u64;
         loop {
             let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
@@ -742,7 +851,7 @@ impl LazyRatDafsaAsync {
         F: Fn(u32) -> Fut,
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
     {
-        let mut state = self.manifest.root_state;
+        let mut state = 0u32;
         for &symbol in prefixed {
             let (_, edges) = self.lookup_state(state, fetch).await.map_err(|_| ())?;
             let mut next: Option<u32> = None;
@@ -770,43 +879,153 @@ impl LazyRatDafsaAsync {
         F: Fn(u32) -> Fut,
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
     {
-        let block_id = state_id / self.manifest.block_size;
-        let local = (state_id % self.manifest.block_size) as usize;
-        self.ensure_block_loaded(block_id, fetch).await?;
+        // State 0 (root) served from the manifest -- no I/O.
+        if state_id == 0 {
+            return Ok((
+                root_as_state_rec(&self.manifest.root),
+                root_edges(&self.manifest.root),
+            ));
+        }
+        let block_index = self
+            .manifest
+            .block_index_for_state(state_id)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "state_id {state_id} not within asset (n_states = {})",
+                        self.manifest.n_states
+                    ),
+                )
+            })?;
+        let entry = self.manifest.blocks[block_index].clone();
+        let local = (state_id - entry.first_state) as usize;
+        self.ensure_block_loaded(block_index, fetch).await?;
         let cache = self.cache.borrow();
         let block = cache
-            .get(&block_id)
+            .get(&(block_index as u32))
             .expect("ensure_block_loaded just populated it");
         let rec = block.states[local];
         let edges = block.edges_for(local).to_vec();
         Ok((rec, edges))
     }
 
-    async fn ensure_block_loaded<F, Fut>(&self, block_id: u32, fetch: &F) -> io::Result<()>
+    async fn ensure_block_loaded<F, Fut>(&self, block_index: usize, fetch: &F) -> io::Result<()>
     where
         F: Fn(u32) -> Fut,
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
     {
+        let key = block_index as u32;
         // Quick check; we drop the borrow before awaiting so the
         // RefCell doesn't bridge an await point.
-        if self.cache.borrow().contains_key(&block_id) {
+        if self.cache.borrow().contains_key(&key) {
             return Ok(());
         }
-        let bytes = fetch(block_id).await?;
+        let entry = self.manifest.blocks[block_index].clone();
+        let bytes = fetch(block_index as u32).await?;
+        verify_block_hash(&bytes, &entry.sha256, block_index)?;
         let block = Block::from_gz_bytes(&bytes)?;
-        let expected_first = block_id * self.manifest.block_size;
-        if block.first_state_id != expected_first {
+        if block.first_state_id != entry.first_state {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "block {block_id} declares first_state_id {} but should be {expected_first}",
-                    block.first_state_id
+                    "block {block_index} declares first_state_id {} but manifest says {}",
+                    block.first_state_id, entry.first_state
                 ),
             ));
         }
-        self.cache.borrow_mut().insert(block_id, block);
+        self.cache.borrow_mut().insert(key, block);
         Ok(())
     }
+}
+
+// ---- Helpers shared by sync + async readers ----
+
+/// Convert a manifest [`RootState`] (parsed from JSON) into the
+/// in-memory [`StateRec`] used by the lookup paths.
+fn root_as_state_rec(root: &RootState) -> StateRec {
+    StateRec {
+        // Edges_offset is meaningless for the root: its edges
+        // live in the manifest, not in a block file's edges array.
+        edges_offset: 0,
+        count: root.count,
+        is_accept: root.is_accept,
+    }
+}
+
+/// Convert a manifest's [`RootEdge`] list into the in-memory
+/// [`EdgeRec`] list used by the lookup paths.
+fn root_edges(root: &RootState) -> Vec<EdgeRec> {
+    root.edges
+        .iter()
+        .map(|e| EdgeRec {
+            label: e.label,
+            target: e.target,
+        })
+        .collect()
+}
+
+/// SHA-256-hex of `bytes`, compared to `want`. Used to integrity-
+/// check each fetched block file against the hash baked into the
+/// manifest.
+fn verify_block_hash(bytes: &[u8], want: &str, block_index: usize) -> io::Result<()> {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let got = format!("{:x}", hasher.finalize());
+    if got != want {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("block {block_index} sha256 mismatch (got {got}, manifest wants {want})"),
+        ));
+    }
+    Ok(())
+}
+
+/// Manifest-time validation of the `blocks` index. Catches the
+/// malformed cases that would otherwise cause confusing reader
+/// errors deep into a query: empty index, out-of-order
+/// `first_state`, gaps, n_states inconsistent with last block.
+fn validate_block_index(manifest: &BlockManifest) -> io::Result<()> {
+    if manifest.blocks.is_empty() {
+        if manifest.n_states > 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "manifest has n_states={} but no blocks (only root in manifest)",
+                    manifest.n_states
+                ),
+            ));
+        }
+        return Ok(());
+    }
+    if manifest.blocks[0].first_state != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "first block must start at state 1 (root is state 0); got {}",
+                manifest.blocks[0].first_state
+            ),
+        ));
+    }
+    for w in manifest.blocks.windows(2) {
+        if w[1].first_state <= w[0].first_state {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "block index not strictly ascending by first_state",
+            ));
+        }
+    }
+    let last = &manifest.blocks[manifest.blocks.len() - 1];
+    if last.first_state >= manifest.n_states {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "last block first_state={} >= n_states={}",
+                last.first_state, manifest.n_states
+            ),
+        ));
+    }
+    Ok(())
 }
 
 // ---- Writer ----
@@ -817,113 +1036,140 @@ impl RatDafsa {
     /// [`JSON_SCHEMA_DOC`] for the on-disk layout and
     /// [`LazyRatDafsa`] for the corresponding reader.
     ///
-    /// `dir` must already exist. `block_size` is the number of
-    /// states per file (except the last); typical values are
-    /// 1024..8192.
-    pub fn write_blocks(&self, dir: &std::path::Path, block_size: u32) -> io::Result<()> {
-        assert!(block_size >= 1, "block_size must be >= 1");
+    /// `dir` must already exist. `target_block_bytes` is the
+    /// writer's target on-disk size per block: we close a block
+    /// once its uncompressed serialised size crosses this threshold,
+    /// then gzip + name it by content hash. The last block may be
+    /// smaller. Typical value: `DEFAULT_TARGET_BLOCK_BYTES` (1 MiB).
+    ///
+    /// Asset layout produced:
+    ///
+    /// ```text
+    /// dir/
+    ///   block_index.json   (manifest with root + sha256 block index)
+    ///   blocks/
+    ///     <sha256>.bin     (one per block; filename = SHA-256 of file)
+    /// ```
+    pub fn write_blocks(&self, dir: &std::path::Path, target_block_bytes: u32) -> io::Result<()> {
+        assert!(target_block_bytes >= 1, "target_block_bytes must be >= 1");
         let dafsa = self.inner();
         let n_states = dafsa.raw_n_states() as u32;
         let n_edges = dafsa.raw_n_edges() as u32;
         let counts = dafsa.raw_counts();
         let n_sequences = counts.first().copied().unwrap_or(0) as u32;
-        let n_blocks = n_states.div_ceil(block_size);
 
         let edges_start = dafsa.raw_edges_start();
         let labels = dafsa.raw_labels();
         let targets = dafsa.raw_targets();
         let is_accept = dafsa.raw_is_accept();
 
-        for block_id in 0..n_blocks {
-            let first = block_id * block_size;
-            let last = ((block_id + 1) * block_size).min(n_states);
-            let n_in_block = last - first;
-
-            // Slice the edges owned by this block's states.
-            let edge_lo = edges_start[first as usize] as usize;
-            let edge_hi = if last as usize == n_states as usize {
-                n_edges as usize
-            } else {
-                edges_start[last as usize] as usize
-            };
-            let n_in_edges = (edge_hi - edge_lo) as u32;
-
-            let mut bytes = Vec::with_capacity(
-                BLOCK_HEADER_BYTES
-                    + n_in_block as usize * STATE_RECORD_BYTES
-                    + n_in_edges as usize * EDGE_RECORD_BYTES,
-            );
-            bytes.extend_from_slice(BLOCK_MAGIC);
-            write_u32(&mut bytes, first);
-            write_u32(&mut bytes, n_in_block);
-            write_u32(&mut bytes, n_in_edges);
-
-            // State records: edges_offset is block-local (subtract
-            // edge_lo from the global edges_start).
-            for local in 0..n_in_block as usize {
-                let global = first as usize + local;
-                let edges_offset_local = (edges_start[global] as usize - edge_lo) as u32;
-                write_u32(&mut bytes, edges_offset_local);
-                write_u64(&mut bytes, counts[global] as u64);
-                bytes.push(is_accept[global] as u8);
-                bytes.push(0);
-                bytes.push(0);
-                bytes.push(0);
-            }
-            // Edge records.
-            for i in edge_lo..edge_hi {
-                bytes.push(labels[i] as u8);
-                bytes.push(0);
-                bytes.push(0);
-                bytes.push(0);
-                write_u32(&mut bytes, targets[i]);
-            }
-
-            // Gzip and write. The default template places blocks in
-            // a `blocks/` subdir, so ensure it exists once per call.
-            let filename = render_template(DEFAULT_BLOCK_FILENAME_TEMPLATE, block_id);
-            let path = dir.join(&filename);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let file = std::fs::File::create(&path)?;
-            let mut enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-            io::Write::write_all(&mut enc, &bytes)?;
-            enc.finish()?;
-        }
-
-        // Write the manifest last so the reader never sees an index
-        // pointing at a block that hasn't been flushed yet.
-        // Maximum rat length covered = the largest label on a root
-        // edge (each root edge's label is the length-prefix byte of
-        // a stored rat). Lets consumers short-circuit oversized
-        // queries without walking.
-        let root_first = edges_start[0] as usize;
-        let root_last = if n_states > 1 {
+        // Build the root state record for the manifest. Root is
+        // state 0; its outgoing edges live at edges_start[0]..edges_start[1].
+        let root_edge_lo = edges_start[0] as usize;
+        let root_edge_hi = if n_states > 1 {
             edges_start[1] as usize
         } else {
             n_edges as usize
         };
-        let max_indexed_length = labels[root_first..root_last]
+        let root_edges_list: Vec<RootEdge> = (root_edge_lo..root_edge_hi)
+            .map(|i| RootEdge {
+                label: labels[i],
+                target: targets[i],
+            })
+            .collect();
+        let max_indexed_length = root_edges_list
             .iter()
-            .copied()
+            .map(|e| e.label as u32)
             .max()
-            .map(|v| v as u32);
+            .unwrap_or(0);
+        let root = RootState {
+            count: counts.first().copied().unwrap_or(0) as u64,
+            is_accept: *is_accept.first().unwrap_or(&false),
+            edges: root_edges_list,
+        };
 
+        let blocks_dir = dir.join("blocks");
+        std::fs::create_dir_all(&blocks_dir)?;
+
+        // Walk states 1..n_states (state 0 lives in the manifest)
+        // packing them into byte-budgeted blocks. The header and
+        // record sizes are known constants so we can predict the
+        // exact serialised cost of adding the next state without
+        // re-serialising.
+        let mut block_index: Vec<BlockEntry> = Vec::new();
+        let mut buf_states: Vec<(u32, u64, bool)> = Vec::new();
+        let mut buf_edges: Vec<(i8, u32)> = Vec::new();
+        let mut block_first_state: u32 = 1;
+        let mut block_edge_lo: usize = root_edge_hi;
+
+        for state in 1..n_states {
+            let global = state as usize;
+            let next_edge_offset = if global + 1 == n_states as usize {
+                n_edges as usize
+            } else {
+                edges_start[global + 1] as usize
+            };
+            let state_edge_lo = edges_start[global] as usize;
+            let state_edge_count = next_edge_offset - state_edge_lo;
+            let edges_offset_local = (state_edge_lo - block_edge_lo) as u32;
+            // Predict the new size if we append this state.
+            let next_bytes = BLOCK_HEADER_BYTES
+                + (buf_states.len() + 1) * STATE_RECORD_BYTES
+                + (buf_edges.len() + state_edge_count) * EDGE_RECORD_BYTES;
+            // If the predicted size crosses the threshold AND we
+            // already have at least one state in the buffer, flush
+            // first. (Guarantees every block holds >= 1 state, even
+            // if one state's edges blow past the threshold alone.)
+            if !buf_states.is_empty() && next_bytes as u32 > target_block_bytes {
+                flush_block(
+                    &blocks_dir,
+                    block_first_state,
+                    &buf_states,
+                    &buf_edges,
+                    &mut block_index,
+                )?;
+                buf_states.clear();
+                buf_edges.clear();
+                block_first_state = state;
+                block_edge_lo = state_edge_lo;
+            }
+            // Append. edges_offset is block-local (relative to the
+            // current block's edges_lo).
+            let local_offset = if buf_states.is_empty() {
+                0
+            } else {
+                edges_offset_local
+            };
+            buf_states.push((local_offset, counts[global] as u64, is_accept[global]));
+            for i in state_edge_lo..next_edge_offset {
+                buf_edges.push((labels[i], targets[i]));
+            }
+        }
+        if !buf_states.is_empty() {
+            flush_block(
+                &blocks_dir,
+                block_first_state,
+                &buf_states,
+                &buf_edges,
+                &mut block_index,
+            )?;
+        }
+
+        // Write the manifest last so a reader never sees an index
+        // pointing at a block that hasn't been flushed yet.
         let manifest = BlockManifest {
             format: MANIFEST_FORMAT.to_string(),
             version: MANIFEST_VERSION,
             scalar: SCALAR_TAG.to_string(),
             block_format: BLOCK_FORMAT_TAG.to_string(),
             block_version: BLOCK_FORMAT_VERSION,
-            block_size,
+            target_block_bytes,
             n_states,
             n_edges,
             n_sequences,
-            n_blocks,
-            root_state: 0,
-            block_filename_template: DEFAULT_BLOCK_FILENAME_TEMPLATE.to_string(),
             max_indexed_length,
+            root,
+            blocks: block_index,
         };
         let manifest_path = dir.join("block_index.json");
         let manifest_file = std::fs::File::create(&manifest_path)?;
@@ -933,25 +1179,63 @@ impl RatDafsa {
     }
 }
 
-fn render_template(template: &str, block_id: u32) -> String {
-    if let Some(start) = template.find('{') {
-        if let Some(end_rel) = template[start..].find('}') {
-            let end = start + end_rel;
-            let spec = &template[start + 1..end];
-            let width: usize = spec
-                .strip_prefix(':')
-                .and_then(|s| s.strip_prefix('0'))
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(6);
-            let rendered = format!("{:0>width$}", block_id, width = width);
-            let mut s = String::new();
-            s.push_str(&template[..start]);
-            s.push_str(&rendered);
-            s.push_str(&template[end + 1..]);
-            return s;
-        }
+/// Serialise + gzip + hash + write one block, appending its
+/// [`BlockEntry`] to `index`.
+fn flush_block(
+    blocks_dir: &std::path::Path,
+    first_state: u32,
+    states: &[(u32, u64, bool)],
+    edges: &[(i8, u32)],
+    index: &mut Vec<BlockEntry>,
+) -> io::Result<()> {
+    // Build the uncompressed block bytes.
+    let n_states = states.len() as u32;
+    let n_edges = edges.len() as u32;
+    let mut bytes = Vec::with_capacity(
+        BLOCK_HEADER_BYTES + states.len() * STATE_RECORD_BYTES + edges.len() * EDGE_RECORD_BYTES,
+    );
+    bytes.extend_from_slice(BLOCK_MAGIC);
+    write_u32(&mut bytes, first_state);
+    write_u32(&mut bytes, n_states);
+    write_u32(&mut bytes, n_edges);
+    for &(off, count, accept) in states {
+        write_u32(&mut bytes, off);
+        write_u64(&mut bytes, count);
+        bytes.push(accept as u8);
+        bytes.push(0);
+        bytes.push(0);
+        bytes.push(0);
     }
-    template.to_string()
+    for &(label, target) in edges {
+        bytes.push(label as u8);
+        bytes.push(0);
+        bytes.push(0);
+        bytes.push(0);
+        write_u32(&mut bytes, target);
+    }
+    // Gzip.
+    let mut gz: Vec<u8> = Vec::new();
+    {
+        let mut enc = flate2::write::GzEncoder::new(&mut gz, flate2::Compression::default());
+        io::Write::write_all(&mut enc, &bytes)?;
+        enc.finish()?;
+    }
+    // SHA-256 of the gzipped bytes -- both the integrity hash AND
+    // the filename stem. Cross-edition stability: same bytes ->
+    // same name -> same URL.
+    let sha256 = {
+        let mut h = Sha256::new();
+        h.update(&gz);
+        format!("{:x}", h.finalize())
+    };
+    let path = blocks_dir.join(format!("{sha256}.bin"));
+    std::fs::write(&path, &gz)?;
+    index.push(BlockEntry {
+        first_state,
+        sha256,
+        size: gz.len() as u32,
+    });
+    Ok(())
 }
 
 fn prefix(rat: &[i8]) -> Vec<i8> {
@@ -998,26 +1282,28 @@ mod tests {
         let rd = RatDafsa::from_rats(input.iter().map(|v| v.as_slice()));
 
         let dir = tempdir();
-        rd.write_blocks(&dir, 4).expect("write_blocks");
-        // Manifest + at least one block file got written.
+        // Tiny target so the small test set produces multiple blocks.
+        rd.write_blocks(&dir, 128).expect("write_blocks");
         let manifest_path = dir.join("block_index.json");
         assert!(manifest_path.exists(), "manifest must be created");
         let manifest_text = fs::read_to_string(&manifest_path).unwrap();
         let manifest: BlockManifest = serde_json::from_str(&manifest_text).unwrap();
-        assert!(manifest.n_blocks >= 1);
-        // A few blocks ought to be created for non-trivial input.
+        assert!(!manifest.blocks.is_empty());
+        // Non-trivial input should produce more than one block when
+        // the target is tiny.
         assert!(
-            manifest.n_blocks >= 2,
+            manifest.blocks.len() >= 2,
             "expected >=2 blocks for {} states, got {}",
             manifest.n_states,
-            manifest.n_blocks
+            manifest.blocks.len()
         );
 
         // Open through a filesystem fetch callback.
         let dir_for_cb = dir.clone();
         let manifest_clone = manifest.clone();
-        let fetch = move |block_id: u32| -> io::Result<Vec<u8>> {
-            let name = manifest_clone.block_filename(block_id);
+        let fetch = move |block_index: u32| -> io::Result<Vec<u8>> {
+            let entry = &manifest_clone.blocks[block_index as usize];
+            let name = manifest_clone.block_filename(entry);
             fs::read(dir_for_cb.join(name))
         };
         let lazy = LazyRatDafsa::open(&manifest_text, fetch).expect("open");
@@ -1042,9 +1328,10 @@ mod tests {
         assert_eq!(lazy.index_of([42i8, 42, 42].as_slice()), None);
     }
 
-    /// With `block_size = 1` every state lives in its own block, so
-    /// any non-trivial walk forces fetches across multiple block
-    /// boundaries. Guards the cross-block edge-traversal path.
+    /// With `target_block_bytes = 1` every non-root state lives in
+    /// its own block, so any non-trivial walk forces fetches across
+    /// multiple block boundaries. Guards the cross-block edge-
+    /// traversal path.
     #[test]
     fn cross_block_walks_are_correct() {
         let input: Vec<Vec<i8>> = vec![
@@ -1059,12 +1346,17 @@ mod tests {
         rd.write_blocks(&dir, 1).expect("write_blocks");
         let manifest_text = fs::read_to_string(dir.join("block_index.json")).unwrap();
         let manifest: BlockManifest = serde_json::from_str(&manifest_text).unwrap();
-        assert_eq!(manifest.block_size, 1);
-        assert_eq!(manifest.n_blocks, manifest.n_states);
+        assert_eq!(manifest.target_block_bytes, 1);
+        // Root (state 0) lives in the manifest; one block per
+        // remaining state.
+        assert_eq!(manifest.blocks.len() as u32, manifest.n_states - 1);
 
         let dir_for_cb = dir.clone();
         let manifest_clone = manifest.clone();
-        let fetch = move |id: u32| fs::read(dir_for_cb.join(manifest_clone.block_filename(id)));
+        let fetch = move |i: u32| {
+            let entry = &manifest_clone.blocks[i as usize];
+            fs::read(dir_for_cb.join(manifest_clone.block_filename(entry)))
+        };
         let lazy = LazyRatDafsa::open(&manifest_text, fetch).expect("open");
 
         for i in 0..rd.len() {
@@ -1078,7 +1370,7 @@ mod tests {
     /// One query should not require fetching every block. Counts
     /// fetches and asserts that a `contains` of an n=4-symbol
     /// sequence touches significantly fewer blocks than the total
-    /// for a non-trivial DAFSA with `block_size = 2`.
+    /// for a non-trivial DAFSA with a tiny `target_block_bytes`.
     #[test]
     fn fetch_callback_is_called_minimally() {
         let input: Vec<Vec<i8>> = vec![
@@ -1093,18 +1385,21 @@ mod tests {
         ];
         let rd = RatDafsa::from_rats(input.iter().map(|v| v.as_slice()));
         let dir = tempdir();
-        rd.write_blocks(&dir, 2).expect("write_blocks");
+        // ~2 states per block at this size given header + record sizes.
+        rd.write_blocks(&dir, 48).expect("write_blocks");
         let manifest_text = fs::read_to_string(dir.join("block_index.json")).unwrap();
         let manifest: BlockManifest = serde_json::from_str(&manifest_text).unwrap();
-        let total_blocks = manifest.n_blocks;
+        let total_blocks = manifest.blocks.len();
+        assert!(total_blocks >= 2, "test needs at least 2 blocks");
 
         let dir_for_cb = dir.clone();
         let manifest_clone = manifest.clone();
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter_for_cb = counter.clone();
-        let fetch = move |id: u32| {
+        let fetch = move |i: u32| {
             counter_for_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            fs::read(dir_for_cb.join(manifest_clone.block_filename(id)))
+            let entry = &manifest_clone.blocks[i as usize];
+            fs::read(dir_for_cb.join(manifest_clone.block_filename(entry)))
         };
         let lazy = LazyRatDafsa::open(&manifest_text, fetch).expect("open");
 
@@ -1148,15 +1443,19 @@ mod tests {
         let original = RatDafsa::from_rats(input.iter().map(|v| v.as_slice()));
 
         let dir = tempdir();
-        original.write_blocks(&dir, 3).expect("write_blocks");
+        // Tiny target so the small set is sliced into multiple blocks.
+        original.write_blocks(&dir, 64).expect("write_blocks");
         let manifest_text = fs::read_to_string(dir.join("block_index.json")).unwrap();
         let manifest: BlockManifest = serde_json::from_str(&manifest_text).unwrap();
         // Non-trivial blocking: more than one block, smaller-than-set.
-        assert!(manifest.n_blocks >= 2);
+        assert!(manifest.blocks.len() >= 2);
 
         let dir_for_cb = dir.clone();
         let manifest_clone = manifest.clone();
-        let fetch = move |id: u32| fs::read(dir_for_cb.join(manifest_clone.block_filename(id)));
+        let fetch = move |i: u32| {
+            let entry = &manifest_clone.blocks[i as usize];
+            fs::read(dir_for_cb.join(manifest_clone.block_filename(entry)))
+        };
         let lazy = LazyRatDafsa::open(&manifest_text, fetch).expect("open");
 
         let restored = lazy.to_rat_dafsa().expect("to_rat_dafsa");
@@ -1186,7 +1485,9 @@ mod tests {
         assert_eq!(a2.iter().collect::<Vec<_>>(), b2.iter().collect::<Vec<_>>());
     }
 
-    /// Manifests with wrong format / version / scalar are rejected.
+    /// Manifests with wrong format / version / scalar / block index
+    /// are rejected. Only the manifest is parsed here; no block file
+    /// is fetched, so the sha256 strings are placeholders.
     #[test]
     fn manifest_validation() {
         let valid = BlockManifest {
@@ -1195,14 +1496,24 @@ mod tests {
             scalar: SCALAR_TAG.to_string(),
             block_format: BLOCK_FORMAT_TAG.to_string(),
             block_version: BLOCK_FORMAT_VERSION,
-            block_size: 2,
+            target_block_bytes: 1024,
             n_states: 3,
             n_edges: 2,
             n_sequences: 1,
-            n_blocks: 2,
-            root_state: 0,
-            block_filename_template: DEFAULT_BLOCK_FILENAME_TEMPLATE.to_string(),
-            max_indexed_length: None,
+            max_indexed_length: 1,
+            root: RootState {
+                count: 1,
+                is_accept: false,
+                edges: vec![RootEdge {
+                    label: 1,
+                    target: 1,
+                }],
+            },
+            blocks: vec![BlockEntry {
+                first_state: 1,
+                sha256: "0".repeat(64),
+                size: 0,
+            }],
         };
         let unused = |_: u32| -> io::Result<Vec<u8>> {
             Err(io::Error::other(
@@ -1234,15 +1545,133 @@ mod tests {
         let json = serde_json::to_string(&bad).unwrap();
         assert!(LazyRatDafsa::open(&json, unused).is_err());
 
-        // block_size == 0.
+        // First block does not start at state 1 (root is 0).
         let mut bad = valid.clone();
-        bad.block_size = 0;
+        bad.blocks[0].first_state = 2;
+        let json = serde_json::to_string(&bad).unwrap();
+        assert!(LazyRatDafsa::open(&json, unused).is_err());
+
+        // Non-strictly-ascending block index.
+        let mut bad = valid.clone();
+        bad.blocks.push(BlockEntry {
+            first_state: 1,
+            sha256: "1".repeat(64),
+            size: 0,
+        });
+        let json = serde_json::to_string(&bad).unwrap();
+        assert!(LazyRatDafsa::open(&json, unused).is_err());
+
+        // Empty index but n_states > 1: orphaned non-root states.
+        let mut bad = valid.clone();
+        bad.blocks.clear();
         let json = serde_json::to_string(&bad).unwrap();
         assert!(LazyRatDafsa::open(&json, unused).is_err());
 
         // The valid one must open.
         let json = serde_json::to_string(&valid).unwrap();
         assert!(LazyRatDafsa::open(&json, unused).is_ok());
+    }
+
+    /// Upgrade-path immutability: extending an asset with strictly
+    /// longer rats (= new length classes added on top) must leave
+    /// every full inner block of the smaller asset byte-identical
+    /// in the larger asset. Only the manifest's `root` and the
+    /// trailing partial block are allowed to change. This is the
+    /// concrete property that lets CDN caches stay warm across
+    /// asset upgrades: any block file URL that existed before the
+    /// upgrade keeps pointing at the same bytes.
+    #[test]
+    fn upgrade_path_preserves_inner_block_hashes() {
+        // Small asset: a handful of short rats with mixed shapes.
+        let small_input: Vec<Vec<i8>> = vec![
+            vec![-2],
+            vec![-1],
+            vec![0],
+            vec![1],
+            vec![2],
+            vec![-2, 1, 1],
+            vec![-1, 0, 1],
+            vec![0, 1, 2],
+            vec![1, 2, 3],
+            vec![1, 2, 4],
+            vec![1, 3, 5],
+            vec![2, 2, 2],
+        ];
+        // Big asset: every small rat + new strictly-longer rats.
+        // Length classes 4..6 are entirely new; their sub-DAFSAs
+        // are built after the small set's sub-DAFSAs are frozen,
+        // so the small set's state numbering survives.
+        let mut big_input = small_input.clone();
+        big_input.extend(vec![
+            vec![1, 2, 3, 4],
+            vec![1, 2, 4, 5],
+            vec![0, 1, 2, 3],
+            vec![1, 2, 3, 4, 5],
+            vec![0, 1, 2, 3, 4],
+            vec![1, 2, 3, 4, 5, 6],
+        ]);
+
+        let small_rd = RatDafsa::from_rats(small_input.iter().map(|v| v.as_slice()));
+        let big_rd = RatDafsa::from_rats(big_input.iter().map(|v| v.as_slice()));
+
+        let small_dir = tempdir();
+        let big_dir = tempdir();
+        // Pick a target small enough that the small asset spans
+        // multiple blocks (so we can witness >=1 full block surviving
+        // the upgrade), but large enough that not every state is its
+        // own block. The exact byte values are not material -- the
+        // assertion only relies on small + big using the same target.
+        let target = 96u32;
+        small_rd.write_blocks(&small_dir, target).expect("small");
+        big_rd.write_blocks(&big_dir, target).expect("big");
+
+        let small_manifest: BlockManifest =
+            serde_json::from_str(&fs::read_to_string(small_dir.join("block_index.json")).unwrap())
+                .unwrap();
+        let big_manifest: BlockManifest =
+            serde_json::from_str(&fs::read_to_string(big_dir.join("block_index.json")).unwrap())
+                .unwrap();
+
+        // Sanity: the small asset has multiple blocks; otherwise the
+        // test wouldn't exercise the immutability claim at all.
+        assert!(
+            small_manifest.blocks.len() >= 2,
+            "test needs small asset to have >=2 blocks; got {}",
+            small_manifest.blocks.len()
+        );
+        // Sanity: the big asset is genuinely bigger.
+        assert!(big_manifest.n_states > small_manifest.n_states);
+        assert!(big_manifest.n_sequences > small_manifest.n_sequences);
+
+        // Every full inner block of the small asset (all but its
+        // last block, which may have been only partially full) must
+        // appear with the SAME first_state and SAME sha256 in the
+        // big asset. That is the cache-immutability guarantee.
+        let cutoff = small_manifest.blocks.len() - 1;
+        for (i, small_entry) in small_manifest.blocks.iter().take(cutoff).enumerate() {
+            let big_entry = &big_manifest.blocks[i];
+            assert_eq!(
+                big_entry.first_state, small_entry.first_state,
+                "block {i}: big.first_state {} != small.first_state {}",
+                big_entry.first_state, small_entry.first_state
+            );
+            assert_eq!(
+                big_entry.sha256, small_entry.sha256,
+                "block {i} (first_state={}): sha256 diverged after upgrade",
+                small_entry.first_state
+            );
+            // The block file the small asset published is still
+            // findable in the big asset's blocks/ dir, byte-identical.
+            let small_path = small_dir.join(small_manifest.block_filename(small_entry));
+            let big_path = big_dir.join(big_manifest.block_filename(big_entry));
+            let small_bytes = fs::read(&small_path).unwrap();
+            let big_bytes = fs::read(&big_path).unwrap();
+            assert_eq!(
+                small_bytes, big_bytes,
+                "block {i} (first_state={}): on-disk bytes diverged",
+                small_entry.first_state
+            );
+        }
     }
 
     // ---- Test infrastructure ----
