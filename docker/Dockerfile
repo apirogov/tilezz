@@ -95,11 +95,15 @@ RUN printf '%s\n' \
 #   cargo-edit      - `cargo add` / `cargo rm` / `cargo upgrade`
 #   samply          - Firefox-profiler-compatible sampler; no perf,
 #                     no root required, container-friendly
-# Build artifacts land under CARGO_HOME which we already chmod a+w
-# above, so the runtime non-root user picks them up automatically.
+# This step runs as root and fills /usr/local/cargo/registry with
+# root-owned files, so the chmod must run again afterwards -- the
+# one in the rustup step above predates these artifacts. Without it,
+# the non-root runtime user gets "Permission denied" the first time
+# a build needs a crate that wasn't cached at image-build time.
 RUN cargo install --locked \
         wasm-pack cargo-nextest cargo-watch cargo-edit \
-        samply
+        samply \
+    && chmod -R a+w /usr/local/cargo
 
 # Install zellij
 RUN curl -fsSL https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \

@@ -38,6 +38,23 @@ cmd_start() {
   SANDBOX_STATE="$HOME/.rust-sandbox/local"
   mkdir -p "$SANDBOX_STATE"
 
+  # Persist gh CLI auth the same way: gh stores its token (plain text)
+  # in ~/.config/gh/hosts.yml, so a durable mount means one
+  # `gh auth login` inside the sandbox instead of one per container.
+  # Deliberately a sandbox-private dir rather than the host's own
+  # ~/.config/gh -- the sandbox token can be scoped/revoked separately.
+  GH_STATE="$HOME/.rust-sandbox/gh"
+  mkdir -p "$GH_STATE"
+
+  # Container-side global git config (XDG path; only consulted when
+  # ~/.gitconfig is absent in the container, which it is). Carries the
+  # gh credential helper plus an url.insteadOf rewrite of git@github.com:
+  # to https://, so the workspace remote can stay SSH for the host while
+  # the sandbox pushes over HTTPS with the gh token. Kept out of the
+  # image so `gh auth setup-git` edits survive rebuilds.
+  GIT_STATE="$HOME/.rust-sandbox/git"
+  mkdir -p "$GIT_STATE"
+
   docker run -d -it \
     --name "$CONTAINER_NAME" \
     -u $(id -u):$(id -g) \
@@ -47,6 +64,8 @@ cmd_start() {
     -e GIT_COMMITTER_NAME="$GIT_NAME" \
     -e GIT_COMMITTER_EMAIL="$GIT_EMAIL" \
     -v $(realpath $HOME/.config/zellij):/home/ubuntu/.config/zellij:ro \
+    -v "$GH_STATE":/home/ubuntu/.config/gh \
+    -v "$GIT_STATE":/home/ubuntu/.config/git \
     -v $HOME/.claude:/home/ubuntu/.claude \
     -v $HOME/.claude.json:/home/ubuntu/.claude.json \
     -v "$SANDBOX_STATE":/home/ubuntu/.local \
