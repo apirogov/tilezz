@@ -628,11 +628,7 @@ pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<u32> {
     let fetch = move |block_index: u32| {
         let manifest = state_for_fetch.dafsa.manifest();
         let entry = &manifest.blocks[block_index as usize];
-        let url = format!(
-            "{}/{}",
-            state_for_fetch.asset_dir,
-            manifest.block_filename(entry)
-        );
+        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
     state.dafsa.index_of(&canonical, &fetch).await
@@ -649,11 +645,7 @@ pub async fn db_seq_of(ring: u8, id: u32) -> Option<Vec<i8>> {
     let fetch = move |block_index: u32| {
         let manifest = state_for_fetch.dafsa.manifest();
         let entry = &manifest.blocks[block_index as usize];
-        let url = format!(
-            "{}/{}",
-            state_for_fetch.asset_dir,
-            manifest.block_filename(entry)
-        );
+        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
     state.dafsa.get(id as usize, &fetch).await
@@ -664,6 +656,18 @@ fn lookup_db(ring: u8) -> Option<Rc<DbState>> {
 }
 
 // ---- Helpers ----
+
+/// Resolve `block_url` (the output of `BlockManifest::block_url`) to a
+/// fetchable URL. Absolute URLs (manifest has `block_base_url` set --
+/// blocks live on a CDN / GitHub Release) are returned as-is; relative
+/// `blocks/<sha256>.bin` paths are joined with the asset directory.
+fn resolve_block_url(asset_dir: &str, block_url: &str) -> String {
+    if block_url.contains("://") {
+        block_url.to_string()
+    } else {
+        format!("{asset_dir}/{block_url}")
+    }
+}
 
 /// Fetch `url` via `window.fetch` and return the response body as a
 /// `Vec<u8>`. Surfaces non-200 statuses + abort/network errors as
