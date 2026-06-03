@@ -1409,7 +1409,7 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::cyclotomic::{ZZ4, ZZ12};
     use crate::geom::matches::{EdgeRange, Segment};
     use crate::geom::tiles;
     use crate::geom::tileset::{self, TileSet};

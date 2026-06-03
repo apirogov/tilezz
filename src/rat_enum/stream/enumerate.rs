@@ -20,8 +20,8 @@ use std::thread;
 use crate::cyclotomic::IsRing;
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
-use crate::rat_enum::dfs::{collect_seeds, rat_enum_step, SeedGather};
-use crate::rat_enum::prune::{snapshot_prunes, Prunes};
+use crate::rat_enum::dfs::{SeedGather, collect_seeds, rat_enum_step};
+use crate::rat_enum::prune::{Prunes, snapshot_prunes};
 use crate::rat_enum::seed::parallel::splitting_depth;
 use crate::rat_enum::stats::DfsStats;
 use crate::rat_enum::stream::runs::RunWriter;
@@ -181,11 +181,11 @@ pub fn stream_enum_dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cyclotomic::{ZZ12, ZZ8};
+    use crate::cyclotomic::{ZZ8, ZZ12};
     use crate::rat_enum::canonical::make_ops as canonical_make_ops;
     use crate::rat_enum::dfs::rat_enum_with;
     use crate::rat_enum::prune::Prunes;
-    use crate::rat_enum::stream::merge::{merge_runs, read_unique_records, UNIQUE_FILENAME};
+    use crate::rat_enum::stream::merge::{UNIQUE_FILENAME, merge_runs, read_unique_records};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering as AOrd};
 

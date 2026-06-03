@@ -99,8 +99,8 @@ macro_rules! impl_cell_floor_via_sign_verify {
         impl $crate::cyclotomic::CellFloor for $name {
             #[inline]
             fn cell_floor_exact(&self) -> (i64, i64) {
-                use $crate::cyclotomic::geometry::rect_signs;
                 use $crate::cyclotomic::SymNum;
+                use $crate::cyclotomic::geometry::rect_signs;
                 let c = self.complex64();
                 let mut cx = c.re.floor() as i64;
                 let mut cy = c.im.floor() as i64;
@@ -1009,8 +1009,8 @@ crate::impl_integral_within_radius_via_norm_sq!(ZZ14);
 impl crate::cyclotomic::CellFloor for ZZ14 {
     #[inline]
     fn cell_floor_exact(&self) -> (i64, i64) {
-        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
         use crate::cyclotomic::SymNum;
+        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
         let [c0, c1, c2, c3, c4, c5] = self.int_coeffs();
         // Re(z) = (m0 + m1*c + m2*c^2) / 2.
         let m0 = 2 * c0 - 2 * c2 - c3 + c4 + 2 * c5;
@@ -1272,8 +1272,8 @@ crate::impl_integral_within_radius_via_norm_sq!(ZZ18);
 impl crate::cyclotomic::CellFloor for ZZ18 {
     #[inline]
     fn cell_floor_exact(&self) -> (i64, i64) {
-        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
         use crate::cyclotomic::SymNum;
+        use crate::cyclotomic::sign::{sign_at_cubic_root_in_interval, sign_at_s_times_x_minus_k};
         let [c0, c1, c2, c3, c4, c5] = self.int_coeffs();
         // Re(z) = (m0 + m1*c + m2*c^2) / 2  with c = 2*cos(pi/9).
         let m0 = 2 * c0 - 2 * c2 + c3 + 2 * c4 - 2 * c5;
@@ -1883,19 +1883,11 @@ fn sign_p_b2_plus_q_b3(p: i64, q: i64) -> i8 {
     // p^2 > q^2: closed-form discriminant for `|p|*sqrt(alpha) > |q|*sqrt(beta)`.
     let poly = p_sq * p_sq - 3 * p_sq * q_sq + q_sq * q_sq;
     if poly > 0 {
-        if p > 0 {
-            1
-        } else {
-            -1
-        }
+        if p > 0 { 1 } else { -1 }
     } else {
         // poly < 0 (poly == 0 is unreachable for integer mixed-sign inputs:
         // it would require p^2 = (3 +/- sqrt(5))/2 * q^2, irrational ratio).
-        if p > 0 {
-            -1
-        } else {
-            1
-        }
+        if p > 0 { -1 } else { 1 }
     }
 }
 
@@ -1933,11 +1925,7 @@ fn sign_p_b2_plus_q_b3_minus_k(p: i64, q: i64, big_k: i64) -> i8 {
     let m = 10 * (p_sq + q_sq) - k_sq;
     let n = 2 * (q_sq - p_sq + 4 * p * q);
     let sign_diff = sign_m_plus_n_sqrt5(m, n);
-    if sign_a > 0 {
-        sign_diff
-    } else {
-        -sign_diff
-    }
+    if sign_a > 0 { sign_diff } else { -sign_diff }
 }
 
 /// Re-part components of `z = (a, b, c, d)` in basis `{1, zeta, zeta^2, zeta^3}`:

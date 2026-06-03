@@ -50,8 +50,8 @@ pub use num_traits::{One, Pow, Zero};
 pub use numtraits::{IntField, IntRing};
 
 pub use traits::{
-    Ccw, CellFloor, Conj, HasZZ10, HasZZ12, HasZZ4, HasZZ6, HasZZ8, IntersectUnitSegments, IsRing,
+    Ccw, CellFloor, Conj, HasZZ4, HasZZ6, HasZZ8, HasZZ10, HasZZ12, IntersectUnitSegments, IsRing,
     IsZZ4, OneImag, ReImSign, SymNum, Units, WithinRadius, ZZComplex,
 };
 
-pub use rings::{ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ4, ZZ6, ZZ60, ZZ8};
+pub use rings::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60};

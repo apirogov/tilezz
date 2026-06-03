@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6, IsRing};
+use crate::cyclotomic::{HasZZ4, HasZZ6, HasZZ10, HasZZ12, IsRing};
 use crate::geom::rat::Rat;
 use crate::geom::tiles;
 

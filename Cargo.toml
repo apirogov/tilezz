@@ -10,7 +10,7 @@ repository = "https://github.com/apirogov/tilezz"
 keywords = ["2d", "geometry", "tilings", "math", "algebra"]
 categories = ["mathematics", "graphics"]
 
-edition = "2021"
+edition = "2024"
 
 exclude = ["examples/*"]
 

@@ -192,12 +192,14 @@ mod tests {
         drop(w);
         let files = list_run_files(&dir).unwrap();
         assert_eq!(files.len(), 2, "expected 2 run files (auto-flush + drop)");
-        assert!(files[0]
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .contains("t07"));
+        assert!(
+            files[0]
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("t07")
+        );
     }
 
     fn tempdir() -> PathBuf {

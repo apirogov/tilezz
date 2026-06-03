@@ -19,7 +19,7 @@ pub mod modular;
 pub mod units;
 
 pub use closure_key::ClosureKeyPrune;
-pub use modular::{ModularPrune, MOD_PRUNE_CELL_BUDGET};
+pub use modular::{MOD_PRUNE_CELL_BUDGET, ModularPrune};
 
 use std::sync::Arc;
 use std::sync::Mutex;

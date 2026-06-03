@@ -2,7 +2,7 @@
 
 use super::angles::upscale_angles;
 use super::snake::Snake;
-use crate::cyclotomic::{HasZZ10, HasZZ12, HasZZ4, HasZZ6};
+use crate::cyclotomic::{HasZZ4, HasZZ6, HasZZ10, HasZZ12};
 
 /// Return sequence of a square tile over a compatible ring (divisible by 4).
 pub fn square<T: HasZZ4>() -> Snake<T> {

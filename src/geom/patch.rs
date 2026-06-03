@@ -2,8 +2,8 @@ use rustc_hash::FxHashSet;
 use std::sync::Arc;
 
 use crate::analysis::matchtypes::MatchTypeIndex;
-use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::cyclotomic::IsRing;
+use crate::cyclotomic::geometry::intersect_unit_segments;
 use crate::geom::angles;
 use crate::geom::cyclic::{cyclic_arcs_overlap, cyclic_range_contains};
 use crate::geom::glue;
@@ -16,7 +16,7 @@ use crate::geom::rat::Rat;
 use crate::geom::snake::Snake;
 use crate::geom::tileset::TileSet;
 use crate::geom::vertices::{
-    compute_junctions, compute_segments, is_junction_at, CoarseJunction, EdgeInfo, OpenVertexType,
+    CoarseJunction, EdgeInfo, OpenVertexType, compute_junctions, compute_segments, is_junction_at,
 };
 use crate::stringmatch::forward_match_length;
 
@@ -1939,10 +1939,10 @@ fn dir_of_edge<T: IsRing>(from: T, to: T) -> i8 {
 mod tests {
     use super::*;
     use crate::analysis::matchtypes::MatchTypeIndex;
-    use crate::cyclotomic::{ZZ12, ZZ4};
+    use crate::cyclotomic::{ZZ4, ZZ12};
     use crate::geom::snake::Snake;
     use crate::geom::tiles;
-    use crate::geom::vertices::{vertex_type_raw_from, ClosedVertexType};
+    use crate::geom::vertices::{ClosedVertexType, vertex_type_raw_from};
     use std::collections::BTreeMap;
 
     fn ei(tile_id: usize, tile_offset: usize) -> EdgeInfo {
@@ -2374,10 +2374,10 @@ mod tests {
     fn get_matches_in_edge_range_matches_brute_force() {
         for ts in [
             Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
+                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap(),
             ])),
             Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
+                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap(),
             ])),
         ] {
             let seed = PatchSeed::new(Arc::clone(&ts), 0);
@@ -2434,10 +2434,9 @@ mod tests {
     /// every match (= equivalent to `get_all_matches()`).
     #[test]
     fn get_matches_in_edge_range_full_boundary_equals_all() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
-            ]));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap(),
+        ]));
         let seed = PatchSeed::new(Arc::clone(&ts), 0);
         let first = *seed.candidate_matches().first().unwrap();
         let gp = seed.grow(&first).unwrap();
@@ -2481,10 +2480,10 @@ mod tests {
     fn junction_pair_set_is_normalize_invariant() {
         for ts in [
             Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap()
+                Rat::try_from(&tiles::hexagon::<ZZ12>()).unwrap(),
             ])),
             Arc::new(TileSet::new(vec![
-                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap()
+                Rat::try_from(&tiles::spectre::<ZZ12>()).unwrap(),
             ])),
         ] {
             // Grow a patch a few tiles deep and check at each step.
@@ -3437,10 +3436,9 @@ mod tests {
 
     #[test]
     fn get_matches_touching_vertex_lazy_matches_eager() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let seed = PatchSeed::new(Arc::clone(&ts), 0);
         let pm = *seed.candidate_matches().first().unwrap();
         let mut gp = seed.grow(&pm).unwrap();
@@ -3483,10 +3481,9 @@ mod tests {
 
     #[test]
     fn compute_candidates_covering_position_matches_full_enumeration() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let mi: Arc<MatchTypeIndex<ZZ12>> = Arc::new(MatchTypeIndex::new(Arc::clone(&ts)));
         let gp = grow_first(Arc::clone(&ts));
 
@@ -3586,10 +3583,9 @@ mod tests {
     /// classification) is byte-identical after the failed `add_tile`.
     #[test]
     fn add_tile_failure_leaves_state_unchanged() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let mut gp = grow_first(Arc::clone(&ts));
         let before = snapshot_growing(&gp);
         let failing_pm = before
@@ -3619,10 +3615,9 @@ mod tests {
     /// we know the candidate list is non-trivial).
     #[test]
     fn add_tile_rejects_geometrically_invalid_candidate() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let gp = grow_first(Arc::clone(&ts));
 
         let candidates = gp.get_all_matches();
@@ -3664,10 +3659,9 @@ mod tests {
     /// add_tile level -- the two paths trivially agree there).
     #[test]
     fn add_tile_decision_agrees_with_snake_on_spectre() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let gp = grow_first(Arc::clone(&ts));
 
         let candidates = gp.get_all_matches();
@@ -3705,10 +3699,9 @@ mod tests {
     /// the candidate boundaries are non-trivial.
     #[test]
     fn growing_patch_boundary_validates_as_snake_through_growth() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let mut gp = grow_first(Arc::clone(&ts));
         // First snake check before any further growth.
         {
@@ -3759,10 +3752,9 @@ mod tests {
     /// index or the segment/junction routing.
     #[test]
     fn get_all_matches_matches_brute_force_on_spectre() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let gp = grow_first(Arc::clone(&ts));
 
         let n = gp.boundary_len();
@@ -3820,10 +3812,9 @@ mod tests {
     /// vertex `v`, and compare against the per-vertex fast path.
     #[test]
     fn get_matches_touching_vertex_matches_brute_force_on_spectre() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let mut gp = grow_first(Arc::clone(&ts));
         gp.ensure_candidates_materialized();
 
@@ -4050,10 +4041,9 @@ mod tests {
 
     #[test]
     fn construct_minimal_witness_spectre_roundtrip() {
-        let ts: Arc<TileSet<ZZ12>> =
-            Arc::new(TileSet::new(
-                vec![Rat::try_from(&tiles::spectre()).unwrap()],
-            ));
+        let ts: Arc<TileSet<ZZ12>> = Arc::new(TileSet::new(vec![
+            Rat::try_from(&tiles::spectre()).unwrap(),
+        ]));
         let gp = grow_first(Arc::clone(&ts));
         let mi = gp.match_index().clone();
         assert_minimal_witness_roundtrips_for(&gp, &mi, "spectre first-glue");

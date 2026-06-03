@@ -1697,7 +1697,7 @@ mod tests {
         // (a + bi)(c + di) = (ac - bd) + (ad + bc)i
         let x = [3i64, 4]; // 3 + 4i
         let y = [1i64, 2]; // 1 + 2i
-                           // (3 + 4i)(1 + 2i) = 3 + 6i + 4i + 8i^2 = 3 + 10i - 8 = -5 + 10i
+        // (3 + 4i)(1 + 2i) = 3 + 6i + 4i + 8i^2 = 3 + 10i - 8 = -5 + 10i
         assert_eq!(mul_basis::<2>(&x, &y, &RED_I), [-5, 10]);
 
         // i * i = -1

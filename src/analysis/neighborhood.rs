@@ -592,11 +592,7 @@ impl<T: IsRing> NeighborhoodIndex<T> {
                             && st.to_patch(Arc::clone(&match_index)).is_some()
                     }
                 };
-                if ok {
-                    None
-                } else {
-                    Some(idx + 1)
-                }
+                if ok { None } else { Some(idx + 1) }
             })
             .collect()
     }
