@@ -42,24 +42,33 @@ jobs:
         id: pages
         uses: actions/configure-pages@v5
 
-      - name: Build rat_enum + build_web_rocrate (release)
-        run: |
-          cargo build --release \
-            --bin rat_enum --bin build_web_rocrate \
-            --features cli,rat_explorer
+      - name: Build build_web_rocrate (release)
+        # Datasets are no longer generated at deploy time; only the
+        # top-level RO-Crate stitcher is needed here.
+        run: cargo build --release --bin build_web_rocrate --features rat_explorer
 
-      - name: Generate RatDB block assets
-        # Each line generates one (ring, n, mode) asset directory under
-        # web/data/. Keep the set small enough that the Pages upload
-        # stays comfortably under the 1 GB artifact limit -- ZZ12 n=10
-        # is ~55 KB; add new lines for larger rings/n once we have the
-        # asset-size budget worked out.
+      - name: Fetch RatDB dataset metadata
+        # Datasets live in the tilezz-ratdb repo, one per orphan
+        # branch, pinned by sha in web/datasets.json. The deploy
+        # copies each pinned ref's metadata (everything except
+        # blocks/) into web/data/<name>/ and points block_base_url
+        # at the matching raw.githubusercontent.com URL, so the
+        # explorer lazy-fetches blocks straight from the data repo
+        # (CORS-verified) and manifest + URL can never drift apart.
         run: |
-          mkdir -p web/data
-          ./target/release/rat_enum --ring 12 -n 10 --free \
-            --mode dafsa-blocks --threads 0 \
-            --oeis-a-number A316192 \
-            -o web/data/zz12_n10_free
+          jq -c '.[]' web/datasets.json | while read -r ds; do
+            name=$(jq -r .name <<<"$ds")
+            repo=$(jq -r .repo <<<"$ds")
+            ref=$(jq -r .ref <<<"$ds")
+            mkdir -p "web/data/$name"
+            curl -sfL "https://api.github.com/repos/$repo/tarball/$ref" \
+              | tar -xz -C "web/data/$name" --strip-components=1 \
+                    --exclude='*/blocks' --exclude='*/blocks/*'
+            base="https://raw.githubusercontent.com/$repo/$ref/blocks/"
+            jq --arg base "$base" '. + {block_base_url: $base}' \
+                "web/data/$name/block_index.json" > "/tmp/$name.manifest.json"
+            mv "/tmp/$name.manifest.json" "web/data/$name/block_index.json"
+          done
 
       - name: Build top-level RO-Crate
         # Aggregate every web/data/*/ro-crate-metadata.json into a
