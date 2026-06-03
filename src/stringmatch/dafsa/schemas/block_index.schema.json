@@ -137,6 +137,11 @@
           }
         }
       }
+    },
+    "block_base_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Optional URL prefix for fetching block files. When present, clients resolve each block as `{block_base_url}{sha256}.bin` instead of `{asset_dir}/blocks/{sha256}.bin`. Lets the manifest live on one host (e.g. Pages) while block files live on another (e.g. a GitHub Release, S3, IPFS) -- the sha256 integrity check is unchanged, so the trust anchor remains the manifest URL. Absent in single-host assets; consumers MUST tolerate absence."
     }
   }
 }

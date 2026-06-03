@@ -118,6 +118,21 @@ pub struct BlockManifest {
     /// `[blocks[N].first_state, blocks[N+1].first_state)`; the
     /// last block covers up to `n_states`.
     pub blocks: Vec<BlockEntry>,
+    /// Optional URL prefix for fetching block files. When `Some`,
+    /// readers resolve each block as `{block_base_url}{sha256}.bin`
+    /// instead of `{asset_dir}/blocks/{sha256}.bin`. Lets the
+    /// (small) manifest + RO-Crate live on one host (e.g. GitHub
+    /// Pages) while the (large) block files live somewhere with
+    /// fewer size constraints -- a GitHub Release, Cloudflare R2,
+    /// IPFS, etc. The reader's integrity check (verify SHA-256
+    /// against the manifest) is unchanged: the trust anchor stays
+    /// the manifest URL, the block-content provenance follows from
+    /// the content hash.
+    ///
+    /// Skipped in serialised output when `None` so existing
+    /// single-host assets stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_base_url: Option<String>,
 }
 
 /// State 0 (root) record, inlined into the manifest. Same shape
@@ -168,8 +183,26 @@ impl BlockManifest {
     /// root. The SHA-256 stem is the same one used as the cache /
     /// CDN key, so two assets that contain the same block file
     /// share the same URL.
+    ///
+    /// Returns the relative `blocks/<sha256>.bin` form regardless
+    /// of whether the manifest carries a `block_base_url` -- it's
+    /// the on-disk filename. For the actual fetch target (which
+    /// honours `block_base_url`) see [`Self::block_url`].
     pub fn block_filename(&self, entry: &BlockEntry) -> String {
         format!("blocks/{}.bin", entry.sha256)
+    }
+
+    /// Where to fetch `entry`'s block file from. With
+    /// `block_base_url` set, returns `{block_base_url}{sha256}.bin`
+    /// (no `blocks/` prefix -- the URL points directly at the
+    /// content-addressed object on its host of choice). Without it,
+    /// returns the relative `blocks/<sha256>.bin`, which the caller
+    /// resolves against the asset directory.
+    pub fn block_url(&self, entry: &BlockEntry) -> String {
+        match self.block_base_url.as_deref() {
+            Some(base) => format!("{}{}.bin", base, entry.sha256),
+            None => self.block_filename(entry),
+        }
     }
 
     /// Find which block holds `state_id`. Returns the index into
@@ -1170,6 +1203,11 @@ impl RatDafsa {
             max_indexed_length,
             root,
             blocks: block_index,
+            // Default: blocks live next to the manifest under
+            // `blocks/`. A publisher who later moves block files to
+            // an external host (release CDN, R2, IPFS) rewrites this
+            // field in the emitted manifest before deployment.
+            block_base_url: None,
         };
         let manifest_path = dir.join("block_index.json");
         let manifest_file = std::fs::File::create(&manifest_path)?;
@@ -1514,6 +1552,7 @@ mod tests {
                 sha256: "0".repeat(64),
                 size: 0,
             }],
+            block_base_url: None,
         };
         let unused = |_: u32| -> io::Result<Vec<u8>> {
             Err(io::Error::other(
@@ -1672,6 +1711,121 @@ mod tests {
                 small_entry.first_state
             );
         }
+    }
+
+    /// `block_url` honours `block_base_url`: with the field absent
+    /// it returns the relative `blocks/<sha>.bin`; with it set it
+    /// returns the joined absolute URL. The integrity check (sha256
+    /// in the block index) is unchanged either way -- the field is
+    /// purely about resolving the fetch target.
+    #[test]
+    fn block_url_resolves_with_and_without_base() {
+        let entry = BlockEntry {
+            first_state: 1,
+            sha256: "abcdef0123456789".repeat(4),
+            size: 4096,
+        };
+        // Same fixed length as a real sha256 hex string (64 hex
+        // chars) so the URLs are realistic.
+        assert_eq!(entry.sha256.len(), 64);
+
+        let mut manifest = BlockManifest {
+            format: MANIFEST_FORMAT.to_string(),
+            version: MANIFEST_VERSION,
+            scalar: SCALAR_TAG.to_string(),
+            block_format: BLOCK_FORMAT_TAG.to_string(),
+            block_version: BLOCK_FORMAT_VERSION,
+            target_block_bytes: 1024,
+            n_states: 2,
+            n_edges: 0,
+            n_sequences: 0,
+            max_indexed_length: 0,
+            root: RootState {
+                count: 0,
+                is_accept: false,
+                edges: vec![],
+            },
+            blocks: vec![entry.clone()],
+            block_base_url: None,
+        };
+
+        // Without block_base_url: relative path matching block_filename.
+        assert_eq!(manifest.block_url(&entry), manifest.block_filename(&entry));
+        assert!(manifest.block_url(&entry).starts_with("blocks/"));
+        assert!(manifest.block_url(&entry).ends_with(".bin"));
+
+        // With block_base_url: joined absolute URL, no `blocks/` prefix.
+        manifest.block_base_url = Some(
+            "https://github.com/apirogov/tilezz/releases/download/data-zz12-n16-free-v1/"
+                .to_string(),
+        );
+        let url = manifest.block_url(&entry);
+        assert!(
+            url.starts_with("https://github.com/apirogov/tilezz/releases/download/"),
+            "got {url}"
+        );
+        assert!(url.ends_with(&format!("{}.bin", entry.sha256)), "got {url}");
+        assert!(
+            !url.contains("/blocks/"),
+            "url must skip the `blocks/` prefix when base set; got {url}"
+        );
+
+        // The relative on-disk filename is unaffected by block_base_url.
+        assert_eq!(
+            manifest.block_filename(&entry),
+            format!("blocks/{}.bin", entry.sha256)
+        );
+    }
+
+    /// Round-trip serialisation: a manifest written with
+    /// `block_base_url = None` round-trips byte-identically through
+    /// serde (no key emitted at all), and a manifest with the field
+    /// set survives + parses back to the same value.
+    #[test]
+    fn block_base_url_serde_roundtrip() {
+        let make = |base: Option<&str>| BlockManifest {
+            format: MANIFEST_FORMAT.to_string(),
+            version: MANIFEST_VERSION,
+            scalar: SCALAR_TAG.to_string(),
+            block_format: BLOCK_FORMAT_TAG.to_string(),
+            block_version: BLOCK_FORMAT_VERSION,
+            target_block_bytes: 1024,
+            n_states: 2,
+            n_edges: 0,
+            n_sequences: 0,
+            max_indexed_length: 0,
+            root: RootState {
+                count: 0,
+                is_accept: false,
+                edges: vec![],
+            },
+            blocks: vec![BlockEntry {
+                first_state: 1,
+                sha256: "0".repeat(64),
+                size: 0,
+            }],
+            block_base_url: base.map(str::to_string),
+        };
+
+        // None: field omitted from JSON entirely.
+        let m = make(None);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(
+            !json.contains("block_base_url"),
+            "field should not serialise when None; got {json}"
+        );
+        let parsed: BlockManifest = serde_json::from_str(&json).unwrap();
+        assert!(parsed.block_base_url.is_none());
+
+        // Some: field round-trips.
+        let m = make(Some("https://cdn.example.com/data/"));
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(json.contains("\"block_base_url\":\"https://cdn.example.com/data/\""));
+        let parsed: BlockManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.block_base_url.as_deref(),
+            Some("https://cdn.example.com/data/")
+        );
     }
 
     // ---- Test infrastructure ----
