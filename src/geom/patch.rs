@@ -1787,10 +1787,10 @@ fn compute_glue_angles<T: IsRing>(
         pm.b.range.start_offset,
     )
     .ok_or(DegenerateGlue::KeystoneHturn)?;
-    if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
-        if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-            return Err(DegenerateGlue::JunctionHturn);
-        }
+    if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy)
+        && (a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn())
+    {
+        return Err(DegenerateGlue::JunctionHturn);
     }
     Ok(gr.angles)
 }

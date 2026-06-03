@@ -153,28 +153,28 @@ pub fn rat_enum_step<ZZ: IsRing>(
         // If no sum of (remaining-1) unit vectors equals `-new_pt`
         // (modulo any active modulus), closure is impossible.
         let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref() {
-            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
-                stats.mod_skip += 1;
-                continue;
-            }
+        if let Some(mp) = prunes.mod_prune.as_deref()
+            && !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after)
+        {
+            stats.mod_skip += 1;
+            continue;
         }
         // Optional closure-key prune (set via `--closure-key-prune`).
         // Only fires when `remaining_after <= max_l` (otherwise the
         // tabulated suffix lengths aren't enough to cover the
         // closing range, and pruning would be unsound).
-        if let Some(ck) = prunes.closure_key_prune.as_deref() {
-            if remaining_after <= ck.max_l {
-                let turn = ZZ::turn();
-                let new_facing = (snake.direction() + direction).rem_euclid(turn);
-                let neg_facing = (-new_facing).rem_euclid(turn);
-                // target suffix endpoint = -unit(-new_facing) * new_pt.
-                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
-                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
-                if !ck.keys.contains(&key) {
-                    stats.closure_key_skip += 1;
-                    continue;
-                }
+        if let Some(ck) = prunes.closure_key_prune.as_deref()
+            && remaining_after <= ck.max_l
+        {
+            let turn = ZZ::turn();
+            let new_facing = (snake.direction() + direction).rem_euclid(turn);
+            let neg_facing = (-new_facing).rem_euclid(turn);
+            // target suffix endpoint = -unit(-new_facing) * new_pt.
+            let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
+            let key = (target.int_coeffs_slice().to_vec(), neg_facing);
+            if !ck.keys.contains(&key) {
+                stats.closure_key_skip += 1;
+                continue;
             }
         }
         if !snake.add(direction) {
@@ -280,23 +280,23 @@ pub fn collect_seeds<ZZ: IsRing>(
 
         // Modular reachability prune (see `rat_enum_step`).
         let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref() {
-            if !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after) {
-                gather.stats.mod_skip += 1;
-                continue;
-            }
+        if let Some(mp) = prunes.mod_prune.as_deref()
+            && !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after)
+        {
+            gather.stats.mod_skip += 1;
+            continue;
         }
-        if let Some(ck) = prunes.closure_key_prune.as_deref() {
-            if remaining_after <= ck.max_l {
-                let turn = ZZ::turn();
-                let new_facing = (snake.direction() + direction).rem_euclid(turn);
-                let neg_facing = (-new_facing).rem_euclid(turn);
-                let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
-                let key = (target.int_coeffs_slice().to_vec(), neg_facing);
-                if !ck.keys.contains(&key) {
-                    gather.stats.closure_key_skip += 1;
-                    continue;
-                }
+        if let Some(ck) = prunes.closure_key_prune.as_deref()
+            && remaining_after <= ck.max_l
+        {
+            let turn = ZZ::turn();
+            let new_facing = (snake.direction() + direction).rem_euclid(turn);
+            let neg_facing = (-new_facing).rem_euclid(turn);
+            let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
+            let key = (target.int_coeffs_slice().to_vec(), neg_facing);
+            if !ck.keys.contains(&key) {
+                gather.stats.closure_key_skip += 1;
+                continue;
             }
         }
         if !snake.add(direction) {

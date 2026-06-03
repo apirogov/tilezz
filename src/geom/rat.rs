@@ -345,10 +345,10 @@ impl<T: IsRing> Rat<T> {
         let gr = super::glue::glue_raw_angles::<T>(self_seq, other_seq, ns_u, mlen, ne_u)
             .ok_or("Glue produces empty boundary")?;
 
-        if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy) {
-            if a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn() {
-                return Err("Glue produces degenerate ±hturn junction angle");
-            }
+        if let (Some(a_yx), Some(a_xy)) = (gr.a_yx, gr.a_xy)
+            && (a_yx.abs() == T::hturn() || a_xy.abs() == T::hturn())
+        {
+            return Err("Glue produces degenerate ±hturn junction angle");
         }
 
         if unchecked {

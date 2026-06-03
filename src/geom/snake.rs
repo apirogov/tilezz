@@ -509,10 +509,10 @@ impl<T: IsRing> Snake<T> {
         // is always retained -- when the popped segment was the
         // closing one, popped_point == points[0] and the start is
         // still in the polyline.
-        if let Some(visited) = self.visited.as_mut() {
-            if Some(&popped_point) != self.points.first() {
-                visited.remove(&popped_point);
-            }
+        if let Some(visited) = self.visited.as_mut()
+            && Some(&popped_point) != self.points.first()
+        {
+            visited.remove(&popped_point);
         }
 
         if let Some(original_angle_0) = self.saved_angle_0.take() {

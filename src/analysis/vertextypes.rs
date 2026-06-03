@@ -1324,11 +1324,12 @@ impl Collection {
                     let Some(&dst_pos) = witness_pos.get(&t.dst_id) else {
                         continue;
                     };
-                    if let Some(expected) = dst_gp.junction_vertex_type_at(dst_pos) {
-                        if actual.cw == expected.cw && actual.ccw == expected.ccw {
-                            found = true;
-                            break;
-                        }
+                    if let Some(expected) = dst_gp.junction_vertex_type_at(dst_pos)
+                        && actual.cw == expected.cw
+                        && actual.ccw == expected.ccw
+                    {
+                        found = true;
+                        break;
                     }
                 }
             }
