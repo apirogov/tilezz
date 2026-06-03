@@ -8,6 +8,8 @@ const idEl = document.getElementById('rat-id');
 const dbControlEl = document.getElementById('db-control');
 const clearBtn = document.getElementById('clear-btn');
 const diceBtn = document.getElementById('dice-btn');
+const idDecBtn = document.getElementById('id-dec-btn');
+const idIncBtn = document.getElementById('id-inc-btn');
 
 let previewAngle = null; // null = no preview; integer = active preview
 
@@ -425,10 +427,14 @@ function updateDbUi(ring) {
       dbControlEl.dataset.tooltip = 'no RatDB shipped for this ring';
     }
     diceBtn.disabled = true;
+    idDecBtn.disabled = true;
+    idIncBtn.disabled = true;
   } else {
     dbControlEl.classList.remove('disabled');
     idEl.disabled = false;
     diceBtn.disabled = false;
+    idDecBtn.disabled = false;
+    idIncBtn.disabled = false;
     idEl.max = String(meta.total - 1);
     dbControlEl.dataset.tooltip =
       `RatDB: ${meta.total.toLocaleString()} rats, max length n = ${meta.max_len}`;
@@ -454,6 +460,32 @@ idEl.addEventListener('change', async () => {
     setTimeout(() => idEl.classList.remove('db-id-invalid'), 1200);
   }
 });
+
+// -/+ stepper buttons. The native number-input spinners are hidden
+// via CSS (desktop browsers show them, mobile ones don't), so these
+// are the one stepper UI on all devices. Clamp to [0, total) and
+// funnel through the same change handler as manual edits.
+function stepId(delta) {
+  const ring = parseInt(ringEl.value, 10);
+  const meta = dbMeta.get(ring);
+  if (!meta || meta.total === 0) return;
+  const raw = idEl.value.trim();
+  // From an empty box both buttons land on a valid endpoint: + on
+  // the first ID, - on the last.
+  let id;
+  if (raw === '') {
+    id = delta > 0 ? 0 : meta.total - 1;
+  } else {
+    id = parseInt(raw, 10) + delta;
+    if (!Number.isFinite(id)) id = 0;
+    id = Math.min(Math.max(id, 0), meta.total - 1);
+  }
+  idEl.value = String(id);
+  idEl.dispatchEvent(new Event('change'));
+}
+
+idDecBtn.addEventListener('click', () => stepId(-1));
+idIncBtn.addEventListener('click', () => stepId(1));
 
 // Keep the URL in sync with the (ring, sequence) pair so any
 // committed state is shareable / bookmarkable.
