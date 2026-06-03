@@ -1,5 +1,12 @@
 # tilezz
 
+*Perfect-precision 2D polygonal tiles over cyclotomic integer rings -- no floats, no coordinates, no grids.*
+
+[![Crates.io](https://img.shields.io/crates/v/tilezz.svg)](https://crates.io/crates/tilezz)
+[![docs.rs](https://img.shields.io/docsrs/tilezz)](https://docs.rs/tilezz)
+[![CI](https://github.com/apirogov/tilezz/actions/workflows/ci.yml/badge.svg)](https://github.com/apirogov/tilezz/actions/workflows/ci.yml)
+[![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 This repository provides the following main features:
 
 1. practical implementation of various [cyclotomic rings and fields](https://en.wikipedia.org/wiki/Cyclotomic_field), which are subsets of complex numbers that admit exact representation
@@ -23,13 +30,16 @@ The concepts this work is based on are described in the following blog posts:
 
 * https://pirogov.de/blog/perfect-precision-2d-geometry-complex-integers/
 * https://pirogov.de/blog/intersecting-segments-without-tears/
-* (more posts will probably added over time)
+* (more posts will probably be added over time)
 
 Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
+The crate is pre-1.0 -- APIs may break between minor versions as the internals
+get cleaned up. Pin to an exact version (`tilezz = "=0.0.4"`) if that matters
+to you.
 
 ## Demonstration
 
-*To be able to execute the demos on your computer, make sure to build the crate with the `examples` feature enabled.*
+*To be able to execute the demos on your computer, make sure to build the crate with the `cli` feature enabled.*
 
 ### Exploring the cyclotomic ring ZZ12
 
@@ -39,23 +49,21 @@ Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
 Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square.
 Each image shows the new points discovered in the corresponding round.
 
-To generate images like these, check out the [cyc_explore](./src/bin/cyc_explore.rs) example.
+To generate images like these, check out the [`cyc_explore`](./src/bin/cyc_explore.rs) binary.
 
 ### Enumerating simple polygons constructible over cyclotomic rings
 
 <img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
 <img src="https://github.com/user-attachments/assets/198814da-471f-49f3-81e1-784c4252c388" width="45%" />
 
-Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: ~0.1s),
-Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: ~30s).
+Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: ~25 ms),
+Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: ~0.7 s).
 The polygon sets are computed by a single-threaded DFS over angle sequences with a lex-min rotation prune
 that collapses each polygon's `n` cyclic walks down to one -- see [rat_enum](./src/bin/rat_enum.rs).
 
-To generate images like these, check out the [rat_enum](./src/bin/rat_enum.rs) example.
+To generate images like these, check out the [`rat_enum`](./src/bin/rat_enum.rs) binary.
 
-## Usage
-
-### Essential Concepts
+## Essential Concepts
 
 This crate provides the abstract geometric API for using concrete
 representations of constructible cyclotomic rings for some fixed root of unity,
@@ -73,18 +81,20 @@ Here is a conceptual mapping for the relevant geometrical objects:
 
 * a **point** corresponds to a **turtle**, which is an "oriented point" (it has an angle, defining its facing direction)
 * a **polygonal chain** corresponds to a **snake**, which consists of instructions for a turtle
-* a **polygon** corresponds to a *closed* snake, which I call a **rat** (for *rational tile*)
-* a **tile patch** corresponds to a **pack**, which is a collection of combined rats
+* a **[simple polygon](https://en.wikipedia.org/wiki/Simple_polygon)** corresponds to a *closed* snake, which I call a **rat** (for *rational tile*)
+* a **tileset** is a collection of distinct rats you can take as building blocks
+* a **patch** is a collection of rats from a tileset glued along matching boundaries edge-to-edge
 
-A **tile** is a [simple polygon](https://en.wikipedia.org/wiki/Simple_polygon),
-i.e. a polygon without holes or self-intersections, and a segment chain, polygon, or tile
-is *rational* if all the side lengths can be expressed as integer multiples of a
-common length.
+The reason why I call these segment chains and polygons *rational* is because
+all the side lengths can be expressed as integer multiples of a common length,
+which then can be interpreted as normalized unit steps. So contrary to classical
+polygon representation, the smallest meaningful unit is not a point (you cannot
+connect arbitrary points), but a unit step.
 
 By using cyclotomic integers for coordinates and expressing all geometric
 objects in terms of unit steps into some direction, each simple polygon allows
 for a natural representation as a sequence of exterior angles along its boundary.
-As the sequence is cyclic, there is one cyclicaly shifted sequence for each
+As the sequence is cyclic, there is one cyclically shifted sequence for each
 starting vertex.
 
 The **canonical representation** is then simply the [lexicographically
@@ -95,22 +105,53 @@ angle sequence. Treating (rational) polygons as strings of angles also allows us
 to use other efficient string-based algorithms, e.g. to compute combinations of
 tiles.
 
-This library also provides a small, declarative 2D rendering pipeline
-(`vis::scene`) that turns geometric primitives -- segments, polylines,
-polygons, vertex markers, text labels, arrowheads -- into output formats
-suitable for any environment:
+## Usage
 
-* **SVG strings** -- always available, no extra dependencies, embeds
-  directly in HTML, Jupyter, or saved as `.svg`.
-* **PNG bytes** (feature `raster`) -- pure-Rust rasterization via
-  [`resvg`](https://github.com/linebender/resvg) + `tiny-skia`. Works
-  on every target `tiny-skia` supports, including WASM.
-* **Animated GIFs** (feature `animation`) -- multi-frame output via the
-  [`gif`](https://github.com/image-rs/image-gif) crate.
+This is a library and an experimentation sandbox of data structures trying to
+push the basic ideas outlined above as far as possible.
+
+The library also provides a 2D rendering pipeline that helps visualizing the
+provided data structures by rendering them into various output formats, such as
+SVG, PNG (`raster` feature) or GIF (`animation` feature).
+
+The minimum supported Rust version is **1.85** (Rust 2024 edition).
+
+### As a library
+
+Add the crate to a Rust project:
+
+```toml
+[dependencies]
+tilezz = "0.0.4"
+```
+
+Full API reference (auto-built by docs.rs against the current published version):
+**https://docs.rs/tilezz**
+
+Default features are intentionally empty so the dependency stays lean -- just
+the core cyclotomic types + geometry + string algorithms, no clap, threading,
+or rendering deps unless you opt in. Enable what you need:
+
+* `raster` -- PNG output via `resvg` + `tiny-skia`
+* `animation` -- multi-frame GIF (implies `raster`)
+* `cli` -- bundled CLI binaries (`rat_enum`, `cyc_explore`, `patch_enum`,
+  `polyomino`, `tileset_collect`); implies `animation`
+
+### Bundled CLI tools
+
+To install the binaries above directly without cloning the repo:
+
+```bash
+cargo install tilezz --features cli
+```
+
+The binaries land under `~/.cargo/bin/`. Each accepts `--help` for its
+specific options. See the [Demonstration](#demonstration) section above for
+what they produce.
 
 ### Interactive (Jupyter Notebook)
 
-The crate integrates with [Jupyter notebooks](https://jupyter.org/)
+The library integrates with [Jupyter notebooks](https://jupyter.org/)
 through the [evcxr](https://github.com/evcxr/evcxr) Rust kernel. A
 `Scene` exposes an `evcxr_display`-aware wrapper via `scene.display(&vp)`
 that renders inline as SVG; `scene.display_png(&vp)` does the same as
@@ -143,7 +184,7 @@ cd tilezz
 
 **Step 2:** Run `jupyter notebook`
 
-**Step 3:** Open the [minimal example notebook](./examples/minimal.ipynb) **OR**
+**Step 3:** Open the [minimal example notebook](./notebooks/minimal.ipynb) **OR**
     Create a new Rust notebook (which is powered by `evcxr`) and add the following code into a cell:
 
 ```rust
@@ -152,8 +193,8 @@ cd tilezz
 :dep tilezz = { path = "..", features = ["raster"] }
 
 use tilezz::cyclotomic::*;
-use tilezz::intgeom::rat::Rat;
-use tilezz::intgeom::snake::Turtle;
+use tilezz::geom::rat::Rat;
+use tilezz::geom::snake::Turtle;
 use tilezz::vis::draw::{MarkerStyle, TileStyle};
 use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 
@@ -186,7 +227,7 @@ scene.display(&vp)
 After waiting for some seconds (the required dependencies have to be built
 first, after that it is faster), you should see a plot showing the spectre tile.
 
-## See Also
+## Related Work
 
 ### Tiles and Tilings
 
@@ -246,9 +287,13 @@ ring-specific implementation of multiplication, which hard-codes the symbolic
 simplifications of expressions that appear during the evaluation of
 multiplication.
 
-I have have not tried to compare this crate to the other approaches or benchmark
+I have not tried to compare this crate to the other approaches or benchmark
 anything yet, because the implementations of the complex integers were not the
 intended main feature of this crate. If someone is mainly interested in this
 crate for the implementation of the cyclotomic integer rings, I would be happy
 to get some feedback on how this compares to the more generic implementations
 with similar features.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
