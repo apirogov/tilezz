@@ -1065,33 +1065,33 @@ mod tests {
                 if len2 != mt.len() {
                     continue;
                 }
-                if let Ok(rat_rev) = r.try_glue_precomputed((ns2, len2, ne2), &r, true) {
-                    if rat_rev == rat_fwd {
-                        eprintln!(
-                            "  MATCH {} works: fwd=({},{},{}) rev=({},{},{}) rat_fwd==rat_rev",
-                            label,
-                            ns,
-                            mt.len(),
-                            ne,
-                            ns2,
-                            len2,
-                            ne2
-                        );
-                        found = true;
+                if let Ok(rat_rev) = r.try_glue_precomputed((ns2, len2, ne2), &r, true)
+                    && rat_rev == rat_fwd
+                {
+                    eprintln!(
+                        "  MATCH {} works: fwd=({},{},{}) rev=({},{},{}) rat_fwd==rat_rev",
+                        label,
+                        ns,
+                        mt.len(),
+                        ne,
+                        ns2,
+                        len2,
+                        ne2
+                    );
+                    found = true;
 
-                        assert_eq!(
-                            ns2,
-                            (ne - len).rem_euclid(n as i64),
-                            "reverse ext_start should be (ne - len) % n for {}",
-                            label
-                        );
-                        assert_eq!(
-                            ne2,
-                            (ns + len).rem_euclid(n as i64),
-                            "reverse ext_end should be (ns + len) % n for {}",
-                            label
-                        );
-                    }
+                    assert_eq!(
+                        ns2,
+                        (ne - len).rem_euclid(n as i64),
+                        "reverse ext_start should be (ne - len) % n for {}",
+                        label
+                    );
+                    assert_eq!(
+                        ne2,
+                        (ns + len).rem_euclid(n as i64),
+                        "reverse ext_end should be (ns + len) % n for {}",
+                        label
+                    );
                 }
             }
 

@@ -487,10 +487,10 @@ impl<T: IsRing> NeighborhoodIndex<T> {
         let n = self.entries.len();
         let mut is_closed_terminal = vec![false; n];
         for (i, entry) in self.entries.iter().enumerate() {
-            if let NtEntry::Phase2(st) = entry {
-                if st.is_closed {
-                    is_closed_terminal[i] = true;
-                }
+            if let NtEntry::Phase2(st) = entry
+                && st.is_closed
+            {
+                is_closed_terminal[i] = true;
             }
         }
 
