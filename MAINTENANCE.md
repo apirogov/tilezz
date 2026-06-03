@@ -32,7 +32,7 @@ moves the branch, but old pins stay reachable as ancestors.
 Each dataset branch is self-contained. Clone just that branch:
 
 ```sh
-git clone --branch zz12-n10-free --single-branch --depth 1 \
+git clone --branch zz12-n14-free --single-branch --depth 1 \
     https://github.com/apirogov/tilezz-ratdb
 cd tilezz-ratdb
 python3 tools/verify_sha256.py    # must print: OK (<n> files verified)
@@ -43,10 +43,10 @@ Alternatives, no git required:
 
 ```sh
 # whole dataset as a tarball (any ref: branch name or commit sha)
-curl -sL https://api.github.com/repos/apirogov/tilezz-ratdb/tarball/zz12-n10-free | tar -xz
+curl -sL https://api.github.com/repos/apirogov/tilezz-ratdb/tarball/zz12-n14-free | tar -xz
 
 # single file
-curl -sLO https://raw.githubusercontent.com/apirogov/tilezz-ratdb/zz12-n10-free/block_index.json
+curl -sLO https://raw.githubusercontent.com/apirogov/tilezz-ratdb/zz12-n14-free/block_index.json
 ```
 
 The branch list (= dataset list) is indexed in the tilezz-ratdb
@@ -106,9 +106,11 @@ D=/tmp/zz12_n16_free
 ./target/release/rat_enum --ring 12 -n 16 --free --mode build -o $D
 ```
 
-The blocked asset lands in `$D/dafsa/` (that is the directory to
-publish). RO-Crate provenance and `--oeis-a-number` are honoured
-by the asset-writing modes (`dafsa-blocks` and `build`).
+The blocked asset lands in `$D/dafsa/` -- publish THAT directory,
+not `$D` itself (`$D` also holds the intermediate `runs/`,
+`unique.bin` and `certificate.json`, which are not part of the
+asset). RO-Crate provenance and `--oeis-a-number` are honoured by
+the asset-writing modes (`dafsa-blocks` and `build`).
 
 **Multi-host splitting** (if one machine is not enough):
 `--mode list-seeds` prints DFS prefixes at `--split-depth`; farm
@@ -170,11 +172,11 @@ then replace the branch content in place:
 
 ```sh
 cd tilezz-ratdb
-git checkout zz12-n10-free
+git checkout zz12-n14-free
 find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
-cp -r /tmp/zz12_n12_free/. .
-git add -A && git commit -m "data: extend to n=12 (<count> rats)"
-git push origin zz12-n10-free        # rename branch first if the name encodes n
+cp -r /tmp/zz12_n16_free/dafsa/. .
+git add -A && git commit -m "data: extend to n=16 (<count> rats)"
+git push origin zz12-n14-free        # rename branch first if the name encodes n
 git rev-parse HEAD                   # the new pin
 ```
 
@@ -188,8 +190,8 @@ and merge. Two properties make this safe:
   datasets.json bump deploys -- old pins are ancestors of the new
   branch tip, so the sha-pinned raw URLs never break mid-rollout.
 
-If the branch name encodes the perimeter bound (zz12-n10-free),
-prefer creating the new branch name (zz12-n12-free) via the
+If the branch name encodes the perimeter bound (zz12-n14-free),
+prefer creating the new branch name (zz12-n16-free) via the
 section-3 flow and retiring the old one from the README index; the
 old branch can be deleted once nothing pins it (check
 web/datasets.json history if unsure).
@@ -234,6 +236,12 @@ git fetch origin && git merge-base --is-ancestor <recorded-sha> origin/main && e
 
 # dataset internally consistent
 python3 tools/verify_sha256.py
+
+# counts are sane: per-exact-length terms must match the OEIS
+# sequence where published and any previously computed overlap.
+# (Careful: OEIS A316192 counts perimeter EXACTLY n, while the
+# manifest's n_sequences is cumulative over <= n.)
+python3 tools/count_by_length.py
 
 # live wiring: deployed manifest points at the right pin and the
 # blocks serve with CORS
