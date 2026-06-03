@@ -959,6 +959,10 @@ mod free_tests {
     /// test `test_intersect_zz12_t_touch_endpoint_on_segment` in
     /// `cyclotomic::geometry::tests`.
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: full A316192 pin to n>=10 takes ~12 min debug / ~30 s release"
+    )]
     fn test_oeis_a316192_zz12() {
         const OEIS: &[(usize, usize)] = &[
             (3, 1),
@@ -1075,6 +1079,10 @@ mod free_tests {
     /// are more constrained and an off-by-one in the prefix prune is
     /// easier to spot than at ZZ12.
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: ZZ12 n<=9 + ZZ8 n<=12 dihedral cross-check is ~9 min debug / ~25 s release"
+    )]
     fn test_free_enum_matches_dfs_quotient() {
         for n in [4, 5, 6, 7, 8, 9] {
             check_quotient_match::<ZZ12>("ZZ12", n);
@@ -1261,6 +1269,10 @@ mod opt_correctness_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: ZZ14 n=7 32-prune-combo cross-check is ~5 min debug / ~15 s release"
+    )]
     fn cross_validate_zz14() {
         // Capped at n=7 for runtime budget. ZZ14 has no OEIS oracle
         // for the full-ring counts (A316197 is the bipartite subset),
@@ -1273,6 +1285,10 @@ mod opt_correctness_tests {
     }
 
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: ZZ18 n=7 32-prune-combo cross-check is ~13 min debug / ~40 s release"
+    )]
     fn cross_validate_zz18() {
         // ZZ18 shares the cubic-root sign infrastructure with ZZ14
         // (different minpoly, same algorithm). Same runtime-budget
@@ -1363,6 +1379,10 @@ mod opt_correctness_tests {
     /// test that ties our enumeration to a published external
     /// reference at the bug-sensitive lengths.
     #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: A316192 pin x 32 prune combos is ~17 min debug / ~60-90 s release"
+    )]
     fn oeis_a316192_each_opt_combo() {
         const OEIS: &[(usize, usize)] = &[
             (3, 1),

@@ -17,7 +17,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  # Static checks + the dataset round-trip. Doesn't run the long
+  # cargo-test suite; that's the job below. Splitting these two
+  # lets fmt/clippy failures surface in under a minute even when
+  # tests are in flight.
+  checks:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,9 +47,6 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: cargo test
-        run: cargo test --all-targets --all-features
 
       - name: round-trip test (asset emit + tools/reproduce.sh + diff)
         run: |
@@ -93,3 +94,47 @@ jobs:
           diff -r \
               /tmp/repro/tilezz-local/tilezz-rat-zz12-n7-free \
               /tmp/asset-original
+
+  # `cargo test --all-targets --all-features` in both profiles, in
+  # parallel. The slowest combinatorial pins (oeis_a316192_*, deep
+  # cross-validate, dihedral quotient) are `#[cfg_attr(debug_assertions,
+  # ignore)]` so they only run in the release matrix entry -- in debug
+  # mode they took 5-17 minutes each, vs. tens of seconds in release.
+  # The debug job still covers every cheap test, including the i128-
+  # overflow-sensitive arithmetic where `debug_assertions` panics on
+  # the bugs `release` would silently wrap.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
+    name: test (${{ matrix.profile }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Separate cache per profile -- target/debug and target/release
+          # are independent artifact trees.
+          key: ${{ matrix.profile }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libfontconfig1-dev
+
+      - name: cargo test
+        run: |
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo test --release --all-targets --all-features
+          else
+            cargo test --all-targets --all-features
+          fi
