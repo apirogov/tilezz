@@ -12,7 +12,55 @@ categories = ["mathematics", "graphics"]
 
 edition = "2024"
 
-exclude = ["examples/*"]
+# Curated allowlist of what lands in the published crate. New top-
+# level directories (literature/, docs/, web/, docker/, .github/,
+# justfile, AGENTS.md, examples/, ...) default to "not in the crate"
+# unless explicitly enumerated here. Lib consumers need src/ (which
+# transitively includes the schema files + the standalone Python
+# decoder/verifier shipped inside each emitted RO-Crate asset),
+# Cargo.toml + Cargo.lock for pinning, the build script, and the
+# human-readable README + LICENSE.
+include = [
+    "/src/**/*",
+    "/build.rs",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+]
+
+# All binaries are gated behind the `cli` feature so `cargo build` /
+# `cargo install tilezz` (default features = empty) only build the
+# library. Pass `--features cli` to compile the CLI tooling.
+[[bin]]
+name = "rat_enum"
+path = "src/bin/rat_enum.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "tileset_collect"
+path = "src/bin/tileset_collect.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "cyc_explore"
+path = "src/bin/cyc_explore.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "patch_enum"
+path = "src/bin/patch_enum.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "polyomino"
+path = "src/bin/polyomino.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "build_web_rocrate"
+path = "src/bin/build_web_rocrate.rs"
+required-features = ["cli"]
 
 [dependencies]
 num-bigint = "0.4.6"
@@ -44,13 +92,21 @@ gif = { version = "0.13", optional = true }
 jsonschema = { version = "0.34", default-features = false }
 
 [features]
-default = ["examples"]
-pprof = ["dep:pprof"]
-# Emits log lines counting how many sign-at-cubic-root queries fall
-# through to the Sturm fallback. Used to size the bisection threshold.
-sign_profile = []
-# Enables the CLI binaries (clap + threading + gif/png output).
-examples = ["dep:clap", "dep:crossbeam", "dep:num_cpus", "animation"]
+# Empty default keeps the library installable as a pure-Rust
+# dependency without dragging in clap / crossbeam / num_cpus
+# (CLI binaries). Opt in to `cli` for `cargo install tilezz`.
+default = []
+# Diagnostic instrumentation: pprof flamegraph wiring for the CLI
+# binaries' `--pprof <PATH>` flag + the sign-at-cubic-root call
+# counter in `cyclotomic::sign` (emits `[sign_profile] total=...`
+# lines at every power-of-two call count beyond 1024). Off by
+# default; turn on when tuning the Sturm fallback threshold or
+# chasing a hot loop with flamegraph.
+debug = ["dep:pprof"]
+# Enables the enumeration CLI binaries: rat_enum, cyc_explore,
+# patch_enum, polyomino, tileset_collect (clap + threading + gif/png
+# output for the matchstick-polygon DFS workflows).
+cli = ["dep:clap", "dep:crossbeam", "dep:num_cpus", "animation"]
 # Pure-Rust raster output (PNG) via resvg + tiny-skia.
 raster = ["dep:resvg", "dep:tiny-skia"]
 # Multi-frame GIF output. Implies `raster`.

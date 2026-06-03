@@ -6,7 +6,7 @@ use clap::Parser;
 use rustc_hash::FxHashSet;
 
 use tilezz::analysis::patch_enum::enum_patches;
-use tilezz::cyclotomic::{IsRing, ZZ12, ZZ4};
+use tilezz::cyclotomic::{IsRing, ZZ4, ZZ12};
 use tilezz::geom::rat::Rat;
 use tilezz::geom::tileset::{self, TileSet};
 
@@ -33,7 +33,7 @@ struct Args {
     #[arg(long)]
     validate: bool,
 
-    /// Flamegraph output path (requires --features pprof).
+    /// Flamegraph output path (requires --features debug).
     #[arg(long)]
     pprof: Option<String>,
 }

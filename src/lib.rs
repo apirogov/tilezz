@@ -10,5 +10,5 @@ pub mod stringmatch;
 
 pub mod vis;
 
-#[cfg(feature = "examples")]
+#[cfg(feature = "cli")]
 pub mod rat_enum;

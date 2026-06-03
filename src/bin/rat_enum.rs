@@ -289,7 +289,7 @@ struct Cli {
     verbose: bool,
 
     /// In Bench mode, write a flamegraph SVG to this path (requires
-    /// the `pprof` cargo feature).
+    /// the `debug` cargo feature).
     #[arg(long)]
     profile: Option<String>,
 
@@ -556,7 +556,7 @@ fn main() {
             // invocation.
             if !cli.no_rocrate {
                 use tilezz::stringmatch::dafsa::{
-                    write_archival_extras, write_ro_crate, AssetParams, ProducedVia,
+                    AssetParams, ProducedVia, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
                     ring: cli.ring,
@@ -728,7 +728,7 @@ fn main() {
             // the bare wire format).
             if !cli.no_rocrate {
                 use tilezz::stringmatch::dafsa::{
-                    write_archival_extras, write_ro_crate, AssetParams, ProducedVia,
+                    AssetParams, ProducedVia, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
                     ring: cli.ring,
@@ -873,7 +873,7 @@ mod free_tests {
     use super::*;
     use std::collections::HashMap;
     use tilezz::cyclotomic::geometry::intersect;
-    use tilezz::cyclotomic::{IsRing, Units, ZZ12, ZZ4, ZZ8};
+    use tilezz::cyclotomic::{IsRing, Units, ZZ4, ZZ8, ZZ12};
 
     /// Independent validator: reconstruct the polygon from `angles` in
     /// exact ring arithmetic and check three properties without any
@@ -1171,8 +1171,8 @@ mod free_tests {
 mod opt_correctness_tests {
     use super::*;
     use std::sync::Arc;
-    use tilezz::cyclotomic::{ZZ10, ZZ12, ZZ14, ZZ18, ZZ4, ZZ6, ZZ8};
-    use tilezz::rat_enum::prune::closure_key::{collect_closure_keys, ClosureKeyPrune};
+    use tilezz::cyclotomic::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ18};
+    use tilezz::rat_enum::prune::closure_key::{ClosureKeyPrune, collect_closure_keys};
     use tilezz::rat_enum::prune::modular::ModularPrune;
     use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
     use tilezz::rat_enum::seed::rat_enum_parallel;

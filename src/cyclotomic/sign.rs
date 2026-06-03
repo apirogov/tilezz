@@ -246,9 +246,9 @@ fn sturm_sign_at_root(p_coeffs: &[i64], f_coeffs: &[i64], lo: i64, hi: i64) -> i
     (v_lo - v_hi) as i8
 }
 
-#[cfg(feature = "sign_profile")]
+#[cfg(feature = "debug")]
 mod profile {
-    //! `sign_profile` feature: counts every call to
+    //! `debug` feature: counts every call to
     //! `sign_at_cubic_root_in_interval`, tracking how many have
     //! large coefficients (would force Sturm fallback) and the
     //! observed coefficient envelope. Output is emitted on every
@@ -1108,7 +1108,7 @@ pub fn sign_at_cubic_root_in_interval(
     let l_bound = b.abs() + 4 * d.abs();
 
     let c_max = a.abs().max(b.abs()).max(d.abs());
-    #[cfg(feature = "sign_profile")]
+    #[cfg(feature = "debug")]
     profile::record(c_max);
     // For very large coefficients the bisection's i128 budget for
     // f_abs_num / p_sign might not accommodate enough iterations to

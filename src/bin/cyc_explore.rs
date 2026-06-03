@@ -1,17 +1,17 @@
 use std::collections::HashSet;
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 use std::marker::{Send, Sync};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 
-use tilezz::cyclotomic::geometry::point_mod_rect;
 use tilezz::cyclotomic::Units;
+use tilezz::cyclotomic::geometry::point_mod_rect;
 use tilezz::cyclotomic::*;
 use tilezz::vis::animation::render_gif;
 use tilezz::vis::draw::rainbow;
-use tilezz::vis::plotutils::{points_bounds, P64, R64};
+use tilezz::vis::plotutils::{P64, R64, points_bounds};
 use tilezz::vis::scene::{Color, Fill, Item, MarkerShape, Scene, Stroke, Viewport};
 
 static VERBOSE: Mutex<bool> = Mutex::new(false);
@@ -180,7 +180,7 @@ struct Cli {
     verbose: bool,
 }
 
-#[cfg(feature = "examples")]
+#[cfg(feature = "cli")]
 fn main() {
     let cli = Cli::parse();
     if cli.verbose {
