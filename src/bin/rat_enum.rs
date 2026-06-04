@@ -1505,6 +1505,45 @@ mod opt_correctness_tests {
         }
     }
 
+    /// Frontier regression guard for the A316192 EXTENSION terms
+    /// (ZZ12 free, n >= 11) -- the ones OEIS does not publish and that
+    /// we would submit, so they have no external oracle. Two oracle-
+    /// free checks:
+    ///   * prune-invariance at n=11: the optional prunes (mod +
+    ///     closure-key) must not change the free count vs the
+    ///     baseline (free/canonical/reachability prunes only). An
+    ///     over-aggressive prune that dropped a valid rat would
+    ///     silently undercount -- this catches it one step past the
+    ///     OEIS-pinned range.
+    ///   * value pins for a(11)=89075 and a(12)=597581, locking the
+    ///     first extension terms against any future silent drift.
+    /// n<=12 only: the unpruned baseline at n>=13 is too slow even
+    /// for a release test; deeper terms rely on the prunes'
+    /// analytical (n-independent) soundness, the verification gate,
+    /// and an independent recompute at submission time (see
+    /// docs/oeis-A316200-correction for the recompute methodology).
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "release-only: ZZ12 n=11 unpruned baseline + n=12 pinned, ~1-3 min release"
+    )]
+    fn zz12_extension_frontier_guard() {
+        // Prune-invariance at n=11 (optional prunes on vs off).
+        let none = build_prunes(12, 11, false, false);
+        let all11 = build_prunes(12, 11, true, true);
+        let base = by_length(&run::<ZZ12>(11, true, 0, &none));
+        let pruned = by_length(&run::<ZZ12>(11, true, 0, &all11));
+        assert_eq!(
+            base, pruned,
+            "ZZ12 free n=11: optional prunes changed the count -- over-pruning at the frontier",
+        );
+        // Value pins for the first two extension terms.
+        let all12 = build_prunes(12, 12, true, true);
+        let c12 = by_length(&run::<ZZ12>(12, true, 0, &all12));
+        assert_eq!(c12.get(&11).copied(), Some(89075), "ZZ12 a(11) regression");
+        assert_eq!(c12.get(&12).copied(), Some(597581), "ZZ12 a(12) regression");
+    }
+
     /// Group an enumerated `Vec<Vec<i8>>` into `len -> count`.
     fn by_length(
         rats: &std::collections::HashSet<Vec<i8>>,
