@@ -253,6 +253,34 @@ curl -sI -H "Origin: https://ratdb.app.pirogov.de" \
 SOURCE_DATE_EPOCH=1780000000 bash tools/reproduce.sh
 ```
 
+### Exactness / overflow verification gate
+
+The geometry is exact by construction: `cell_floor` (the only input
+to the self-intersection grid) is exact-by-default, so the f64 fast
+path can no longer mis-bucket a boundary point and let a non-simple
+polygon through. The exact-sign helpers run in i128; reachable
+coordinate magnitudes (~hundreds even at n~20-30) sit ~36 orders of
+magnitude below the i128 ceiling, and an overflow-checked sweep of
+every ring (ZZ8/10/16/20/24/32/60 nested-sqrt + ZZ14/18 cubic) shows
+no wrap.
+
+For a count you intend to PUBLISH or SUBMIT (a new dataset, or an
+OEIS extension/correction), run the producing enumeration once more
+with integer overflow-checks on, as a belt-and-suspenders against a
+silent i128 wrap at a magnitude beyond what's been measured:
+
+```sh
+RUSTFLAGS="-C overflow-checks=on" cargo build --release --bin rat_enum --features cli
+# re-run the exact producing invocation; identical count, panics loudly on any wrap
+RUSTFLAGS="-C overflow-checks=on" ./target/release/rat_enum --ring <r> -n <n> --free ...
+```
+
+This is cheap relative to the value (one extra run on the artifact
+you stake a claim on). The deep nested-sqrt rings (ZZ32/60) have no
+external count oracle yet, so for those a small-n independent brute
+check (see `docs/oeis-A316200-correction/zz10_independent.py` as a
+template) is also worth doing before trusting their counts.
+
 The archival manifest (in tilezz-ratdb) deliberately has NO
 `block_base_url` -- it stays location-independent, and
 `tools/decode.py` works offline against the sibling `blocks/`
