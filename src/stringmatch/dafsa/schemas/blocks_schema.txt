@@ -94,9 +94,9 @@ The manifest
     "block_format":        "tilezz-rat-block",  // wire format of each block file
     "block_version":       1,                   // bumped independently of "version"
     "target_block_bytes":  <u32>,               // writer's target on-disk bytes/block (hint)
-    "n_states":            <u32>,               // total states, including the root
-    "n_edges":             <u32>,               // total edges, including the root's
-    "n_sequences":         <u32>,               // == root.count; the rat count
+    "n_states":            <u32>,               // total states, including the root (caps the wire state-id space)
+    "n_edges":             <u64>,               // total edges, including the root's
+    "n_sequences":         <u64>,               // == root.count; the rat count
     "max_indexed_length":  <u32>,               // max label on a root edge (= max rat length)
     "root": {                                   // state 0, inlined into the manifest
       "count":       <u64>,                     // == n_sequences
@@ -196,6 +196,16 @@ Edges of the local state at index `j` in a block are the slice
 of this block's edge array, where `next_edges_offset` is the edges
 offset of state `j+1` in the same block, or `n_edges` if `j` is the
 last state in the block.
+
+Capacity. State ids (`target`, `first_state`, `first_state_id`) are
+u32, so an asset addresses at most 2^32 ~ 4.29e9 states; sequence
+counts (`n_sequences`, every state `count`) and the edge total
+(`n_edges`) are u64 and effectively unbounded. For the reference
+ZZ12 enumeration the u32 state-id space is first reached around
+perimeter 21 -- past the point where building the (in-memory)
+automaton is feasible on commodity hardware -- so within this
+format's intended range no field overflows. A writer that somehow
+exceeds 2^32 states MUST refuse rather than truncate ids.
 
 Integrity check (mandatory)
 ---------------------------
