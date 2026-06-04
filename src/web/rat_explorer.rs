@@ -517,7 +517,15 @@ fn snake_state<R: IsRing>(snake: &Snake<R>) -> SnakeState {
 
     let rat = if closed {
         let rat = Rat::from_unchecked(snake);
+        // Report the traversal orientation the user actually entered
+        // (a simple closed rat sums to +k for CCW, -k for CW)...
         let chirality = rat.chirality();
+        // ...but compute the canonical forms in the enumeration's
+        // CCW convention. A CW spelling (e.g. -1,-1,-1,-1) is the
+        // reverse-complement of its CCW spelling (1,1,1,1) -- the
+        // SAME rat -- so both must show the same canonical CCW form
+        // and match the RatDB id (which db_id_of also CCW-normalizes).
+        let rat = if rat.chirality() >= 0 { rat } else { rat.reversed() };
         let rotational_order = repetition_factor(rat.seq()) as u32;
         let chiral_canon = rat.clone().canonical();
         let mirror_canon = rat.reflected().canonical();
@@ -862,6 +870,24 @@ mod tests {
         assert_eq!(rat.canonical_chiral, rat.canonical_achiral);
         // Equilateral triangle's canonical rotation is [4, 4, 4].
         assert_eq!(rat.canonical_chiral, vec![4, 4, 4]);
+    }
+
+    /// A CW spelling and its CCW reverse-complement are the SAME
+    /// rat, so the displayed canonical forms (and the RatDB id) must
+    /// be identical and CCW-oriented. The ZZ4 square 1,1,1,1 (CCW)
+    /// and -1,-1,-1,-1 (CW) must both report canonical CCW = [1,1,1,1];
+    /// only the reported `chirality` (= input orientation) differs.
+    #[test]
+    fn cw_input_shows_ccw_canonical() {
+        let ccw = analyze_data(4, &[1, 1, 1, 1], None).state.rat.expect("closed");
+        let cw = analyze_data(4, &[-1, -1, -1, -1], None).state.rat.expect("closed");
+        assert_eq!(ccw.chirality, 1, "1,1,1,1 is CCW");
+        assert_eq!(cw.chirality, -1, "-1,-1,-1,-1 is CW (input orientation reported)");
+        // Canonical forms are CCW-normalized -> identical for both spellings.
+        assert_eq!(cw.canonical_chiral, vec![1, 1, 1, 1]);
+        assert_eq!(cw.canonical_achiral, vec![1, 1, 1, 1]);
+        assert_eq!(ccw.canonical_chiral, cw.canonical_chiral);
+        assert_eq!(ccw.canonical_achiral, cw.canonical_achiral);
     }
 
     /// The Spectre tile is the famous strictly-chiral aperiodic

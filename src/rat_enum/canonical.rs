@@ -157,14 +157,18 @@ pub fn is_free_canonical_extended(prefix: &[i8], new: i8) -> bool {
 /// Correctness layer for the free DFS. Computes the lex-minimum
 /// over all cyclic rotations and reversed rotations of `seq`.
 ///
-/// The inputs are already chirality-normalized to CW by the DFS
-/// before this function runs. Under that normalization, two mirror
-/// images of the same polygon shape (an enantiomer pair) end up as
-/// CW walks of the original and the mirror. Algebraically these CW
-/// walks differ by SEQUENCE REVERSAL (one polygon walked CW from
-/// vertex V0, vs its mirror walked CW from V0' = mirror of V0,
-/// gives sequences related by reverse). Plain reversal -- not
-/// revcomp -- is therefore the right relation here.
+/// The inputs are already chirality-normalized to CCW by the DFS
+/// before this function runs (see `dfs.rs`: a closed rat with
+/// `chirality() <= 0` is replaced by its `reversed()`). Under that
+/// normalization, two mirror images of the same polygon shape (an
+/// enantiomer pair) end up as CCW walks of the original and the
+/// mirror. Algebraically these CCW walks differ by SEQUENCE
+/// REVERSAL (one polygon walked CCW from vertex V0, vs its mirror
+/// walked CCW from V0' = mirror of V0, gives sequences related by
+/// reverse). Plain reversal -- not revcomp -- is therefore the
+/// right relation here; this reverse (orientation-preserving
+/// mirror), as opposed to the revcomp that flips CW<->CCW, is
+/// load-bearing -- do not "simplify" it away.
 ///
 /// Both members of an enantiomer pair map to the same value, so the
 /// HashSet deduplicates them. Without this step, the output would

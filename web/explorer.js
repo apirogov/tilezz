@@ -167,7 +167,7 @@ function renderInfo(result) {
     html += row('state', '<strong>closed (rat)</strong>');
     const chirLabel = r.chirality > 0 ? '+1 (CCW)'
       : (r.chirality < 0 ? '-1 (CW)' : '0');
-    html += row('sequence chirality', chirLabel);
+    html += row('sequence orientation', chirLabel);
     const rotation = r.rotational_order > 1
       ? `${r.rotational_order}-fold` : 'none';
     html += row('rotational symmetry', rotation);
@@ -189,14 +189,16 @@ function renderInfo(result) {
     // Enumeration terminology: the rotation-only canonical form is
     // the "one sided" representative; the rotation+reflection
     // (dihedral) one is the "free" representative -- the form the
-    // RatDB indexes. (The symmetry rows above keep the geometric
-    // chiral/achiral wording, which is the right term there.)
+    // RatDB indexes. Both are normalized to CCW orientation by the
+    // engine (a CW spelling and its CCW reverse-complement are the
+    // same rat), so the labels say "CCW" explicitly. (The symmetry
+    // rows above keep the geometric chiral/achiral wording.)
     const oneSidedStr = formatSeq(r.canonical_chiral);
     const freeStr = formatSeq(r.canonical_achiral);
-    html += row('one sided canonical sequence',
+    html += row('canonical CCW one sided',
       `<span class="loadable" data-load-angles="${oneSidedStr}" `
       + `title="click to load this sequence">${oneSidedStr}</span>`);
-    html += row('free canonical sequence',
+    html += row('canonical CCW free',
       `<span class="loadable" data-load-angles="${freeStr}" `
       + `title="click to load this sequence">${freeStr}</span>`);
   } else if (s.length === 0) {
