@@ -101,7 +101,7 @@ pub struct BlockManifest {
     /// Total DAFSA edges, including the root's edges.
     pub n_edges: u32,
     /// Number of accepted sequences (rats).
-    pub n_sequences: u32,
+    pub n_sequences: u64,
     /// Maximum rat length covered by the asset (= the largest
     /// label appearing on a root-edge, i.e. the maximum length
     /// prefix). A consumer can short-circuit queries for longer
@@ -448,9 +448,10 @@ where
         })
     }
 
-    /// Number of rats stored.
-    pub fn len(&self) -> usize {
-        self.manifest.n_sequences as usize
+    /// Number of rats stored. `u64` because ZZ12 cumulative counts
+    /// cross `u32::MAX` around n=17.
+    pub fn len(&self) -> u64 {
+        self.manifest.n_sequences
     }
 
     pub fn is_empty(&self) -> bool {
@@ -467,12 +468,12 @@ where
 
     /// Assigned index of `rat` under `(length, lex)` ordering, or
     /// `None` if not in the set.
-    pub fn index_of<S: AsRef<[i8]>>(&self, rat: S) -> Option<u32> {
+    pub fn index_of<S: AsRef<[i8]>>(&self, rat: S) -> Option<u64> {
         let prefixed = prefix(rat.as_ref());
         // The inner DAFSA's lex rank of the prefixed sequence equals
         // the rat's (length, lex) rank.
         let mut state = 0u32;
-        let mut rank: u32 = 0;
+        let mut rank: u64 = 0;
         for &symbol in &prefixed {
             let (rec, edges) = self.lookup_state(state).ok()?;
             if rec.is_accept {
@@ -483,7 +484,7 @@ where
                 match e.label.cmp(&symbol) {
                     std::cmp::Ordering::Less => {
                         let (sub_rec, _) = self.lookup_state(e.target).ok()?;
-                        rank = rank.checked_add(sub_rec.count as u32)?;
+                        rank = rank.checked_add(sub_rec.count)?;
                     }
                     std::cmp::Ordering::Equal => {
                         found = Some(e.target);
@@ -503,13 +504,13 @@ where
 
     /// The rat at assigned index `i` in `(length, lex)` order, or
     /// `None` if `i >= len()`.
-    pub fn get(&self, i: usize) -> Option<Vec<i8>> {
+    pub fn get(&self, i: u64) -> Option<Vec<i8>> {
         if i >= self.len() {
             return None;
         }
         let mut out: Vec<i8> = Vec::new();
         let mut state = 0u32;
-        let mut remaining = i as u64;
+        let mut remaining = i;
         loop {
             let (rec, edges) = self.lookup_state(state).ok()?;
             if rec.is_accept {
@@ -556,7 +557,7 @@ where
         // lex on raw) order. `RatDafsa::from_rats` then re-sorts and
         // dedups, but the input is already in the right shape so
         // that step is a fast no-op for this input.
-        let mut rats: Vec<Vec<i8>> = Vec::with_capacity(self.len());
+        let mut rats: Vec<Vec<i8>> = Vec::with_capacity(self.len() as usize);
         let mut current: Vec<i8> = Vec::new();
         let mut stack: Vec<(Vec<EdgeRec>, usize)> = Vec::new();
 
@@ -590,7 +591,7 @@ where
         }
 
         debug_assert_eq!(
-            rats.len(),
+            rats.len() as u64,
             self.len(),
             "to_rat_dafsa: DFS yielded {} rats but manifest claims {}",
             rats.len(),
@@ -769,8 +770,9 @@ impl LazyRatDafsaAsync {
         &self.manifest
     }
 
-    pub fn len(&self) -> usize {
-        self.manifest.n_sequences as usize
+    /// Number of rats stored. `u64`; see the sync reader's `len`.
+    pub fn len(&self) -> u64 {
+        self.manifest.n_sequences
     }
 
     pub fn is_empty(&self) -> bool {
@@ -794,7 +796,7 @@ impl LazyRatDafsaAsync {
     /// Assigned (length, lex)-rank index of `rat`, or `None` if it
     /// is not in the set or is longer than the asset's
     /// `max_indexed_length` (when that hint is present).
-    pub async fn index_of<S, F, Fut>(&self, rat: S, fetch: &F) -> Option<u32>
+    pub async fn index_of<S, F, Fut>(&self, rat: S, fetch: &F) -> Option<u64>
     where
         S: AsRef<[i8]>,
         F: Fn(u32) -> Fut,
@@ -806,7 +808,7 @@ impl LazyRatDafsaAsync {
         }
         let prefixed = prefix(rat_slice);
         let mut state = 0u32;
-        let mut rank: u32 = 0;
+        let mut rank: u64 = 0;
         for &symbol in &prefixed {
             let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
             if rec.is_accept {
@@ -817,7 +819,7 @@ impl LazyRatDafsaAsync {
                 match e.label.cmp(&symbol) {
                     std::cmp::Ordering::Less => {
                         let (sub_rec, _) = self.lookup_state(e.target, fetch).await.ok()?;
-                        rank = rank.checked_add(sub_rec.count as u32)?;
+                        rank = rank.checked_add(sub_rec.count)?;
                     }
                     std::cmp::Ordering::Equal => {
                         next = Some(e.target);
@@ -836,7 +838,7 @@ impl LazyRatDafsaAsync {
     }
 
     /// Rat at assigned index `i` in (length, lex) order.
-    pub async fn get<F, Fut>(&self, i: usize, fetch: &F) -> Option<Vec<i8>>
+    pub async fn get<F, Fut>(&self, i: u64, fetch: &F) -> Option<Vec<i8>>
     where
         F: Fn(u32) -> Fut,
         Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
@@ -846,7 +848,7 @@ impl LazyRatDafsaAsync {
         }
         let mut out: Vec<i8> = Vec::new();
         let mut state = 0u32;
-        let mut remaining = i as u64;
+        let mut remaining = i;
         loop {
             let (rec, edges) = self.lookup_state(state, fetch).await.ok()?;
             if rec.is_accept {
@@ -1089,7 +1091,7 @@ impl RatDafsa {
         let n_states = dafsa.raw_n_states() as u32;
         let n_edges = dafsa.raw_n_edges() as u32;
         let counts = dafsa.raw_counts();
-        let n_sequences = counts.first().copied().unwrap_or(0) as u32;
+        let n_sequences = counts.first().copied().unwrap_or(0) as u64;
 
         let edges_start = dafsa.raw_edges_start();
         let labels = dafsa.raw_labels();
@@ -1347,20 +1349,20 @@ mod tests {
         let lazy = LazyRatDafsa::open(&manifest_text, fetch).expect("open");
 
         // len agrees.
-        assert_eq!(lazy.len(), rd.len());
+        assert_eq!(lazy.len(), rd.len() as u64);
 
         // get(i) agrees for every i.
         for i in 0..rd.len() {
-            assert_eq!(lazy.get(i), rd.get(i), "get({i}) mismatch");
+            assert_eq!(lazy.get(i as u64), rd.get(i), "get({i}) mismatch");
         }
-        assert_eq!(lazy.get(rd.len()), None, "out-of-range");
+        assert_eq!(lazy.get(rd.len() as u64), None, "out-of-range");
 
         // contains + index_of agree for every entry and for a
         // negative probe.
         for i in 0..rd.len() {
             let rat = rd.get(i).unwrap();
             assert!(lazy.contains(rat.as_slice()), "missing rat #{i}");
-            assert_eq!(lazy.index_of(rat.as_slice()), Some(i as u32));
+            assert_eq!(lazy.index_of(rat.as_slice()), Some(i as u64));
         }
         assert!(!lazy.contains([42i8, 42, 42].as_slice()));
         assert_eq!(lazy.index_of([42i8, 42, 42].as_slice()), None);
@@ -1400,8 +1402,8 @@ mod tests {
         for i in 0..rd.len() {
             let rat = rd.get(i).unwrap();
             assert!(lazy.contains(rat.as_slice()));
-            assert_eq!(lazy.get(i), Some(rat.clone()));
-            assert_eq!(lazy.index_of(rat.as_slice()), Some(i as u32));
+            assert_eq!(lazy.get(i as u64), Some(rat.clone()));
+            assert_eq!(lazy.index_of(rat.as_slice()), Some(i as u64));
         }
     }
 
@@ -1826,6 +1828,133 @@ mod tests {
             parsed.block_base_url.as_deref(),
             Some("https://cdn.example.com/data/")
         );
+    }
+
+    // ---- Scaling: sequence counts/ids beyond u32 (n>=17) ----
+
+    /// A manifest whose `n_sequences` exceeds `u32::MAX` (the
+    /// regime past ZZ12 n=16) must round-trip through JSON and be
+    /// reported by `len()` without truncation. ZZ12 cumulative
+    /// counts cross 4.29e9 around n=17 (~12.3e9), so the field and
+    /// the `len()` accessor have to be 64-bit.
+    #[test]
+    fn manifest_n_sequences_beyond_u32() {
+        const BIG: u64 = 5_000_000_000; // > u32::MAX (4_294_967_295)
+        let manifest = BlockManifest {
+            format: MANIFEST_FORMAT.to_string(),
+            version: MANIFEST_VERSION,
+            scalar: SCALAR_TAG.to_string(),
+            block_format: BLOCK_FORMAT_TAG.to_string(),
+            block_version: BLOCK_FORMAT_VERSION,
+            target_block_bytes: 1024,
+            n_states: 3,
+            n_edges: 2,
+            n_sequences: BIG,
+            max_indexed_length: 1,
+            root: RootState {
+                count: BIG,
+                is_accept: false,
+                edges: vec![RootEdge { label: 1, target: 1 }],
+            },
+            blocks: vec![BlockEntry {
+                first_state: 1,
+                sha256: "0".repeat(64),
+                size: 0,
+            }],
+            block_base_url: None,
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let back: BlockManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.n_sequences, BIG);
+
+        let unused = |_: u32| -> io::Result<Vec<u8>> {
+            Err(io::Error::other("fetch should never be called"))
+        };
+        let lazy = LazyRatDafsa::open(&json, unused).expect("open");
+        assert_eq!(lazy.len(), BIG);
+    }
+
+    /// `index_of` accumulates the rank by summing the `count` of
+    /// every earlier sibling sub-DAFSA. Those counts are `u64` on
+    /// the wire; the accumulator and the returned rank must be
+    /// `u64` too, or a sibling class larger than `u32::MAX` (real
+    /// at ZZ12 n>=17) silently truncates the index.
+    ///
+    /// Forge a minimal asset: root --1--> s1, and s1 has a sibling
+    /// edge (label 5) into s2 whose `count` is 5e9, plus the target
+    /// edge (label 7) into the accepting s3. Looking up the rat
+    /// `[7]` must skip s2's whole class, yielding rank == 5e9.
+    #[test]
+    fn index_of_rank_beyond_u32() {
+        const SIBLING: u64 = 5_000_000_000; // > u32::MAX
+
+        // Block body holding states 1,2,3 (state 0 = root is in the
+        // manifest). Layout per schemas/blocks_schema.txt.
+        let mut body = Vec::new();
+        body.extend_from_slice(BLOCK_MAGIC);
+        write_u32(&mut body, 1); // first_state_id
+        write_u32(&mut body, 3); // n_states
+        write_u32(&mut body, 2); // n_edges
+        // state records (edges_offset u32, count u64, is_accept u8, +3 pad)
+        let push_state = |b: &mut Vec<u8>, off: u32, count: u64, acc: bool| {
+            write_u32(b, off);
+            write_u64(b, count);
+            b.push(acc as u8);
+            b.extend_from_slice(&[0u8; 3]);
+        };
+        push_state(&mut body, 0, SIBLING + 1, false); // s1: edges [0,2)
+        push_state(&mut body, 2, SIBLING, true); // s2: leaf, big class
+        push_state(&mut body, 2, 1, true); // s3: leaf, the target
+        // edge records (label i8, +3 pad, target u32) for s1
+        let push_edge = |b: &mut Vec<u8>, label: i8, target: u32| {
+            b.push(label as u8);
+            b.extend_from_slice(&[0u8; 3]);
+            write_u32(b, target);
+        };
+        push_edge(&mut body, 5, 2); // sibling -> s2
+        push_edge(&mut body, 7, 3); // target  -> s3
+
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut enc, &body).unwrap();
+        let gz = enc.finish().unwrap();
+        let sha = {
+            let mut h = Sha256::new();
+            h.update(&gz);
+            format!("{:x}", h.finalize())
+        };
+
+        let manifest = BlockManifest {
+            format: MANIFEST_FORMAT.to_string(),
+            version: MANIFEST_VERSION,
+            scalar: SCALAR_TAG.to_string(),
+            block_format: BLOCK_FORMAT_TAG.to_string(),
+            block_version: BLOCK_FORMAT_VERSION,
+            target_block_bytes: 1024,
+            n_states: 4,
+            n_edges: 2,
+            n_sequences: SIBLING + 1,
+            max_indexed_length: 8,
+            root: RootState {
+                count: SIBLING + 1,
+                is_accept: false,
+                edges: vec![RootEdge { label: 1, target: 1 }],
+            },
+            blocks: vec![BlockEntry {
+                first_state: 1,
+                sha256: sha,
+                size: gz.len() as u32,
+            }],
+            block_base_url: None,
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        let gz_for_cb = gz.clone();
+        let fetch = move |_: u32| -> io::Result<Vec<u8>> { Ok(gz_for_cb.clone()) };
+        let lazy = LazyRatDafsa::open(&json, fetch).expect("open");
+
+        // rat [7] prefixes to [1,7]: root --1--> s1, then at s1 the
+        // sibling label 5 (< 7) contributes SIBLING to the rank,
+        // and label 7 reaches accepting s3.
+        assert_eq!(lazy.index_of([7i8].as_slice()), Some(SIBLING));
     }
 
     // ---- Test infrastructure ----

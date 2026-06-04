@@ -179,11 +179,11 @@ impl RatDafsa {
 
     /// Assigned external index of `rat` (its position in
     /// `(length, lex)` order) if it is in the set, else `None`.
-    pub fn index_of<S: AsRef<[i8]>>(&self, rat: S) -> Option<u32> {
+    pub fn index_of<S: AsRef<[i8]>>(&self, rat: S) -> Option<u64> {
         let prefixed = prefix(rat.as_ref());
         // Lex rank in the inner DAFSA == (length, lex) rank of the
         // raw rat -- exactly the external assigned index.
-        self.inner.lex_rank_of(&prefixed).map(|r| r as u32)
+        self.inner.lex_rank_of(&prefixed).map(|r| r as u64)
     }
 
     /// Set membership: does `rat` appear in this `RatDafsa`?
@@ -366,7 +366,7 @@ mod tests {
 
         // index_of returns the (length, lex) position.
         for (i, e) in expected.iter().enumerate() {
-            assert_eq!(rd.index_of(e.as_slice()), Some(i as u32));
+            assert_eq!(rd.index_of(e.as_slice()), Some(i as u64));
         }
         assert_eq!(rd.index_of([42i8, 42].as_slice()), None);
 
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(restored_iter, expected);
         for (i, e) in expected.iter().enumerate() {
             assert_eq!(restored.get(i).as_ref(), Some(e));
-            assert_eq!(restored.index_of(e.as_slice()), Some(i as u32));
+            assert_eq!(restored.index_of(e.as_slice()), Some(i as u64));
         }
     }
 
