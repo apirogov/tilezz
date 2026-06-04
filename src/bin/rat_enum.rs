@@ -1172,7 +1172,9 @@ mod free_tests {
 mod opt_correctness_tests {
     use super::*;
     use std::sync::Arc;
-    use tilezz::cyclotomic::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ18};
+    use tilezz::cyclotomic::{
+        ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60,
+    };
     use tilezz::rat_enum::prune::closure_key::{ClosureKeyPrune, collect_closure_keys};
     use tilezz::rat_enum::prune::modular::ModularPrune;
     use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
@@ -1364,6 +1366,78 @@ mod opt_correctness_tests {
                 mismatches.len()
             );
         }
+    }
+
+    /// Generic step-subset cross-check. `ZZ_big --step k` walks only
+    /// turns that are multiples of `k`; when `k * small = big` that
+    /// enumerates exactly the `ZZ_small`-equivalent polygons -- a
+    /// bijection on turn sequences, so the per-perimeter counts must
+    /// match. This drives the BIG ring's own sign + cell_floor
+    /// machinery (the i128 nested-sqrt helpers, for the deep rings)
+    /// yet compares against a ring that is OEIS-pinned, transitively
+    /// anchoring the big ring to external data with no brute-force
+    /// oracle. `--step k` collapses the effective branching to ~n/k
+    /// directions, so at the small `max_steps` used here these stay
+    /// in the fast default suite (each well under a second).
+    fn assert_step_subset<Big: IsRing, Small: IsRing>(max_steps: usize, step: i8, label: &str) {
+        let count_by_len = |rats: &[Vec<i8>]| {
+            let mut m = std::collections::BTreeMap::<usize, usize>::new();
+            for r in rats {
+                *m.entry(r.len()).or_insert(0) += 1;
+            }
+            m
+        };
+        let (big, _) = rat_enum_with::<Big>(
+            max_steps,
+            step,
+            make_ops(true),
+            label,
+            "",
+            false,
+            &Prunes::default(),
+        );
+        let (small, _) = rat_enum_with::<Small>(
+            max_steps,
+            1,
+            make_ops(true),
+            "ref",
+            "",
+            false,
+            &Prunes::default(),
+        );
+        assert_eq!(
+            count_by_len(&big),
+            count_by_len(&small),
+            "{label}: step-{step} subset counts disagree with the reference ring \
+             -- a sign-helper or cell_floor bug in the bigger ring",
+        );
+    }
+
+    /// Step-subset anchors for the rings WITHOUT their own OEIS
+    /// sequence: each reduces (via `--step`) to an OEIS-pinned ring,
+    /// transitively verifying its exact-geometry machinery. ZZ14
+    /// (= 2*7) is the sole ring with no such reduction and is checked
+    /// separately. Small n keeps the suite fast; a deeper sweep lives
+    /// in the `#[ignore]` release tests.
+    #[test]
+    fn zz16_step2_matches_zz8() {
+        assert_step_subset::<ZZ16, ZZ8>(8, 2, "zz16_step2");
+    }
+    #[test]
+    fn zz20_step2_matches_zz10() {
+        assert_step_subset::<ZZ20, ZZ10>(7, 2, "zz20_step2");
+    }
+    #[test]
+    fn zz24_step2_matches_zz12() {
+        assert_step_subset::<ZZ24, ZZ12>(7, 2, "zz24_step2");
+    }
+    #[test]
+    fn zz32_step4_matches_zz8() {
+        assert_step_subset::<ZZ32, ZZ8>(6, 4, "zz32_step4");
+    }
+    #[test]
+    fn zz60_step5_matches_zz12() {
+        assert_step_subset::<ZZ60, ZZ12>(6, 5, "zz60_step5");
     }
 
     /// External anchor: OEIS A316192 per-length counts for ZZ12
