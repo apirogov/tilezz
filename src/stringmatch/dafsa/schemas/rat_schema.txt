@@ -62,7 +62,7 @@ A consumer (Rust, JS, WASM) that opens a `tilezz-rat-dafsa`:
 Index lookups
 -------------
 
-The Rust API exposes `index_of(rat) -> Option<u32>` (assigned index
+The Rust API exposes `index_of(rat) -> Option<u64>` (assigned index
 of a rat in `(length, lex)` order) and `get(i) -> Option<Vec<i8>>`
 (the rat at assigned index `i`). Both are thin wrappers over the
 inner DAFSA's lex-rank operations: `index_of(rat)` is the inner

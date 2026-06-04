@@ -117,7 +117,7 @@ pub struct AssetParams<'a> {
     /// script.
     pub target_block_bytes: u32,
     /// Final rat count, surfaced into the Dataset `description`.
-    pub n_sequences: u32,
+    pub n_sequences: u64,
     /// Optional OEIS reference (e.g. `"A316192"`). Becomes a
     /// `subjectOf` contextual entity in the graph so an archivist
     /// can pivot from the asset to the underlying sequence.
@@ -1400,7 +1400,7 @@ mod tests {
             step: 1,
             free: true,
             target_block_bytes: 2,
-            n_sequences: rats.len() as u32,
+            n_sequences: rats.len() as u64,
             oeis_a_number: Some("A316192"),
             produced_via: ProducedVia::InMemory,
         };

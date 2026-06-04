@@ -581,7 +581,7 @@ thread_local! {
 }
 
 /// Initialise the DB for the given ring by fetching its manifest.
-/// Returns `{ total: u32, max_len: u32 }` as a plain JS object on
+/// Returns `{ total: number, max_len: number }` as a plain JS object on
 /// success; throws a JS string on failure (manifest missing, malformed,
 /// or version-mismatched). Idempotent: calling twice for the same
 /// ring re-fetches and replaces the in-memory state.
@@ -596,7 +596,7 @@ pub async fn db_init(ring: u8, asset_dir: String) -> Result<JsValue, JsValue> {
         .map_err(|e| JsValue::from_str(&format!("manifest not UTF-8: {e}")))?;
     let dafsa = LazyRatDafsaAsync::open(text)
         .map_err(|e| JsValue::from_str(&format!("parse manifest: {e}")))?;
-    let total = dafsa.len() as u32;
+    let total = dafsa.len();
     let max_len = dafsa.manifest().max_indexed_length;
     DBS.with(|dbs| {
         dbs.borrow_mut().insert(
@@ -620,8 +620,13 @@ pub async fn db_init(ring: u8, asset_dir: String) -> Result<JsValue, JsValue> {
 /// Canonicalization mirrors `rat_enum --free`: flip to CCW if
 /// needed, then take the lex-min over rotations and the reflected
 /// rotations.
+///
+/// The id is returned as `f64` (a plain JS number, exact for every
+/// integer below 2^53) rather than a 32-bit int: ZZ12 cumulative
+/// counts cross `u32::MAX` around n=17. This matches `db_init`'s
+/// `total`, so the JS side keeps doing ordinary number arithmetic.
 #[wasm_bindgen]
-pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<u32> {
+pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<f64> {
     let state = lookup_db(ring)?;
     let canonical = closing_free_canonical_for_ring(ring, &angles)?;
     let state_for_fetch = state.clone();
@@ -631,15 +636,19 @@ pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<u32> {
         let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
-    state.dafsa.index_of(&canonical, &fetch).await
+    state.dafsa.index_of(&canonical, &fetch).await.map(|r| r as f64)
 }
 
 /// Inverse lookup: fetch the canonical rat sequence at assigned ID
 /// `id` in `ring`'s DB as a `Vec<i8>` (marshalled to JS as an
 /// `Int8Array`). Returns `None` if no DB is loaded for `ring` or
 /// `id` is out of range.
+///
+/// `id` is taken as `f64` (a plain JS number) to match
+/// [`db_id_of`]; it is an integer index, so the `as u64` truncates
+/// nothing for any value the DB can hold.
 #[wasm_bindgen]
-pub async fn db_seq_of(ring: u8, id: u32) -> Option<Vec<i8>> {
+pub async fn db_seq_of(ring: u8, id: f64) -> Option<Vec<i8>> {
     let state = lookup_db(ring)?;
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {
@@ -648,7 +657,7 @@ pub async fn db_seq_of(ring: u8, id: u32) -> Option<Vec<i8>> {
         let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
-    state.dafsa.get(id as usize, &fetch).await
+    state.dafsa.get(id as u64, &fetch).await
 }
 
 fn lookup_db(ring: u8) -> Option<Rc<DbState>> {

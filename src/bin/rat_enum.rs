@@ -565,7 +565,7 @@ fn main() {
                     step: cli.step,
                     free: cli.free,
                     target_block_bytes: cli.target_block_bytes,
-                    n_sequences: dafsa.len() as u32,
+                    n_sequences: dafsa.len() as u64,
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::StreamingPipeline,
                 };
@@ -737,7 +737,7 @@ fn main() {
                     step: cli.step,
                     free: cli.free,
                     target_block_bytes: cli.target_block_bytes,
-                    n_sequences: dafsa.len() as u32,
+                    n_sequences: dafsa.len() as u64,
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::InMemory,
                 };

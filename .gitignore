@@ -12,3 +12,7 @@ snapshots/
 .claude/*.lock
 /web/data/
 /web/ro-crate-metadata.json
+
+# Python bytecode from running the bundled dataset tools
+__pycache__/
+*.pyc
