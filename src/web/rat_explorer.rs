@@ -652,6 +652,13 @@ pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<f64> {
 /// nothing for any value the DB can hold.
 #[wasm_bindgen]
 pub async fn db_seq_of(ring: u8, id: f64) -> Option<Vec<i8>> {
+    // Reject non-finite / negative ids before the f64->u64 cast,
+    // which would otherwise saturate them to index 0 and return a
+    // wrong rat instead of `None`. (The JS UI already guards its
+    // call sites; this protects the public wasm export directly.)
+    if !(id.is_finite() && id >= 0.0) {
+        return None;
+    }
     let state = lookup_db(ring)?;
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {

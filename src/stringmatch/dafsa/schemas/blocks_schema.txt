@@ -197,10 +197,13 @@ of this block's edge array, where `next_edges_offset` is the edges
 offset of state `j+1` in the same block, or `n_edges` if `j` is the
 last state in the block.
 
-Capacity. State ids (`target`, `first_state`, `first_state_id`) are
-u32, so an asset addresses at most 2^32 ~ 4.29e9 states; sequence
-counts (`n_sequences`, every state `count`) and the edge total
-(`n_edges`) are u64 and effectively unbounded. For the reference
+Capacity. State ids (`target`, `first_state`, and a block header's
+`first_state_id`) are u32, so an asset addresses at most 2^32 ~
+4.29e9 states; sequence counts (the manifest `n_sequences`, every
+state `count`) and the manifest's `n_edges` total are u64 and
+effectively unbounded. (The per-block header `n_edges` and
+`n_states` count only that block's records and stay u32, as the
+layout table above shows.) For the reference
 ZZ12 enumeration the u32 state-id space is first reached around
 perimeter 21 -- past the point where building the (in-memory)
 automaton is feasible on commodity hardware -- so within this

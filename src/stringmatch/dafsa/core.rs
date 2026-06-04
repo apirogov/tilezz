@@ -288,10 +288,12 @@ impl Dafsa {
     /// state, the count of sequences in earlier-lex subtrees plus
     /// the empty continuation if the state itself is accepting.
     /// O(seq.len() * fanout).
-    pub fn lex_rank_of<S: AsRef<[i8]>>(&self, seq: S) -> Option<usize> {
+    pub fn lex_rank_of<S: AsRef<[i8]>>(&self, seq: S) -> Option<u64> {
         let seq = seq.as_ref();
         let mut s = 0u32;
-        let mut rank: usize = 0;
+        // u64 accumulator: a rank can exceed u32::MAX (~ZZ12 n=17),
+        // and `usize` is 32-bit on wasm32. Matches the lazy reader.
+        let mut rank: u64 = 0;
         for &c in seq {
             if self.states[s as usize].is_accept {
                 rank += 1;
@@ -300,7 +302,7 @@ impl Dafsa {
             let mut next: Option<u32> = None;
             for e in edges {
                 match e.label.cmp(&c) {
-                    std::cmp::Ordering::Less => rank += self.counts[e.target as usize],
+                    std::cmp::Ordering::Less => rank += self.counts[e.target as usize] as u64,
                     std::cmp::Ordering::Equal => {
                         next = Some(e.target);
                         break;
