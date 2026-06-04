@@ -406,17 +406,35 @@ fn dataset_identifier(p: &AssetParams) -> String {
     }
 }
 
+/// Euclidean GCD on `u8`, for the `effectiveRing = ring/gcd(step, ring)`
+/// derivation. `gcd(x, 0) = x`.
+fn gcd_u8(mut a: u8, mut b: u8) -> u8 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
 /// Structured, machine-readable parameters of an asset, rendered
 /// as a schema.org `PropertyValue` array. Used both inside the
 /// per-dataset RO-Crate's root Dataset and -- copied verbatim --
 /// inside the collection-level RO-Crate's per-dataset stubs.
 ///
-/// Keys: `ring`, `maxPerimeter`, `canonicalization`,
-/// `nSequences`, `maxIndexedLength`. `canonicalization` is a
-/// string (`"free"` or `"onesided"`); the rest are integers.
+/// Keys: `ring`, `step`, `effectiveRing`, `maxPerimeter`,
+/// `canonicalization`, `nSequences`, `maxIndexedLength`.
+/// `canonicalization` is a string (`"free"` or `"onesided"`); the
+/// rest are integers.
 fn dataset_additional_properties(p: &AssetParams, max_indexed_length: usize) -> Value {
+    // The order of the actual subring the rats live in. A `--step k` run on
+    // ZZn enumerates the order-(n/gcd(k,n)) subring; with step 1 this is just
+    // `ring`. The web explorer keys datasets on this so a ZZ14-step2 asset
+    // (the odd ring ZZ7) presents as ZZ7 rather than ZZ14.
+    let g = gcd_u8(p.step.unsigned_abs().max(1), p.ring);
+    let effective_ring = p.ring / g.max(1);
     json!([
         {"@type": "PropertyValue", "name": "ring", "value": p.ring},
+        {"@type": "PropertyValue", "name": "step", "value": p.step},
+        {"@type": "PropertyValue", "name": "effectiveRing", "value": effective_ring},
         {"@type": "PropertyValue", "name": "maxPerimeter", "value": p.max_steps},
         {
             "@type": "PropertyValue",

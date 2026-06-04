@@ -146,13 +146,61 @@ pub fn analyze(ring: u8, angles: Vec<i8>, preview: Option<i32>) -> JsValue {
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
+/// Odd rings 3/5/7/9 are not native cyclotomic rings in this crate; we
+/// present them through their even parent ZZ_{2r}. The order-`r` subring
+/// embeds in ZZ_{2r} as the all-even-turn rats, and one odd-ring turn step
+/// spans two parent steps (the parent's direction unit is half the odd
+/// ring's angle). So every geometry / canonical / DB operation runs in the
+/// audited even parent with turns scaled `x2`, and only turn *values* are
+/// halved back for display -- never the DB lookup key, which stays in
+/// parent (even) units to match the stored DAFSA. Halving is always exact:
+/// even inputs keep the snake inside the even subring, so every reported
+/// turn is even.
+///
+/// Returns `(parent_ring, scale)` for an odd ring, `None` otherwise.
+fn odd_ring_parent(ring: u8) -> Option<(u8, i8)> {
+    match ring {
+        3 => Some((6, 2)),
+        5 => Some((10, 2)),
+        7 => Some((14, 2)),
+        9 => Some((18, 2)),
+        _ => None,
+    }
+}
+
+/// Halve the displayed turn values (committed angles, angle sum, preview
+/// angle, both canonical sequences) after an odd ring was analyzed through
+/// its even parent. SVG geometry and step indices are already correct and
+/// left untouched; chirality / rotational order / achirality are
+/// unit-independent. All halved values are guaranteed even, so the integer
+/// division is exact.
+fn halve_displayed_turns(result: &mut AnalysisResult, scale: i8) {
+    let s = scale as i64;
+    for a in result.state.angles.iter_mut() {
+        *a /= scale;
+    }
+    result.state.angle_sum /= s;
+    if let Some(rat) = result.state.rat.as_mut() {
+        for a in rat.canonical_chiral.iter_mut() {
+            *a /= scale;
+        }
+        for a in rat.canonical_achiral.iter_mut() {
+            *a /= scale;
+        }
+    }
+    if let Some(p) = result.preview.as_mut() {
+        p.angle /= scale;
+    }
+}
+
 /// Pure-data analyze, used directly by tests and indirectly by the
 /// WASM wrapper. Returns an [`AnalysisResult`] with the rendered SVG
 /// and structured snake / rat metadata.
 ///
-/// `ring` must be one of {4, 8, 10, 12, 16, 20, 24, 32, 60}; any
-/// other value yields an `error` (defensive guard -- the JS layer
-/// validates the ring upfront).
+/// `ring` must be one of the native rings {4, 6, 8, 10, 12, 14, 16, 18,
+/// 20, 24, 32, 60} or an odd ring {3, 5, 7, 9} (presented via its even
+/// parent, see [`odd_ring_parent`]); any other value yields an `error`
+/// (defensive guard -- the JS layer validates the ring upfront).
 ///
 /// If the snake self-intersects partway through, we render the
 /// longest accepted prefix and record the failing step in
@@ -169,19 +217,45 @@ pub fn analyze_data(ring: u8, angles: &[i8], preview: Option<i32>) -> AnalysisRe
         };
     }
 
+    // Odd ring: scale turns into the even parent and render there with
+    // the display scale, so the SVG preview label reads in odd-ring units;
+    // then halve the structured turn values back too.
+    if let Some((parent, scale)) = odd_ring_parent(ring) {
+        let scaled: Vec<i8> = angles.iter().map(|&a| a.saturating_mul(scale)).collect();
+        let scaled_preview = preview_angle.map(|p| p.saturating_mul(scale));
+        let mut result = dispatch_ring(parent, &scaled, scaled_preview, scale);
+        halve_displayed_turns(&mut result, scale);
+        return result;
+    }
+
+    dispatch_ring(ring, angles, preview_angle, 1)
+}
+
+/// Dispatch to the concrete-ring analyzer. `display_scale` divides the
+/// angle shown on the SVG preview label so an odd ring (rendered through a
+/// scaled even parent) displays odd-native turn values; it is 1 for native
+/// rings. Geometry and all structured numeric fields stay in the analyzed
+/// ring's units -- the odd-ring caller halves those separately via
+/// [`halve_displayed_turns`].
+fn dispatch_ring(
+    ring: u8,
+    angles: &[i8],
+    preview_angle: Option<i8>,
+    display_scale: i8,
+) -> AnalysisResult {
     match ring {
-        4 => analyze_for_ring::<ZZ4>(angles, preview_angle),
-        6 => analyze_for_ring::<ZZ6>(angles, preview_angle),
-        8 => analyze_for_ring::<ZZ8>(angles, preview_angle),
-        10 => analyze_for_ring::<ZZ10>(angles, preview_angle),
-        12 => analyze_for_ring::<ZZ12>(angles, preview_angle),
-        14 => analyze_for_ring::<ZZ14>(angles, preview_angle),
-        16 => analyze_for_ring::<ZZ16>(angles, preview_angle),
-        18 => analyze_for_ring::<ZZ18>(angles, preview_angle),
-        20 => analyze_for_ring::<ZZ20>(angles, preview_angle),
-        24 => analyze_for_ring::<ZZ24>(angles, preview_angle),
-        32 => analyze_for_ring::<ZZ32>(angles, preview_angle),
-        60 => analyze_for_ring::<ZZ60>(angles, preview_angle),
+        4 => analyze_for_ring::<ZZ4>(angles, preview_angle, display_scale),
+        6 => analyze_for_ring::<ZZ6>(angles, preview_angle, display_scale),
+        8 => analyze_for_ring::<ZZ8>(angles, preview_angle, display_scale),
+        10 => analyze_for_ring::<ZZ10>(angles, preview_angle, display_scale),
+        12 => analyze_for_ring::<ZZ12>(angles, preview_angle, display_scale),
+        14 => analyze_for_ring::<ZZ14>(angles, preview_angle, display_scale),
+        16 => analyze_for_ring::<ZZ16>(angles, preview_angle, display_scale),
+        18 => analyze_for_ring::<ZZ18>(angles, preview_angle, display_scale),
+        20 => analyze_for_ring::<ZZ20>(angles, preview_angle, display_scale),
+        24 => analyze_for_ring::<ZZ24>(angles, preview_angle, display_scale),
+        32 => analyze_for_ring::<ZZ32>(angles, preview_angle, display_scale),
+        60 => analyze_for_ring::<ZZ60>(angles, preview_angle, display_scale),
         _ => AnalysisResult {
             error: Some(format!("unsupported ring: {ring}")),
             svg: empty_svg(),
@@ -199,7 +273,11 @@ enum PreviewState {
     Rejected(i8),
 }
 
-fn analyze_for_ring<R: IsRing>(angles: &[i8], preview_angle: Option<i8>) -> AnalysisResult {
+fn analyze_for_ring<R: IsRing>(
+    angles: &[i8],
+    preview_angle: Option<i8>,
+    display_scale: i8,
+) -> AnalysisResult {
     let mut snake: Snake<R> = Snake::new();
     let mut self_intersect_at: Option<usize> = None;
     for (i, &a) in angles.iter().enumerate() {
@@ -416,17 +494,28 @@ fn analyze_for_ring<R: IsRing>(angles: &[i8], preview_angle: Option<i8>) -> Anal
         // crosses, so the user can see WHY it was rejected (a
         // T-touch landing on a faraway edge can otherwise look
         // like "plenty of space").
-        if let Some(idx) = conflict_edge_idx
-            && let Some(point) = segment_intersection_f64(
-                from,
-                to,
-                committed_polyline[idx],
-                committed_polyline[idx + 1],
-            )
-        {
-            let conflict_marker =
-                MarkerStyle::filled_circle(marker_size * 1.4, Color::rgb(220, 0, 0));
-            scene.draw_points(&[point], &conflict_marker);
+        if let Some(idx) = conflict_edge_idx {
+            // Place the collision marker on the conflicting edge (which
+            // the exact engine already identified -- this is only the
+            // visual dot). A crossing or T-touch is pinned by the f64
+            // line intersection; a *collinear overlap* (the preview
+            // retraces an existing edge, so the lines are parallel and
+            // `segment_intersection_f64` returns None) falls back to the
+            // point on that edge nearest the preview's landing, so the
+            // dot always sits on real geometry.
+            let (e0, e1) = (committed_polyline[idx], committed_polyline[idx + 1]);
+            let point = segment_intersection_f64(from, to, e0, e1)
+                .unwrap_or_else(|| closest_point_on_segment(to, e0, e1));
+            // A red dot with a small yellow center -- a bullseye that
+            // reads as a distinct "collision here" target. Kept smaller
+            // than the plain RED start-point marker (marker_size * 1.4)
+            // and visually different from it (the yellow pip) so the two
+            // are never confused.
+            let conflict_outer =
+                MarkerStyle::filled_circle(marker_size * 0.8, Color::rgb(220, 0, 0));
+            let conflict_inner = MarkerStyle::filled_circle(marker_size * 0.35, Color::YELLOW);
+            scene.draw_points(&[point], &conflict_outer);
+            scene.draw_points(&[point], &conflict_inner);
         }
         // The labelled marker sits at the OUTGOING vertex (= from):
         // the angle describes the turn at that corner, not at the
@@ -435,8 +524,11 @@ fn analyze_for_ring<R: IsRing>(angles: &[i8], preview_angle: Option<i8>) -> Anal
         // and orange fills.
         let preview_marker = MarkerStyle::filled_circle(marker_size * 2.0, color);
         let label_style = TextStyle::new(marker_size * 1.6, Color::WHITE).bold();
+        // Show the angle in display units (odd rings divide by their
+        // even-parent scale); native rings use display_scale == 1.
+        let shown_angle = angle / display_scale;
         scene.draw_labeled_points(&[from], &preview_marker, &label_style, |_, _| {
-            format!("{angle}")
+            format!("{shown_angle}")
         });
     }
 
@@ -504,6 +596,24 @@ fn segment_intersection_f64(a: P64, b: P64, c: P64, d: P64) -> Option<P64> {
     let t = (rhs1 * r4 - rhs2 * r3) / det;
     let t = t.clamp(0.0, 1.0);
     Some((ax + t * r1, ay + t * r2))
+}
+
+/// The point on segment `[c, d]` closest to `p` (orthogonal projection
+/// clamped to the segment). Used to place the rejected-preview collision
+/// marker when the preview retraces a committed edge (a collinear overlap
+/// that `segment_intersection_f64` reports as parallel), so the dot still
+/// lands on the existing edge rather than being dropped.
+fn closest_point_on_segment(p: P64, c: P64, d: P64) -> P64 {
+    let (px, py) = p;
+    let (cx, cy) = c;
+    let (dx, dy) = d;
+    let (ux, uy) = (dx - cx, dy - cy);
+    let len2 = ux * ux + uy * uy;
+    if len2 < 1e-18 {
+        return c; // degenerate (zero-length) edge
+    }
+    let t = (((px - cx) * ux + (py - cy) * uy) / len2).clamp(0.0, 1.0);
+    (cx + t * ux, cy + t * uy)
 }
 
 /// Build the structured per-snake state. For closed snakes this
@@ -643,7 +753,17 @@ pub async fn db_init(ring: u8, asset_dir: String) -> Result<JsValue, JsValue> {
 #[wasm_bindgen]
 pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<f64> {
     let state = lookup_db(ring)?;
-    let canonical = closing_free_canonical_for_ring(ring, &angles)?;
+    // Odd rings: build the lookup key in the even parent (the stored DAFSA
+    // keys are in parent/even units). Scale x2, canonicalize in the parent,
+    // and do NOT halve -- the key must stay even to match the blocks.
+    let (canon_ring, canon_angles): (u8, Vec<i8>) = match odd_ring_parent(ring) {
+        Some((parent, scale)) => (
+            parent,
+            angles.iter().map(|&a| a.saturating_mul(scale)).collect(),
+        ),
+        None => (ring, angles),
+    };
+    let canonical = closing_free_canonical_for_ring(canon_ring, &canon_angles)?;
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {
         let manifest = state_for_fetch.dafsa.manifest();
@@ -683,7 +803,13 @@ pub async fn db_seq_of(ring: u8, id: f64) -> Option<Vec<i8>> {
         let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
-    state.dafsa.get(id as u64, &fetch).await
+    let seq = state.dafsa.get(id as u64, &fetch).await?;
+    // Odd rings: the stored sequence is in parent (even) units; halve it
+    // back to odd-ring units for display. Exact -- every stored turn is even.
+    Some(match odd_ring_parent(ring) {
+        Some((_, scale)) => seq.iter().map(|&a| a / scale).collect(),
+        None => seq,
+    })
 }
 
 fn lookup_db(ring: u8) -> Option<Rc<DbState>> {
@@ -804,10 +930,11 @@ mod tests {
         assert!(r.self_intersect_at.is_none());
     }
 
-    /// Unsupported ring rejected via the `error` field.
+    /// Unsupported ring rejected via the `error` field. (13 is neither a
+    /// native ring nor a presentable odd ring -- its parent ZZ26 is absent.)
     #[test]
     fn unsupported_ring_rejected() {
-        let r = analyze_data(7, &[1, 2, 3], None);
+        let r = analyze_data(13, &[1, 2, 3], None);
         assert!(r.error.as_deref().unwrap_or("").contains("unsupported"));
     }
 
@@ -843,6 +970,69 @@ mod tests {
         assert!(r.error.is_none(), "ZZ14: {:?}", r.error);
         assert!(r.state.closed, "ZZ14 regular 14-gon should close");
         assert!(r.state.rat.is_some(), "ZZ14 -> rat info");
+    }
+
+    /// Odd ring ZZ3 (presented via the even parent ZZ6): the
+    /// equilateral triangle is typed in ZZ3-native units `[1,1,1]`,
+    /// closes, and reports odd-native turns/sums -- angle sum 3 (= one
+    /// full turn in ZZ3), 3-fold symmetric, achiral, canonical `[1,1,1]`.
+    #[test]
+    fn odd_ring_zz3_triangle_is_native() {
+        let r = analyze_data(3, &[1, 1, 1], None);
+        assert!(r.error.is_none(), "ZZ3: {:?}", r.error);
+        assert!(r.state.closed, "ZZ3 triangle should close");
+        assert!(r.svg.contains("<polygon"), "closed -> <polygon>");
+        // Committed angles + angle sum are reported in ZZ3 units, not the
+        // even-parent ZZ6 units it was computed in.
+        assert_eq!(r.state.angles, vec![1, 1, 1], "angles in ZZ3 units");
+        assert_eq!(r.state.angle_sum, 3, "one full ZZ3 turn");
+        let rat = r.state.rat.expect("closed -> rat info");
+        assert_eq!(rat.rotational_order, 3, "3-fold symmetry");
+        assert!(rat.achiral, "equilateral triangle is achiral");
+        assert_eq!(rat.chirality, 1, "default orientation CCW");
+        assert_eq!(
+            rat.canonical_chiral,
+            vec![1, 1, 1],
+            "canonical in ZZ3 units"
+        );
+        assert_eq!(rat.canonical_achiral, vec![1, 1, 1]);
+    }
+
+    /// Odd ring ZZ7 (via even parent ZZ14): the regular heptagon typed
+    /// as `[1;7]` closes with angle sum 7 and 7-fold symmetry, all in
+    /// ZZ7-native units.
+    #[test]
+    fn odd_ring_zz7_heptagon_is_native() {
+        let r = analyze_data(7, &[1; 7], None);
+        assert!(r.error.is_none(), "ZZ7: {:?}", r.error);
+        assert!(r.state.closed, "ZZ7 heptagon should close");
+        assert_eq!(r.state.angle_sum, 7, "one full ZZ7 turn");
+        let rat = r.state.rat.expect("closed -> rat info");
+        assert_eq!(rat.rotational_order, 7, "7-fold symmetry");
+        assert_eq!(rat.canonical_chiral, vec![1; 7], "canonical in ZZ7 units");
+    }
+
+    /// The DB lookup key for an odd ring stays in even-parent units (it
+    /// must match the stored ZZ_{2r}-step2 DAFSA), exactly twice the
+    /// displayed odd-native canonical. This pins the two-representation
+    /// contract that `db_id_of` (key) and the info panel (display) rely on.
+    #[test]
+    fn odd_ring_db_key_is_double_display_canonical() {
+        // What the info panel shows for a ZZ7 heptagon (odd units):
+        let shown = analyze_data(7, &[1; 7], None)
+            .state
+            .rat
+            .expect("closed")
+            .canonical_achiral;
+        assert_eq!(shown, vec![1; 7]);
+        // What db_id_of builds as the lookup key: scale x2 into the
+        // parent ZZ14, canonicalize there, do NOT halve.
+        let scaled: Vec<i8> = [1i8; 7].iter().map(|&a| a * 2).collect();
+        let key = closing_free_canonical_for_ring(14, &scaled).expect("closed parent canonical");
+        assert_eq!(key, vec![2; 7], "DB key stays in even parent units");
+        // The contract: key == 2 * display.
+        let doubled: Vec<i8> = shown.iter().map(|&a| a * 2).collect();
+        assert_eq!(key, doubled);
     }
 
     /// Partial open snake: <polyline>, not closed, no rat info.
@@ -959,6 +1149,47 @@ mod tests {
         assert!(with_preview.svg.contains(">4<"));
         // Committed length is still 2 while previewing.
         assert_eq!(with_preview.state.length, 2);
+    }
+
+    /// Odd ring preview: the SVG angle label and the structured
+    /// `preview.angle` are both in odd-ring units, not the even-parent
+    /// units the geometry is computed in. Dialing 2 on a ZZ7 snake must
+    /// label `>2<` (not the parent's `>4<`).
+    #[test]
+    fn odd_ring_preview_label_is_halved() {
+        let with_preview = analyze_data(7, &[1, 1], Some(2));
+        let p = with_preview.preview.expect("preview present");
+        assert_eq!(p.angle, 2, "preview.angle in ZZ7 units");
+        assert!(with_preview.svg.contains("<text"), "preview is labelled");
+        assert!(
+            with_preview.svg.contains(">2<"),
+            "label shows odd-ring angle 2"
+        );
+        assert!(
+            !with_preview.svg.contains(">4<"),
+            "must not show the even-parent angle 4"
+        );
+    }
+
+    /// Regression: a rejected preview whose segment is *collinear* with
+    /// the conflicting edge (the preview retraces an existing edge) must
+    /// still draw the collision bullseye. `segment_intersection_f64`
+    /// returns None for collinear lines, so the marker falls back to the
+    /// nearest point on the edge. The exact engine correctly rejects this
+    /// ZZ9 case; only the dot was previously dropped.
+    /// (Reported case: ring 9, seq 0 0 2 2 1 3 -4 -2 4 1, preview 4.)
+    #[test]
+    fn collinear_rejected_preview_still_marks_collision() {
+        let r = analyze_data(9, &[0, 0, 2, 2, 1, 3, -4, -2, 4, 1], Some(4));
+        let p = r.preview.expect("preview present");
+        assert!(!p.accepted, "preview should be rejected (self-intersects)");
+        // The conflict bullseye outer ring is rgb(220,0,0) = #dc0000,
+        // distinct from the RED (#ff0000) start-point marker. Its
+        // presence proves the collision marker was drawn.
+        assert!(
+            r.svg.contains("#dc0000"),
+            "collision bullseye must be drawn even for a collinear overlap"
+        );
     }
 
     /// A rejected preview is reported with `accepted: false` and
