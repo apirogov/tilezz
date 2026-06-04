@@ -171,10 +171,13 @@ pub fn analyze_data(ring: u8, angles: &[i8], preview: Option<i32>) -> AnalysisRe
 
     match ring {
         4 => analyze_for_ring::<ZZ4>(angles, preview_angle),
+        6 => analyze_for_ring::<ZZ6>(angles, preview_angle),
         8 => analyze_for_ring::<ZZ8>(angles, preview_angle),
         10 => analyze_for_ring::<ZZ10>(angles, preview_angle),
         12 => analyze_for_ring::<ZZ12>(angles, preview_angle),
+        14 => analyze_for_ring::<ZZ14>(angles, preview_angle),
         16 => analyze_for_ring::<ZZ16>(angles, preview_angle),
+        18 => analyze_for_ring::<ZZ18>(angles, preview_angle),
         20 => analyze_for_ring::<ZZ20>(angles, preview_angle),
         24 => analyze_for_ring::<ZZ24>(angles, preview_angle),
         32 => analyze_for_ring::<ZZ32>(angles, preview_angle),
@@ -712,10 +715,13 @@ async fn fetch_url_to_bytes(url: &str) -> io::Result<Vec<u8>> {
 fn closing_free_canonical_for_ring(ring: u8, angles: &[i8]) -> Option<Vec<i8>> {
     match ring {
         4 => closing_free_canonical::<ZZ4>(angles),
+        6 => closing_free_canonical::<ZZ6>(angles),
         8 => closing_free_canonical::<ZZ8>(angles),
         10 => closing_free_canonical::<ZZ10>(angles),
         12 => closing_free_canonical::<ZZ12>(angles),
+        14 => closing_free_canonical::<ZZ14>(angles),
         16 => closing_free_canonical::<ZZ16>(angles),
+        18 => closing_free_canonical::<ZZ18>(angles),
         20 => closing_free_canonical::<ZZ20>(angles),
         24 => closing_free_canonical::<ZZ24>(angles),
         32 => closing_free_canonical::<ZZ32>(angles),
@@ -794,6 +800,26 @@ mod tests {
         assert_eq!(rat.rotational_order, 3, "3-fold symmetry");
         assert!(rat.achiral, "equilateral triangle is achiral");
         assert_eq!(rat.chirality, 1, "default orientation is CCW (+1)");
+    }
+
+    /// The rings ZZ6, ZZ14, ZZ18 were missing from the web dispatch
+    /// even though the crate implements them. Smoke-test that
+    /// `analyze` handles each: a regular polygon closes into a rat
+    /// (triangle where n/3 is integral, else the regular n-gon).
+    #[test]
+    fn newly_wired_rings_close() {
+        // ZZ6 / ZZ18: equilateral triangle (turn = n/3 each).
+        for (ring, turn) in [(6u8, 2i8), (18, 6)] {
+            let r = analyze_data(ring, &[turn, turn, turn], None);
+            assert!(r.error.is_none(), "ZZ{ring}: {:?}", r.error);
+            assert!(r.state.closed, "ZZ{ring} triangle should close");
+            assert!(r.state.rat.is_some(), "ZZ{ring} -> rat info");
+        }
+        // ZZ14: n/3 not integral, use the regular 14-gon (turn 1 each).
+        let r = analyze_data(14, &[1; 14], None);
+        assert!(r.error.is_none(), "ZZ14: {:?}", r.error);
+        assert!(r.state.closed, "ZZ14 regular 14-gon should close");
+        assert!(r.state.rat.is_some(), "ZZ14 -> rat info");
     }
 
     /// Partial open snake: <polyline>, not closed, no rat info.
