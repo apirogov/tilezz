@@ -292,7 +292,8 @@ function run() {
   // renders. The token stops a stale lookup (e.g. user typed
   // faster than the DB walked) from overwriting a newer one.
   runId += 1;
-  augmentInfoWithDbId(runId, ring, result);
+  augmentInfoWithDbId(runId, ring, result)
+    .catch((err) => console.warn('RatDB id lookup failed:', err));
 }
 let runId = 0;
 
@@ -428,6 +429,10 @@ function tryLoadDb(ring) {
     } catch (err) {
       console.warn(`RatDB ring=${ring} not loaded:`, err);
       dbMeta.set(ring, null); // explicit miss
+      // Don't cache a failed/transient load: drop the memoized
+      // attempt so re-selecting this ring retries db_init instead
+      // of staying permanently disabled for the session.
+      dbLoadAttempts.delete(ring);
       return null;
     } finally {
       setDbBusy(false);
@@ -717,9 +722,13 @@ function commitPreview() {
   if (lastResult?.state.closed) {
     // Snake rewrites the first angle when the boundary closes, so
     // resync the input from the canonical sequence the engine emits
-    // and clear the preview so the closed shape stands alone.
+    // and clear the preview so the closed shape stands alone. The
+    // programmatic value assignment fires no `input` event, so sync
+    // the share URL explicitly (otherwise ?seq= keeps the pre-
+    // closure spelling until the next interaction).
     previewAngle = null;
     anglesEl.value = formatSeq(lastResult.state.angles);
+    syncUrl();
   }
 }
 

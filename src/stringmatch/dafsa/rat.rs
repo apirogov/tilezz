@@ -183,7 +183,7 @@ impl RatDafsa {
         let prefixed = prefix(rat.as_ref());
         // Lex rank in the inner DAFSA == (length, lex) rank of the
         // raw rat -- exactly the external assigned index.
-        self.inner.lex_rank_of(&prefixed).map(|r| r as u64)
+        self.inner.lex_rank_of(&prefixed)
     }
 
     /// Set membership: does `rat` appear in this `RatDafsa`?
