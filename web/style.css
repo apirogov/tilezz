@@ -292,7 +292,47 @@ ul.hint li {
 }
 
 .ctrl-block.db-control {
-  width: 12rem;
+  /* Wide enough for an ~11-digit id (ZZ12 reaches ~1.7e9 at n=16,
+     and the field stays readable past u32 for deeper sets) plus the
+     three flanking icon buttons. */
+  width: 18rem;
+}
+#rat-id {
+  /* Keep the number field readable when the control row is tight. */
+  min-width: 7rem;
+}
+
+/* RatDB busy spinner: shown next to the "RatDB ID" label while a
+   block fetch is in flight (db_init / db_id_of / db_seq_of). A
+   random lookup walks the DAFSA and pulls several blocks serially,
+   so the first one is visibly slow -- this says "working", not
+   "stuck". */
+.db-control label {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+}
+.db-control.db-busy label::after {
+  content: "";
+  width: .8rem;
+  height: .8rem;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: .7;
+  animation: db-spin .7s linear infinite;
+}
+@keyframes db-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .db-control.db-busy label::after { animation: none; opacity: .4; }
+}
+
+/* Ring select is disabled while an angle sequence is present
+   (angles are ring-specific; clear first to switch). Show
+   not-allowed without greying it into invisibility. */
+#ring:disabled {
+  cursor: not-allowed;
+  opacity: .6;
 }
 
 /* Hide the native number spinners: desktop browsers render their own

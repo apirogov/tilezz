@@ -2,6 +2,7 @@ import init, { analyze, db_init, db_id_of, db_seq_of } from './pkg/tilezz.js';
 await init();
 
 const ringEl = document.getElementById('ring');
+const ringBlockEl = document.getElementById('ring-block');
 const anglesEl = document.getElementById('angles');
 const outEl = document.getElementById('out');
 const idEl = document.getElementById('rat-id');
@@ -10,6 +11,29 @@ const clearBtn = document.getElementById('clear-btn');
 const diceBtn = document.getElementById('dice-btn');
 const idDecBtn = document.getElementById('id-dec-btn');
 const idIncBtn = document.getElementById('id-inc-btn');
+
+// Angles are ring-specific, so the ring can only be changed while
+// the sequence is empty (guards against silently discarding a rat
+// you built). Disable the ring select whenever angles are present;
+// the Clear button re-enables it.
+function syncRingGuard() {
+  const locked = anglesEl.value.trim() !== '';
+  ringEl.disabled = locked;
+  ringBlockEl.dataset.tooltip = locked
+    ? 'clear the sequence to change ring'
+    : 'choose the cyclotomic ring';
+}
+
+// Busy indicator for RatDB block fetches (db_init / db_id_of /
+// db_seq_of). A random lookup on a deep dataset walks the DAFSA
+// root-to-leaf, fetching several ~300 KB blocks serially, so the
+// first one is visibly slow -- show a spinner so it doesn't read as
+// frozen. Counted so overlapping lookups don't clear it early.
+let dbBusyCount = 0;
+function setDbBusy(on) {
+  dbBusyCount = Math.max(0, dbBusyCount + (on ? 1 : -1));
+  dbControlEl.classList.toggle('db-busy', dbBusyCount > 0);
+}
 
 let previewAngle = null; // null = no preview; integer = active preview
 
@@ -162,14 +186,19 @@ function renderInfo(result) {
     }
     html += row('reflection symmetry', reflection);
 
-    const chiralStr = formatSeq(r.canonical_chiral);
-    const achiralStr = formatSeq(r.canonical_achiral);
-    html += row('canonical chiral sequence',
-      `<span class="loadable" data-load-angles="${chiralStr}" `
-      + `title="click to load this sequence">${chiralStr}</span>`);
-    html += row('canonical achiral sequence',
-      `<span class="loadable" data-load-angles="${achiralStr}" `
-      + `title="click to load this sequence">${achiralStr}</span>`);
+    // Enumeration terminology: the rotation-only canonical form is
+    // the "one sided" representative; the rotation+reflection
+    // (dihedral) one is the "free" representative -- the form the
+    // RatDB indexes. (The symmetry rows above keep the geometric
+    // chiral/achiral wording, which is the right term there.)
+    const oneSidedStr = formatSeq(r.canonical_chiral);
+    const freeStr = formatSeq(r.canonical_achiral);
+    html += row('one sided canonical sequence',
+      `<span class="loadable" data-load-angles="${oneSidedStr}" `
+      + `title="click to load this sequence">${oneSidedStr}</span>`);
+    html += row('free canonical sequence',
+      `<span class="loadable" data-load-angles="${freeStr}" `
+      + `title="click to load this sequence">${freeStr}</span>`);
   } else if (s.length === 0) {
     html += row('state', 'empty');
   } else {
@@ -257,6 +286,7 @@ function run() {
     ? errorResult(parsed.error)
     : analyze(ring, parsed.angles, previewAngle);
   applyResult(result);
+  syncRingGuard();
   syncUrl();
   // RatDB row in the info panel: appended async after the SVG
   // renders. The token stops a stale lookup (e.g. user typed
@@ -298,7 +328,8 @@ async function augmentInfoWithDbId(myRunId, ring, result) {
     const tip = `polygon perimeter ${tokenCount} exceeds DB maximum ${meta.max_len}`;
     valueHtml = `<span class="db-na" data-tooltip="${tip}">n/a</span>`;
   } else {
-    const id = await db_id_of(ring, new Int8Array(committed));
+    setDbBusy(true);
+    const id = await db_id_of(ring, new Int8Array(committed)).finally(() => setDbBusy(false));
     if (myRunId !== runId) return; // stale; a newer run replaced us
     if (id === undefined || id === null) {
       // Within-envelope miss: the polygon's perimeter is <= the
@@ -338,7 +369,8 @@ async function augmentInfoWithDbId(myRunId, ring, result) {
       // Fetch the canonical so the ID can be a self-loading link.
       // Both calls hit the same DAFSA so the second one is mostly
       // cache-warm.
-      const canonical = await db_seq_of(ring, id);
+      setDbBusy(true);
+      const canonical = await db_seq_of(ring, id).finally(() => setDbBusy(false));
       if (myRunId !== runId) return;
       if (canonical && canonical.length > 0) {
         const canonicalStr = formatSeq(canonical);
@@ -387,6 +419,7 @@ function tryLoadDb(ring) {
   }
   const assetDir = ds.dir;
   const promise = (async () => {
+    setDbBusy(true);
     try {
       const meta = await db_init(ring, assetDir);
       // meta is a plain object from JS side: { total, max_len }
@@ -397,6 +430,7 @@ function tryLoadDb(ring) {
       dbMeta.set(ring, null); // explicit miss
       return null;
     } finally {
+      setDbBusy(false);
       updateDbUi(parseInt(ringEl.value, 10));
     }
   })();
@@ -437,7 +471,7 @@ function updateDbUi(ring) {
     idIncBtn.disabled = false;
     idEl.max = String(meta.total - 1);
     dbControlEl.dataset.tooltip =
-      `RatDB: ${meta.total.toLocaleString()} rats, max length n = ${meta.max_len}`;
+      `RatDB: ${meta.total.toLocaleString()} free rats, max length n = ${meta.max_len}`;
   }
 }
 
@@ -448,7 +482,8 @@ idEl.addEventListener('change', async () => {
   if (raw === '') return;
   const id = parseInt(raw, 10);
   if (!Number.isFinite(id) || id < 0) return;
-  const seq = await db_seq_of(ring, id);
+  setDbBusy(true);
+  const seq = await db_seq_of(ring, id).finally(() => setDbBusy(false));
   if (seq && seq.length > 0) {
     anglesEl.value = formatSeq(seq);
     previewAngle = null;
@@ -539,7 +574,8 @@ if (
 ) {
   const id = parseInt(initialParams.get('id'), 10);
   if (Number.isFinite(id) && id >= 0) {
-    const seq = await db_seq_of(initialRing, id);
+    setDbBusy(true);
+    const seq = await db_seq_of(initialRing, id).finally(() => setDbBusy(false));
     if (seq && seq.length > 0) anglesEl.value = formatSeq(seq);
   }
 }
@@ -604,7 +640,8 @@ diceBtn.addEventListener('click', async () => {
   if (!meta || meta.total === 0) return;
   const id = Math.floor(Math.random() * meta.total);
   idEl.value = String(id);
-  const seq = await db_seq_of(ring, id);
+  setDbBusy(true);
+  const seq = await db_seq_of(ring, id).finally(() => setDbBusy(false));
   if (seq && seq.length > 0) {
     anglesEl.value = formatSeq(seq);
     previewAngle = null;
@@ -616,6 +653,10 @@ diceBtn.addEventListener('click', async () => {
 ringEl.addEventListener('change', async () => {
   previewAngle = null;
   const ring = parseInt(ringEl.value, 10);
+  // Drop focus so the select doesn't keep the keyboard's arrow
+  // keys (option cycling) and the user can immediately build with
+  // arrows. The guard only lets us get here with empty angles.
+  ringEl.blur();
   updateDbUi(ring);
   await tryLoadDb(ring);
   run();
@@ -646,9 +687,57 @@ document.addEventListener('click', (e) => {
   anglesEl.focus();
 });
 
-// Document-level keyboard: arrows always drive the preview, even
-// when the angle input has focus. We sacrifice cursor navigation
-// inside the input (use mouse + typing to edit mid-sequence).
+// Commit the active preview angle into the committed sequence, or
+// pop the last committed angle. Extracted so BOTH the keyboard
+// handler and the touch handler can invoke them directly: a touch
+// gesture is an unambiguous build action and must work regardless
+// of which control has focus. (Previously touchend re-dispatched a
+// synthetic `keydown`, which the focus gate below then swallowed
+// whenever an input/select kept focus -- e.g. right after the
+// Clear button or a ring switch focused that control. That was the
+// "rotate but can't confirm, stuck" bug.)
+function commitPreview() {
+  // Closed rats can't be extended -- snake.add rejects it. Pop the
+  // closing edge with popLast() first.
+  if (lastResult?.state.closed) return;
+  // No active preview -> treat the commit as "extend with angle 0
+  // (straight)". Run once so lastResult reflects the angle-0 attempt
+  // before the rejection check below reads it.
+  if (previewAngle === null) {
+    previewAngle = 0;
+    run();
+  }
+  // Refuse to commit a preview the engine rejected (would
+  // self-intersect); the orange overlay still shows what was tried.
+  if (lastResult?.preview && !lastResult.preview.accepted) return;
+  const t = anglesEl.value.trimEnd();
+  anglesEl.value = (t.length === 0 ? '' : t + ' ') + previewAngle;
+  previewAngle = 0;
+  run();
+  if (lastResult?.state.closed) {
+    // Snake rewrites the first angle when the boundary closes, so
+    // resync the input from the canonical sequence the engine emits
+    // and clear the preview so the closed shape stands alone.
+    previewAngle = null;
+    anglesEl.value = formatSeq(lastResult.state.angles);
+  }
+}
+
+// Pop the last committed angle. Returns true if it popped anything.
+function popLast() {
+  const tokens = anglesEl.value.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  tokens.pop();
+  anglesEl.value = tokens.join(' ');
+  previewAngle = null;
+  run();
+  return true;
+}
+
+// Document-level keyboard: arrows drive the preview when no text
+// input / select owns the keys (those keep their native arrow UX:
+// cursor nav, value step, option cycle). Up/Down commit/pop via the
+// shared helpers above; touch uses the same helpers directly.
 document.addEventListener('keydown', (e) => {
   // Inputs / selects own the arrow keys for their own UX (cursor
   // navigation in text inputs, value step in number inputs, option
@@ -686,62 +775,13 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       run();
       break;
-    case 'ArrowUp': {
-      // Closed rats can't be extended -- snake.add rejects it at
-      // the type level. Pop the closing edge with Down first.
-      if (lastResult?.state.closed) {
-        e.preventDefault();
-        break;
-      }
-      // Up always tries to add an edge: with no active preview,
-      // treat the press as "extend with angle 0 (straight)" rather
-      // than a no-op. We do an extra `run()` so lastResult reflects
-      // the angle-0 attempt before we read it for the rejection
-      // check below.
-      if (previewAngle === null) {
-        previewAngle = 0;
-        run();
-      }
-      // Refuse to commit a preview the engine rejected (would
-      // self-intersect). The rendered overlay still shows the
-      // candidate edge in orange so the user sees what they tried.
-      if (lastResult?.preview && !lastResult.preview.accepted) {
-        e.preventDefault();
-        break;
-      }
-      // Commit the preview angle into the input, then immediately
-      // arm the next preview at 0 -- unless the commit just closed
-      // the snake into a rat (in which case clear the preview so
-      // the closed shape stands alone until the user pops the
-      // closing edge with Down). Rust suppresses the preview
-      // overlay on closed snakes, so the single render below is
-      // already correct; we only need to update the JS state.
-      const t = anglesEl.value.trimEnd();
-      anglesEl.value = (t.length === 0 ? '' : t + ' ') + previewAngle;
-      previewAngle = 0;
+    case 'ArrowUp':
       e.preventDefault();
-      run();
-      if (lastResult?.state.closed) {
-        previewAngle = null;
-        // Snake rewrites the first angle when the boundary closes,
-        // so the committed angle sequence may differ from what the
-        // user typed. Resync the input from the canonical sequence
-        // the engine emits.
-        anglesEl.value = formatSeq(lastResult.state.angles);
-      }
+      commitPreview();
       break;
-    }
-    case 'ArrowDown': {
-      const tokens = anglesEl.value.trim().split(/\s+/).filter(Boolean);
-      if (tokens.length > 0) {
-        tokens.pop();
-        anglesEl.value = tokens.join(' ');
-        previewAngle = null;
-        e.preventDefault();
-        run();
-      }
+    case 'ArrowDown':
+      if (popLast()) e.preventDefault();
       break;
-    }
     case 'Escape':
       if (previewAngle !== null) {
         previewAngle = null;
@@ -841,9 +881,9 @@ document.addEventListener('touchend', (e) => {
   const axis = touchState.axis;
   touchState = null;
   if (axis === 'vertical' && Math.abs(dy) >= COMMIT_THRESHOLD_PX) {
-    document.dispatchEvent(new KeyboardEvent('keydown', {
-      key: dy > 0 ? 'ArrowDown' : 'ArrowUp',
-    }));
+    // Call the build helpers directly rather than re-dispatching a
+    // keydown: a gesture must commit/pop regardless of focus.
+    if (dy > 0) popLast(); else commitPreview();
   }
 }, { passive: true });
 
