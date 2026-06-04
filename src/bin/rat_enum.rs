@@ -1523,10 +1523,8 @@ mod opt_correctness_tests {
     /// and an independent recompute at submission time (see
     /// docs/oeis-A316200-correction for the recompute methodology).
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "release-only: ZZ12 n=11 unpruned baseline + n=12 pinned, ~1-3 min release"
-    )]
+    #[ignore = "opt-in (cargo test -- --include-ignored): ~4 min; pre-submission / thorough CI \
+                guard, not part of the default debug or release suite"]
     fn zz12_extension_frontier_guard() {
         // Prune-invariance at n=11 (optional prunes on vs off).
         let none = build_prunes(12, 11, false, false);
