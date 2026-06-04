@@ -84,7 +84,10 @@ async function loadAvailableDatasets() {
     for (const p of entity.additionalProperty || []) {
       props[p.name] = p.value;
     }
-    const ring = props.ring;
+    // Key on the effective subring order: a `--step k` asset (e.g. the
+    // odd ring ZZ7, computed as ZZ14 step-2) advertises effectiveRing so
+    // it presents as that ring. Falls back to `ring` for plain step-1 sets.
+    const ring = props.effectiveRing ?? props.ring;
     if (!Number.isFinite(ring)) continue;
     const ds = {
       dir: id.replace(/\/$/, ''),
@@ -104,13 +107,19 @@ async function loadAvailableDatasets() {
 }
 
 // ZZn angle alphabet: turn by k * (2*pi / n) for integer k with
-// |k| < n/2. The endpoints +/- n/2 are excluded (a 180-degree turn
-// would fold the polygon back on itself).
+// |k| < n/2. Even rings exclude the endpoints +/- n/2 (a 180-degree
+// turn would fold the polygon back on itself). Odd rings (3/5/7/9,
+// presented via their even parent) have no exact 180-degree turn, so
+// the full |k| <= (n-1)/2 range is valid.
 function currentRange() {
   const n = parseInt(ringEl.value, 10);
-  if (!Number.isFinite(n) || n < 4 || n % 2 !== 0) return [0, 0];
-  const hturn = n / 2;
-  return [-(hturn - 1), hturn - 1];
+  if (!Number.isFinite(n) || n < 3) return [0, 0];
+  if (n % 2 === 0) {
+    const hturn = n / 2;
+    return [-(hturn - 1), hturn - 1];
+  }
+  const h = (n - 1) / 2;
+  return [-h, h];
 }
 
 // Apply a fresh `analyze(...)` result by updating in place rather

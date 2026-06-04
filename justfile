@@ -7,18 +7,22 @@ default: dev
 wasm:
     wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer
 
-# Generate the small local test dataset the web app loads at
-# startup, plus the top-level RO-Crate that lists it. Mirrors the
-# Pages workflow: ZZ12 free up to n=10 (~50 KB, a few seconds to
-# build). Re-run after asset-format changes; otherwise once per
-# checkout is enough.
+# Generate the small local test datasets the web app loads at
+# startup, plus the top-level RO-Crate that lists them. Mirrors the
+# Pages workflow: ZZ12 free up to n=10, plus ZZ7 (the odd ring,
+# computed as ZZ14 step-2; effectiveRing 7) as an end-to-end test of
+# multi-dataset support and odd-ring presentation. Re-run after
+# asset-format changes; otherwise once per checkout is enough.
 data:
     cargo build --release --bin rat_enum --bin build_web_rocrate --features cli,rat_explorer
-    rm -rf web/data/zz12_n10_free
+    rm -rf web/data/zz12_n10_free web/data/zz7_n10_free
     ./target/release/rat_enum --ring 12 -n 10 --free \
         --mode dafsa-blocks --threads 0 \
         --oeis-a-number A316192 \
         -o web/data/zz12_n10_free
+    ./target/release/rat_enum --ring 14 --step 2 -n 10 --free \
+        --mode dafsa-blocks --threads 0 \
+        -o web/data/zz7_n10_free
     ./target/release/build_web_rocrate --web-dir web/
 
 # Serve web/ via Python's stdlib http server. Open the printed URL.
