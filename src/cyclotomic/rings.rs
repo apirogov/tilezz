@@ -2742,4 +2742,51 @@ mod tests {
         let p: ZZ12 = zz_units_sum();
         assert!(p.is_complex());
     }
+
+    /// Independent cross-check of ZZ14's `cell_floor_exact`, the one
+    /// blessed ring whose Re/Im decomposition coefficients (`m0..m2`,
+    /// `n0..n2`) are hand-inlined rather than driven by the
+    /// `RE_DECOMP`/`IM_DECOMP` tables, and which has no step-subset
+    /// reduction to an OEIS-pinned ring. A miswired coefficient would
+    /// make the exact refinement converge to the wrong cell.
+    ///
+    /// For random points that sit comfortably OFF a cell boundary the
+    /// f64 floor of `complex64()` is exact and fully independent of
+    /// the hand-derived integer path, so it pins the coefficients. We
+    /// skip near-boundary points (where f64 is the unreliable one --
+    /// that measure-zero set is exactly why ZZ14 overrides to exact).
+    #[test]
+    fn zz14_cell_floor_exact_matches_f64_off_boundary() {
+        use crate::cyclotomic::{CellFloor, SymNum};
+        let mut seed: u64 = 0x9E3779B97F4A7C15;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut checked = 0u32;
+        for _ in 0..6_000 {
+            // Modest coefficients (range comparable to enumeration
+            // lattice points); large enough to exercise all six basis
+            // components in the m/n combinations.
+            let coeffs: [i64; 6] = std::array::from_fn(|_| (next() % 41) as i64 - 20);
+            let z = ZZ14::from_int_coeffs(coeffs);
+            let c = z.complex64();
+            let re_frac = c.re - c.re.floor();
+            let im_frac = c.im - c.im.floor();
+            // f64 is only trustworthy away from the half-open cell edges.
+            if re_frac < 1e-6 || re_frac > 1.0 - 1e-6 || im_frac < 1e-6 || im_frac > 1.0 - 1e-6 {
+                continue;
+            }
+            assert_eq!(
+                z.cell_floor_exact(),
+                (c.re.floor() as i64, c.im.floor() as i64),
+                "ZZ14 cell_floor_exact disagrees with f64 off-boundary for coeffs {coeffs:?} \
+                 -- a miswired Re/Im decomposition coefficient",
+            );
+            checked += 1;
+        }
+        assert!(checked > 2_000, "too few off-boundary samples ({checked})");
+    }
 }
