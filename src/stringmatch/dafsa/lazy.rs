@@ -99,7 +99,7 @@ pub struct BlockManifest {
     /// cover states 1..n_states; state 0 lives in `root`.
     pub n_states: u32,
     /// Total DAFSA edges, including the root's edges.
-    pub n_edges: u32,
+    pub n_edges: u64,
     /// Number of accepted sequences (rats).
     pub n_sequences: u64,
     /// Maximum rat length covered by the asset (= the largest
@@ -1088,8 +1088,25 @@ impl RatDafsa {
     pub fn write_blocks(&self, dir: &std::path::Path, target_block_bytes: u32) -> io::Result<()> {
         assert!(target_block_bytes >= 1, "target_block_bytes must be >= 1");
         let dafsa = self.inner();
-        let n_states = dafsa.raw_n_states() as u32;
-        let n_edges = dafsa.raw_n_edges() as u32;
+        let n_states_usize = dafsa.raw_n_states();
+        let n_edges_usize = dafsa.raw_n_edges();
+        // Wire state ids (`target`, `first_state`) are u32, so an
+        // asset can address at most u32::MAX states. For ZZ12 that's
+        // reached around perimeter 21 -- past the commodity-hardware
+        // build-RAM ceiling anyway. Refuse loudly rather than
+        // silently truncating ids into a corrupt asset. `n_edges` is
+        // a u64 metadata total (no addressing role), so it never
+        // needs this guard.
+        if n_states_usize > u32::MAX as usize {
+            return Err(io::Error::other(format!(
+                "DAFSA has {n_states_usize} states, exceeding the u32 wire \
+                 state-id capacity ({}); this perimeter is beyond the block \
+                 format's range and would require a wider-id revision.",
+                u32::MAX
+            )));
+        }
+        let n_states = n_states_usize as u32; // wire/loop id width
+        let n_edges = n_edges_usize as u64; // manifest total
         let counts = dafsa.raw_counts();
         let n_sequences = counts.first().copied().unwrap_or(0) as u64;
 
@@ -1104,7 +1121,7 @@ impl RatDafsa {
         let root_edge_hi = if n_states > 1 {
             edges_start[1] as usize
         } else {
-            n_edges as usize
+            n_edges_usize
         };
         let root_edges_list: Vec<RootEdge> = (root_edge_lo..root_edge_hi)
             .map(|i| RootEdge {
@@ -1140,7 +1157,7 @@ impl RatDafsa {
         for state in 1..n_states {
             let global = state as usize;
             let next_edge_offset = if global + 1 == n_states as usize {
-                n_edges as usize
+                n_edges_usize
             } else {
                 edges_start[global + 1] as usize
             };
@@ -1840,6 +1857,7 @@ mod tests {
     #[test]
     fn manifest_n_sequences_beyond_u32() {
         const BIG: u64 = 5_000_000_000; // > u32::MAX (4_294_967_295)
+        const BIG_EDGES: u64 = 6_000_000_000; // n_edges also crosses u32 (~n=20)
         let manifest = BlockManifest {
             format: MANIFEST_FORMAT.to_string(),
             version: MANIFEST_VERSION,
@@ -1848,7 +1866,7 @@ mod tests {
             block_version: BLOCK_FORMAT_VERSION,
             target_block_bytes: 1024,
             n_states: 3,
-            n_edges: 2,
+            n_edges: BIG_EDGES,
             n_sequences: BIG,
             max_indexed_length: 1,
             root: RootState {
@@ -1866,6 +1884,7 @@ mod tests {
         let json = serde_json::to_string(&manifest).unwrap();
         let back: BlockManifest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.n_sequences, BIG);
+        assert_eq!(back.n_edges, BIG_EDGES);
 
         let unused = |_: u32| -> io::Result<Vec<u8>> {
             Err(io::Error::other("fetch should never be called"))
