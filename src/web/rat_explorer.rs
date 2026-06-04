@@ -525,7 +525,11 @@ fn snake_state<R: IsRing>(snake: &Snake<R>) -> SnakeState {
         // reverse-complement of its CCW spelling (1,1,1,1) -- the
         // SAME rat -- so both must show the same canonical CCW form
         // and match the RatDB id (which db_id_of also CCW-normalizes).
-        let rat = if rat.chirality() >= 0 { rat } else { rat.reversed() };
+        let rat = if rat.chirality() >= 0 {
+            rat
+        } else {
+            rat.reversed()
+        };
         let rotational_order = repetition_factor(rat.seq()) as u32;
         let chiral_canon = rat.clone().canonical();
         let mirror_canon = rat.reflected().canonical();
@@ -647,7 +651,11 @@ pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<f64> {
         let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
         async move { fetch_url_to_bytes(&url).await }
     };
-    state.dafsa.index_of(&canonical, &fetch).await.map(|r| r as f64)
+    state
+        .dafsa
+        .index_of(&canonical, &fetch)
+        .await
+        .map(|r| r as f64)
 }
 
 /// Inverse lookup: fetch the canonical rat sequence at assigned ID
@@ -879,10 +887,19 @@ mod tests {
     /// only the reported `chirality` (= input orientation) differs.
     #[test]
     fn cw_input_shows_ccw_canonical() {
-        let ccw = analyze_data(4, &[1, 1, 1, 1], None).state.rat.expect("closed");
-        let cw = analyze_data(4, &[-1, -1, -1, -1], None).state.rat.expect("closed");
+        let ccw = analyze_data(4, &[1, 1, 1, 1], None)
+            .state
+            .rat
+            .expect("closed");
+        let cw = analyze_data(4, &[-1, -1, -1, -1], None)
+            .state
+            .rat
+            .expect("closed");
         assert_eq!(ccw.chirality, 1, "1,1,1,1 is CCW");
-        assert_eq!(cw.chirality, -1, "-1,-1,-1,-1 is CW (input orientation reported)");
+        assert_eq!(
+            cw.chirality, -1,
+            "-1,-1,-1,-1 is CW (input orientation reported)"
+        );
         // Canonical forms are CCW-normalized -> identical for both spellings.
         assert_eq!(cw.canonical_chiral, vec![1, 1, 1, 1]);
         assert_eq!(cw.canonical_achiral, vec![1, 1, 1, 1]);

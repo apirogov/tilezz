@@ -77,6 +77,12 @@ const VERIFY_SHA256_PY: &str = include_str!("extras/verify_sha256.py");
 /// step of the publishing checklist (see MAINTENANCE.md).
 const COUNT_BY_LENGTH_PY: &str = include_str!("extras/count_by_length.py");
 
+/// Standalone Python verifier for the `variableMeasured` sub-family
+/// sequences: recomputes free / oneSided / achiral / rotationSymmetric
+/// / symmetric / subring / coset from the DAFSA and checks them
+/// against what the writer emitted into the RO-Crate.
+const VERIFY_COUNTS_PY: &str = include_str!("extras/verify_counts.py");
+
 /// How the dataset was produced. Determines what `reproduce.sh`
 /// emits (one-step in-memory build vs. three-stage streaming
 /// pipeline) and what the `CreateAction.description` records.
@@ -345,6 +351,10 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
             "count_by_length.py (Python 3 per-length counter)",
             "Standalone Python 3 script (stdlib + sibling decode.py) that prints the number of stored sequences per exact perimeter length, one `<length> <count>` line each -- the OEIS-style terms this asset realises. Reads the counts off the DAFSA's rank index without decoding. Run as `python3 tools/count_by_length.py`.",
         ),
+        "tools/verify_counts.py" => (
+            "verify_counts.py (Python 3 sub-family verifier)",
+            "Standalone Python 3 script (stdlib + sibling decode.py) that re-derives the per-perimeter sub-family sequences (free, oneSided, achiral, rotationSymmetric, symmetric, subring, coset) from the DAFSA and checks them against the `variableMeasured` block in ro-crate-metadata.json. Run as `python3 tools/verify_counts.py`; exits 0 if all match, 1 on mismatch.",
+        ),
         "README.md" => (
             "README.md",
             "Human-readable entry point: dataset overview, author and copyright notice, CC-BY-SA 4.0 license summary, contents map, reproduction recipe (repo URL, exact commit, CLI invocation), and a SHA-256 verification snippet.",
@@ -404,7 +414,7 @@ fn dataset_identifier(p: &AssetParams) -> String {
 /// Keys: `ring`, `maxPerimeter`, `canonicalization`,
 /// `nSequences`, `maxIndexedLength`. `canonicalization` is a
 /// string (`"free"` or `"onesided"`); the rest are integers.
-fn dataset_additional_properties(p: &AssetParams) -> Value {
+fn dataset_additional_properties(p: &AssetParams, max_indexed_length: usize) -> Value {
     json!([
         {"@type": "PropertyValue", "name": "ring", "value": p.ring},
         {"@type": "PropertyValue", "name": "maxPerimeter", "value": p.max_steps},
@@ -414,10 +424,12 @@ fn dataset_additional_properties(p: &AssetParams) -> Value {
             "value": if p.free { "free" } else { "onesided" },
         },
         {"@type": "PropertyValue", "name": "nSequences", "value": p.n_sequences},
-        // For the current enumeration shape, the maximum indexed
-        // rat length equals max_steps (every length up to that
-        // bound is present in the asset).
-        {"@type": "PropertyValue", "name": "maxIndexedLength", "value": p.max_steps},
+        // The deepest perimeter that actually closes a polygon. Usually
+        // equals maxPerimeter, but can be smaller when the top perimeter
+        // admits no closing polygon (e.g. odd perimeters on an
+        // even-perimeter-only ring), so derive it from the data rather
+        // than from max_steps. Matches the block manifest.
+        {"@type": "PropertyValue", "name": "maxIndexedLength", "value": max_indexed_length},
     ])
 }
 
@@ -428,7 +440,148 @@ fn dataset_additional_properties(p: &AssetParams) -> Value {
 /// Must be called AFTER `RatDafsa::write_blocks` and AFTER the
 /// schemas have been copied into `dir/schemas/` (see
 /// [`copy_schemas`]).
-pub fn write_ro_crate(dir: &Path, p: &AssetParams) -> io::Result<()> {
+/// Per-exact-perimeter counts of the sub-families derivable from a
+/// free DAFSA by filtering/bucketing one rat at a time. Emitted into
+/// the RO-Crate as `variableMeasured` so each dataset self-documents
+/// the integer sequences it realises; re-derived and checked by
+/// `tools/verify_counts.py`.
+#[derive(Default)]
+pub struct SequenceCounts {
+    free: BTreeMap<usize, u64>,
+    subring: BTreeMap<usize, u64>,
+    coset: BTreeMap<usize, u64>,
+    achiral: BTreeMap<usize, u64>,
+    rotation_symmetric: BTreeMap<usize, u64>,
+    symmetric: BTreeMap<usize, u64>,
+}
+
+fn rot_min(t: &[i8]) -> Vec<i8> {
+    let n = t.len();
+    (0..n)
+        .map(|i| {
+            let mut r = Vec::with_capacity(n);
+            r.extend_from_slice(&t[i..]);
+            r.extend_from_slice(&t[..i]);
+            r
+        })
+        .min()
+        .unwrap_or_default()
+}
+
+impl SequenceCounts {
+    /// Bucket a stream of rats (angle sequences). Streaming, O(1)
+    /// memory beyond the count maps.
+    pub fn from_rats<I: IntoIterator<Item = Vec<i8>>>(rats: I) -> Self {
+        let mut c = Self::default();
+        for t in rats {
+            let l = t.len();
+            *c.free.entry(l).or_default() += 1;
+            if t.iter().all(|a| a % 2 == 0) {
+                *c.subring.entry(l).or_default() += 1;
+            }
+            if t.iter().all(|a| a % 2 != 0) {
+                *c.coset.entry(l).or_default() += 1;
+            }
+            // Achiral: the polygon equals its mirror image. The
+            // stored rep is free-canonical; it is achiral iff its
+            // reverse (the orientation-preserving mirror) is in the
+            // same rotation class -- i.e. their rotation-minima match.
+            let mut rev = t.clone();
+            rev.reverse();
+            let achiral = rot_min(&t) == rot_min(&rev);
+            // Rotationally symmetric: some nontrivial rotation fixes it.
+            let rot_sym = (1..l).any(|d| t[d..].iter().chain(&t[..d]).eq(t.iter()));
+            if achiral {
+                *c.achiral.entry(l).or_default() += 1;
+            }
+            if rot_sym {
+                *c.rotation_symmetric.entry(l).or_default() += 1;
+            }
+            if achiral || rot_sym {
+                *c.symmetric.entry(l).or_default() += 1;
+            }
+        }
+        c
+    }
+
+    /// Render one family as an OEIS-`%S`-style comma-separated string
+    /// indexed by perimeter `1..=max_perim` (0 where none close).
+    fn series(map: &BTreeMap<usize, u64>, max_perim: usize) -> String {
+        (1..=max_perim)
+            .map(|n| map.get(&n).copied().unwrap_or(0).to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The `variableMeasured` JSON array: one schema.org `PropertyValue`
+    /// per sub-family, value an ordered perimeter-indexed string.
+    ///
+    /// Series are sized to the deepest perimeter that actually closes a
+    /// polygon (the max `free` key), which equals the block manifest's
+    /// `max_indexed_length`. This keeps the emitted strings byte-identical
+    /// to what `tools/verify_counts.py` re-derives from the same blocks;
+    /// sizing to the asset's `max_steps` instead would append spurious
+    /// trailing zeros whenever the top perimeter has no closing polygon
+    /// (e.g. odd `n` on an even-perimeter-only ring), making the verifier
+    /// report a false mismatch.
+    fn variable_measured(&self) -> Value {
+        let max_perim = self.free.keys().next_back().copied().unwrap_or(0);
+        let one_sided: BTreeMap<usize, u64> = (1..=max_perim)
+            .filter_map(|n| {
+                let f = self.free.get(&n).copied().unwrap_or(0);
+                if f == 0 {
+                    return None;
+                }
+                let a = self.achiral.get(&n).copied().unwrap_or(0);
+                Some((n, 2 * f - a))
+            })
+            .collect();
+        let pv = |name: &str, map: &BTreeMap<usize, u64>, desc: &str| {
+            json!({
+                "@type": "PropertyValue",
+                "name": name,
+                "unitText": "polygons",
+                "value": Self::series(map, max_perim),
+                "description": desc,
+            })
+        };
+        json!([
+            pv(
+                "free",
+                &self.free,
+                "Self-avoiding polygons by exact perimeter (index = perimeter, from 1); the base count, up to rotation and reflection."
+            ),
+            pv(
+                "oneSided",
+                &one_sided,
+                "Up to rotation only; mirror images counted as distinct (= 2*free - achiral)."
+            ),
+            pv("achiral", &self.achiral, "Equal to its own mirror image."),
+            pv(
+                "rotationSymmetric",
+                &self.rotation_symmetric,
+                "Repetition factor > 1 (nontrivial rotational symmetry)."
+            ),
+            pv(
+                "symmetric",
+                &self.symmetric,
+                "Has a nontrivial symmetry: achiral OR rotationSymmetric."
+            ),
+            pv(
+                "subring",
+                &self.subring,
+                "All turns even -- the polygons of the order-n/2 sub-ring."
+            ),
+            pv(
+                "coset",
+                &self.coset,
+                "All turns odd -- no straight segments; even perimeter only."
+            ),
+        ])
+    }
+}
+
+pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> io::Result<()> {
     let files = snapshot_dir(dir)?;
 
     // Dataset hasPart lists every File entity in lex order.
@@ -491,7 +644,19 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams) -> io::Result<()> {
     // hosted page copies this array verbatim into its hasPart stubs
     // so the JS explorer can drive off a single fetch without
     // string-parsing identifiers.
-    root.insert("additionalProperty", dataset_additional_properties(p));
+    let max_indexed_length = counts.free.keys().next_back().copied().unwrap_or(0);
+    root.insert(
+        "additionalProperty",
+        dataset_additional_properties(p, max_indexed_length),
+    );
+    // The integer sequences this dataset realises, one schema.org
+    // PropertyValue per sub-family (free / oneSided / achiral /
+    // rotationSymmetric / symmetric / subring / coset), values as
+    // ordered perimeter-indexed strings. Kept out of
+    // `additionalProperty` (which the collection crate copies to the
+    // web stub) so it doesn't bloat that; re-derived and verified by
+    // `tools/verify_counts.py`.
+    root.insert("variableMeasured", counts.variable_measured());
     // Author(s) -- the Person(s) credited under the CC-BY-SA
     // attribution clause. Distinct from `instrument` on the
     // CreateAction (= the rat_enum tool).
@@ -667,6 +832,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     std::fs::write(tools.join("decode.py"), DECODER_PY)?;
     std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
     std::fs::write(tools.join("count_by_length.py"), COUNT_BY_LENGTH_PY)?;
+    std::fs::write(tools.join("verify_counts.py"), VERIFY_COUNTS_PY)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
     std::fs::write(&sh_path, reproduce_sh(params))?;
@@ -1127,6 +1293,7 @@ to its schema.
     decode.py               standalone Python 3 decoder (no deps)
     verify_sha256.py        SHA-256 verifier (no deps; exits 0 on full match)
     count_by_length.py      per-exact-length counts (OEIS-style terms)
+    verify_counts.py        re-derive + verify the variableMeasured sub-family sequences
     reproduce.sh            executable rebuild script (clones + builds + runs)
 ```
 
@@ -1404,8 +1571,9 @@ mod tests {
             oeis_a_number: Some("A316192"),
             produced_via: ProducedVia::InMemory,
         };
+        let counts = SequenceCounts::from_rats(dafsa.iter());
         write_archival_extras(&dir, &params).expect("write_archival_extras");
-        write_ro_crate(&dir, &params).expect("write_ro_crate");
+        write_ro_crate(&dir, &params, &counts).expect("write_ro_crate");
         dir
     }
 
@@ -1619,6 +1787,171 @@ mod tests {
         let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with('#')).collect();
         assert_eq!(lines, vec!["3 4", "4 1"], "unexpected terms:\n{stdout}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End-to-end for the sub-family sequences: the writer emits a
+    /// `variableMeasured` block with the seven named sequences, and
+    /// the shipped `tools/verify_counts.py` re-derives them from the
+    /// DAFSA and agrees. The Rust-side check pins the structure +
+    /// the free series (must match n_sequences by perimeter); the
+    /// Python half closes the loop independently (skipped if python3
+    /// is absent).
+    #[test]
+    fn variable_measured_emitted_and_verified() {
+        let dir = build_test_asset();
+        let meta: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let graph = meta["@graph"].as_array().expect("@graph");
+        let root = graph
+            .iter()
+            .find(|e| e["@id"] == "./")
+            .expect("root Dataset");
+        let vm = root["variableMeasured"]
+            .as_array()
+            .expect("variableMeasured array");
+        let names: std::collections::BTreeSet<&str> =
+            vm.iter().filter_map(|p| p["name"].as_str()).collect();
+        for want in [
+            "free",
+            "oneSided",
+            "achiral",
+            "rotationSymmetric",
+            "symmetric",
+            "subring",
+            "coset",
+        ] {
+            assert!(names.contains(want), "variableMeasured missing `{want}`");
+        }
+        // The test asset has 4 rats of length 3 and 1 of length 4
+        // (see build_test_asset); free series is perimeter-indexed
+        // from 1 up to max_indexed_length (4).
+        let free = vm
+            .iter()
+            .find(|p| p["name"] == "free")
+            .and_then(|p| p["value"].as_str())
+            .expect("free series");
+        assert_eq!(free, "0,0,4,1", "free series wrong: {free}");
+
+        // Independent re-derivation via the shipped Python verifier.
+        let have_python = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if have_python {
+            let out = std::process::Command::new("python3")
+                .arg(dir.join("tools/verify_counts.py"))
+                .arg(&dir)
+                .output()
+                .expect("run verify_counts.py");
+            assert!(
+                out.status.success(),
+                "verify_counts.py failed:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+        } else {
+            eprintln!("skipping verify_counts.py half: python3 not on PATH");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression: when the asset's `max_steps` exceeds the deepest
+    /// perimeter that actually closes a polygon (as happens for odd
+    /// perimeters on an even-perimeter-only ring), the emitted
+    /// `variableMeasured` series and `maxIndexedLength` must still track
+    /// the data (the block manifest), NOT `max_steps`. Sizing them to
+    /// `max_steps` appended spurious trailing zeros and made
+    /// `verify_counts.py` -- which sizes by the manifest's
+    /// `max_indexed_length` -- report a false mismatch.
+    #[test]
+    fn variable_measured_handles_max_steps_above_deepest_perimeter() {
+        use crate::stringmatch::dafsa::RatDafsa;
+        // Deepest rat is length 4; declare max_steps = 7 (a 3-perimeter
+        // gap with no closing polygon at perimeters 5..7).
+        let rats: Vec<Vec<i8>> = vec![vec![1, 2, 3], vec![1, 2, 4], vec![3, 0, -1, 2]];
+        let dafsa = RatDafsa::from_rats(rats.iter().map(|r| r.as_slice()));
+        let dir = std::env::temp_dir().join(format!(
+            "tilezz_rocrate_gap_{}",
+            std::process::id() as u64 * 1000
+                + std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos() as u64
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dafsa.write_blocks(&dir, 2).expect("write_blocks");
+        let params = AssetParams {
+            ring: 12,
+            max_steps: 7,
+            step: 1,
+            free: true,
+            target_block_bytes: 2,
+            n_sequences: rats.len() as u64,
+            oeis_a_number: Some("A316192"),
+            produced_via: ProducedVia::InMemory,
+        };
+        let counts = SequenceCounts::from_rats(dafsa.iter());
+        write_archival_extras(&dir, &params).expect("write_archival_extras");
+        write_ro_crate(&dir, &params, &counts).expect("write_ro_crate");
+
+        let meta: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let graph = meta["@graph"].as_array().expect("@graph");
+        let root = graph
+            .iter()
+            .find(|e| e["@id"] == "./")
+            .expect("root Dataset");
+
+        // Series sized to the deepest closing perimeter (4), not max_steps (7).
+        let free = root["variableMeasured"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "free")
+            .and_then(|p| p["value"].as_str())
+            .expect("free series");
+        assert_eq!(
+            free, "0,0,2,1",
+            "free series should stop at perimeter 4: {free}"
+        );
+
+        // maxIndexedLength reflects the data (4), not max_steps (7).
+        let max_indexed = root["additionalProperty"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "maxIndexedLength")
+            .and_then(|p| p["value"].as_u64())
+            .expect("maxIndexedLength");
+        assert_eq!(max_indexed, 4, "maxIndexedLength should track the data");
+
+        // The shipped verifier must agree (this is what regressed).
+        let have_python = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if have_python {
+            let out = std::process::Command::new("python3")
+                .arg(dir.join("tools/verify_counts.py"))
+                .arg(&dir)
+                .output()
+                .expect("run verify_counts.py");
+            assert!(
+                out.status.success(),
+                "verify_counts.py failed on the gap asset:\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr),
+            );
+        } else {
+            eprintln!("skipping verify_counts.py half: python3 not on PATH");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

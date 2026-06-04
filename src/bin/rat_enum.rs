@@ -557,7 +557,7 @@ fn main() {
             // invocation.
             if !cli.no_rocrate {
                 use tilezz::stringmatch::dafsa::{
-                    AssetParams, ProducedVia, write_archival_extras, write_ro_crate,
+                    AssetParams, ProducedVia, SequenceCounts, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
                     ring: cli.ring,
@@ -569,8 +569,10 @@ fn main() {
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::StreamingPipeline,
                 };
+                let counts = SequenceCounts::from_rats(dafsa.iter());
                 write_archival_extras(&blocks_dir, &params).expect("write archival extras");
-                write_ro_crate(&blocks_dir, &params).expect("write ro-crate-metadata.json");
+                write_ro_crate(&blocks_dir, &params, &counts)
+                    .expect("write ro-crate-metadata.json");
             }
 
             fn dir_size_recursive(p: &std::path::Path) -> u64 {
@@ -729,7 +731,7 @@ fn main() {
             // the bare wire format).
             if !cli.no_rocrate {
                 use tilezz::stringmatch::dafsa::{
-                    AssetParams, ProducedVia, write_archival_extras, write_ro_crate,
+                    AssetParams, ProducedVia, SequenceCounts, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
                     ring: cli.ring,
@@ -741,8 +743,9 @@ fn main() {
                     oeis_a_number: cli.oeis_a_number.as_deref(),
                     produced_via: ProducedVia::InMemory,
                 };
+                let counts = SequenceCounts::from_rats(dafsa.iter());
                 write_archival_extras(path, &params).expect("write archival extras");
-                write_ro_crate(path, &params).expect("write ro-crate-metadata.json");
+                write_ro_crate(path, &params, &counts).expect("write ro-crate-metadata.json");
             }
 
             // Walk the directory tree so the total includes blocks/
@@ -1172,9 +1175,7 @@ mod free_tests {
 mod opt_correctness_tests {
     use super::*;
     use std::sync::Arc;
-    use tilezz::cyclotomic::{
-        ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60,
-    };
+    use tilezz::cyclotomic::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60};
     use tilezz::rat_enum::prune::closure_key::{ClosureKeyPrune, collect_closure_keys};
     use tilezz::rat_enum::prune::modular::ModularPrune;
     use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
@@ -1507,16 +1508,16 @@ mod opt_correctness_tests {
 
     /// Frontier regression guard for the A316192 EXTENSION terms
     /// (ZZ12 free, n >= 11) -- the ones OEIS does not publish and that
-    /// we would submit, so they have no external oracle. Two oracle-
-    /// free checks:
-    ///   * prune-invariance at n=11: the optional prunes (mod +
-    ///     closure-key) must not change the free count vs the
-    ///     baseline (free/canonical/reachability prunes only). An
-    ///     over-aggressive prune that dropped a valid rat would
-    ///     silently undercount -- this catches it one step past the
-    ///     OEIS-pinned range.
-    ///   * value pins for a(11)=89075 and a(12)=597581, locking the
-    ///     first extension terms against any future silent drift.
+    /// we would submit, so they have no external oracle.
+    ///
+    /// Two oracle-free checks at n=11 (the first unanchored term):
+    /// prune-invariance -- the optional prunes (mod + closure-key)
+    /// must not change the free count vs the baseline (free/canonical/
+    /// reachability prunes only), so an over-aggressive prune that
+    /// dropped a valid rat is caught one step past the pinned range;
+    /// plus value pins for a(11)=89075 and a(12)=597581 against
+    /// silent drift.
+    ///
     /// n<=12 only: the unpruned baseline at n>=13 is too slow even
     /// for a release test; deeper terms rely on the prunes'
     /// analytical (n-independent) soundness, the verification gate,
