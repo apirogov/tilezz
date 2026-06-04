@@ -2776,7 +2776,8 @@ mod tests {
             let re_frac = c.re - c.re.floor();
             let im_frac = c.im - c.im.floor();
             // f64 is only trustworthy away from the half-open cell edges.
-            if re_frac < 1e-6 || re_frac > 1.0 - 1e-6 || im_frac < 1e-6 || im_frac > 1.0 - 1e-6 {
+            let near_edge = |f: f64| !(1e-6..=1.0 - 1e-6).contains(&f);
+            if near_edge(re_frac) || near_edge(im_frac) {
                 continue;
             }
             assert_eq!(

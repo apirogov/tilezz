@@ -77,6 +77,14 @@ jobs:
           # on-disk bytes.
           python3 /tmp/asset-original/tools/verify_sha256.py /tmp/asset-original
 
+          # tools/verify_counts.py re-derives the variableMeasured
+          # sub-family sequences (free, oneSided, achiral,
+          # rotationSymmetric, symmetric, subring, coset) from the
+          # DAFSA and checks them against what the writer emitted into
+          # ro-crate-metadata.json -- an independent (Python) check of
+          # the (Rust) emitter on a real asset.
+          python3 /tmp/asset-original/tools/verify_counts.py /tmp/asset-original
+
           # Run tools/reproduce.sh against the local checkout and
           # the same SOURCE_DATE_EPOCH. The pre-built target dir
           # inside the clone is fresh, so cargo build inside the

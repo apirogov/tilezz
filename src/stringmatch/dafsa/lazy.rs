@@ -1872,7 +1872,10 @@ mod tests {
             root: RootState {
                 count: BIG,
                 is_accept: false,
-                edges: vec![RootEdge { label: 1, target: 1 }],
+                edges: vec![RootEdge {
+                    label: 1,
+                    target: 1,
+                }],
             },
             blocks: vec![BlockEntry {
                 first_state: 1,
@@ -1956,7 +1959,10 @@ mod tests {
             root: RootState {
                 count: SIBLING + 1,
                 is_accept: false,
-                edges: vec![RootEdge { label: 1, target: 1 }],
+                edges: vec![RootEdge {
+                    label: 1,
+                    target: 1,
+                }],
             },
             blocks: vec![BlockEntry {
                 first_state: 1,
