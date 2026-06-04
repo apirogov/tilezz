@@ -79,11 +79,10 @@ pub trait IntersectUnitSegments: Sized {
 ///
 /// Two entry points:
 ///
-/// * [`cell_floor`](Self::cell_floor) -- the fast path. Returns the
-///   f64-only floor of `complex64()`. In debug builds it cross-checks
-///   against `cell_floor_exact` via `debug_assert_eq!`. This is what
-///   the grid uses in the hot path (spatial bucketing only needs
-///   deterministic answers, not bit-exact ones at boundary points).
+/// * [`cell_floor`](Self::cell_floor) -- EXACT by default (returns
+///   `cell_floor_exact`), with a debug-only f64 cross-check. This is
+///   what the grid uses; bucketing must be exact at boundary points
+///   or a self-intersection candidate can be missed (-> overcount).
 ///
 /// * [`cell_floor_exact`](Self::cell_floor_exact) -- the slow path,
 ///   ~20% of `patch_enum`/`rat_enum` runtime when called per insertion.
@@ -105,23 +104,35 @@ pub trait CellFloor: SymNum {
     /// set of points exactly on a half-integer grid line.
     fn cell_floor_exact(&self) -> (i64, i64);
 
-    /// Fast `(floor(Re), floor(Im))` via f64. In debug builds,
-    /// `debug_assert_eq!`s against `cell_floor_exact` so any
-    /// boundary-case divergence shows up in tests.
+    /// `(floor(Re), floor(Im))`, EXACT by default.
     ///
-    /// Canonical ring elements with small integer coefficients
-    /// essentially never land exactly on a half-integer line, so the
-    /// fast path matches the exact path in practice.
+    /// The grid's self-intersection accelerator buckets points by
+    /// this cell; a mis-bucket at a half-integer boundary can drop a
+    /// genuinely-intersecting edge from the candidate set and let a
+    /// non-simple polygon through -- an overcount. The exact path
+    /// costs only ~5-15% over the f64 floor (measured on ZZ12/ZZ8),
+    /// so we always pay it rather than rely on "f64 essentially never
+    /// lands on a boundary".
+    ///
+    /// In debug builds we still cross-check against the f64 fast
+    /// path: the two agree except on the measure-zero half-integer
+    /// grid lines, so a disagreement on a normal canonical element
+    /// means a bug in `cell_floor_exact` itself. (Rings whose f64
+    /// projection is known to diverge at *reachable* boundary points
+    /// -- ZZ14, ZZ18 -- override this method to skip the otherwise-
+    /// misfiring cross-check.)
     #[inline]
     fn cell_floor(&self) -> (i64, i64) {
-        let c = self.complex64();
-        let fast = (c.re.floor() as i64, c.im.floor() as i64);
+        let exact = self.cell_floor_exact();
         debug_assert_eq!(
-            fast,
-            self.cell_floor_exact(),
-            "fast cell_floor disagrees with cell_floor_exact",
+            {
+                let c = self.complex64();
+                (c.re.floor() as i64, c.im.floor() as i64)
+            },
+            exact,
+            "f64 fast cell_floor disagrees with cell_floor_exact",
         );
-        fast
+        exact
     }
 }
 

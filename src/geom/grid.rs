@@ -144,18 +144,15 @@ impl UnitSquareGrid {
     ///
     /// # Speed and exactness
     ///
-    /// The default `cell_floor` is the fast f64 floor of
-    /// `complex64()`. In **debug builds** it `debug_assert!`s the
-    /// result against the per-ring `cell_floor_exact` (an
-    /// integer-arithmetic sign-verification path that's exact at all
-    /// points, including the measure-zero half-integer grid lines).
-    /// In **release**, no verification -- the f64 path stands alone.
-    ///
-    /// This is safe in practice because canonical ring elements with
-    /// small integer coefficients essentially never land exactly on a
-    /// half-integer boundary; the f64 floor matches `cell_floor_exact`
-    /// on every snake / patch state the codebase actually constructs.
-    /// Debug builds catch any boundary-case divergence in tests.
+    /// The default `cell_floor` is EXACT (delegates to the per-ring
+    /// `cell_floor_exact`, an integer-arithmetic sign-verification
+    /// path correct at all points, including the measure-zero half-
+    /// integer grid lines). In **debug builds** it additionally
+    /// cross-checks against the f64 floor, so a bug in the exact path
+    /// surfaces in tests. The exact path is always used because a
+    /// boundary mis-bucket here can drop a real self-intersection
+    /// candidate (-> a non-simple polygon counted as simple); it
+    /// costs only ~5-15% over the f64 floor (measured).
     ///
     /// Every blessed ring has an exact path available (`HasZZ4` rings
     /// via cell-corner construction + the `rect_signs` sign primitive;
