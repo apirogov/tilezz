@@ -1,7 +1,7 @@
 /target
 .vscode/
 scratch*
-/web/pkg/
+/web/ratdb/pkg/
 .ipynb_checkpoints/
 flamegraph*.svg
 perf.data
@@ -10,8 +10,8 @@ literature/
 snapshots/
 .claude/*.local.json
 .claude/*.lock
-/web/data/
-/web/ro-crate-metadata.json
+/web/ratdb/data/
+/web/ratdb/ro-crate-metadata.json
 
 # Python bytecode from running the bundled dataset tools
 __pycache__/

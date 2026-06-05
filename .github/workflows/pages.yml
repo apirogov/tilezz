@@ -36,7 +36,7 @@ jobs:
         run: cargo install wasm-pack --locked
 
       - name: Build WASM bundle
-        run: wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer
+        run: wasm-pack build --target web --out-dir web/ratdb/pkg -- --no-default-features --features rat_explorer
 
       - name: Configure Pages
         id: pages
@@ -49,43 +49,52 @@ jobs:
 
       - name: Fetch RatDB dataset metadata
         # Datasets live in the tilezz-ratdb repo, one per orphan
-        # branch, pinned by sha in web/datasets.json. The deploy
+        # branch, pinned by sha in web/ratdb/datasets.json. The deploy
         # copies each pinned ref's metadata (everything except
-        # blocks/) into web/data/<name>/ and points block_base_url
+        # blocks/) into web/ratdb/data/<name>/ and points block_base_url
         # at the matching raw.githubusercontent.com URL, so the
         # explorer lazy-fetches blocks straight from the data repo
         # (CORS-verified) and manifest + URL can never drift apart.
         run: |
-          jq -c '.[]' web/datasets.json | while read -r ds; do
+          jq -c '.[]' web/ratdb/datasets.json | while read -r ds; do
             name=$(jq -r .name <<<"$ds")
             repo=$(jq -r .repo <<<"$ds")
             ref=$(jq -r .ref <<<"$ds")
-            mkdir -p "web/data/$name"
+            mkdir -p "web/ratdb/data/$name"
             curl -sfL "https://api.github.com/repos/$repo/tarball/$ref" \
-              | tar -xz -C "web/data/$name" --strip-components=1 \
+              | tar -xz -C "web/ratdb/data/$name" --strip-components=1 \
                     --exclude='*/blocks' --exclude='*/blocks/*'
             base="https://raw.githubusercontent.com/$repo/$ref/blocks/"
             jq --arg base "$base" '. + {block_base_url: $base}' \
-                "web/data/$name/block_index.json" > "/tmp/$name.manifest.json"
-            mv "/tmp/$name.manifest.json" "web/data/$name/block_index.json"
+                "web/ratdb/data/$name/block_index.json" > "/tmp/$name.manifest.json"
+            mv "/tmp/$name.manifest.json" "web/ratdb/data/$name/block_index.json"
           done
 
       - name: Build top-level RO-Crate
-        # Aggregate every web/data/*/ro-crate-metadata.json into a
-        # single web/ro-crate-metadata.json. Crawlers (Google Dataset
+        # Aggregate every web/ratdb/data/*/ro-crate-metadata.json into a
+        # single web/ratdb/ro-crate-metadata.json. Crawlers (Google Dataset
         # Search) follow `<link rel=describedby>` from index.html
         # here; the explorer's JS reads `additionalProperty` from each
         # hasPart stub to drive ring -> dataset discovery without any
         # hardcoded paths.
         run: |
+          # web/ratdb/ is published AS the Pages site root (see the
+          # upload step), so the app lives at <base_url> directly. A
+          # per-app custom domain (ratdb.app.pirogov.de) maps to the
+          # site root -- it cannot point at a subdirectory -- so the app
+          # must be at the root, not /ratdb/.
           ./target/release/build_web_rocrate \
-            --web-dir web/ \
+            --web-dir web/ratdb/ \
             --page-url "${{ steps.pages.outputs.base_url }}"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          # Publish the ratdb app AS the site root so a custom domain
+          # (ratdb.app.pirogov.de) resolves to it. The repo keeps apps in
+          # sibling web/<app>/ dirs for organisation; each app deploys
+          # from its own Pages site (one Pages site == one root).
+          path: web/ratdb
 
       - name: Deploy to GitHub Pages
         id: deployment

@@ -12,11 +12,11 @@ self-describing RO-Crate at the branch root: `block_index.json`
 (the wire manifest), `ro-crate-metadata.json`, `schemas/`, `tools/`,
 `README.md`, and the content-addressed `blocks/<sha256>.bin` files.
 
-This repo only pins them: `web/datasets.json` lists
+This repo only pins them: `web/ratdb/datasets.json` lists
 `{name, repo, ref}` per dataset, where `ref` is a tilezz-ratdb
 commit sha. At deploy time, `.github/workflows/pages.yml` copies the
 pinned ref's metadata (everything except `blocks/`) into
-`web/data/<name>/` and injects a `block_base_url` derived from the
+`web/ratdb/data/<name>/` and injects a `block_base_url` derived from the
 same ref, so the explorer lazy-fetches blocks straight from
 `raw.githubusercontent.com/apirogov/tilezz-ratdb/<ref>/blocks/`.
 
@@ -163,15 +163,15 @@ git rev-parse zz24-n8-free          # note this sha: it is the pin
 # 2. index it on tilezz-ratdb main (add a row to the README table)
 git checkout main   # edit README.md, commit, push
 
-# 3. pin it in tilezz: add an entry to web/datasets.json
+# 3. pin it in tilezz: add an entry to web/ratdb/datasets.json
 #    {"name": "zz24_n8_free", "repo": "apirogov/tilezz-ratdb",
 #     "ref": "<sha from step 1>"}
 #    then PR + merge as usual.
 ```
 
 Explorer discovery is automatic from there: the deploy copies the
-metadata into `web/data/zz24_n8_free/`, `build_web_rocrate` scans
-`web/data/*/ro-crate-metadata.json` into the top-level RO-Crate,
+metadata into `web/ratdb/data/zz24_n8_free/`, `build_web_rocrate` scans
+`web/ratdb/data/*/ro-crate-metadata.json` into the top-level RO-Crate,
 and the explorer JS drives ring/dataset selection off that single
 fetch. Nothing else to wire up.
 
@@ -194,7 +194,7 @@ git push origin zz12-n14-free        # rename branch first if the name encodes n
 git rev-parse HEAD                   # the new pin
 ```
 
-Then bump the `ref` (and `name`, if renamed) in `web/datasets.json`
+Then bump the `ref` (and `name`, if renamed) in `web/ratdb/datasets.json`
 and merge. Two properties make this safe:
 
 - Blocks are content-addressed: any block whose bytes did not
@@ -208,7 +208,7 @@ If the branch name encodes the perimeter bound (zz12-n14-free),
 prefer creating the new branch name (zz12-n16-free) via the
 section-3 flow and retiring the old one from the README index; the
 old branch can be deleted once nothing pins it (check
-web/datasets.json history if unsure).
+web/ratdb/datasets.json history if unsure).
 
 ### 5. Reproducibility: keeping the hashes wired up
 
@@ -349,6 +349,6 @@ template) is also worth doing before trusting their counts.
 The archival manifest (in tilezz-ratdb) deliberately has NO
 `block_base_url` -- it stays location-independent, and
 `tools/decode.py` works offline against the sibling `blocks/`
-directory. Only the deploy-time copy in `web/data/<name>/` gets
+directory. Only the deploy-time copy in `web/ratdb/data/<name>/` gets
 the URL injected; if the two ever disagree on anything else, the
 tilezz-ratdb branch is the canonical one.
