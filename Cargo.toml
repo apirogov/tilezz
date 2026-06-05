@@ -31,9 +31,11 @@ include = [
 
 # All binaries are gated behind a feature so `cargo build` /
 # `cargo install tilezz` (default features = empty) only build the
-# library. Pass `--features cli` for the enumeration CLIs;
-# `build_web_rocrate` sits behind `rat_explorer` since it's part
-# of the web-app deploy pipeline, not the research tooling.
+# library. Pass `--features cli` for the enumeration CLIs. The two
+# dev/build-time tools (build_web_rocrate, favicon) additionally
+# require the `dev-tools` marker feature -- which no normal feature
+# pulls in -- so enabling cli / raster / animation / rat_explorer for
+# the library or research CLIs never drags them into a `cargo install`.
 [[bin]]
 name = "rat_enum"
 path = "src/bin/rat_enum.rs"
@@ -59,10 +61,25 @@ name = "polyomino"
 path = "src/bin/polyomino.rs"
 required-features = ["cli"]
 
+# Web-app deploy helper: stitches the top-level RO-Crate that lists the
+# explorer's datasets. Needs `rat_explorer` (it shares the web module's
+# wasm bindings, which are no-ops on this native build) AND the
+# `dev-tools` marker, so building the WASM bundle with `rat_explorer`
+# alone never drags this native bin in.
 [[bin]]
 name = "build_web_rocrate"
 path = "src/bin/build_web_rocrate.rs"
-required-features = ["rat_explorer"]
+required-features = ["dev-tools", "rat_explorer"]
+
+# Dev-only asset generator: regenerates the web/ratdb favicon from the
+# spectre tile via the `vis` renderer. Needs `raster` (resvg/tiny-skia
+# for the PNG fallbacks) AND the `dev-tools` marker, so enabling raster
+# on its own -- e.g. via `cli` -> `animation` -> `raster` -- never
+# builds it.
+[[bin]]
+name = "favicon"
+path = "src/bin/favicon.rs"
+required-features = ["dev-tools", "raster"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -122,6 +139,12 @@ debug = ["dep:pprof"]
 # patch_enum, polyomino, tileset_collect (clap + threading + gif/png
 # output for the matchstick-polygon DFS workflows).
 cli = ["dep:clap", "dep:crossbeam", "dep:num_cpus", "animation"]
+# Pure marker for the dev/build-time tool binaries (build_web_rocrate,
+# favicon). Enables no deps of its own; it's AND-combined with each
+# tool's real feature needs via `required-features`. Because no normal
+# feature (cli, raster, animation, rat_explorer) implies it, a plain
+# `cargo install tilezz --features cli` never builds those tools.
+dev-tools = []
 # Pure-Rust raster output (PNG) via resvg + tiny-skia.
 raster = ["dep:resvg", "dep:tiny-skia"]
 # Multi-frame GIF output. Implies `raster`.

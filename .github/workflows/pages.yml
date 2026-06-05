@@ -45,7 +45,7 @@ jobs:
       - name: Build build_web_rocrate (release)
         # Datasets are no longer generated at deploy time; only the
         # top-level RO-Crate stitcher is needed here.
-        run: cargo build --release --bin build_web_rocrate --features rat_explorer
+        run: cargo build --release --bin build_web_rocrate --features rat_explorer,dev-tools
 
       - name: Fetch RatDB dataset metadata
         # Datasets live in the tilezz-ratdb repo, one per orphan

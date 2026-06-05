@@ -14,7 +14,7 @@ wasm:
 # multi-dataset support and odd-ring presentation. Re-run after
 # asset-format changes; otherwise once per checkout is enough.
 data:
-    cargo build --release --bin rat_enum --bin build_web_rocrate --features cli,rat_explorer
+    cargo build --release --bin rat_enum --bin build_web_rocrate --features cli,rat_explorer,dev-tools
     rm -rf web/ratdb/data/zz12_n10_free web/ratdb/data/zz7_n10_free
     ./target/release/rat_enum --ring 12 -n 10 --free \
         --mode dafsa-blocks --threads 0 \
