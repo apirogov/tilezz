@@ -99,7 +99,12 @@ jobs:
           # Reproduced asset must match the original byte-for-byte
           # under fixed SOURCE_DATE_EPOCH (including
           # ro-crate-metadata.json -- timestamps are deterministic).
-          diff -r \
+          # Exclude __pycache__: the verify_*/count_by_length tools above
+          # import the sibling decode module, so Python writes
+          # tools/__pycache__/ into the original; it's a transient
+          # byproduct of running the tools, not part of the asset, and
+          # the freshly reproduced copy (tools never run) has none.
+          diff -r --exclude=__pycache__ \
               /tmp/repro/tilezz-local/tilezz-rat-zz12-n7-free \
               /tmp/asset-original
 
