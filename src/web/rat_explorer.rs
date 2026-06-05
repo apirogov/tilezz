@@ -3,7 +3,7 @@
 //! Build for the web with:
 //!
 //! ```text
-//! wasm-pack build --target web --out-dir web/pkg -- --no-default-features --features rat_explorer
+//! wasm-pack build --target web --out-dir web/ratdb/pkg -- --no-default-features --features rat_explorer
 //! ```
 //!
 //! The `--no-default-features` is mandatory: the default `examples`

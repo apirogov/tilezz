@@ -12,8 +12,8 @@
 //!
 //! ```sh
 //! cargo run --release --bin build_web_rocrate -- \
-//!     --web-dir web/ \
-//!     --page-url https://apirogov.github.io/tilezz/
+//!     --web-dir web/ratdb/ \
+//!     --page-url https://ratdb.app.pirogov.de/
 //! ```
 
 use clap::Parser;
