@@ -1,6 +1,6 @@
 [package]
 name = "tilezz"
-version = "0.0.4"
+version = "0.1.0"
 authors = ["Anton Pirogov <apirogov@users.noreply.github.com>"]
 description = "Utilities to work with perfect-precision polygonal tiles built on top of cyclotomic integer rings."
 license = "MIT"
@@ -76,7 +76,8 @@ num-traits = "0.2.19"
 paste = "1.0.15"
 flate2 = "1.0"
 blake3 = "1.5"
-sha2 = "0.10"
+sha2 = "0.11"
+data-encoding = "2.11"
 
 clap = { version = "4.5.27", features = ["derive"], optional = true }
 num_cpus = { version = "1.16.0", optional = true }
@@ -86,9 +87,9 @@ pprof = { version = "0.15.0", features = ["flamegraph"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-resvg = { version = "0.45", optional = true }
-tiny-skia = { version = "0.11", optional = true }
-gif = { version = "0.13", optional = true }
+resvg = { version = "0.47", optional = true }
+tiny-skia = { version = "0.12", optional = true }
+gif = { version = "0.14", optional = true }
 
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
@@ -103,7 +104,7 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 # Validates the produced block_index.json against
 # src/stringmatch/dafsa/schemas/block_index.schema.json. Test-only;
 # no runtime cost.
-jsonschema = { version = "0.34", default-features = false }
+jsonschema = { version = "0.46", default-features = false }
 
 [features]
 # Empty default keeps the library installable as a pure-Rust
