@@ -148,6 +148,25 @@ struct PkgMeta {
     commit: &'static str,
 }
 
+/// ORCID iD per author, keyed by the email in CARGO_PKG_AUTHORS (which
+/// carries no ORCID). When present, the author's RO-Crate Person entity
+/// uses the ORCID URI as its @id -- the resolvable, globally-unique form
+/// -- and `creator` references it by that @id.
+const AUTHOR_ORCIDS: &[(&str, &str)] = &[(
+    "apirogov@users.noreply.github.com",
+    "https://orcid.org/0000-0002-5077-7497",
+)];
+
+/// Look up the ORCID URI for an author email, if known. Returns
+/// `None` when the email is absent or not in [`AUTHOR_ORCIDS`].
+fn orcid_for(email: Option<&str>) -> Option<&'static str> {
+    let email = email?;
+    AUTHOR_ORCIDS
+        .iter()
+        .find(|(e, _)| *e == email)
+        .map(|(_, orcid)| *orcid)
+}
+
 const PKG: PkgMeta = PkgMeta {
     name: env!("CARGO_PKG_NAME"),
     version: env!("CARGO_PKG_VERSION"),
@@ -175,6 +194,13 @@ fn build_endtime() -> String {
             .unwrap_or(0),
     };
     format_iso_utc(secs)
+}
+
+/// Calendar date `YYYY-MM-DD` of the build, used as the dataset
+/// `version`. The leading 10 chars of [`build_endtime`]'s RFC-3339
+/// string, so it honours `SOURCE_DATE_EPOCH` the same way.
+fn build_date() -> String {
+    build_endtime()[..10].to_string()
 }
 
 /// Format a POSIX-epoch second count as `YYYY-MM-DDTHH:MM:SSZ`. No
@@ -375,14 +401,12 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
 /// bound, step, and canonicalization mode into a stable string.
 fn dataset_name(p: &AssetParams) -> String {
     let canon = if p.free { "free" } else { "rotation-canonical" };
-    let step = if p.step == 1 {
-        String::new()
-    } else {
-        format!(", step={}", p.step)
-    };
+    // Presented as the effective ring (ZZ7 for a ZZ14 step-2 run); the
+    // ring/step it was computed with live in additionalProperty + the
+    // reproduce recipe, not the human-facing name.
     format!(
-        "tilezz simple matchstick polygons on Z[zeta_{ring}], perimeter <= {n}, {canon}{step}",
-        ring = p.ring,
+        "tilezz simple matchstick polygons on Z[zeta_{ring}], perimeter <= {n}, {canon}",
+        ring = effective_ring(p),
         n = p.max_steps,
     )
 }
@@ -390,20 +414,14 @@ fn dataset_name(p: &AssetParams) -> String {
 /// Stable, machine-friendly identifier for the Dataset.
 fn dataset_identifier(p: &AssetParams) -> String {
     let canon = if p.free { "free" } else { "onesided" };
-    if p.step == 1 {
-        format!(
-            "tilezz-rat-zz{ring}-n{n}-{canon}",
-            ring = p.ring,
-            n = p.max_steps,
-        )
-    } else {
-        format!(
-            "tilezz-rat-zz{ring}-n{n}-step{step}-{canon}",
-            ring = p.ring,
-            n = p.max_steps,
-            step = p.step,
-        )
-    }
+    // Effective-ring slug (zz7, not zz14-step2): the step is an
+    // implementation detail. Deployed stepped datasets are the odd rings
+    // (effectiveRing odd), so this never collides with a native even ring.
+    format!(
+        "tilezz-rat-zz{ring}-n{n}-{canon}",
+        ring = effective_ring(p),
+        n = p.max_steps,
+    )
 }
 
 /// Euclidean GCD on `u8`, for the `effectiveRing = ring/gcd(step, ring)`
@@ -413,6 +431,68 @@ fn gcd_u8(mut a: u8, mut b: u8) -> u8 {
         (a, b) = (b, a % b);
     }
     a
+}
+
+/// The order of the subring the rats actually live in:
+/// `ring / gcd(step, ring)`. `--step 1` gives `ring`; `--step 2` on an
+/// even ring ZZ_{2m} gives the odd ring ZZ_m. This is the ring the
+/// dataset is PRESENTED as (name, identifier, keywords, description,
+/// README); the `ring` / `step` it was computed with are an
+/// implementation detail kept in `additionalProperty` and the reproduce
+/// recipe.
+fn effective_ring(p: &AssetParams) -> u8 {
+    p.ring / gcd_u8(p.step.unsigned_abs().max(1), p.ring).max(1)
+}
+
+/// One-sentence note on the stored turn-angle units for a stepped
+/// (sub-ring) dataset, appended to the RO-Crate description. Empty for
+/// `step == 1` datasets, where the stored units already match the
+/// presented ring. The dataset presents as Z[zeta_effective] but the
+/// turns are physically stored in the parent Z[zeta_ring] units, so a
+/// consumer reading the raw sequences needs the conversion factor.
+fn turn_units_note_short(p: &AssetParams) -> String {
+    let eff = effective_ring(p);
+    if eff == p.ring {
+        return String::new();
+    }
+    format!(
+        " It is the order-{eff} sub-ring of Z[zeta_{parent}] (Z[zeta_{eff}] has no native lattice here, \
+         so it is enumerated as the directions that are multiples of {step}, via --step {step}); each \
+         stored turn is a Z[zeta_{parent}] unit (always even) equal to {step} times the Z[zeta_{eff}] turn \
+         -- divide stored values by {step} to read Z[zeta_{eff}] turns. See README.md (Turn-angle units).",
+        eff = eff,
+        parent = p.ring,
+        step = p.step,
+    )
+}
+
+/// Full "Turn-angle units" README section for a stepped (sub-ring)
+/// dataset, with a worked example. Empty for `step == 1`.
+fn turn_units_note_readme(p: &AssetParams) -> String {
+    let eff = effective_ring(p);
+    if eff == p.ring {
+        return String::new();
+    }
+    let n = eff as usize;
+    let stored = vec![p.step.to_string(); n].join(" ");
+    let halved = vec!["1"; n].join(" ");
+    format!(
+        "\n\n## Turn-angle units\n\n\
+         Z[zeta_{eff}] has no native lattice in tilezz, so this dataset is the order-{eff} \
+         sub-ring of Z[zeta_{parent}] -- the turn directions that are multiples of {step} -- \
+         enumerated with `--step {step}`. Each stored turn is therefore a Z[zeta_{parent}] turn \
+         (an integer multiple of `2*pi/{parent}`, always even) and is `{step}` times the \
+         corresponding Z[zeta_{eff}] turn (a multiple of `2*pi/{eff}`).\n\n\
+         To read the sequences as Z[zeta_{eff}] turns, divide every stored value by `{step}`. \
+         For example the regular {eff}-gon is stored as `{stored}` and is `{halved}` in \
+         Z[zeta_{eff}]. The web explorer shows the halved Z[zeta_{eff}] form; `tools/decode.py` \
+         prints the raw stored Z[zeta_{parent}] values.",
+        eff = eff,
+        parent = p.ring,
+        step = p.step,
+        stored = stored,
+        halved = halved,
+    )
 }
 
 /// Structured, machine-readable parameters of an asset, rendered
@@ -429,8 +509,7 @@ fn dataset_additional_properties(p: &AssetParams, max_indexed_length: usize) -> 
     // ZZn enumerates the order-(n/gcd(k,n)) subring; with step 1 this is just
     // `ring`. The web explorer keys datasets on this so a ZZ14-step2 asset
     // (the odd ring ZZ7) presents as ZZ7 rather than ZZ14.
-    let g = gcd_u8(p.step.unsigned_abs().max(1), p.ring);
-    let effective_ring = p.ring / g.max(1);
+    let effective_ring = effective_ring(p);
     json!([
         {"@type": "PropertyValue", "name": "ring", "value": p.ring},
         {"@type": "PropertyValue", "name": "step", "value": p.step},
@@ -599,7 +678,86 @@ impl SequenceCounts {
     }
 }
 
-pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> io::Result<()> {
+/// Compute the host-coordinate fields (identifier, optional url,
+/// distribution, optional sameAs) for a deployed asset.
+///
+/// Picture: the blocks and provenance of a dataset are fixed history;
+/// only the dataset's ADDRESS in the world changes as it is re-hosted.
+/// These four fields ARE that address. Factoring them into one helper
+/// makes the emit path ([`write_ro_crate`]) and the re-host path
+/// ([`rehost_ro_crate`]) write byte-identical host coordinates, so a
+/// re-hosted crate is indistinguishable from one emitted fresh at the
+/// same host.
+///
+/// `base_url` is where the dataset DIRECTORY is served (any trailing
+/// slash is trimmed); `doi` is a minted DOI like
+/// `"10.5281/zenodo.123"`; `slug` is the stable dataset identifier used
+/// for the relative fallback; `manifest_size` is `block_index.json`'s
+/// byte length for the DataDownload `contentSize`.
+///
+/// Field rules:
+/// - identifier: a DOI PropertyValue when `doi` is set (the most
+///   citable id); else the bare `base_url` string when deployed; else a
+///   `tilezz-dataset-id` PropertyValue carrying the slug (never a bare
+///   relative string).
+/// - url: the resolvable `base_url`, only when deployed.
+/// - sameAs: `https://doi.org/<doi>`, only when a DOI is set.
+/// - distribution: a DataDownload whose contentUrl is the absolute
+///   `<base>/block_index.json` when deployed, else the relative
+///   `block_index.json`.
+fn host_coordinate_fields(
+    base_url: Option<&str>,
+    doi: Option<&str>,
+    slug: &str,
+    manifest_size: u64,
+) -> (Value, Option<Value>, Value, Option<Value>) {
+    let base = base_url.map(|b| b.trim_end_matches('/'));
+
+    let identifier = if let Some(doi) = doi {
+        json!({
+            "@type": "PropertyValue",
+            "propertyID": "DOI",
+            "value": doi,
+            "url": format!("https://doi.org/{doi}"),
+        })
+    } else if let Some(base) = base {
+        // When deployed at a known base URL, the resolvable URL doubles
+        // as the dataset's identifier (best practice).
+        json!(base)
+    } else {
+        // Local / test build with no public home: a structured
+        // PropertyValue carrying the stable slug -- never a bare string.
+        json!({
+            "@type": "PropertyValue",
+            "propertyID": "tilezz-dataset-id",
+            "value": slug,
+        })
+    };
+
+    let url = base.map(|b| json!(b));
+    let same_as = doi.map(|doi| json!(format!("https://doi.org/{doi}")));
+
+    let content_url = match base {
+        Some(base) => format!("{base}/block_index.json"),
+        None => "block_index.json".to_string(),
+    };
+    let distribution = json!({
+        "@type": "DataDownload",
+        "contentUrl": content_url,
+        "encodingFormat": "application/json",
+        "contentSize": manifest_size.to_string(),
+    });
+
+    (identifier, url, distribution, same_as)
+}
+
+pub fn write_ro_crate(
+    dir: &Path,
+    p: &AssetParams,
+    counts: &SequenceCounts,
+    base_url: Option<&str>,
+    doi: Option<&str>,
+) -> io::Result<()> {
     let files = snapshot_dir(dir)?;
 
     // Dataset hasPart lists every File entity in lex order.
@@ -626,35 +784,58 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> i
     root.insert("@id", json!("./"));
     root.insert("@type", json!("Dataset"));
     root.insert("name", json!(dataset_name(p)));
-    root.insert("identifier", json!(dataset_identifier(p)));
+    // Host coordinates (identifier / url / distribution / sameAs) are
+    // shaped by the single source of truth shared with rehost, so an
+    // emit and a re-host to the same host produce identical bytes.
+    let index_size = std::fs::metadata(dir.join("block_index.json"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let (identifier, url, distribution, same_as) =
+        host_coordinate_fields(base_url, doi, &dataset_identifier(p), index_size);
+    root.insert("identifier", identifier);
+    if let Some(url) = url {
+        root.insert("url", url);
+    }
     root.insert(
         "description",
         json!(format!(
-            "Simple matchstick polygons (closed self-avoiding unit-edge polygons) on the cyclotomic ring Z[zeta_{ring}], with perimeter <= {n}, canonicalized by {canon} symmetry. Contains {count} sequences. Self-describing tilezz-rat-dafsa-blocks asset (schemas alongside).",
-            ring = p.ring,
+            "Simple matchstick polygons (closed self-avoiding unit-edge polygons) on the cyclotomic ring Z[zeta_{ring}], with perimeter <= {n}, canonicalized by {canon} symmetry. Contains {count} sequences.{units} Self-describing tilezz-rat-dafsa-blocks asset (schemas alongside).",
+            ring = effective_ring(p),
             n = p.max_steps,
             canon = if p.free { "free (full dihedral)" } else { "rotation only (one-sided)" },
             count = p.n_sequences,
+            units = turn_units_note_short(p),
         )),
     );
     root.insert("datePublished", json!(build_endtime()));
-    root.insert("version", json!(PKG.commit));
+    // Dataset version is the build DATE (YYYY-MM-DD). The exact source
+    // commit lives on the #tilezz SoftwareApplication and the #build
+    // CreateAction, where it belongs as build provenance; a calendar
+    // version is friendlier as the dataset's public `version`.
+    root.insert("version", json!(build_date()));
     root.insert(
         "license",
         json!({"@id": "https://creativecommons.org/licenses/by-sa/4.0/"}),
     );
-    root.insert(
-        "keywords",
-        json!([
-            "combinatorial enumeration",
-            "self-avoiding polygon",
-            "cyclotomic lattice",
-            "matchstick polygon",
-            "DAFSA",
-            format!("ZZ{}", p.ring),
-        ]),
-    );
+    // Discovery keywords: standard ring notation (Z[zeta_n]) instead
+    // of the internal "ZZn" codename, plus the bare OEIS A-number when
+    // known so a search for e.g. "A316192" surfaces this dataset.
+    let mut keywords = vec![
+        json!("combinatorial enumeration"),
+        json!("self-avoiding polygon"),
+        json!("cyclotomic lattice"),
+        json!("matchstick polygon"),
+        json!(format!("Z[zeta_{}]", effective_ring(p))),
+    ];
+    if let Some(oeis) = p.oeis_a_number {
+        keywords.push(json!(oeis));
+    }
+    root.insert("keywords", Value::Array(keywords));
     root.insert("mainEntity", json!({"@id": "block_index.json"}));
+    // DataDownload advertising the manifest as the dataset's download
+    // endpoint. With a base URL, contentUrl is the absolute deployed
+    // location; otherwise it's the relative path inside the crate.
+    root.insert("distribution", distribution);
     root.insert("hasPart", json!(has_part));
     // Structured, machine-readable parameters. Crawlers (Google
     // Dataset Search etc.) ignore the inner shape but display the
@@ -691,6 +872,12 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> i
         let oeis_url = format!("https://oeis.org/{oeis}");
         root.insert("subjectOf", json!({"@id": oeis_url}));
     }
+    // sameAs: the DOI's resolvable form, present only on a DOI-minted
+    // (e.g. Zenodo) deployment. Kept alongside the identifier so a
+    // citation tool can pivot from either.
+    if let Some(same_as) = same_as {
+        root.insert("sameAs", same_as);
+    }
     graph.push(serde_json::Value::Object(
         root.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
     ));
@@ -709,6 +896,12 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> i
     // concrete referent inside the graph.
     for (id, name, email) in parse_authors(PKG.authors) {
         let mut p_obj: BTreeMap<&str, Value> = BTreeMap::new();
+        // When the @id is an ORCID URI, restate it as `identifier`
+        // so the globally-unique researcher iD is explicit, not just
+        // implied by the @id.
+        if id.starts_with("https://orcid.org/") {
+            p_obj.insert("identifier", json!(id));
+        }
         p_obj.insert("@id", json!(id));
         p_obj.insert("@type", json!("Person"));
         p_obj.insert("name", json!(name));
@@ -814,6 +1007,141 @@ pub fn write_ro_crate(dir: &Path, p: &AssetParams, counts: &SequenceCounts) -> i
     let mut writer = std::io::BufWriter::new(std::fs::File::create(&path)?);
     serde_json::to_writer_pretty(&mut writer, &root_obj)
         .map_err(|e| io::Error::other(format!("write ro-crate-metadata.json: {e}")))?;
+    io::Write::write_all(&mut writer, b"\n")?;
+    Ok(())
+}
+
+/// Recover the dataset slug (the relative-fallback identifier) from an
+/// already-written root Dataset entity. Prefers the value carried by an
+/// existing `tilezz-dataset-id` PropertyValue identifier (the form the
+/// emitter writes for a local build); falls back to the dataset `name`.
+/// Used only to repopulate the relative identifier when a re-host clears
+/// a DOI / base_url back to the location-independent form.
+/// Recover the dataset slug (e.g. "tilezz-rat-zz7-n10-free") from the
+/// `#build` CreateAction name ("Generate <slug>"). That field is part of
+/// the immutable build provenance and is never touched by re-hosting --
+/// unlike `identifier`, which a prior DOI re-host overwrites with the
+/// DOI -- so it is the only reliable slug source when re-hosting an
+/// already-re-hosted crate.
+fn recover_slug(graph: &[Value]) -> String {
+    for e in graph {
+        if e.get("@id").and_then(|v| v.as_str()) == Some("#build")
+            && let Some(slug) = e
+                .get("name")
+                .and_then(|v| v.as_str())
+                .and_then(|n| n.strip_prefix("Generate "))
+        {
+            return slug.to_string();
+        }
+    }
+    "tilezz-rat-dataset".to_string()
+}
+
+/// Re-host a dataset to a new host (or back to location-independent
+/// form) by SURGICALLY patching only its host-coordinate fields.
+///
+/// Picture: the blocks are content-addressed and the provenance (the
+/// producing commit, build time, reproduce recipe, file sha256s) is
+/// fixed history. Re-hosting -- e.g. mirroring a raw.githubusercontent
+/// dataset to Zenodo with a DOI -- changes only WHERE the dataset
+/// lives, never WHAT it is. So this rewrites exactly `identifier`,
+/// `url`, `distribution`, and `sameAs` on the root Dataset and leaves
+/// every other field and entity byte-for-byte unchanged. It does NOT
+/// re-run the emitter (whose build time / commit would differ and
+/// corrupt the recorded provenance).
+///
+/// `base_url` is the new directory URL (trailing slash trimmed);
+/// `doi` is a minted DOI like `"10.5281/zenodo.123"`. Passing both
+/// `None` reverts the crate to relative / PropertyValue forms and
+/// drops `url` / `sameAs`, so a stale absolute deployment is cleared
+/// cleanly. The JSON is written back with the same pretty formatting +
+/// trailing newline the emitter uses, so a diff shows only the host
+/// fields.
+pub fn rehost_ro_crate(dir: &Path, base_url: Option<&str>, doi: Option<&str>) -> io::Result<()> {
+    let path = dir.join("ro-crate-metadata.json");
+    if !path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "{} is not an RO-Crate: no ro-crate-metadata.json found",
+                dir.display()
+            ),
+        ));
+    }
+    let bytes = std::fs::read(&path)?;
+    let mut crate_json: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| io::Error::other(format!("{} is not valid JSON: {e}", path.display())))?;
+
+    // block_index.json byte length feeds the DataDownload contentSize;
+    // it is part of the dataset payload, so it must already exist next
+    // to the crate.
+    let manifest_size = std::fs::metadata(dir.join("block_index.json"))
+        .map_err(|e| {
+            io::Error::other(format!(
+                "cannot stat {}/block_index.json (re-host needs the dataset payload present): {e}",
+                dir.display()
+            ))
+        })?
+        .len();
+
+    // Locate the root Dataset entity (@id == "./") and patch only its
+    // host-coordinate keys; the @graph order and all other entities are
+    // preserved untouched.
+    // Recover the slug from the immutable #build provenance BEFORE taking
+    // the mutable root borrow (a prior DOI re-host may have overwritten
+    // the root identifier, so it is not a reliable slug source).
+    let slug = crate_json
+        .get("@graph")
+        .and_then(|g| g.as_array())
+        .map(|g| recover_slug(g))
+        .unwrap_or_else(|| "tilezz-rat-dataset".to_string());
+
+    let graph = crate_json
+        .get_mut("@graph")
+        .and_then(|g| g.as_array_mut())
+        .ok_or_else(|| io::Error::other(format!("{} has no @graph array", path.display())))?;
+    let root = graph
+        .iter_mut()
+        .find_map(|e| {
+            let obj = e.as_object_mut()?;
+            (obj.get("@id").and_then(|v| v.as_str()) == Some("./")).then_some(obj)
+        })
+        .ok_or_else(|| {
+            io::Error::other(format!(
+                "{} has no Dataset entity at @id \"./\"",
+                path.display()
+            ))
+        })?;
+
+    let (identifier, url, distribution, same_as) =
+        host_coordinate_fields(base_url, doi, &slug, manifest_size);
+
+    // Overwrite identifier + distribution; set-or-remove url + sameAs so
+    // a re-host to the relative form clears any stale absolute values.
+    root.insert("identifier".to_string(), identifier);
+    root.insert("distribution".to_string(), distribution);
+    match url {
+        Some(v) => {
+            root.insert("url".to_string(), v);
+        }
+        None => {
+            root.remove("url");
+        }
+    }
+    match same_as {
+        Some(v) => {
+            root.insert("sameAs".to_string(), v);
+        }
+        None => {
+            root.remove("sameAs");
+        }
+    }
+
+    // Write back with the exact formatting the emitter uses (pretty +
+    // trailing newline) so a diff shows only the host fields.
+    let mut writer = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    serde_json::to_writer_pretty(&mut writer, &crate_json)
+        .map_err(|e| io::Error::other(format!("write {}: {e}", path.display())))?;
     io::Write::write_all(&mut writer, b"\n")?;
     Ok(())
 }
@@ -1009,7 +1337,15 @@ pub fn write_collection_ro_crate(web_dir: &Path, page_url: &str) -> io::Result<(
     root.insert("identifier", json!(page_url));
     root.insert("url", json!(page_url));
     root.insert("datePublished", json!(build_endtime()));
-    root.insert("version", json!(PKG.commit));
+    // Date-based version (see write_ro_crate); the source commit
+    // stays on the #tilezz SoftwareSourceCode entity below.
+    root.insert("version", json!(build_date()));
+    // An RO-Crate root Dataset MUST carry a license. The hosted page
+    // and its database share the per-dataset CC-BY-SA 4.0 terms.
+    root.insert(
+        "license",
+        json!({"@id": "https://creativecommons.org/licenses/by-sa/4.0/"}),
+    );
     root.insert("isBasedOn", json!({"@id": format!("#{}", PKG.name)}));
     root.insert(
         "creator",
@@ -1045,6 +1381,9 @@ pub fn write_collection_ro_crate(web_dir: &Path, page_url: &str) -> io::Result<(
     // resolves both crates de-duplicates them via @id.
     for (id, name, email) in parse_authors(PKG.authors) {
         let mut p_obj: BTreeMap<&str, Value> = BTreeMap::new();
+        if id.starts_with("https://orcid.org/") {
+            p_obj.insert("identifier", json!(id));
+        }
         p_obj.insert("@id", json!(id));
         p_obj.insert("@type", json!("Person"));
         p_obj.insert("name", json!(name));
@@ -1071,6 +1410,22 @@ pub fn write_collection_ro_crate(web_dir: &Path, page_url: &str) -> io::Result<(
         "softwareVersion": PKG.commit,
         "license": {"@id": "https://opensource.org/license/mit"},
     }));
+
+    // License contextual entity (CC-BY-SA 4.0), mirroring the
+    // per-dataset crate. Guard against a duplicate @id in case a
+    // child stub or other entity already introduced it.
+    let cc_id = "https://creativecommons.org/licenses/by-sa/4.0/";
+    let already_present = graph
+        .iter()
+        .any(|e| e.get("@id").and_then(|v| v.as_str()) == Some(cc_id));
+    if !already_present {
+        graph.push(json!({
+            "@id": cc_id,
+            "@type": "CreativeWork",
+            "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+            "identifier": "CC-BY-SA-4.0",
+        }));
+    }
 
     // Per-dataset stubs.
     graph.extend(child_stubs);
@@ -1260,6 +1615,9 @@ fn readme_md(p: &AssetParams) -> String {
         None => String::new(),
     };
 
+    // Turn-angle units section for stepped (sub-ring) datasets; empty otherwise.
+    let units = turn_units_note_readme(p);
+
     format!(
         "# {name_h}
 
@@ -1267,7 +1625,7 @@ Simple matchstick polygons -- closed self-avoiding polygonal walks \
 with unit-length edges and turn angles in integer multiples of \
 `2*pi/{ring}` -- on the cyclotomic ring `Z[zeta_{ring}]`, with perimeter \
 up to {n}, canonicalised under {canon} symmetry. {count} sequences.\
-{oeis_note}
+{oeis_note}{units}
 
 ## Copyright
 
@@ -1377,7 +1735,7 @@ Otherwise the `CreateAction.endTime` will reflect the current \
 wall-clock time and the metadata hash will drift; the block \
 files and `block_index.json` are unaffected.
 ",
-        ring = p.ring,
+        ring = effective_ring(p),
         n = p.max_steps,
         count = p.n_sequences,
     )
@@ -1395,7 +1753,6 @@ fn parse_authors(authors: &str) -> Vec<(String, String, Option<String>)> {
         .filter(|s| !s.is_empty())
         .enumerate()
         .map(|(i, raw)| {
-            let id = format!("#author-{i}");
             // Cargo's convention is `Name <email>`; either piece
             // may be missing.
             let (name, email) = match (raw.find('<'), raw.rfind('>')) {
@@ -1404,6 +1761,13 @@ fn parse_authors(authors: &str) -> Vec<(String, String, Option<String>)> {
                     Some(raw[lt + 1..gt].trim().to_string()),
                 ),
                 _ => (raw.to_string(), None),
+            };
+            // Prefer the resolvable ORCID URI as the Person's @id when
+            // we know one for this email; fall back to the deterministic
+            // `#author-N` anchor otherwise.
+            let id = match orcid_for(email.as_deref()) {
+                Some(orcid) => orcid.to_string(),
+                None => format!("#author-{i}"),
             };
             (id, name, email)
         })
@@ -1515,11 +1879,17 @@ mod tests {
         assert_eq!(dataset_identifier(&p), "tilezz-rat-zz12-n10-free");
         let p2 = AssetParams { free: false, ..p };
         assert_eq!(dataset_identifier(&p2), "tilezz-rat-zz12-n10-onesided");
+        // Stepped datasets present as their EFFECTIVE ring (the step is
+        // an implementation detail). ZZ12 step-3 is the ZZ4 subring...
         let p3 = AssetParams { step: 3, ..p2 };
-        assert_eq!(
-            dataset_identifier(&p3),
-            "tilezz-rat-zz12-n10-step3-onesided"
-        );
+        assert_eq!(dataset_identifier(&p3), "tilezz-rat-zz4-n10-onesided");
+        // ...and the real deployed case: ZZ14 step-2 is the odd ring ZZ7.
+        let p4 = AssetParams {
+            ring: 14,
+            step: 2,
+            ..p
+        };
+        assert_eq!(dataset_identifier(&p4), "tilezz-rat-zz7-n10-free");
     }
 
     /// Pipeline-shape selector emits different reproduce.sh content.
@@ -1591,7 +1961,7 @@ mod tests {
         };
         let counts = SequenceCounts::from_rats(dafsa.iter());
         write_archival_extras(&dir, &params).expect("write_archival_extras");
-        write_ro_crate(&dir, &params, &counts).expect("write_ro_crate");
+        write_ro_crate(&dir, &params, &counts, None, None).expect("write_ro_crate");
         dir
     }
 
@@ -1701,6 +2071,25 @@ mod tests {
             root["license"]["@id"], "https://creativecommons.org/licenses/by-sa/4.0/",
             "license wrong"
         );
+        // distribution: a DataDownload for the manifest. With no base
+        // URL the contentUrl is the relative path inside the crate.
+        let dist = &root["distribution"];
+        assert_eq!(dist["@type"], "DataDownload", "distribution @type wrong");
+        assert_eq!(
+            dist["contentUrl"], "block_index.json",
+            "distribution.contentUrl wrong for relative (no base_url) build"
+        );
+        // creator points at the author's resolvable ORCID @id.
+        let orcid = "https://orcid.org/0000-0002-5077-7497";
+        let creators = root["creator"].as_array().expect("creator array");
+        assert!(
+            creators.iter().any(|c| c["@id"] == orcid),
+            "creator does not reference the author ORCID {orcid}"
+        );
+        // ...and the matching Person entity carries it as @id + identifier.
+        let person = by_id.get(orcid).expect("Person entity at ORCID @id");
+        assert_eq!(person["@type"], "Person");
+        assert_eq!(person["identifier"], orcid, "Person.identifier wrong");
 
         // License entity, software, create-action, OEIS contextual.
         assert!(by_id.contains_key("https://creativecommons.org/licenses/by-sa/4.0/"));
@@ -1915,7 +2304,7 @@ mod tests {
         };
         let counts = SequenceCounts::from_rats(dafsa.iter());
         write_archival_extras(&dir, &params).expect("write_archival_extras");
-        write_ro_crate(&dir, &params, &counts).expect("write_ro_crate");
+        write_ro_crate(&dir, &params, &counts, None, None).expect("write_ro_crate");
 
         let meta: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
@@ -1997,6 +2386,201 @@ mod tests {
             "block_index.json failed validation:\n  {}",
             errors.join("\n  ")
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Collect every File entity's (`@id`, `sha256`) pair from a crate,
+    /// sorted by @id. The fingerprint of the dataset payload as the
+    /// crate records it: a re-host must leave this identical.
+    fn file_sha_pairs(crate_json: &Value) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = crate_json["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| {
+                let id = e["@id"].as_str()?;
+                let sha = e["sha256"].as_str()?;
+                Some((id.to_string(), sha.to_string()))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Re-hosting rewrites ONLY the host-coordinate fields and leaves
+    /// the blocks, their recorded sha256s, and all provenance
+    /// byte-for-byte intact -- then round-trips back to the relative
+    /// form. This is the correctness pin for the metadata-only re-host
+    /// principle: blocks are content-addressed and provenance is fixed
+    /// history, so only `identifier` / `url` / `distribution` / `sameAs`
+    /// may move.
+    #[test]
+    fn rehost_rewrites_only_host_coordinates() {
+        let dir = build_test_asset();
+
+        // Snapshot the pre-rehost metadata + the on-disk block bytes.
+        let before: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let before_root = before["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["@id"] == "./")
+            .unwrap()
+            .clone();
+        let before_files = file_sha_pairs(&before);
+        // Read a real block file's bytes to prove the payload is never
+        // touched.
+        let blocks_dir = dir.join("blocks");
+        let block_path = std::fs::read_dir(&blocks_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().and_then(|s| s.to_str()) == Some("bin"))
+            .expect("at least one block file");
+        let block_bytes_before = std::fs::read(&block_path).unwrap();
+
+        // Re-host to a Zenodo record with a DOI.
+        rehost_ro_crate(
+            &dir,
+            Some("https://zenodo.org/records/123/files"),
+            Some("10.5281/zenodo.123"),
+        )
+        .expect("rehost to zenodo");
+
+        let after: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let after_root = after["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["@id"] == "./")
+            .unwrap()
+            .clone();
+
+        // Host coordinates moved to the DOI / Zenodo forms.
+        assert_eq!(after_root["identifier"]["@type"], "PropertyValue");
+        assert_eq!(after_root["identifier"]["propertyID"], "DOI");
+        assert_eq!(after_root["identifier"]["value"], "10.5281/zenodo.123");
+        assert_eq!(
+            after_root["distribution"]["contentUrl"],
+            "https://zenodo.org/records/123/files/block_index.json"
+        );
+        assert_eq!(after_root["sameAs"], "https://doi.org/10.5281/zenodo.123");
+        assert_eq!(after_root["url"], "https://zenodo.org/records/123/files");
+
+        // Everything else on the root is byte-identical to before.
+        for key in [
+            "datePublished",
+            "version",
+            "variableMeasured",
+            "additionalProperty",
+            "name",
+            "description",
+            "keywords",
+            "creator",
+            "license",
+            "hasPart",
+            "mainEntity",
+            "subjectOf",
+        ] {
+            assert_eq!(
+                after_root.get(key),
+                before_root.get(key),
+                "re-host changed `{key}` on the root Dataset",
+            );
+        }
+
+        // Provenance entities untouched: #build endTime, #tilezz
+        // softwareVersion.
+        let find = |c: &Value, id: &str| -> Value {
+            c["@graph"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["@id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(
+            find(&after, "#build")["endTime"],
+            find(&before, "#build")["endTime"],
+            "re-host changed the CreateAction endTime"
+        );
+        assert_eq!(
+            find(&after, "#build"),
+            find(&before, "#build"),
+            "re-host changed the #build CreateAction"
+        );
+        assert_eq!(
+            find(&after, "#tilezz")["softwareVersion"],
+            find(&before, "#tilezz")["softwareVersion"],
+            "re-host changed the tool softwareVersion"
+        );
+
+        // Every File entity's sha256 is preserved, and the block bytes
+        // on disk are unchanged.
+        assert_eq!(
+            file_sha_pairs(&after),
+            before_files,
+            "re-host changed a File entity's sha256"
+        );
+        assert_eq!(
+            std::fs::read(&block_path).unwrap(),
+            block_bytes_before,
+            "re-host changed block file bytes on disk"
+        );
+
+        // Round-trip: re-host back to the location-independent form
+        // drops url / sameAs and restores the PropertyValue identifier
+        // + relative distribution.
+        rehost_ro_crate(&dir, None, None).expect("rehost to relative");
+        let reverted: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
+        )
+        .unwrap();
+        let reverted_root = reverted["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["@id"] == "./")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            reverted_root["identifier"]["propertyID"],
+            "tilezz-dataset-id"
+        );
+        // The reverted identifier must carry the ORIGINAL dataset slug,
+        // recovered from immutable #build provenance -- NOT the DOI left
+        // by the intermediate Zenodo re-host. (Regression: recovering the
+        // slug from the mutated `identifier` leaked the DOI here.)
+        assert_eq!(
+            reverted_root["identifier"]["value"], before_root["identifier"]["value"],
+            "reverted identifier slug must match the original, not the DOI"
+        );
+        assert_eq!(
+            reverted_root["distribution"]["contentUrl"],
+            "block_index.json"
+        );
+        assert!(
+            reverted_root.get("url").is_none(),
+            "reverting to relative form must remove url"
+        );
+        assert!(
+            reverted_root.get("sameAs").is_none(),
+            "reverting to relative form must remove sameAs"
+        );
+        // Provenance still intact after the round-trip.
+        assert_eq!(
+            find(&reverted, "#build")["endTime"],
+            find(&before, "#build")["endTime"],
+            "round-trip changed the CreateAction endTime"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

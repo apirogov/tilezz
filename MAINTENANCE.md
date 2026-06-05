@@ -112,6 +112,20 @@ not `$D` itself (`$D` also holds the intermediate `runs/`,
 asset). RO-Crate provenance and `--oeis-a-number` are honoured by
 the asset-writing modes (`dafsa-blocks` and `build`).
 
+**Deploying vs. local builds**: for a dataset you intend to PUBLISH,
+pass `--base-url <public URL of the dataset directory>` to the
+asset-writing mode (`dafsa-blocks` or `build`). That is the URL the
+served directory will live at -- for our setup the
+raw.githubusercontent.com tilezz-ratdb path, e.g.
+`https://raw.githubusercontent.com/apirogov/tilezz-ratdb/<ref>` --
+and it sets the RO-Crate `distribution.contentUrl`, `identifier`,
+and `url` to the real location instead of relative paths. Omit
+`--base-url` for local / test builds (the metadata then carries the
+location-independent relative forms, which is what the archival
+tilezz-ratdb branch keeps). If you already have a minted DOI at
+compute time you can also pass `--doi <DOI>`; usually the DOI comes
+later, so see section 6 to add it after the fact without recomputing.
+
 **Multi-host splitting** (if one machine is not enough):
 `--mode list-seeds` prints DFS prefixes at `--split-depth`; farm
 each prefix out with `--seed a,b,c` on separate hosts, then feed
@@ -252,6 +266,57 @@ curl -sI -H "Origin: https://ratdb.app.pirogov.de" \
 # full reproduce round-trip (slow but definitive)
 SOURCE_DATE_EPOCH=1780000000 bash tools/reproduce.sh
 ```
+
+### 6. Re-hosting a dataset to a new host / Zenodo (metadata only, no recompute)
+
+A dataset's blocks are content-addressed and its provenance (the
+producing commit, the `CreateAction.endTime`, the reproduce recipe,
+every File `sha256`) is fixed history. Re-hosting the same dataset --
+mirroring the raw.githubusercontent copy to a Zenodo deposit with a
+DOI, or otherwise switching where the bytes are served -- therefore
+changes ONLY the "host coordinates": `identifier`, `url`,
+`distribution.contentUrl`, and (with a DOI) `sameAs`.
+
+So we do NOT recompute and we do NOT re-run the emitter (its
+`TILEZZ_GIT_COMMIT` and build time would differ and corrupt the
+recorded provenance). Instead, surgically patch just those fields:
+
+```sh
+rat_enum --mode rehost -o <dataset-dir> \
+    --base-url <new file base URL> [--doi <minted DOI>]
+```
+
+This rewrites only `identifier` / `url` / `distribution` / `sameAs`
+in `<dataset-dir>/ro-crate-metadata.json` and leaves the blocks,
+their recorded sha256s, the provenance, and `variableMeasured`
+byte-for-byte untouched (a `git diff` after the patch shows only
+those host fields). `--mode rehost` does no enumeration, so it does
+not need `--ring` / `-n`. Re-run `verify_sha256.py` afterwards to
+confirm the payload still matches the (unchanged) hashes.
+
+Zenodo flow:
+
+1. Create the Zenodo deposit and upload the dataset (the whole
+   directory's files, or a single tarball of it). Zenodo mints a DOI
+   like `10.5281/zenodo.123`.
+2. Re-host with that DOI and the record's file base URL:
+   - if Zenodo serves the files individually, use their base URL as
+     `--base-url` (so `<base>/block_index.json` resolves), e.g.
+     `--base-url https://zenodo.org/records/123/files`;
+   - if you uploaded a single tarball instead, point
+     `--base-url` at the record's file URL so `contentUrl` resolves
+     to the artifact you actually published.
+3. The identifier becomes a DOI PropertyValue, `sameAs` becomes
+   `https://doi.org/<doi>`, and `url` / `distribution.contentUrl`
+   point at the Zenodo location.
+
+The same command covers any host switch, not just Zenodo: pass the
+new `--base-url` (and `--doi` if one applies). Passing NEITHER flag
+(`rat_enum --mode rehost -o <dataset-dir>`) reverts the crate to the
+location-independent relative forms and drops `url` / `sameAs` --
+useful to clear a stale absolute URL, e.g. before re-archiving the
+canonical tilezz-ratdb branch copy, which deliberately stays
+location-independent (see the note at the end of this document).
 
 ### Exactness / overflow verification gate
 

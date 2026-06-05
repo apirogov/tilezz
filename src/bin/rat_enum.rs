@@ -220,6 +220,16 @@ enum Mode {
     /// dafsa-blocks` for inputs too large to fit in memory as a
     /// Vec<Vec<i8>>.
     Build,
+    /// Re-host an EXISTING dataset to a new host (metadata only, no
+    /// recompute). Surgically patches just the host-coordinate fields
+    /// (`identifier`, `url`, `distribution.contentUrl`, `sameAs`) in
+    /// `<-o dir>/ro-crate-metadata.json` to the `--base-url` / `--doi`
+    /// given, leaving the blocks, their recorded sha256s, the
+    /// provenance (commit / build time / reproduce recipe), and
+    /// `variableMeasured` byte-for-byte unchanged. Use when mirroring a
+    /// dataset to Zenodo or otherwise switching where it is served;
+    /// pass neither flag to revert to the location-independent form.
+    Rehost,
 }
 
 #[derive(Parser, Debug)]
@@ -243,6 +253,8 @@ Output is selected via `--mode` (default: render):\n\
                   through a DAFSA builder and write blocks to `<-o dir>/dafsa/`\n\
   * list-seeds    walk DFS to `--split-depth` and print SEED + RAT lines\n\
                   (for multi-host orchestration; see `--seed`)\n\
+  * rehost        patch an existing dataset's RO-Crate host fields to a\n\
+                  new `--base-url` / `--doi` (no recompute; see -o)\n\
 \n\
 Performance opts (combine for maximum speedup):\n\
   --mod-prune          modular reachability prune; up to 376x on some rings\n\
@@ -260,15 +272,17 @@ docstring in src/bin/rat_enum.rs for the full memory accounting.\n"
 )]
 struct Cli {
     /// Cyclotomic ring index n in `ZZn`. Supported:
-    /// 4, 6, 8, 10, 12, 16, 20, 24, 32, 60.
+    /// 4, 6, 8, 10, 12, 16, 20, 24, 32, 60. Required by every
+    /// enumerating mode; ignored by `--mode rehost` (metadata-only).
     #[arg(short = 'r', long)]
-    ring: u8,
+    ring: Option<u8>,
 
     /// Maximum boundary perimeter to enumerate up to (inclusive).
     /// Memory and time scale exponentially in `n`; expect each
     /// `+1` to multiply runtime by `~3-10` depending on ring.
+    /// Required by every enumerating mode; ignored by `--mode rehost`.
     #[arg(short = 'n', long)]
-    max_steps: usize,
+    max_steps: Option<usize>,
 
     /// Output mode. See the top-level `--help` for the menu.
     #[arg(long, value_enum, default_value_t = Mode::Render)]
@@ -400,6 +414,22 @@ struct Cli {
     #[arg(long)]
     oeis_a_number: Option<String>,
 
+    /// Public base URL where this dataset directory will be hosted
+    /// (e.g. the raw.githubusercontent.com or Pages URL); used to set
+    /// the RO-Crate distribution.contentUrl and identifier on deployed
+    /// assets. Omit for local/test builds (relative URL). In `--mode
+    /// rehost` this is the NEW host the dataset is being moved to.
+    #[arg(long)]
+    base_url: Option<String>,
+
+    /// Minted DOI for this dataset (e.g. `10.5281/zenodo.123` from a
+    /// Zenodo deposit). When set, the RO-Crate identifier becomes a DOI
+    /// PropertyValue and a resolvable `https://doi.org/<doi>` sameAs is
+    /// added. Honoured by the asset-writing modes and by `--mode
+    /// rehost`. Omit when the dataset has no DOI.
+    #[arg(long)]
+    doi: Option<String>,
+
     /// Resume the DFS from a specific seed prefix (comma-separated
     /// angles like `-5,3,-4`). When set, the DFS skips seed
     /// collection and resumes from this prefix; output is the same
@@ -437,11 +467,61 @@ fn main() {
 
     let n_threads = resolve_n_threads(cli.threads);
 
+    // `--mode rehost`: pure metadata patch on an existing dataset, no
+    // DFS and no ring / -n needed. Rewrites only the host-coordinate
+    // fields in the dataset's ro-crate-metadata.json (identifier / url /
+    // distribution / sameAs) to the new --base-url / --doi, leaving
+    // blocks, sha256s, and provenance untouched. Handled first, before
+    // anything reads --ring / --max-steps, so re-hosting a dataset does
+    // not require restating its enumeration parameters.
+    if matches!(cli.mode, Mode::Rehost) {
+        let Some(dir) = cli.filename.as_deref() else {
+            eprintln!("--mode rehost requires -o <existing dataset directory>");
+            std::process::exit(2);
+        };
+        let dir = std::path::Path::new(dir);
+        match tilezz::stringmatch::dafsa::rehost_ro_crate(
+            dir,
+            cli.base_url.as_deref(),
+            cli.doi.as_deref(),
+        ) {
+            Ok(()) => {
+                let where_to = match (cli.base_url.as_deref(), cli.doi.as_deref()) {
+                    (Some(b), Some(d)) => format!("base_url={b} doi={d}"),
+                    (Some(b), None) => format!("base_url={b}"),
+                    (None, Some(d)) => format!("doi={d}"),
+                    (None, None) => "location-independent (relative) form".to_string(),
+                };
+                eprintln!(
+                    "rehost: patched {}/ro-crate-metadata.json to {where_to}",
+                    dir.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("--mode rehost failed: {e}");
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
+    // Every remaining mode enumerates, so --ring and --max-steps are
+    // required from here on. Resolve them once into locals; the rest of
+    // main uses these instead of the Option-typed CLI fields.
+    let Some(ring) = cli.ring else {
+        eprintln!("--ring is required for every mode except --mode rehost");
+        std::process::exit(2);
+    };
+    let Some(max_steps) = cli.max_steps else {
+        eprintln!("-n / --max-steps is required for every mode except --mode rehost");
+        std::process::exit(2);
+    };
+
     if cli.mod_prune {
-        install_mod_prune(cli.ring, cli.max_steps, cli.mod_prune_moduli.as_deref());
+        install_mod_prune(ring, max_steps, cli.mod_prune_moduli.as_deref());
     }
     if cli.closure_key_prune {
-        install_closure_key_prune(cli.ring, cli.closure_key_depth);
+        install_closure_key_prune(ring, cli.closure_key_depth);
     }
     // `--mode list-seeds`: walk the DFS down to split_depth, print
     // alive prefixes as `SEED a,b,c` lines and any already-closed
@@ -449,13 +529,8 @@ fn main() {
     // defaults to 3 (typically ~50-300 seeds at usable n).
     if matches!(cli.mode, Mode::ListSeeds) {
         let split_depth = cli.split_depth.unwrap_or(3);
-        let (closed, seeds) = dispatch_collect_seed_prefixes(
-            cli.ring,
-            cli.max_steps,
-            cli.step,
-            split_depth,
-            cli.free,
-        );
+        let (closed, seeds) =
+            dispatch_collect_seed_prefixes(ring, max_steps, cli.step, split_depth, cli.free);
         for prefix in &seeds {
             let s = prefix
                 .iter()
@@ -496,8 +571,8 @@ fn main() {
     if let Some(seed) = cli.seed.as_deref() {
         let t0 = Instant::now();
         let rats = dispatch_enumerate_from_seed(
-            cli.ring,
-            cli.max_steps,
+            ring,
+            max_steps,
             cli.step,
             seed,
             n_threads,
@@ -514,6 +589,7 @@ fn main() {
 
     match cli.mode {
         Mode::ListSeeds => unreachable!("handled above"),
+        Mode::Rehost => unreachable!("handled above"),
         Mode::Build => {
             let Some(out_dir) = cli.filename.as_deref() else {
                 eprintln!("--mode build requires -o <output directory>");
@@ -560,8 +636,8 @@ fn main() {
                     AssetParams, ProducedVia, SequenceCounts, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
-                    ring: cli.ring,
-                    max_steps: cli.max_steps,
+                    ring,
+                    max_steps,
                     step: cli.step,
                     free: cli.free,
                     target_block_bytes: cli.target_block_bytes,
@@ -571,8 +647,14 @@ fn main() {
                 };
                 let counts = SequenceCounts::from_rats(dafsa.iter());
                 write_archival_extras(&blocks_dir, &params).expect("write archival extras");
-                write_ro_crate(&blocks_dir, &params, &counts)
-                    .expect("write ro-crate-metadata.json");
+                write_ro_crate(
+                    &blocks_dir,
+                    &params,
+                    &counts,
+                    cli.base_url.as_deref(),
+                    cli.doi.as_deref(),
+                )
+                .expect("write ro-crate-metadata.json");
             }
 
             fn dir_size_recursive(p: &std::path::Path) -> u64 {
@@ -605,8 +687,8 @@ fn main() {
             let t0 = Instant::now();
             let cert = tilezz::rat_enum::stream::merge_runs(
                 std::path::Path::new(out_dir),
-                cli.ring,
-                cli.max_steps,
+                ring,
+                max_steps,
                 cli.step,
                 cli.free,
             )
@@ -614,7 +696,7 @@ fn main() {
             let dt = t0.elapsed();
             println!(
                 "merge: ring={} step={} max_steps={} -> {} unique rats in {:?}",
-                cli.ring, cli.step, cli.max_steps, cert.unique_records, dt
+                ring, cli.step, max_steps, cert.unique_records, dt
             );
         }
         Mode::Stream => {
@@ -628,8 +710,8 @@ fn main() {
 
             let t0 = Instant::now();
             let stats = tilezz::rat_enum::stream::stream_enum_dispatch(
-                cli.ring,
-                cli.max_steps,
+                ring,
+                max_steps,
                 cli.step,
                 n_threads,
                 cli.free,
@@ -640,7 +722,7 @@ fn main() {
             let dt = t0.elapsed();
             println!(
                 "stream: ring={} step={} max_steps={} -> wrote runs to {} in {:?}",
-                cli.ring, cli.step, cli.max_steps, out_dir, dt
+                ring, cli.step, max_steps, out_dir, dt
             );
             println!("{stats}");
         }
@@ -657,14 +739,8 @@ fn main() {
             STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
 
             let t0 = Instant::now();
-            let (rats, _stats) = run_rat_enum_seqs(
-                cli.ring,
-                cli.max_steps,
-                cli.step,
-                n_threads,
-                cli.free,
-                cli.paranoid,
-            );
+            let (rats, _stats) =
+                run_rat_enum_seqs(ring, max_steps, cli.step, n_threads, cli.free, cli.paranoid);
             eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
 
             // `RatDafsa::from_rats` handles the (length, lex) sort,
@@ -700,14 +776,8 @@ fn main() {
             STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
 
             let t0 = Instant::now();
-            let (rats, _stats) = run_rat_enum_seqs(
-                cli.ring,
-                cli.max_steps,
-                cli.step,
-                n_threads,
-                cli.free,
-                cli.paranoid,
-            );
+            let (rats, _stats) =
+                run_rat_enum_seqs(ring, max_steps, cli.step, n_threads, cli.free, cli.paranoid);
             eprintln!("enumerated {} rats in {:?}", rats.len(), t0.elapsed());
 
             let t1 = Instant::now();
@@ -734,8 +804,8 @@ fn main() {
                     AssetParams, ProducedVia, SequenceCounts, write_archival_extras, write_ro_crate,
                 };
                 let params = AssetParams {
-                    ring: cli.ring,
-                    max_steps: cli.max_steps,
+                    ring,
+                    max_steps,
                     step: cli.step,
                     free: cli.free,
                     target_block_bytes: cli.target_block_bytes,
@@ -745,7 +815,14 @@ fn main() {
                 };
                 let counts = SequenceCounts::from_rats(dafsa.iter());
                 write_archival_extras(path, &params).expect("write archival extras");
-                write_ro_crate(path, &params, &counts).expect("write ro-crate-metadata.json");
+                write_ro_crate(
+                    path,
+                    &params,
+                    &counts,
+                    cli.base_url.as_deref(),
+                    cli.doi.as_deref(),
+                )
+                .expect("write ro-crate-metadata.json");
             }
 
             // Walk the directory tree so the total includes blocks/
@@ -783,14 +860,8 @@ fn main() {
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
-            let (rats, stats) = run_rat_enum_seqs(
-                cli.ring,
-                cli.max_steps,
-                cli.step,
-                n_threads,
-                cli.free,
-                cli.paranoid,
-            );
+            let (rats, stats) =
+                run_rat_enum_seqs(ring, max_steps, cli.step, n_threads, cli.free, cli.paranoid);
             let dt = t0.elapsed();
 
             // Use the result so it can't be trivially optimized away.
@@ -798,9 +869,9 @@ fn main() {
 
             println!(
                 "benchmark: ring={} step={} max_steps={} -> {} unique rats (total boundary len={}) in {:?}",
-                cli.ring,
+                ring,
                 cli.step,
-                cli.max_steps,
+                max_steps,
                 rats.len(),
                 total_boundary_len,
                 dt
@@ -816,8 +887,8 @@ fn main() {
         }
         Mode::Render => {
             let rats: Vec<Vec<P64>> = run_rat_enum_polylines(
-                cli.ring,
-                cli.max_steps,
+                ring,
+                max_steps,
                 cli.step,
                 n_threads,
                 cli.free,
