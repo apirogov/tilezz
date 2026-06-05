@@ -11,6 +11,9 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
+
 use crate::rat_enum::stream::records::encode_record;
 
 /// Default sort-buffer threshold: ~1M records per flush. With ~16
@@ -83,11 +86,18 @@ impl RunWriter {
             "run_t{:02}_r{:06}.bin",
             self.thread_id, self.run_counter
         ));
-        let mut writer = BufWriter::new(File::create(&path)?);
+        // The run file holds gzip-compressed scratch: the records are
+        // identical canonical bytes for the ~2n dihedral copies of each
+        // rat and the buffer is sorted, so duplicates sit adjacently and
+        // gzip crushes them. Compression::fast() (level 1) -- this is
+        // throwaway scratch, so prioritize speed; the data compresses
+        // well regardless. `finish()` flushes the gzip trailer so the
+        // file is complete on disk before we move on.
+        let mut writer = GzEncoder::new(BufWriter::new(File::create(&path)?), Compression::fast());
         for rec in &self.buffer {
             writer.write_all(rec)?;
         }
-        writer.flush()?;
+        writer.finish()?.flush()?;
         self.total_records_emitted += self.buffer.len() as u64;
         self.run_counter += 1;
         self.buffer.clear();
@@ -158,9 +168,10 @@ mod tests {
         let files = list_run_files(&dir).unwrap();
         assert_eq!(files.len(), 1);
 
+        // Run files are gzip-compressed scratch; decompress before
+        // decoding the records back out.
         let mut buf = Vec::new();
-        File::open(&files[0])
-            .unwrap()
+        flate2::read::GzDecoder::new(File::open(&files[0]).unwrap())
             .read_to_end(&mut buf)
             .unwrap();
 

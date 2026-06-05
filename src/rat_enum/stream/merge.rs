@@ -12,6 +12,9 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
 use crate::rat_enum::stream::runs::list_run_files;
@@ -56,9 +59,13 @@ pub struct Certificate {
     pub total_input_records: u64,
     /// Number of unique records written to `unique.bin`.
     pub unique_records: u64,
-    /// Byte length of `unique.bin`.
+    /// Total byte length of the decompressed record stream (the logical
+    /// content of `unique.bin`, which is gzip-compressed on disk -- this
+    /// is NOT the compressed file size).
     pub unique_bytes: u64,
-    /// BLAKE3 hash of `unique.bin` (hex, 64 chars).
+    /// BLAKE3 hash of the decompressed record stream in `unique.bin`
+    /// (hex, 64 chars). Hashes record CONTENT, not the gzip file bytes,
+    /// so it is unaffected by the scratch compression.
     pub unique_blake3: String,
 }
 
@@ -95,7 +102,12 @@ impl Eq for HeapEntry {}
 /// Streaming reader for one run file. Buffered; reads one record at
 /// a time via the length-prefix.
 struct RunReader {
-    inner: BufReader<File>,
+    // Run files are gzip-compressed scratch (written by RunWriter::flush);
+    // GzDecoder streams them back to the raw record bytes. The merge only
+    // ever reads forward one record at a time, so sequential GzDecoder
+    // reads (no seeking) are exactly what we need. BufReader sits on the
+    // outside so the per-record length-byte + body reads are buffered.
+    inner: BufReader<GzDecoder<File>>,
     buf: Vec<u8>,
 }
 
@@ -103,7 +115,7 @@ impl RunReader {
     fn open(path: &Path) -> std::io::Result<Self> {
         let f = File::open(path)?;
         Ok(RunReader {
-            inner: BufReader::with_capacity(READER_BUFFER_BYTES, f),
+            inner: BufReader::with_capacity(READER_BUFFER_BYTES, GzDecoder::new(f)),
             buf: Vec::with_capacity(64),
         })
     }
@@ -174,7 +186,14 @@ pub fn merge_runs(
 
     let unique_path = out_dir.join(UNIQUE_FILENAME);
     let unique_file = File::create(&unique_path)?;
-    let mut writer = BufWriter::with_capacity(1 << 20, unique_file);
+    // unique.bin is gzip-compressed scratch. The BLAKE3 certificate
+    // hashes the RECORD CONTENT (`hasher.update(&key)` below), not the
+    // compressed file bytes, so gzip is transparent to the certificate.
+    // Compression::fast() -- speed over ratio for throwaway scratch.
+    let mut writer = GzEncoder::new(
+        BufWriter::with_capacity(1 << 20, unique_file),
+        Compression::fast(),
+    );
     let mut hasher = blake3::Hasher::new();
 
     let mut total_in: u64 = 0;
@@ -206,8 +225,9 @@ pub fn merge_runs(
             });
         }
     }
-    writer.flush()?;
-    drop(writer);
+    // finish() flushes the deflate stream + gzip trailer so unique.bin
+    // is a complete gzip member on disk before we read its length back.
+    writer.finish()?.flush()?;
 
     let unique_blake3 = hasher.finalize().to_hex().to_string();
 
@@ -245,15 +265,17 @@ pub fn merge_runs(
 /// 3 (DAFSA build) and for cross-validation tests.
 pub fn read_unique_records(path: &Path) -> std::io::Result<UniqueRecordIter> {
     let f = File::open(path)?;
+    // unique.bin is gzip-compressed scratch; GzDecoder streams it back
+    // to the raw length-prefixed record bytes for sequential reads.
     Ok(UniqueRecordIter {
-        inner: BufReader::with_capacity(READER_BUFFER_BYTES, f),
+        inner: BufReader::with_capacity(READER_BUFFER_BYTES, GzDecoder::new(f)),
     })
 }
 
 /// Streaming iterator over a `unique.bin` file. See [`read_unique_records`].
 #[derive(Debug)]
 pub struct UniqueRecordIter {
-    inner: BufReader<File>,
+    inner: BufReader<GzDecoder<File>>,
 }
 
 impl Iterator for UniqueRecordIter {
@@ -329,13 +351,18 @@ mod tests {
             vec![vec![], vec![2], vec![-1, 0], vec![1, 1], vec![1, 2, 3],]
         );
 
-        // Certificate hash is the BLAKE3 of unique.bin's bytes -- compute
-        // it again and check.
-        let bytes = std::fs::read(dir.join(UNIQUE_FILENAME)).unwrap();
-        assert_eq!(
-            blake3::hash(&bytes).to_hex().to_string(),
-            cert.unique_blake3
-        );
+        // Certificate hash is the BLAKE3 of the decompressed RECORD
+        // stream (not the gzip file bytes). unique.bin is gzip-compressed
+        // scratch, so reconstruct the record bytes via read_unique_records
+        // (re-encoding each record) and hash those to check the cert.
+        use crate::rat_enum::stream::records::encode_record;
+        let mut hasher = blake3::Hasher::new();
+        for rec in read_unique_records(&dir.join(UNIQUE_FILENAME)).unwrap() {
+            let mut enc = Vec::new();
+            encode_record(&rec.unwrap(), &mut enc);
+            hasher.update(&enc);
+        }
+        assert_eq!(hasher.finalize().to_hex().to_string(), cert.unique_blake3);
     }
 
     #[test]
