@@ -217,7 +217,7 @@ fn sha256_hex(path: &Path) -> io::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(super::hex_lower(&hasher.finalize()))
 }
 
 /// One file's RO-Crate File-entity properties.
@@ -1990,7 +1990,7 @@ mod tests {
         let validator = jsonschema::validator_for(&schema).expect("build validator");
         let errors: Vec<String> = validator
             .iter_errors(&instance)
-            .map(|e| format!("{} at {}", e, e.instance_path))
+            .map(|e| format!("{} at {}", e, e.instance_path()))
             .collect();
         assert!(
             errors.is_empty(),

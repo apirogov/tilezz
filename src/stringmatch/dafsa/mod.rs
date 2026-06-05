@@ -39,6 +39,25 @@ pub mod lazy;
 pub mod rat;
 pub mod rocrate;
 
+use sha2::{Digest, Sha256};
+
+/// Lowercase hex encoding of a byte slice. One canonical spelling for
+/// the whole DAFSA stack so the digest-to-string detail lives in a
+/// single place (needed since the `sha2 0.11`/`digest 0.11` bump, where
+/// the finalized `Output` stopped implementing `LowerHex`).
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+    data_encoding::HEXLOWER.encode(bytes)
+}
+
+/// SHA-256 of `bytes` as lowercase hex. Used for block / manifest
+/// digests across the DAFSA stack; streaming file hashing lives in
+/// `rocrate::sha256_hex` (which shares [`hex_lower`]).
+pub(crate) fn sha256_hex_bytes(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    hex_lower(&h.finalize())
+}
+
 pub use core::Dafsa;
 pub use lazy::{LazyRatDafsa, LazyRatDafsaAsync};
 pub use rat::RatDafsa;

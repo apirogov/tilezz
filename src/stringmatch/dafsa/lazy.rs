@@ -32,8 +32,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 
+use super::sha256_hex_bytes;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::rat::RatDafsa;
 
@@ -1004,9 +1004,7 @@ fn root_edges(root: &RootState) -> Vec<EdgeRec> {
 /// check each fetched block file against the hash baked into the
 /// manifest.
 fn verify_block_hash(bytes: &[u8], want: &str, block_index: usize) -> io::Result<()> {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let got = format!("{:x}", hasher.finalize());
+    let got = sha256_hex_bytes(bytes);
     if got != want {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1280,11 +1278,7 @@ fn flush_block(
     // SHA-256 of the gzipped bytes -- both the integrity hash AND
     // the filename stem. Cross-edition stability: same bytes ->
     // same name -> same URL.
-    let sha256 = {
-        let mut h = Sha256::new();
-        h.update(&gz);
-        format!("{:x}", h.finalize())
-    };
+    let sha256 = sha256_hex_bytes(&gz);
     let path = blocks_dir.join(format!("{sha256}.bin"));
     std::fs::write(&path, &gz)?;
     index.push(BlockEntry {
@@ -1939,11 +1933,7 @@ mod tests {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         std::io::Write::write_all(&mut enc, &body).unwrap();
         let gz = enc.finish().unwrap();
-        let sha = {
-            let mut h = Sha256::new();
-            h.update(&gz);
-            format!("{:x}", h.finalize())
-        };
+        let sha = sha256_hex_bytes(&gz);
 
         let manifest = BlockManifest {
             format: MANIFEST_FORMAT.to_string(),
