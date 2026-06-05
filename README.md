@@ -93,7 +93,7 @@ connect arbitrary points), but a unit step.
 
 By using cyclotomic integers for coordinates and expressing all geometric
 objects in terms of unit steps into some direction, each simple polygon allows
-for a natural representation as a sequence of exterior angles along its boundary.
+for a natural representation as a sequence of external angles along its boundary.
 As the sequence is cyclic, there is one cyclically shifted sequence for each
 starting vertex.
 
