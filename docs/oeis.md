@@ -142,21 +142,19 @@ bound -- bank one less `n` for certainty. ZZ32/ZZ60 not calibrated
   "~28 GB" estimate was wrong/conflated with the in-memory path.)
 - **Final dataset (gz blocks) ~= ~5 B/edge** -> **~100-200 MB even
   for billion-rat sets**. Hosting is a non-issue.
-- **Peak SCRATCH disk ~= ~450 B per free rat** -- because the
-  streaming `runs/` + `unique.bin` are UNCOMPRESSED and hold
+- **Peak SCRATCH disk** -- the streaming `runs/` + `unique.bin` hold
   ~dihedral-order (~2n) duplicate copies of each canonical rat (the
   "no HashSet" design trades RAM for disk; the DFS canonical prune
-  cannot fully dedup the dihedral images). -> **ZZ12 n16 ~= ~690 GB
-  scratch -- the BINDING constraint**, larger than a 341 GB volume.
-
-**TODO: gzip the streaming scratch (`runs/` + `unique.bin`).** The
-duplicate records are identical canonical bytes written adjacently in
-sorted runs, so gzip compresses them ~10-25x -> ZZ12 n16 scratch
-~30-70 GB, fitting a commodity box with no extra SSD. ~20 lines in
-`rat_enum/stream/{runs,merge}.rs`; final dataset unchanged (already
-gz). Until then, the deepest reaches (ZZ12 n16, ZZ8 n20, ZZ6 n23,
-ZZ20 n14, ZZ4 n34) need a large scratch volume or a seed-split across
-hosts (`--mode list-seeds`).
+  cannot fully dedup the dihedral images). These duplicate records are
+  identical canonical bytes written adjacently in the sorted runs, so
+  **the scratch is now gzipped** (`Compression::fast()` at all four
+  scratch I/O points; final dataset unchanged, already gz). Measured
+  ZZ12 n13: `runs/` 2069->345 MB (6.0x), `unique.bin` 2134->19 MB
+  (112x), **peak 4203->364 MB (11.5x)**. Uncompressed this was ~450 B
+  per free rat (ZZ12 n16 ~690 GB, larger than a 341 GB volume);
+  gzipped, **ZZ12 n16 peak ~= ~60 GB (worst case ~115 GB) -- fits a
+  341 GB volume with headroom.** The certificate hashes record content
+  (not file bytes), so it is unaffected.
 
 The in-memory `--mode dafsa-blocks` path instead holds all rats
 (~rats x 50 B): fine to ~1e8 rats (<~5 GB RAM), but the billion-rat
