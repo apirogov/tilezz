@@ -135,12 +135,21 @@ function applyResult(result) {
   lastResult = result;
   let live = outEl.querySelector('.rat-explorer-result');
   if (!live) {
-    // First call: install the empty skeleton (outer wrapper +
-    // .rat-explorer-svg + .rat-explorer-info) so subsequent
-    // updates only touch the inner content.
+    // First call: install the empty skeleton so subsequent updates
+    // only touch the inner content. The render column wraps the SVG
+    // box and the export links so the links stay directly under the
+    // canvas in both the two-column and narrow single-column layouts.
+    // The links are buttons (an action, not navigation) styled to read
+    // as plain text links, hidden until there's a shape to export.
     outEl.innerHTML =
       '<div class="rat-explorer-result">' +
-        '<div class="rat-explorer-svg"></div>' +
+        '<div class="rat-explorer-render">' +
+          '<div class="rat-explorer-svg"></div>' +
+          '<div class="rat-explorer-export" hidden>' +
+            '<button type="button" class="export-link" data-export="svg">SVG</button>' +
+            '<button type="button" class="export-link" data-export="png">PNG</button>' +
+          '</div>' +
+        '</div>' +
         '<div class="rat-explorer-info"></div>' +
       '</div>';
     live = outEl.querySelector('.rat-explorer-result');
@@ -149,10 +158,111 @@ function applyResult(result) {
   const svgWrap = live.querySelector('.rat-explorer-svg');
   if (svgWrap.innerHTML !== result.svg) svgWrap.innerHTML = result.svg;
 
+  const exportRow = live.querySelector('.rat-explorer-export');
+  if (exportRow) exportRow.hidden = !hasRenderableShape();
+
   const infoWrap = live.querySelector('.rat-explorer-info');
   const infoHtml = renderInfo(result);
   if (infoWrap.innerHTML !== infoHtml) infoWrap.innerHTML = infoHtml;
 }
+
+// ---- Image export (SVG / PNG) ----
+//
+// Both exports derive from `lastResult.svg`, the self-contained 400x400
+// square the page is already showing (it carries its own xmlns and a
+// white background <rect>). No re-rendering and no wasm round-trip.
+
+// True when there's a real shape on the canvas worth exporting. The
+// empty placeholder (PLACEHOLDER_SVG) and Rust's empty_svg() error case
+// both lack a <polyline>/<polygon>, so the presence of `<poly` is a
+// simple, reliable "something is drawn" signal.
+function hasRenderableShape() {
+  return !!(lastResult && typeof lastResult.svg === 'string'
+            && lastResult.svg.includes('<poly'));
+}
+
+// Filename stem (no extension), prefixed with the ring `zz{n}`.
+//   closed + resolved RatDB id  -> zz12_id12345
+//   otherwise (incl. open snakes) -> zz12_seqN3N2P1
+// where each committed angle becomes a sign letter (N negative, P
+// non-negative) plus its magnitude, so the sequence stays filesystem
+// safe. `idEl.value` is kept in sync with the displayed shape by
+// augmentInfoWithDbId, and is empty for open/miss shapes.
+function exportBasename() {
+  const ring = parseInt(ringEl.value, 10);
+  const ringTag = Number.isFinite(ring) ? `zz${ring}` : 'zz';
+  const state = lastResult?.state;
+  const id = idEl.value.trim();
+  if (state?.closed && /^\d+$/.test(id)) {
+    return `${ringTag}_id${id}`;
+  }
+  const angles = state?.angles ?? [];
+  if (angles.length > 0) {
+    const seq = angles.map((k) => (k < 0 ? 'N' : 'P') + Math.abs(k)).join('');
+    return `${ringTag}_seq${seq}`;
+  }
+  return `${ringTag}_rat`;
+}
+
+// Save `blob` under `filename` via a transient anchor. The object URL is
+// revoked on the next tick so the click's download is committed first.
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function downloadSvg() {
+  if (!hasRenderableShape()) return;
+  const blob = new Blob([lastResult.svg], { type: 'image/svg+xml;charset=utf-8' });
+  triggerDownload(blob, exportBasename() + '.svg');
+}
+
+// Rasterize the current SVG onto a 400x400 canvas (1:1 with the source;
+// higher resolution is left to the user re-rastering the SVG). The
+// canvas is filled white first so any transparent edge stays white even
+// though the SVG already paints its own background.
+function downloadPng() {
+  if (!hasRenderableShape()) return;
+  const svgBlob = new Blob([lastResult.svg], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(svgBlob);
+  const img = new Image();
+  img.onload = () => {
+    const size = 400;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(img, 0, 0, size, size);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((blob) => {
+      if (blob) triggerDownload(blob, exportBasename() + '.png');
+    }, 'image/png');
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    console.warn('PNG export: failed to rasterize the SVG');
+  };
+  img.src = url;
+}
+
+// Delegated on #out because the result skeleton (which holds the
+// buttons) is rebuilt on the first render. The existing swipe handler
+// keys off `.rat-explorer-svg`, so these `.export-link` clicks don't
+// collide with it.
+outEl.addEventListener('click', (e) => {
+  const btn = e.target.closest?.('.export-link');
+  if (!btn) return;
+  if (btn.dataset.export === 'svg') downloadSvg();
+  else if (btn.dataset.export === 'png') downloadPng();
+});
 
 // Build the info-panel HTML from the structured analysis result.
 // All labels, ordering, and DOM shape live here -- no rebuild
