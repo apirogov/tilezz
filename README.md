@@ -37,7 +37,7 @@ The API is not stable, and maybe never will be, so usage as a library is at your
 
 ## Demonstration
 
-### Exploring the cyclotomic ring ZZ12
+### Exploring the cyclotomic ring Z[ζ_12]
 
 *To be able to execute the demos on your computer, make sure to build the crate with the `cli` feature enabled.*
 
@@ -54,8 +54,8 @@ To generate images like these, check out the [`cyc_explore`](./src/bin/cyc_explo
 <img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
 <img src="https://github.com/user-attachments/assets/198814da-471f-49f3-81e1-784c4252c388" width="45%" />
 
-Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: ~25 ms),
-Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: ~0.7 s).
+Left: All 965 distinct polyominos with boundary length up to 16 over Z[ζ_4] (computation time: ~25 ms),
+Right: All 933 distinct matchstick polygons with boundary length up to 8 over Z[ζ_12] (computation time: ~0.7 s).
 The polygon sets are computed by a single-threaded DFS over angle sequences with a lex-min rotation prune
 that collapses each polygon's `n` cyclic walks down to one - see [rat_enum](./src/bin/rat_enum.rs).
 
@@ -207,7 +207,7 @@ use tilezz::vis::scene::{Color, Fill, Scene, Stroke, TextStyle, Viewport};
 // so this fully determines a polygon.
 let external_angles: &[i8] = &[3, 2, 0, 2, -3, 2, 3, 2, -3, 2, 3, -2, 3, -2];
 
-// Instantiate an abstract polygon over the cyclotomic ring ZZ12.
+// Instantiate an abstract polygon over the cyclotomic ring Z[ζ_12].
 let r: Rat<ZZ12> = external_angles.try_into().unwrap();
 // Trace it out in the cartesian plane.
 let pts: Vec<(f64, f64)> = r.to_polyline_f64(Turtle::default());
