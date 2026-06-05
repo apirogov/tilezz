@@ -47,6 +47,17 @@ subring-step cross-checks). Pinned in `opt_correctness_tests`.
 | ZZ10 free | A316200 | a(4..10) *(a(11): OEIS overcounts; correction in Improve)* |
 | ZZ12 free | A316192 | a(3..10) |
 
+OEIS provenance (re-verified against oeis.org 2026-06-05): the ZZ4 and
+ZZ6 *free* counts are Luca Petrone (A266549 to a(20); A284869 to
+a(22)=374128188). Every A3161xx sequence -- free ZZ8/ZZ10/ZZ12,
+symmetric, and coset -- is Hugo Pfoertner (Jun/Jul 2018). The
+holes-allowed siblings A057729/A057730 are N. J. A. Sloane. All carry
+the OEIS `more` keyword, i.e. they are open for extension. Indexing
+differs: A266549, A316194, A316195/197/199/201, A316198 and A057730 use
+a(n) = perimeter 2n (square / coset / even-perimeter families); A284869,
+A316192, A316196, A316200 and A057729 index by perimeter n directly.
+Quote terms in each sequence's own convention.
+
 Now also matchable **by filtering** (no new code):
 
 | OEIS | what | status |
@@ -70,7 +81,8 @@ Now also matchable **by filtering** (no new code):
   - A316192 (ZZ12): a(11..14) = 89075, 597581, 4076855, 28499301.
   - A316198 (ZZ8): a(7) = 240549 (perim 14).
   - A316200 (ZZ10): a(12..14) once a(11) is accepted.
-  - A284869 (ZZ6): OEIS lists to ~a(24); a day of compute reaches it.
+  - A284869 (ZZ6): OEIS lists to a(22)=374128188 (Petrone); a day of
+    compute (n~24) extends it.
 - **Extend the coset/symmetric** sequences (A316195/197/199,
   A316194/196) past their published terms — same filtered free runs.
   Given A316200 was wrong at its deepest term, **re-checking the
@@ -85,8 +97,11 @@ free run:
 - **one-sided** for every ring (`2*free - achiral`) — uncatalogued.
 - **odd sub-rings** ZZ3/5/7/9 (= `subring` filter of ZZ6/10/14/18) —
   no OEIS entry; also obtainable via `--step 2` directly.
-- **symmetric / achiral / rotationSymmetric** for rings beyond ZZ4/6;
-  and the achiral/rotational split (A323188/A323189-style).
+- **symmetric / achiral / rotationSymmetric** for rings beyond ZZ4/6,
+  and the achiral vs rotational split per family. (A323188/A323189 do an
+  analogous mirror/point-symmetry split but for square-lattice
+  self-avoiding *walks*, not closed polygons -- ours are the
+  closed-polygon analogue, uncatalogued.)
 - **full-ring free** for ZZ14, ZZ16, ZZ18, ZZ20, ZZ24 (no OEIS oracle
   today) — straightforward submissions with a methodology citation.
 
@@ -100,7 +115,7 @@ day" are wall-clock for the **enumeration**; counts are cumulative
 | Ring | branch | 10 min: n (~rats) | 1 day: n (~rats) | notes |
 |---|--:|---|---|---|
 | ZZ4  | 3  | ~28 (1.4e7) | ~34 (4e9)  | square; even perim only; tiny DAFSA |
-| ZZ6  | 5  | ~20 (4e7)   | ~24 (8e9)  | triangular; **reaches A284869's frontier** |
+| ZZ6  | 5  | ~20 (4e7)   | ~24 (8e9)  | triangular; **extends A284869** (Petrone, to a(22)) |
 | ZZ8  | 7  | 16  (5e6)   | ~20 (3e9)  | even perim only |
 | ZZ10 | 9  | ~15 (1.5e7) | ~18 (4e9)  | |
 | ZZ12 | 11 | ~14 (3e7)   | **~16 (1.6e9)** | north star (OEIS A316192) |
