@@ -54,3 +54,11 @@ clean:
 # poison the next `just dev`.
 clean-all: clean
     rm -rf web/ratdb/data web/ratdb/ro-crate-metadata.json
+
+# Check that every evcxr notebook under notebooks/ still compiles and
+# runs against the current working tree -- catches API drift before a
+# release. Splices each notebook's cells into one program and runs it
+# (see notebooks/check.py for the execution model and caveats). Pass
+# --no-run for a compile-only check.
+check-notebooks:
+    python3 notebooks/check.py
