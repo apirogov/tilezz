@@ -105,40 +105,63 @@ free run:
 - **full-ring free** for ZZ14, ZZ16, ZZ18, ZZ20, ZZ24 (no OEIS oracle
   today) — straightforward submissions with a methodology citation.
 
-## Reach (measured; commodity machine, all cores)
+## Reach (measured 2026-06-05; 16-core / 61 GB box, all cores, full prunes)
 
-Extrapolated from a `--mode bench --free --threads 0 --mod-prune
---closure-key-prune` sweep (count + timing per `n`). "10 min" and "1
-day" are wall-clock for the **enumeration**; counts are cumulative
-(<= perimeter `n`).
+Per-ring `--mode bench --free --threads 0 --mod-prune
+--closure-key-prune` timing sweeps: a measured anchor `(n, seconds)`
+plus the measured per-`n` growth factor, extrapolated PESSIMISTICALLY
+(factor held flat or worst-observed; reach rounded down). These are
+ENUMERATION (count) times; a deployable dataset adds the build stage
+(see Resources). Counts cumulative (<= perimeter `n`).
 
-| Ring | branch | 10 min: n (~rats) | 1 day: n (~rats) | notes |
-|---|--:|---|---|---|
-| ZZ4  | 3  | ~28 (1.4e7) | ~34 (4e9)  | square; even perim only; tiny DAFSA |
-| ZZ6  | 5  | ~20 (4e7)   | ~24 (8e9)  | triangular; **extends A284869** (Petrone, to a(22)) |
-| ZZ8  | 7  | 16  (5e6)   | ~20 (3e9)  | even perim only |
-| ZZ10 | 9  | ~15 (1.5e7) | ~18 (4e9)  | |
-| ZZ12 | 11 | ~14 (3e7)   | **~16 (1.6e9)** | north star (OEIS A316192) |
-| ZZ14 | 13 | 12 (8e5)    | ~14 (2e8)  | cubic-root sign, slow per node |
-| ZZ16 | 15 | 12 (1.7e6)  | ~14        | even perim only |
-| ZZ18 | 17 | ~11 (1e6)   | ~14 (8e8)  | cubic-root sign |
-| ZZ20 | 19 | ~13 (2e7)   | ~15 (6e8)  | |
-| ZZ24 | 23 | ~11 (4e6)   | ~13 (4e8)  | |
-| ZZ32 | 31 | ~8–9        | ~10        | not benchmarked; i128 sign + huge branching |
-| ZZ60 | 59 | ~6–7        | ~8         | extreme branching; smallest reach |
+| ring | step | growth /+1 n | anchor | 10 min | ~1 hr | ~1 day | ~rats @1-day |
+|---|---|---|---|---|---|---|---|
+| ZZ4  | even  | x5.7 /+2     | n27=36s  | n28 | n30    | n34 (~9h)    | ~2e9 |
+| ZZ6  | every | x3.65        | n18=42s  | n20 | n21    | n23 (~8h)    | ~1.9e9 |
+| ZZ8  | even  | x22.9 /+2    | n16=83s  | n16 | n18    | n20 (~12h)   | ~3e9 |
+| ZZ10 | every | x6 (rising)  | n14=41s  | n15 | n16    | n17-18       | 5e8 / 2.4e9 |
+| ZZ12 | every | x7.0         | n13=85s  | n14 | n14-15 | n16 (~8h)    | 1.6e9 |
+| ZZ14 | every | x16.8        | n12=53s  | n12 | n13    | n13-14 (~4h) | ~2e8 |
+| ZZ16 | even  | >=x26 /+2    | n12=42s  | n12 | n12-14 | ~n14         | ~1e8 |
+| ZZ18 | every | x9.0         | n10=14s  | n11 | n12    | n13 (~3h)    | ~1e8 |
+| ZZ20 | every | x14.7        | n12=255s | n12 | n12-13 | n14 (~15h)   | ~1.7e9 |
+| ZZ24 | every | x11.3        | n10=25s  | n11 | n12    | n13 (~10h)   | ~6e8 |
 
-**Memory / disk (the real ceiling at the deep end).** The DAFSA
-*build* holds the automaton in RAM, and that scales with **states**
-(sublinear in rats), not rats. Reference (ZZ12): n=14 -> 33M rats /
-613K states / 2.67M edges / 9 MB gz; n=16 -> ~1.7e9 rats but only
-~7M states -> ~28 GB build RAM, ~130 MB gz blocks. So:
+Even-only rings (ZZ4/8/16) gain new counts only on even `n`. ZZ16 is
+the least-pinned: n14 alone takes >18 min, so its 1-day cell is a
+rough placeholder (a dedicated overnight calibration is needed to
+target it). ZZ6 1-day is n23 (~8h), NOT n24 (n24 ~28h). On the
+rising/steep rings (ZZ10/14/20/24) treat the 1-day cell as an upper
+bound -- bank one less `n` for certainty. ZZ32/ZZ60 not calibrated
+(extreme branching; small-n only).
 
-- Sequences/counts via `--mode bench`: time-limited only (cheap RAM).
-- Full **datasets** (DAFSA): the billion-rat "1 day" reaches need a
-  32–64 GB box for the build; gz hosting is ~100s of MB. Use the
-  streaming pipeline (`stream`/`merge`/`build`) to bound RAM during
-  the sort; the build stage is the bottleneck.
-- Per-lookup cost in the explorer is unaffected (lazy block fetch).
+## Resources (measured 2026-06-05; constants from a stream->merge->build sweep, rings 4/6/8/10/12)
+
+- **Streaming-build RAM ~= 20 MB + ~280 B/state** -> even ZZ12 n16
+  (~7M states) ~= **~2 GB**. RAM is NOT the constraint. (A prior
+  "~28 GB" estimate was wrong/conflated with the in-memory path.)
+- **Final dataset (gz blocks) ~= ~5 B/edge** -> **~100-200 MB even
+  for billion-rat sets**. Hosting is a non-issue.
+- **Peak SCRATCH disk ~= ~450 B per free rat** -- because the
+  streaming `runs/` + `unique.bin` are UNCOMPRESSED and hold
+  ~dihedral-order (~2n) duplicate copies of each canonical rat (the
+  "no HashSet" design trades RAM for disk; the DFS canonical prune
+  cannot fully dedup the dihedral images). -> **ZZ12 n16 ~= ~690 GB
+  scratch -- the BINDING constraint**, larger than a 341 GB volume.
+
+**TODO: gzip the streaming scratch (`runs/` + `unique.bin`).** The
+duplicate records are identical canonical bytes written adjacently in
+sorted runs, so gzip compresses them ~10-25x -> ZZ12 n16 scratch
+~30-70 GB, fitting a commodity box with no extra SSD. ~20 lines in
+`rat_enum/stream/{runs,merge}.rs`; final dataset unchanged (already
+gz). Until then, the deepest reaches (ZZ12 n16, ZZ8 n20, ZZ6 n23,
+ZZ20 n14, ZZ4 n34) need a large scratch volume or a seed-split across
+hosts (`--mode list-seeds`).
+
+The in-memory `--mode dafsa-blocks` path instead holds all rats
+(~rats x 50 B): fine to ~1e8 rats (<~5 GB RAM), but the billion-rat
+reaches would need ~50-80 GB RAM -- use the streaming pipeline there.
+Per-lookup cost in the explorer is unaffected (lazy block fetch).
 
 ## Workflow per ring (the lever, concretely)
 
