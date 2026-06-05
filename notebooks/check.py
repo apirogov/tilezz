@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,9 +40,18 @@ from pathlib import Path
 CRATE = "tilezz"  # the crate under test; its :dep features are honored
 REPO = Path(__file__).resolve().parent.parent
 NB_DIR = REPO / "notebooks"
-# Generated harness lives under target/ (git-ignored); its own build
-# cache persists there so repeat runs are fast.
+# The generated harness manifest + sources live here (git-ignored).
 HARNESS = REPO / "target" / "nbcheck"
+# ...but its build output goes to the SHARED workspace target dir, so the
+# harness reuses dependency crates the main build already compiled (with
+# matching features/profile) instead of compiling a second private copy.
+SHARED_TARGET = REPO / "target"
+
+
+def cargo_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["CARGO_TARGET_DIR"] = str(SHARED_TARGET)
+    return env
 
 # A line that ends a cell as a bare expression (e.g. `scene.display(&vp)`)
 # must gain a `;` once spliced mid-function, or the concatenation will not
@@ -145,6 +155,7 @@ def main() -> int:
             proc = subprocess.run(
                 cmd,
                 cwd=HARNESS,
+                env=cargo_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

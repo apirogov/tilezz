@@ -48,6 +48,14 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: notebook executability
+        # Splice each evcxr notebook's cells into one program and
+        # compile + run it against this checkout, so a renamed module
+        # or changed signature fails the build instead of a user's
+        # kernel. Builds into the shared target dir, reusing deps from
+        # the clippy step. See notebooks/check.py for the model/caveats.
+        run: python3 notebooks/check.py
+
       - name: round-trip test (asset emit + tools/reproduce.sh + diff)
         run: |
           set -euo pipefail
