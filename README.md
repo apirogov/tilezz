@@ -1,6 +1,6 @@
 # tilezz
 
-*Perfect-precision 2D polygonal tiles over cyclotomic integer rings -- no floats, no coordinates, no grids.*
+*Perfect-precision 2D polygonal tiles over cyclotomic integer rings - no floats, no coordinates, no grids.*
 
 [![Crates.io](https://img.shields.io/crates/v/tilezz.svg)](https://crates.io/crates/tilezz)
 [![docs.rs](https://img.shields.io/docsrs/tilezz)](https://docs.rs/tilezz)
@@ -33,15 +33,13 @@ The concepts this work is based on are described in the following blog posts:
 * (more posts will probably be added over time)
 
 Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
-The crate is pre-1.0 -- APIs may break between minor versions as the internals
-get cleaned up. Pin to an exact version (`tilezz = "=0.0.4"`) if that matters
-to you.
+The API is not stable, and maybe never will be, so usage as a library is at your own risk.
 
 ## Demonstration
 
-*To be able to execute the demos on your computer, make sure to build the crate with the `cli` feature enabled.*
-
 ### Exploring the cyclotomic ring ZZ12
+
+*To be able to execute the demos on your computer, make sure to build the crate with the `cli` feature enabled.*
 
 <img src="https://github.com/user-attachments/assets/a7d1d698-8e7c-41a8-b2a8-49a8fed80c2e" width="45%" />
 <img src="https://github.com/user-attachments/assets/d246fd60-bfed-4ff8-9393-2ae14e77e4d2" width="45%" />
@@ -59,9 +57,18 @@ To generate images like these, check out the [`cyc_explore`](./src/bin/cyc_explo
 Left: All 965 distinct polyominos with boundary length up to 16 over ZZ4 (computation time: ~25 ms),
 Right: All 933 distinct matchstick polygons with boundary length up to 8 over ZZ12 (computation time: ~0.7 s).
 The polygon sets are computed by a single-threaded DFS over angle sequences with a lex-min rotation prune
-that collapses each polygon's `n` cyclic walks down to one -- see [rat_enum](./src/bin/rat_enum.rs).
+that collapses each polygon's `n` cyclic walks down to one - see [rat_enum](./src/bin/rat_enum.rs).
 
 To generate images like these, check out the [`rat_enum`](./src/bin/rat_enum.rs) binary.
+
+### Rat Explorer
+
+The [Rat Explorer](https://ratdb.app.pirogov.de) is an interactive and mobile-friendly database 
+of simple cyclotomic matchstick polygons.
+
+<!--
+<img src="TODO" width="45%" />
+-->
 
 ## Essential Concepts
 
@@ -114,27 +121,25 @@ The library also provides a 2D rendering pipeline that helps visualizing the
 provided data structures by rendering them into various output formats, such as
 SVG, PNG (`raster` feature) or GIF (`animation` feature).
 
-The minimum supported Rust version is **1.85** (Rust 2024 edition).
-
 ### As a library
 
 Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-tilezz = "0.0.4"
+tilezz = "0.1.0"
 ```
 
 Full API reference (auto-built by docs.rs against the current published version):
 **https://docs.rs/tilezz**
 
-Default features are intentionally empty so the dependency stays lean -- just
+Default features are intentionally empty so the dependency stays lean - just
 the core cyclotomic types + geometry + string algorithms, no clap, threading,
 or rendering deps unless you opt in. Enable what you need:
 
-* `raster` -- PNG output via `resvg` + `tiny-skia`
-* `animation` -- multi-frame GIF (implies `raster`)
-* `cli` -- bundled CLI binaries (`rat_enum`, `cyc_explore`, `patch_enum`,
+* `raster`: PNG output via `resvg` + `tiny-skia`
+* `animation`: multi-frame GIF (implies `raster`)
+* `cli`: bundled CLI binaries (`rat_enum`, `cyc_explore`, `patch_enum`,
   `polyomino`, `tileset_collect`); implies `animation`
 
 ### Bundled CLI tools
@@ -168,7 +173,7 @@ Jupyter Notebooks using a Rust kernel (check out the
 [evcxr documentation](https://github.com/evcxr/evcxr/blob/main/evcxr_jupyter/README.md)),
 then you are already set up for using this crate interactively.
 
-#### Rendering the Spectre Tile Over the Cyclotomic Integer Ring ZZ12
+#### Rendering the Spectre Tile Over the Cyclotomic Integer Ring Z[ζ_12]
 
 Here is how you can quickly construct and render the
 [spectre tile](https://en.wikipedia.org/wiki/Einstein_problem):
@@ -280,12 +285,9 @@ suitable polygons.
 
 The corresponding underlying representations are optimized for and limited to
 the respective ring, there is **no overhead due to management of symbolic
-representations** or anything like that, because for each ring, the provided
-data type encodes the values of each ring as vectors over a linearly independent
-set base of units (and all their distinct symbolic products), together with a
-ring-specific implementation of multiplication, which hard-codes the symbolic
-simplifications of expressions that appear during the evaluation of
-multiplication.
+representations** or anything like that, because for each ring, the 
+data type implements an efficient implementation using a minimal basis, together
+with ring-specific implementations of multiplication and some other operations.
 
 I have not tried to compare this crate to the other approaches or benchmark
 anything yet, because the implementations of the complex integers were not the
