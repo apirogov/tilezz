@@ -350,6 +350,81 @@ mod tests {
         check_stream_build_matches_baseline::<ZZ12>(12, 8, false);
     }
 
+    /// Force the volume-fan-out paths that a default-threshold run at
+    /// small n never reaches, and which only grow at large n: a tiny
+    /// per-writer buffer so each writer flushes into MANY run files
+    /// (exercising cross-flush local dedup), plus every rat written
+    /// through two different writers so the same record lands in
+    /// different run files and the k-way merge must collapse it. The
+    /// merged, rebuilt set must still equal the in-memory baseline
+    /// exactly. This logic is ring-independent -- the rings only change
+    /// the byte values, not the encode/sort/merge/dedup path -- so one
+    /// ring suffices; what matters here is the run-file fan-out, not
+    /// the choice of ring.
+    #[test]
+    fn stream_merge_dedups_across_many_runs_and_flushes() {
+        use crate::rat_enum::stream::runs::{RunWriter, list_run_files};
+        use crate::stringmatch::RatDafsa;
+
+        let dir = tempdir();
+        let runs_dir = dir.join(RUNS_SUBDIR);
+        std::fs::create_dir_all(&runs_dir).unwrap();
+        let prunes = Prunes::default();
+
+        // Real canonical rats from the in-memory engine (ZZ12 n8 = 517).
+        let ops = canonical_make_ops(true);
+        let (baseline, _) = rat_enum_with::<ZZ12>(8, 1, ops, "baseline", "", false, &prunes);
+        assert!(baseline.len() > 50, "need a non-trivial set to fan out");
+
+        // threshold=7 -> dozens of flushes per writer; 3 writers; each
+        // rat recorded into two distinct writers -> a duplicate sitting
+        // in a different run file that only the global merge can dedup.
+        {
+            let mut writers: Vec<RunWriter> = (0..3)
+                .map(|tid| RunWriter::with_threshold(&runs_dir, tid, 7))
+                .collect();
+            for (i, rat) in baseline.iter().enumerate() {
+                writers[i % 3].record(rat);
+                writers[(i + 1) % 3].record(rat);
+            }
+            // writers flush remaining buffers on Drop here.
+        }
+
+        let files = list_run_files(&runs_dir).unwrap();
+        assert!(
+            files.len() > 3,
+            "tiny threshold should fan out into many run files, got {}",
+            files.len()
+        );
+
+        let cert = merge_runs(&dir, 12, 8, 1, true).expect("merge_runs");
+        assert_eq!(
+            cert.unique_records as usize,
+            baseline.len(),
+            "k-way merge must collapse the duplicated records back to baseline cardinality"
+        );
+
+        let records = read_unique_records(&dir.join(UNIQUE_FILENAME))
+            .unwrap()
+            .map(|r| r.unwrap());
+        let streamed = RatDafsa::from_sorted_unique_rats(records);
+        let baseline_dafsa = RatDafsa::from_rats(baseline.iter().map(|v| v.as_slice()));
+
+        assert_eq!(streamed.len(), baseline_dafsa.len(), "cardinality mismatch");
+        let s: Vec<Vec<i8>> = streamed.iter().collect();
+        let b: Vec<Vec<i8>> = baseline_dafsa.iter().collect();
+        assert_eq!(s, b, "fan-out stream-merge set != in-memory baseline");
+        for rat in &s {
+            assert_eq!(
+                streamed.index_of(rat.as_slice()),
+                baseline_dafsa.index_of(rat.as_slice()),
+                "index_of mismatch for {rat:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// Re-running the full pipeline (stream -> merge -> build) into
     /// the same output directory must produce byte-identical
     /// artifacts on the second invocation. Guards against any stage
