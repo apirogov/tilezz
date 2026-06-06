@@ -198,8 +198,7 @@ function exportBasename() {
   }
   const angles = state?.angles ?? [];
   if (angles.length > 0) {
-    const seq = angles.map((k) => (k < 0 ? 'N' : 'P') + Math.abs(k)).join('');
-    return `${ringTag}_seq${seq}`;
+    return `${ringTag}_seq${encodeSeqParam(angles)}`;
   }
   return `${ringTag}_rat`;
 }
@@ -357,6 +356,34 @@ function esc(s) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+// Compact, URL-safe encoding for an angle sequence, shared by the
+// shareable `?seq=` URL param and exported image filenames: each
+// angle becomes a sign letter (P for >= 0, N for negative) followed
+// by its magnitude, e.g. [3, -5, 4] <-> `P3N5P4`. Letters instead of
+// signs + comma separators keep the string within the unreserved URL
+// alphabet, so URLSearchParams emits it verbatim with no `%2C`
+// percent-escaping. Accepts an Array or a typed array (state.angles
+// arrives as either depending on the wasm path).
+function encodeSeqParam(angles) {
+  return Array.from(angles)
+    .map((k) => (k < 0 ? 'N' : 'P') + Math.abs(k))
+    .join('');
+}
+
+// Inverse of encodeSeqParam. Returns the angles as a space-separated
+// string (the angle input box's format), or null when `s` is not in
+// the `P3N5P4` form -- letting callers fall back to the legacy
+// comma-separated `?seq=` spelling for older shared links.
+function decodeSeqParam(s) {
+  if (!/^([PN]\d+)+$/.test(s)) return null;
+  const out = [];
+  for (const m of s.matchAll(/([PN])(\d+)/g)) {
+    const mag = parseInt(m[2], 10);
+    out.push(m[1] === 'N' ? -mag : mag);
+  }
+  return out.join(' ');
 }
 
 // Parse the angle input box into a `Vec<i8>`-compatible `Int8Array`
@@ -650,14 +677,26 @@ idIncBtn.addEventListener('click', () => stepId(1));
 
 // Keep the URL in sync with the (ring, sequence) pair so any
 // committed state is shareable / bookmarkable.
-// Scheme: `?ring=<n>&seq=a,b,c,...` (comma-separated, no spaces
-// in the URL). Defaults: ring=12, seq empty.
+// Scheme: `?ring=<n>&seq=P3N5P4...` -- each angle is a sign letter
+// (P for >= 0, N for negative) plus its magnitude, the same compact,
+// URL-safe encoding used for exported image filenames. It stays in
+// the unreserved URL alphabet, so the shared link reads cleanly with
+// no `%2C` comma-escaping. Defaults: ring=12, seq empty.
+//
+// While typing, the box can briefly hold an unparseable token; in
+// that case we keep the legacy comma-separated spelling rather than
+// drop the seq, and the read side accepts both forms.
 function syncUrl() {
   const params = new URLSearchParams();
   params.set('ring', ringEl.value);
-  const seq = anglesEl.value.trim();
-  if (seq.length > 0) {
-    params.set('seq', seq.split(/\s+/).join(','));
+  const text = anglesEl.value.trim();
+  if (text.length > 0) {
+    const parsed = parseAnglesText(text);
+    if (parsed.error) {
+      params.set('seq', text.split(/\s+/).join(','));
+    } else if (parsed.angles.length > 0) {
+      params.set('seq', encodeSeqParam(parsed.angles));
+    }
   }
   const newSearch = '?' + params.toString();
   // Avoid a needless history entry when nothing actually changed
@@ -668,11 +707,12 @@ function syncUrl() {
   }
 }
 
-// Pull initial state from the URL (ring + comma-separated seq)
-// BEFORE the first run() so it's reflected in the rendered SVG
-// immediately. Invalid ring values are ignored; the seq is
-// converted from comma-separated (URL form) to space-separated
-// (input-box form) and passed straight to the engine -- any
+// Pull initial state from the URL (ring + seq) BEFORE the first
+// run() so it's reflected in the rendered SVG immediately. Invalid
+// ring values are ignored. The seq is decoded from the compact
+// `P3N5P4` form into space-separated angles (the input-box form);
+// a legacy comma-separated `?seq=` still loads via the fallback.
+// Either way the angles pass straight to the engine -- any
 // unparseable tokens surface as the usual parse-error fragment.
 // Pull initial state from the URL. `?seq=...` wins over `?id=...`
 // (so a shared link with both falls back to the explicit angle
@@ -684,7 +724,9 @@ if (initialParams.has('ring')) {
   if (ringEl.querySelector(`option[value="${CSS.escape(r)}"]`)) ringEl.value = r;
 }
 if (initialParams.has('seq')) {
-  anglesEl.value = initialParams.get('seq').replace(/,/g, ' ').trim();
+  const raw = initialParams.get('seq');
+  const decoded = decodeSeqParam(raw);
+  anglesEl.value = decoded !== null ? decoded : raw.replace(/,/g, ' ').trim();
 }
 // Discover which datasets are shipped (top-level RO-Crate), then
 // kick off the DB load for the current ring. The "loading ..." tip
