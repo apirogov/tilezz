@@ -41,8 +41,8 @@ The API is not stable, and maybe never will be, so usage as a library is at your
 
 *To be able to execute the demos on your computer, make sure to build the crate with the `cli` feature enabled.*
 
-<img src="https://github.com/user-attachments/assets/a7d1d698-8e7c-41a8-b2a8-49a8fed80c2e" width="45%" />
-<img src="https://github.com/user-attachments/assets/d246fd60-bfed-4ff8-9393-2ae14e77e4d2" width="45%" />
+<img width="45%" alt="zz12-bfs-origin" src="https://github.com/user-attachments/assets/f2a2b4da-1a56-4a03-8ee6-541ddf3c1d9b" />
+<img width="45%" alt="zz12-bfs-unitsquare" src="https://github.com/user-attachments/assets/a7eac67a-e1f4-4ab8-94be-26a7ef69ef0a" />
 
 Left: BFS from the origin, Right: BFS in the unit square, starting in the corners and normalizing discovered point modulo unit square.
 Each image shows the new points discovered in the corresponding round.
@@ -51,8 +51,8 @@ To generate images like these, check out the [`cyc_explore`](./src/bin/cyc_explo
 
 ### Enumerating simple polygons constructible over cyclotomic rings
 
-<img src="https://github.com/user-attachments/assets/3940b499-8a11-40e0-a53f-3b145bc0b894" width="45%" />
-<img src="https://github.com/user-attachments/assets/198814da-471f-49f3-81e1-784c4252c388" width="45%" />
+<img width="45%" alt="zz4-polyominoes" src="https://github.com/user-attachments/assets/a9cd33b4-03be-41f1-8d7c-90db14664826" />
+<img width="45%" alt="zz12-matchsticks" src="https://github.com/user-attachments/assets/135985cc-5fbe-4e05-bb55-55b8e28025fc" />
 
 Left: All 965 distinct polyominos with boundary length up to 16 over Z[ζ_4] (computation time: ~25 ms),
 Right: All 933 distinct matchstick polygons with boundary length up to 8 over Z[ζ_12] (computation time: ~0.7 s).
@@ -66,9 +66,7 @@ To generate images like these, check out the [`rat_enum`](./src/bin/rat_enum.rs)
 The [Rat Explorer](https://ratdb.app.pirogov.de) is an interactive and mobile-friendly database 
 of simple cyclotomic matchstick polygons.
 
-<!--
-<img src="TODO" width="45%" />
--->
+<img width="80%" alt="2026-06-03_161627" src="https://github.com/user-attachments/assets/cd5ff879-ac44-448a-a580-02608c1e8d0f" />
 
 ## Essential Concepts
 
