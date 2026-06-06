@@ -131,12 +131,18 @@ later, so see section 6 to add it after the fact without recomputing.
 each prefix out with `--seed a,b,c` on separate hosts, then feed
 all resulting runs through the same merge + build stages.
 
-**Block size**: `--target-block-bytes` counts UNCOMPRESSED bytes
-per block (the `.bin` files are additionally gzipped, roughly 3x
-smaller on disk). The 1 MiB default is the intended sweet spot for
-HTTP-served assets; the n=10 probe used 8192 deliberately to force
-a multi-block layout out of a tiny dataset. Don't do that for real
-datasets.
+**Block size**: `--target-block-bytes` is the threshold on each
+block's UNCOMPRESSED serialized size; the `.bin` files are then
+gzipped (~3-4x smaller on disk). Consequence to internalize: the
+block COUNT tracks the UNCOMPRESSED DAFSA size, NOT the on-disk
+footprint -- do not expect `(on-disk MB) / (1 MiB)` blocks. Worked
+example: ZZ4 n=32 serializes to ~45 MiB uncompressed -> 46 blocks of
+~1 MiB each -> ~13 MB gzipped on disk (each block ~280 KB over HTTP,
+which is what the lazy explorer fetches). So "13 MB on disk but 46
+blocks" is expected, not a bug. The 1 MiB default is the sweet spot
+for HTTP-served assets; the n=10 probe used 8192 deliberately to
+force a multi-block layout out of a tiny dataset -- don't do that for
+real datasets.
 
 **"Upgrading" to a higher n**: there is no incremental path -- a
 larger perimeter bound is a fresh enumeration from scratch (the
@@ -146,11 +152,18 @@ is everything in this section, plus section 4 for re-publishing.
 ### 3. Adding a new dataset (new ring / new parameters)
 
 Compute the asset per section 2, then publish it as a new orphan
-branch:
+branch. The asset directory is what you publish: the single-step
+`--mode dafsa-blocks -o DIR` writes it straight to `DIR`, while the
+streaming pipeline writes it to `DIR/dafsa/` -- in the streaming case
+substitute `$D/dafsa` for the asset path below (e.g.
+`cp -r $D/dafsa/. .`). The branch name uses hyphens (`zz4-n32-free`),
+the datasets.json `name` uses underscores (`zz4_n32_free`).
 
 ```sh
 # 0. computed per section 2 into /tmp/zz24_n8_free; sanity-check it
+#    (run verify_canonical.py too -- catches non-canonical/dup entries)
 python3 /tmp/zz24_n8_free/tools/verify_sha256.py /tmp/zz24_n8_free
+python3 /tmp/zz24_n8_free/tools/verify_canonical.py /tmp/zz24_n8_free
 
 # 1. publish as orphan branch of tilezz-ratdb
 cd ../tilezz-ratdb
