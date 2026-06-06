@@ -696,6 +696,12 @@ fn empty_svg() -> String {
 struct DbState {
     dafsa: LazyRatDafsaAsync,
     asset_dir: String,
+    /// In-flight block fetches, keyed by block index. Concurrent
+    /// requests for the same block share one network round-trip --
+    /// notably the background prewarm racing the first user lookup
+    /// over the shared shallow-prefix blocks. See
+    /// [`fetch_block_coalesced`].
+    inflight: RefCell<HashMap<u32, js_sys::Promise>>,
 }
 
 thread_local! {
@@ -729,6 +735,7 @@ pub async fn db_init(ring: u8, asset_dir: String) -> Result<JsValue, JsValue> {
             Rc::new(DbState {
                 dafsa,
                 asset_dir: normalised_dir,
+                inflight: RefCell::new(HashMap::new()),
             }),
         )
     });
@@ -766,10 +773,8 @@ pub async fn db_id_of(ring: u8, angles: Vec<i8>) -> Option<f64> {
     let canonical = closing_free_canonical_for_ring(canon_ring, &canon_angles)?;
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {
-        let manifest = state_for_fetch.dafsa.manifest();
-        let entry = &manifest.blocks[block_index as usize];
-        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
-        async move { fetch_url_to_bytes(&url).await }
+        let st = state_for_fetch.clone();
+        async move { fetch_block_coalesced(st, block_index).await }
     };
     state
         .dafsa
@@ -798,10 +803,8 @@ pub async fn db_seq_of(ring: u8, id: f64) -> Option<Vec<i8>> {
     let state = lookup_db(ring)?;
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {
-        let manifest = state_for_fetch.dafsa.manifest();
-        let entry = &manifest.blocks[block_index as usize];
-        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
-        async move { fetch_url_to_bytes(&url).await }
+        let st = state_for_fetch.clone();
+        async move { fetch_block_coalesced(st, block_index).await }
     };
     let seq = state.dafsa.get(id as u64, &fetch).await?;
     // Odd rings: the stored sequence is in parent (even) units; halve it
@@ -827,10 +830,8 @@ pub async fn db_prewarm(ring: u8, max_depth: usize) -> f64 {
     };
     let state_for_fetch = state.clone();
     let fetch = move |block_index: u32| {
-        let manifest = state_for_fetch.dafsa.manifest();
-        let entry = &manifest.blocks[block_index as usize];
-        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
-        async move { fetch_url_to_bytes(&url).await }
+        let st = state_for_fetch.clone();
+        async move { fetch_block_coalesced(st, block_index).await }
     };
     state.dafsa.prewarm_to_depth(max_depth, &fetch).await as f64
 }
@@ -850,6 +851,69 @@ fn resolve_block_url(asset_dir: &str, block_url: &str) -> String {
         block_url.to_string()
     } else {
         format!("{asset_dir}/{block_url}")
+    }
+}
+
+/// Fetch block `block_index`'s bytes, coalescing concurrent requests
+/// for the SAME block into a single network round-trip.
+///
+/// The background prewarm and the first user lookup both descend the
+/// shallow shared-prefix region, so they race to fetch the identical
+/// shallow blocks during the post-load window. Without coalescing each
+/// fires its own request for the same URL; a transient failure of one
+/// then surfaces as an empty result (the "first random tile is blank,
+/// press again and it works" report), and even on success the duplicate
+/// wastes a download on a low-bandwidth client. Sharing one in-flight
+/// `Promise` per block lets the later caller await the earlier fetch
+/// instead of competing with it.
+///
+/// The in-flight entry is cleared once the fetch settles, so a later
+/// cache miss (or a genuinely failed fetch) re-fetches a fresh promise
+/// rather than reusing a dead one. Block decoding and the decoded-block
+/// cache still live in `LazyRatDafsaAsync`; this only deduplicates the
+/// network layer. Every borrow of `inflight` is released before the
+/// `.await`, so the `RefCell` never bridges an await point.
+async fn fetch_block_coalesced(state: Rc<DbState>, block_index: u32) -> io::Result<Vec<u8>> {
+    // Reuse the in-flight fetch for this block if one is already running.
+    let existing = state.inflight.borrow().get(&block_index).cloned();
+    let promise = match existing {
+        Some(p) => p,
+        None => {
+            let url = {
+                let manifest = state.dafsa.manifest();
+                let entry = &manifest.blocks[block_index as usize];
+                resolve_block_url(&state.asset_dir, &manifest.block_url(entry))
+            };
+            // `future_to_promise` starts the fetch immediately and yields a
+            // JS `Promise` that any number of `JsFuture`s can await.
+            let promise = wasm_bindgen_futures::future_to_promise(async move {
+                match fetch_url_to_bytes(&url).await {
+                    Ok(bytes) => {
+                        let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+                        arr.copy_from(&bytes);
+                        Ok(arr.into())
+                    }
+                    Err(e) => Err(JsValue::from_str(&e.to_string())),
+                }
+            });
+            state
+                .inflight
+                .borrow_mut()
+                .insert(block_index, promise.clone());
+            promise
+        }
+    };
+    let result = JsFuture::from(promise).await;
+    // Drop the in-flight handle regardless of outcome.
+    state.inflight.borrow_mut().remove(&block_index);
+    match result {
+        Ok(v) => {
+            let arr: js_sys::Uint8Array = v
+                .dyn_into()
+                .map_err(|_| io::Error::other("coalesced fetch: not a Uint8Array"))?;
+            Ok(arr.to_vec())
+        }
+        Err(e) => Err(io::Error::other(format!("coalesced fetch: {e:?}"))),
     }
 }
 
