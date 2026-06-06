@@ -47,9 +47,11 @@ subring-step cross-checks). Pinned in `opt_correctness_tests`.
 | ZZ10 free | A316200 | a(4..10) *(a(11): OEIS overcounts; correction in Improve)* |
 | ZZ12 free | A316192 | a(3..10) |
 
-OEIS provenance (re-verified against oeis.org 2026-06-05): the ZZ4 and
-ZZ6 *free* counts are Luca Petrone (A266549 to a(20); A284869 to
-a(22)=374128188). Every A3161xx sequence -- free ZZ8/ZZ10/ZZ12,
+OEIS provenance (re-verified against oeis.org, 2026-06): A266549 (ZZ4
+free) is Luca Petrone, to a(20). A284869 (ZZ6 free) is Petrone for
+a(1..14), Hugo Pfoertner for a(15), and **Walter Trump (Nov 2023) for
+a(16..22), a(22)=374128188** -- so the disputed a(22) is Trump's, not
+Petrone's. Every A3161xx sequence -- free ZZ8/ZZ10/ZZ12,
 symmetric, and coset -- is Hugo Pfoertner (Jun/Jul 2018). The
 holes-allowed siblings A057729/A057730 are N. J. A. Sloane. All carry
 the OEIS `more` keyword, i.e. they are open for extension. Indexing
@@ -65,9 +67,45 @@ Now also matchable **by filtering** (no new code):
 | A316194 | ZZ4 symmetric | **verified exact thru perim 16** (= `symmetric` filter) |
 | A316196 | ZZ6 symmetric | matchable (`symmetric` filter) |
 | A316195 | ZZ10 coset (odd turns) | **verified** perim 6/8/10 = 2,1,18 |
-| A316197 | ZZ14 coset | matchable (`coset` filter) — not yet checked deep |
-| A316199 | ZZ18 coset | matchable (`coset` filter) — not yet checked deep |
+| A316197 | ZZ14 coset | verified a(1..7) — see Verification log |
+| A316199 | ZZ18 coset | verified a(1..6) — see Verification log |
 | A057730 / A057729 | ZZ4 / ZZ6 holes-allowed | cross-check up to first hole (n=8 / n=11) |
+
+## Verification log (full screening against published OEIS, 2026-06)
+
+A one-time term-by-term screen of every published sequence we touch
+against tilezz (`tools/count_by_length.py` for free counts; the
+`variableMeasured` symmetric / coset arrays for the filtered ones).
+**Every published term we can reach agrees exactly, with exactly two
+exceptions** -- the two disputes below. "Reached frontier?" = did we
+verify through the deepest published term.
+
+| OEIS | object | verified | published frontier | reached frontier? |
+|---|---|---|---|---|
+| A316192 | ZZ12 free | a(1..10) | a(10) | YES (full extent) |
+| A316198 | ZZ8 free | a(1..6) | a(6) | YES (full extent) |
+| A316194 | ZZ4 symmetric | a(1..8) | a(8) | YES (full extent) |
+| A316196 | ZZ6 symmetric | a(1..15) | a(15) | YES (full extent) |
+| A316195 | ZZ10 coset | a(1..7) | a(7) | YES (full extent) |
+| A316199 | ZZ18 coset | a(1..6) | a(6) | YES (full extent) |
+| A316197 | ZZ14 coset | a(1..7) | a(7) | YES (full extent) |
+| A316200 | ZZ10 free | a(1..10) | a(11) | a(1..10) match; **a(11) DISPUTED** (tilezz 9883 vs 19405; see Improve / docs/oeis-A316200-correction) |
+| A284869 | ZZ6 free | a(1..21) | a(22) | a(1..21) match; **a(22) DISPUTED** (tilezz 374128154 vs 374128188; see docs/oeis-A284869-zz6-a22) |
+| A266549 | ZZ4 free | a(1..16) | a(20) | **NO** -- see exception below |
+
+**The ZZ4 exception.** A266549 is the one sequence published well past
+our reach: polyominoes / square-lattice self-avoiding polygons are
+extremely well studied, and a(20) (perimeter 40) comes from specialized
+finite-lattice / transfer-matrix methods. We verified a(1..16)
+(perimeter 32, the depth we have enumerated) and match exactly; a(17..20)
+are simply beyond our cheap reach, not a disagreement. ZZ4 is therefore
+not an extension target -- we are behind the published frontier there.
+
+For every other sequence we screened, we reached the **last published
+term** and matched it (the two flagged disputes aside). That is the
+clean base for the extension submissions in Improve/Add: where we match
+the full published extent, the new terms beyond it rest on an enumerator
+already confirmed against every known value.
 
 ## Improve (extend or correct published data)
 
