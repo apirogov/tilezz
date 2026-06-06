@@ -10,6 +10,7 @@ literature/
 snapshots/
 .claude/*.local.json
 .claude/*.lock
+.claude/worktrees/*
 /web/ratdb/data/
 /web/ratdb/ro-crate-metadata.json
 
