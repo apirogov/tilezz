@@ -134,7 +134,7 @@ enum OutputFormat {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Explore cyclotomic rings and render the discovered points", long_about = None)]
+#[command(version = tilezz::VERSION, about = "Explore cyclotomic rings and render the discovered points", long_about = None)]
 struct Cli {
     #[arg(short, long)]
     ring: u8,

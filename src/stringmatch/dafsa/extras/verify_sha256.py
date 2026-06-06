@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""Verify the SHA-256 hashes recorded in a tilezz-rat-dafsa-blocks
-asset's `ro-crate-metadata.json` against the on-disk bytes.
+"""Verify a tilezz-rat-dafsa-blocks asset against its
+`ro-crate-metadata.json` -- paranoid mode.
 
-Every File entity in the RO-Crate manifest carries a `sha256`. This
-script reads each one, hashes the file at that relative `@id`, and
-reports any mismatches. Skips entities whose `@id` is an absolute
-URL (`http://...`) or an internal anchor (`#author`, `#build`, ...).
+Three independent checks, any of which fails the run:
 
-Run from the asset directory root:
+1. Recorded -> disk: every File entity in the manifest carries a
+   `sha256`; each is re-hashed from the file at its relative `@id`
+   and compared. (Skips absolute-URL and internal-anchor `@id`s.)
 
-    python3 tools/verify_sha256.py
+2. Disk -> recorded: every file actually present in the asset
+   directory must be accounted for in the manifest. An UNEXPECTED
+   file (one on disk but not hashed in the manifest) fails the run --
+   this catches injected/edited content and stray build artifacts
+   that a recorded->disk pass alone would silently ignore.
+   `ro-crate-metadata.json` itself (the manifest) and transient
+   `__pycache__/` byproducts of running these tools are exempt.
 
-Or pass an explicit directory:
+3. Provenance sanity: the producing-tool `softwareVersion` (the build
+   commit) is reported, and a loud WARNING is printed if it is
+   `unknown` (built outside a git checkout) or `-dirty` (built from an
+   unclean tree) -- i.e. when the recorded commit does not fully
+   describe the binary that produced the asset.
 
-    python3 tools/verify_sha256.py path/to/asset
+Run from the asset directory root, or pass it as the first argument:
 
-Exits 0 on full match, 1 on any mismatch, 2 on usage error. Prints
-"OK (<n> files verified)" on success or one line per mismatch
-followed by an error summary on failure.
+    python3 tools/verify_sha256.py [path/to/asset]
 
-No external Python dependencies; relies only on the stdlib.
+Exits 0 on full match, 1 on any mismatch / missing / unexpected file,
+2 on usage error. No external dependencies; stdlib only.
 """
 
 from __future__ import annotations
@@ -28,6 +36,40 @@ import hashlib
 import json
 import pathlib
 import sys
+
+
+def _recorded_rel_paths(meta: dict) -> dict[str, str]:
+    """Map of relative-path -> recorded sha256 for local File entities."""
+    out: dict[str, str] = {}
+    for entity in meta.get("@graph", []):
+        rel = entity.get("@id", "")
+        want = entity.get("sha256")
+        if not want or not isinstance(rel, str):
+            continue
+        if rel.startswith(("http://", "https://", "#")):
+            continue
+        out[rel] = want
+    return out
+
+
+def _provenance_warnings(meta: dict) -> list[str]:
+    warns: list[str] = []
+    for entity in meta.get("@graph", []):
+        if entity.get("@id") == "#tilezz":
+            ver = str(entity.get("softwareVersion", ""))
+            if ver == "unknown":
+                warns.append(
+                    "provenance: producing tool reports softwareVersion "
+                    "'unknown' (built outside a git checkout); the source "
+                    "commit is NOT recorded."
+                )
+            elif ver.endswith("-dirty"):
+                warns.append(
+                    f"provenance: producing tool was built -dirty ({ver}); "
+                    "the working tree had uncommitted changes, so the "
+                    "recorded commit does not fully describe the binary."
+                )
+    return warns
 
 
 def verify(asset_dir: pathlib.Path) -> int:
@@ -39,20 +81,13 @@ def verify(asset_dir: pathlib.Path) -> int:
         )
         return 2
     meta = json.loads(crate_path.read_text())
+    recorded = _recorded_rel_paths(meta)
+
     errs = 0
     checked = 0
-    for entity in meta.get("@graph", []):
-        rel = entity.get("@id", "")
-        want = entity.get("sha256")
-        if not want or not isinstance(rel, str):
-            continue
-        if rel.startswith("http://") or rel.startswith("https://"):
-            continue
-        if rel.startswith("#"):
-            continue
-        # The metadata-file descriptor itself is `ro-crate-metadata.json`
-        # without a sha256, so we don't usually hit it here -- but
-        # guard anyway in case a writer ever stamps one in.
+
+    # (1) recorded -> disk: hashes match.
+    for rel, want in sorted(recorded.items()):
         path = asset_dir / rel
         if not path.is_file():
             print(f"{rel}: MISSING (manifest expected sha256={want[:12]}...)")
@@ -64,10 +99,31 @@ def verify(asset_dir: pathlib.Path) -> int:
             errs += 1
         else:
             checked += 1
+
+    # (2) disk -> recorded: no unaccounted files. The manifest file
+    # itself has no self-hash, and __pycache__ is a transient byproduct
+    # of running these very tools -- both are exempt.
+    recorded_set = set(recorded)
+    for path in sorted(asset_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(asset_dir).as_posix()
+        if rel == "ro-crate-metadata.json":
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        if rel not in recorded_set:
+            print(f"{rel}: UNEXPECTED (present on disk but not in the manifest)")
+            errs += 1
+
+    # (3) provenance sanity (warnings, not failures).
+    for w in _provenance_warnings(meta):
+        print(f"WARNING: {w}")
+
     if errs:
-        print(f"{errs} mismatch(es); {checked} file(s) verified")
+        print(f"{errs} problem(s); {checked} file(s) verified")
         return 1
-    print(f"OK ({checked} file(s) verified)")
+    print(f"OK ({checked} file(s) verified; no unexpected files)")
     return 0
 
 

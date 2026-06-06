@@ -234,7 +234,7 @@ enum Mode {
 
 #[derive(Parser, Debug)]
 #[command(
-    version,
+    version = tilezz::VERSION,
     about = "Enumerate simple cyclotomic matchstick polygons (rats) up to a given perimeter",
     long_about = "\
 Enumerate every simple polygon (closed self-avoiding boundary) of\n\
