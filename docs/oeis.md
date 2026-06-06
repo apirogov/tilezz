@@ -16,7 +16,7 @@ A single **free** enumeration of `ZZn` to perimeter `N` is a superset.
 Every related sequence is a *filter / bucket* over its rats, computed
 one rat at a time — no re-enumeration, no extra machinery. `rat_enum`
 emits all of them into each dataset's `ro-crate-metadata.json` as
-schema.org `variableMeasured`, and `tools/verify_counts.py` re-derives
+schema.org `variableMeasured`, and `tools/count.py --verify` re-derives
 and checks them:
 
 | derived sequence | filter on the free rats |
@@ -74,7 +74,7 @@ Now also matchable **by filtering** (no new code):
 ## Verification log (full screening against published OEIS, 2026-06)
 
 A one-time term-by-term screen of every published sequence we touch
-against tilezz (`tools/count_by_length.py` for free counts; the
+against tilezz (`tools/count.py` for the per-perimeter counts; the
 `variableMeasured` symmetric / coset arrays for the filtered ones).
 **Every published term we can reach agrees exactly, with exactly two
 exceptions** -- the two disputes below. "Reached frontier?" = did we
@@ -206,7 +206,7 @@ Per-lookup cost in the explorer is unaffected (lazy block fetch).
    --mod-prune --closure-key-prune --mode dafsa-blocks -o ...`
    (or the streaming pipeline for big N).
 3. The RO-Crate now carries all 7 sequences (`variableMeasured`);
-   `tools/verify_counts.py` confirms them; `tools/count_by_length.py`
+   `tools/count.py --verify` confirms them; `tools/count.py --print`
    prints the OEIS-style terms.
 4. Cross-validate via a `--step` subset against a pinned ring
    (ZZ24-step2=ZZ12, ZZ20-step2=ZZ10, ...); for a submission, also the

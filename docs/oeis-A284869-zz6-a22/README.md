@@ -67,7 +67,7 @@ argues *against* a systematic tilezz bug, but does not prove anything.
 | # | Check | Method | Result |
 |---|-------|--------|--------|
 | 1 | OEIS published value | live fetch (oeis.org JSON) | a(22) = **374,128,188** |
-| 2 | tilezz ZZ6 free, full pipeline | bench (in-memory HashSet) == stream->merge cert == build n_sequences == count_by_length; cumulative <=23 = 1,904,072,327 = sum of per-length | a(22) = **374,128,154**, internally consistent |
+| 2 | tilezz ZZ6 free, full pipeline | bench (in-memory HashSet) == stream->merge cert == build n_sequences == count.py; cumulative <=23 = 1,904,072,327 = sum of per-length | a(22) = **374,128,154**, internally consistent |
 | 3 | Independent ring cross-check | **ZZ12 step-2** = ZZ6 sub-ring; different ring arithmetic + different mod-prune moduli + different closure-key tables | a(22) = **374,128,154** (agrees with native ZZ6) |
 | 4 | Duplicate-storage failure mode | a DAFSA stores each string at most once; intermediate dihedral-image dups collapse at merge and are idempotent in the build | **excluded** -- the gap is a true distinct-count difference, not a storage artifact |
 | 5 | Non-canonical-duplicate failure mode | `tools/verify_canonical.py` independently recomputes each rat's dihedral-canonical CCW form; a wrong canonical would also have disagreed between the two rings in #3 | **excluded** (overcount-via-bad-canonicalization) |
@@ -134,14 +134,14 @@ terms (build rat_enum from a clean checkout; see the dataset's
 rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode stream -o zz6
 rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode merge -o zz6
 rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode build --oeis-a-number A284869 -o zz6
-python3 zz6/dafsa/tools/count_by_length.py zz6/dafsa   # a(22) line = 374128154
+python3 zz6/dafsa/tools/count.py zz6/dafsa --print   # free series, perimeter-22 term = 374128154
 ```
 
 Independent ring cross-check (ZZ12 step-2 = ZZ6):
 
 ```sh
 rat_enum --ring 12 --step 2 -n 22 --free --threads 0 --mod-prune --closure-key-prune --mode stream -o chk
-# ... merge, build ... ; count_by_length a(22) line = 374128154
+# ... merge, build ... ; count.py --print free series, perimeter-22 = 374128154
 ```
 
 ## Artifacts in this directory

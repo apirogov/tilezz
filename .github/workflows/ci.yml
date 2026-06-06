@@ -85,13 +85,13 @@ jobs:
           # on-disk bytes.
           python3 /tmp/asset-original/tools/verify_sha256.py /tmp/asset-original
 
-          # tools/verify_counts.py re-derives the variableMeasured
+          # tools/count.py --verify re-derives the variableMeasured
           # sub-family sequences (free, oneSided, achiral,
           # rotationSymmetric, symmetric, subring, coset) from the
           # DAFSA and checks them against what the writer emitted into
           # ro-crate-metadata.json -- an independent (Python) check of
           # the (Rust) emitter on a real asset.
-          python3 /tmp/asset-original/tools/verify_counts.py /tmp/asset-original
+          python3 /tmp/asset-original/tools/count.py /tmp/asset-original --verify
 
           # tools/verify_canonical.py independently recomputes each
           # stored rat's dihedral-canonical CCW form and asserts the
@@ -114,7 +114,7 @@ jobs:
           # Reproduced asset must match the original byte-for-byte
           # under fixed SOURCE_DATE_EPOCH (including
           # ro-crate-metadata.json -- timestamps are deterministic).
-          # Exclude __pycache__: the verify_*/count_by_length tools above
+          # Exclude __pycache__: the verify_*/count tools above
           # import the sibling decode module, so Python writes
           # tools/__pycache__/ into the original; it's a transient
           # byproduct of running the tools, not part of the asset, and

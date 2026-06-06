@@ -70,18 +70,16 @@ const DECODER_PY: &str = include_str!("extras/decode.py");
 /// on mismatch.
 const VERIFY_SHA256_PY: &str = include_str!("extras/verify_sha256.py");
 
-/// Standalone Python per-length counter. Shipped at
-/// `tools/count_by_length.py` inside every asset so the
-/// exact-perimeter sequence counts (OEIS-style terms) can be read
-/// straight off the DAFSA's rank index -- the count-validation
-/// step of the publishing checklist (see MAINTENANCE.md).
-const COUNT_BY_LENGTH_PY: &str = include_str!("extras/count_by_length.py");
-
-/// Standalone Python verifier for the `variableMeasured` sub-family
-/// sequences: recomputes free / oneSided / achiral / rotationSymmetric
-/// / symmetric / subring / coset from the DAFSA and checks them
-/// against what the writer emitted into the RO-Crate.
-const VERIFY_COUNTS_PY: &str = include_str!("extras/verify_counts.py");
+/// Standalone Python per-perimeter family counter + verifier (one
+/// tool, two modes). Shipped at `tools/count.py` inside every asset.
+/// `--print` (default, fast) reads the `free` series off the DAFSA
+/// rank index and cross-checks it against the RO-Crate, echoing the
+/// other six families from `variableMeasured` for display. `--verify`
+/// (slow) decodes every rat, independently re-derives all seven
+/// families, and checks each against the RO-Crate -- the
+/// metadata-integrity gate. Merges the former count_by_length.py +
+/// verify_counts.py.
+const COUNT_PY: &str = include_str!("extras/count.py");
 
 /// Standalone Python canonical-form verifier. Shipped at
 /// `tools/verify_canonical.py` inside every asset. Independently
@@ -383,13 +381,9 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
             "verify_sha256.py (Python 3 hash verifier)",
             "Standalone, dependency-free Python 3 script that checks every sha256 recorded in ro-crate-metadata.json against the on-disk file bytes. Run as `python3 tools/verify_sha256.py`; exits 0 on full match, 1 on mismatch.",
         ),
-        "tools/count_by_length.py" => (
-            "count_by_length.py (Python 3 per-length counter)",
-            "Standalone Python 3 script (stdlib + sibling decode.py) that prints the number of stored sequences per exact perimeter length, one `<length> <count>` line each -- the OEIS-style terms this asset realises. Reads the counts off the DAFSA's rank index without decoding. Run as `python3 tools/count_by_length.py`.",
-        ),
-        "tools/verify_counts.py" => (
-            "verify_counts.py (Python 3 sub-family verifier)",
-            "Standalone Python 3 script (stdlib + sibling decode.py) that re-derives the per-perimeter sub-family sequences (free, oneSided, achiral, rotationSymmetric, symmetric, subring, coset) from the DAFSA and checks them against the `variableMeasured` block in ro-crate-metadata.json. Run as `python3 tools/verify_counts.py`; exits 0 if all match, 1 on mismatch.",
+        "tools/count.py" => (
+            "count.py (Python 3 per-perimeter family counter + verifier)",
+            "Standalone Python 3 script (stdlib + sibling decode.py) that prints the seven per-perimeter family series (free, oneSided, achiral, rotationSymmetric, symmetric, subring, coset) as OEIS-style terms. `--print` (default, fast) reads `free` off the DAFSA rank index without decoding and cross-checks it against ro-crate-metadata.json, echoing the other six from variableMeasured; `--verify` (slow) decodes every rat, independently re-derives all seven, and checks each against the metadata. Exits 0 on success, 1 on mismatch.",
         ),
         "tools/verify_canonical.py" => (
             "verify_canonical.py (Python 3 canonical-form verifier)",
@@ -555,7 +549,7 @@ fn dataset_additional_properties(p: &AssetParams, max_indexed_length: usize) -> 
 /// free DAFSA by filtering/bucketing one rat at a time. Emitted into
 /// the RO-Crate as `variableMeasured` so each dataset self-documents
 /// the integer sequences it realises; re-derived and checked by
-/// `tools/verify_counts.py`.
+/// `tools/count.py --verify`.
 #[derive(Default)]
 pub struct SequenceCounts {
     free: BTreeMap<usize, u64>,
@@ -630,7 +624,7 @@ impl SequenceCounts {
     /// Series are sized to the deepest perimeter that actually closes a
     /// polygon (the max `free` key), which equals the block manifest's
     /// `max_indexed_length`. This keeps the emitted strings byte-identical
-    /// to what `tools/verify_counts.py` re-derives from the same blocks;
+    /// to what `tools/count.py --verify` re-derives from the same blocks;
     /// sizing to the asset's `max_steps` instead would append spurious
     /// trailing zeros whenever the top perimeter has no closing polygon
     /// (e.g. odd `n` on an even-perimeter-only ring), making the verifier
@@ -868,7 +862,7 @@ pub fn write_ro_crate(
     // ordered perimeter-indexed strings. Kept out of
     // `additionalProperty` (which the collection crate copies to the
     // web stub) so it doesn't bloat that; re-derived and verified by
-    // `tools/verify_counts.py`.
+    // `tools/count.py --verify`.
     root.insert("variableMeasured", counts.variable_measured());
     // Author(s) -- the Person(s) credited under the CC-BY-SA
     // attribution clause. Distinct from `instrument` on the
@@ -1191,8 +1185,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     std::fs::create_dir_all(&tools)?;
     std::fs::write(tools.join("decode.py"), DECODER_PY)?;
     std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
-    std::fs::write(tools.join("count_by_length.py"), COUNT_BY_LENGTH_PY)?;
-    std::fs::write(tools.join("verify_counts.py"), VERIFY_COUNTS_PY)?;
+    std::fs::write(tools.join("count.py"), COUNT_PY)?;
     std::fs::write(tools.join("verify_canonical.py"), VERIFY_CANONICAL_PY)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
@@ -1708,8 +1701,7 @@ to its schema.
   tools/
     decode.py               standalone Python 3 decoder (no deps)
     verify_sha256.py        SHA-256 verifier (no deps; exits 0 on full match)
-    count_by_length.py      per-exact-length counts (OEIS-style terms)
-    verify_counts.py        re-derive + verify the variableMeasured sub-family sequences
+    count.py                per-perimeter family terms (--print) + re-derive/verify (--verify)
     verify_canonical.py     independently check every rat is dihedral-canonical CCW
     reproduce.sh            executable rebuild script (clones + builds + runs)
 ```
@@ -2183,17 +2175,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The writer emits `tools/count_by_length.py`, the RO-Crate
-    /// describes it, and the script prints the per-exact-length
-    /// sequence counts (OEIS-style terms) for the asset. Needs
-    /// `python3` on PATH for the end-to-end half; skipped when
-    /// absent.
+    /// The writer emits `tools/count.py`, the RO-Crate describes it,
+    /// and `--print` prints the per-perimeter family series (free read
+    /// off the index and cross-checked). Needs `python3` on PATH for
+    /// the end-to-end half; skipped when absent.
     #[test]
-    fn count_by_length_prints_oeis_terms() {
+    fn count_py_prints_family_terms() {
         let dir = build_test_asset();
 
-        let script = dir.join("tools/count_by_length.py");
-        assert!(script.exists(), "tools/count_by_length.py not emitted");
+        let script = dir.join("tools/count.py");
+        assert!(script.exists(), "tools/count.py not emitted");
         let meta: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.join("ro-crate-metadata.json")).unwrap(),
         )
@@ -2201,11 +2192,11 @@ mod tests {
         let graph = meta["@graph"].as_array().expect("@graph array");
         let entity = graph
             .iter()
-            .find(|e| e["@id"] == "tools/count_by_length.py")
-            .expect("File entity for tools/count_by_length.py");
+            .find(|e| e["@id"] == "tools/count.py")
+            .expect("File entity for tools/count.py");
         assert!(
             entity["name"].as_str().is_some_and(|s| !s.is_empty()),
-            "count_by_length.py entity lacks a human label"
+            "count.py entity lacks a human label"
         );
 
         let have_python = std::process::Command::new("python3")
@@ -2219,28 +2210,32 @@ mod tests {
         }
 
         // The test asset's rats (see build_test_asset) are four
-        // 3-angle sequences and one 4-angle sequence.
+        // 3-angle sequences and one 4-angle sequence -> the free series
+        // over perimeters 1..4 is 0,0,4,1.
         let output = std::process::Command::new("python3")
             .arg(&script)
             .arg(&dir)
+            .arg("--print")
             .output()
-            .expect("run count_by_length.py");
+            .expect("run count.py");
         assert!(
             output.status.success(),
-            "count_by_length.py failed:\nstdout: {}\nstderr: {}",
+            "count.py --print failed:\nstdout: {}\nstderr: {}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with('#')).collect();
-        assert_eq!(lines, vec!["3 4", "4 1"], "unexpected terms:\n{stdout}");
+        assert!(
+            stdout.lines().any(|l| l.starts_with("free: 0,0,4,1")),
+            "expected free series 0,0,4,1 in:\n{stdout}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// End-to-end for the sub-family sequences: the writer emits a
     /// `variableMeasured` block with the seven named sequences, and
-    /// the shipped `tools/verify_counts.py` re-derives them from the
+    /// the shipped `tools/count.py --verify` re-derives them from the
     /// DAFSA and agrees. The Rust-side check pins the structure +
     /// the free series (must match n_sequences by perimeter); the
     /// Python half closes the loop independently (skipped if python3
@@ -2290,18 +2285,19 @@ mod tests {
             .is_ok_and(|o| o.status.success());
         if have_python {
             let out = std::process::Command::new("python3")
-                .arg(dir.join("tools/verify_counts.py"))
+                .arg(dir.join("tools/count.py"))
                 .arg(&dir)
+                .arg("--verify")
                 .output()
-                .expect("run verify_counts.py");
+                .expect("run count.py --verify");
             assert!(
                 out.status.success(),
-                "verify_counts.py failed:\nstdout: {}\nstderr: {}",
+                "count.py --verify failed:\nstdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr),
             );
         } else {
-            eprintln!("skipping verify_counts.py half: python3 not on PATH");
+            eprintln!("skipping count.py --verify half: python3 not on PATH");
         }
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -2313,7 +2309,7 @@ mod tests {
     /// `variableMeasured` series and `maxIndexedLength` must still track
     /// the data (the block manifest), NOT `max_steps`. Sizing them to
     /// `max_steps` appended spurious trailing zeros and made
-    /// `verify_counts.py` -- which sizes by the manifest's
+    /// `count.py --verify` -- which sizes by the manifest's
     /// `max_indexed_length` -- report a false mismatch.
     #[test]
     fn variable_measured_handles_max_steps_above_deepest_perimeter() {
@@ -2387,18 +2383,19 @@ mod tests {
             .is_ok_and(|o| o.status.success());
         if have_python {
             let out = std::process::Command::new("python3")
-                .arg(dir.join("tools/verify_counts.py"))
+                .arg(dir.join("tools/count.py"))
                 .arg(&dir)
+                .arg("--verify")
                 .output()
-                .expect("run verify_counts.py");
+                .expect("run count.py --verify");
             assert!(
                 out.status.success(),
-                "verify_counts.py failed on the gap asset:\nstdout: {}\nstderr: {}",
+                "count.py --verify failed on the gap asset:\nstdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&out.stdout),
                 String::from_utf8_lossy(&out.stderr),
             );
         } else {
-            eprintln!("skipping verify_counts.py half: python3 not on PATH");
+            eprintln!("skipping count.py --verify half: python3 not on PATH");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

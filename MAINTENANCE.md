@@ -268,7 +268,7 @@ python3 tools/verify_sha256.py
 # sequence where published and any previously computed overlap.
 # (Careful: OEIS A316192 counts perimeter EXACTLY n, while the
 # manifest's n_sequences is cumulative over <= n.)
-python3 tools/count_by_length.py
+python3 tools/count.py            # --print (terms); --verify for a full re-derivation
 
 # live wiring: deployed manifest points at the right pin and the
 # blocks serve with CORS
@@ -381,9 +381,8 @@ a dataset. Run from a dataset directory (the asset dir, i.e. the
 | tool | what it does | run where / when |
 |---|---|---|
 | `decode.py` | walk the DAFSA, print every rat (one line of signed ints each) | manual; also the shared block-reader the other tools import |
-| `count_by_length.py` | per-exact-perimeter counts = the OEIS-style terms | manual (read terms for a submission); CI round-trip |
+| `count.py` | per-perimeter family terms (all 7): `--print` (fast -- free off the index + cross-check, others echoed from metadata) / `--verify` (slow -- decode + re-derive all 7, check vs metadata) | manual (read terms for a submission / validate); CI round-trip runs `--verify` |
 | `verify_sha256.py` | recorded sha256 vs disk bytes; FAILS on unexpected files; WARNS on `-dirty`/`unknown` provenance | CI round-trip; manual audit |
-| `verify_counts.py` | re-derive the 7 `variableMeasured` families from the DAFSA, check vs emitted metadata | CI round-trip; manual |
 | `verify_canonical.py` | independently recompute each rat's dihedral-canonical CCW form; assert stored == it (no non-canonical entry, no dup class) | CI round-trip; **run before publishing/submitting** |
 | `reproduce.sh` | clone tilezz @ the recorded commit, build `rat_enum`, provenance-guard (`--version` must report that commit), re-run the producing pipeline | archival reproduction; CI round-trip runs it + diffs |
 
@@ -402,7 +401,7 @@ Pages workflow.
 **Where CI exercises them.** The `checks` job runs `cargo fmt` +
 `clippy`, then `notebooks/check.py`, then the round-trip test -- which
 emits a small ZZ12 n=7 asset and runs `verify_sha256.py`,
-`verify_counts.py`, `verify_canonical.py`, `decode.py`, and
+`count.py --verify`, `verify_canonical.py`, `decode.py`, and
 `reproduce.sh` against it. So every per-dataset tool is exercised on a
 real freshly-emitted asset on each push. The `test` job runs
 `cargo test` in both profiles.
