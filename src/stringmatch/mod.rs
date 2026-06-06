@@ -32,7 +32,7 @@ mod period;
 
 pub use bitparallel::BitParallelMatcher;
 pub use cyclic::cyclic_contains;
-pub use dafsa::{Dafsa, LazyRatDafsa, LazyRatDafsaAsync, RatDafsa};
+pub use dafsa::{DEFAULT_TARGET_BLOCK_BYTES, Dafsa, LazyRatDafsa, LazyRatDafsaAsync, RatDafsa};
 pub use extend::{forward_match_length, match_length};
 pub use period::repetition_factor;
 

@@ -46,14 +46,15 @@ const SCALAR_TAG: &str = "i8";
 const BLOCK_FORMAT_TAG: &str = "tilezz-rat-block";
 const BLOCK_FORMAT_VERSION: u32 = 1;
 
-/// Default target on-disk block file size for the writer. Real
-/// blocks may be a bit larger (we close a block once the buffer
-/// crosses this threshold, after the next state's records are
-/// appended) and the final block can be smaller. 1 MiB is the
-/// sweet spot for HTTP-served assets: roughly a hundred files per
-/// gigabyte of dataset, each large enough that per-file overhead
-/// (gzip header, HTTP round-trip) is well amortised.
-pub const DEFAULT_TARGET_BLOCK_BYTES: u32 = 1 << 20;
+/// Default target UNCOMPRESSED block size for the writer. Real blocks
+/// may be a bit larger (we close a block once the buffer crosses this
+/// threshold, after the next state's records are appended) and the
+/// final block can be smaller. 4 MiB is the sweet spot for HTTP-served
+/// assets: fewer blocks means a lazy lookup crosses fewer of them, so a
+/// cold "give me random" pays fewer sequential block fetches (measured
+/// ZZ4 n32: worst-case blocks/lookup 12 at 1 MiB -> 7 at 4 MiB) -- while
+/// staying small enough per fetch not to strain low-bandwidth clients.
+pub const DEFAULT_TARGET_BLOCK_BYTES: u32 = 1 << 22;
 
 /// Bytes per state record on disk. See the schema for the layout.
 const STATE_RECORD_BYTES: usize = 16;
@@ -1115,7 +1116,7 @@ impl RatDafsa {
     /// writer's target on-disk size per block: we close a block
     /// once its uncompressed serialised size crosses this threshold,
     /// then gzip + name it by content hash. The last block may be
-    /// smaller. Typical value: `DEFAULT_TARGET_BLOCK_BYTES` (1 MiB).
+    /// smaller. Typical value: `DEFAULT_TARGET_BLOCK_BYTES` (4 MiB).
     ///
     /// Asset layout produced:
     ///

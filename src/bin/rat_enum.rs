@@ -46,7 +46,7 @@
 //! ./target/release/rat_enum --ring 12 -n 14 --free \
 //!     --mode merge  -o out/
 //! ./target/release/rat_enum --ring 12 -n 14 --free \
-//!     --mode build  -o out/ --target-block-bytes 1048576
+//!     --mode build  -o out/        # 4 MiB blocks by default
 //! # out/dafsa/ now holds the blocked RatDafsa, readable by
 //! # LazyRatDafsa / LazyRatDafsaAsync. out/certificate.json
 //! # carries the BLAKE3 of unique.bin so the build is auditable.
@@ -86,7 +86,7 @@ use tilezz::rat_enum::output::{print_stats, run_rat_enum_polylines};
 use tilezz::rat_enum::prune::{install_closure_key_prune, install_mod_prune};
 use tilezz::rat_enum::run_rat_enum_seqs;
 use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_from_seed};
-use tilezz::stringmatch::RatDafsa;
+use tilezz::stringmatch::{DEFAULT_TARGET_BLOCK_BYTES, RatDafsa};
 
 // Test-only imports needed by the file-top helpers (`rat_enum`,
 // `rat_enum_free`) which the test modules call via `super::`.
@@ -388,12 +388,16 @@ struct Cli {
     closure_key_depth: usize,
 
     /// Target uncompressed bytes per block file when writing the
-    /// `--mode dafsa-blocks` asset. The writer closes a block once
-    /// its serialised size crosses this threshold (the final block
-    /// may be smaller). 1 MiB (1048576) is the sweet spot for HTTP-
-    /// served assets; reduce for tiny example assets so the test
-    /// fans out across multiple blocks.
-    #[arg(long, default_value_t = 1 << 20)]
+    /// `--mode dafsa-blocks` asset. The writer closes a block once its
+    /// serialised size crosses this threshold (the final block may be
+    /// smaller). Default 4 MiB (4194304): fewer blocks means a lazy
+    /// lookup crosses fewer of them, so HTTP-served assets pay fewer
+    /// sequential block fetches (measured ZZ4 n32: worst-case
+    /// blocks/lookup 12 at 1 MiB -> 7 at 4 MiB) at ~the same gzipped
+    /// on-disk size; going larger would bloat each fetch and strain
+    /// low-bandwidth clients. Reduce (e.g. 8192) for tiny example
+    /// assets so a small set still fans out across multiple blocks.
+    #[arg(long, default_value_t = DEFAULT_TARGET_BLOCK_BYTES)]
     target_block_bytes: u32,
 
     /// Skip emission of `ro-crate-metadata.json` and the `schemas/`

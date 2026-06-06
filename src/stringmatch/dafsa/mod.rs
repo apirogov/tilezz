@@ -59,7 +59,7 @@ pub(crate) fn sha256_hex_bytes(bytes: &[u8]) -> String {
 }
 
 pub use core::Dafsa;
-pub use lazy::{LazyRatDafsa, LazyRatDafsaAsync};
+pub use lazy::{DEFAULT_TARGET_BLOCK_BYTES, LazyRatDafsa, LazyRatDafsaAsync};
 pub use rat::RatDafsa;
 pub use rocrate::{
     AssetParams, ProducedVia, SequenceCounts, rehost_ro_crate, write_archival_extras,

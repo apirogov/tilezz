@@ -135,14 +135,18 @@ all resulting runs through the same merge + build stages.
 block's UNCOMPRESSED serialized size; the `.bin` files are then
 gzipped (~3-4x smaller on disk). Consequence to internalize: the
 block COUNT tracks the UNCOMPRESSED DAFSA size, NOT the on-disk
-footprint -- do not expect `(on-disk MB) / (1 MiB)` blocks. Worked
-example: ZZ4 n=32 serializes to ~45 MiB uncompressed -> 46 blocks of
-~1 MiB each -> ~13 MB gzipped on disk (each block ~280 KB over HTTP,
-which is what the lazy explorer fetches). So "13 MB on disk but 46
-blocks" is expected, not a bug. The 1 MiB default is the sweet spot
-for HTTP-served assets; the n=10 probe used 8192 deliberately to
-force a multi-block layout out of a tiny dataset -- don't do that for
-real datasets.
+footprint -- do not expect `(on-disk MB) / (4 MiB)` blocks. Worked
+example: ZZ4 n=32 serializes to ~45 MiB uncompressed -> at the **4 MiB
+default** ~12 blocks of ~4 MiB -> ~13 MB gzipped on disk (each block
+~1 MB over HTTP, which is what the lazy explorer fetches). The default
+was raised from 1 MiB to 4 MiB so a lazy lookup crosses fewer blocks:
+measured on ZZ4 n32, the worst-case blocks fetched per deep lookup
+dropped 12 (1 MiB) -> 7 (4 MiB), at ~the same on-disk size -- fewer
+sequential round-trips for the same bytes. Larger still (8/16 MiB)
+keeps cutting round-trips but bloats each fetch, straining
+low-bandwidth clients, so 4 MiB is the chosen balance. Reduce only for
+tiny example assets (the n=10 probe used 8192 to force a multi-block
+layout) -- never for real datasets.
 
 **"Upgrading" to a higher n**: there is no incremental path -- a
 larger perimeter bound is a fresh enumeration from scratch (the
