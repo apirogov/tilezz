@@ -812,6 +812,29 @@ pub async fn db_seq_of(ring: u8, id: f64) -> Option<Vec<i8>> {
     })
 }
 
+/// Pre-warm the block cache for `ring`'s DB by loading every block that
+/// holds a state within `max_depth` edges of the root -- the shallow
+/// prefix region every lookup crosses first. Call it fire-and-forget
+/// from JS right after `db_init` so the first real lookup finds its
+/// shared prefix already cached; the per-rat deep tail still streams in
+/// lazily. Returns the number of blocks warmed (0 if no DB is loaded for
+/// `ring`). Keep `max_depth` small (3) -- the warmed set grows with the
+/// ring's branching factor.
+#[wasm_bindgen]
+pub async fn db_prewarm(ring: u8, max_depth: usize) -> f64 {
+    let Some(state) = lookup_db(ring) else {
+        return 0.0;
+    };
+    let state_for_fetch = state.clone();
+    let fetch = move |block_index: u32| {
+        let manifest = state_for_fetch.dafsa.manifest();
+        let entry = &manifest.blocks[block_index as usize];
+        let url = resolve_block_url(&state_for_fetch.asset_dir, &manifest.block_url(entry));
+        async move { fetch_url_to_bytes(&url).await }
+    };
+    state.dafsa.prewarm_to_depth(max_depth, &fetch).await as f64
+}
+
 fn lookup_db(ring: u8) -> Option<Rc<DbState>> {
     DBS.with(|dbs| dbs.borrow().get(&ring).cloned())
 }

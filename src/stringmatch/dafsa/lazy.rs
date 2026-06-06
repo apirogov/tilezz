@@ -878,6 +878,48 @@ impl LazyRatDafsaAsync {
         }
     }
 
+    /// Warm the in-memory block cache for every state reachable within
+    /// `max_depth` edges of the root -- the shallow region every lookup
+    /// traverses first. Pre-loading these blocks turns the cold "first
+    /// lookup" into a cache hit for its shared prefix; each rat's deep
+    /// tail still loads lazily on demand. The depth-`max_depth` ball
+    /// bounds the work regardless of total dataset size, but its breadth
+    /// grows with the ring's branching, so keep `max_depth` small (3 is
+    /// a good default; high-turn rings like ZZ32/60 fan out fast).
+    /// Returns the number of blocks cached afterwards. Best-effort: a
+    /// failed block fetch is skipped, not propagated.
+    pub async fn prewarm_to_depth<F, Fut>(&self, max_depth: usize, fetch: &F) -> usize
+    where
+        F: Fn(u32) -> Fut,
+        Fut: core::future::Future<Output = io::Result<Vec<u8>>>,
+    {
+        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        visited.insert(0);
+        let mut frontier: Vec<u32> = vec![0];
+        for depth in 0..=max_depth {
+            let mut next: Vec<u32> = Vec::new();
+            for &state in &frontier {
+                // lookup_state loads + caches the state's block as a
+                // side effect (the root is served from the manifest).
+                let Ok((_, edges)) = self.lookup_state(state, fetch).await else {
+                    continue;
+                };
+                if depth < max_depth {
+                    for e in edges {
+                        if visited.insert(e.target) {
+                            next.push(e.target);
+                        }
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        self.cache.borrow().len()
+    }
+
     /// Walk the entire prefixed sequence; return the terminal state's
     /// record + edges (whether or not it accepts). Used by
     /// [`Self::contains`].

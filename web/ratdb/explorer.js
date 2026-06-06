@@ -1,4 +1,4 @@
-import init, { analyze, db_init, db_id_of, db_seq_of } from './pkg/tilezz.js';
+import init, { analyze, db_init, db_id_of, db_seq_of, db_prewarm } from './pkg/tilezz.js';
 await init();
 
 const ringEl = document.getElementById('ring');
@@ -573,6 +573,12 @@ function tryLoadDb(ring) {
       const meta = await db_init(ring, assetDir);
       // meta is a plain object from JS side: { total, max_len }
       dbMeta.set(ring, { total: meta.total, max_len: meta.max_len });
+      // Warm the shallow shared-prefix blocks in the background so the
+      // first lookup doesn't pay a cold sequential chain of block
+      // fetches. Depth 3 keeps the warmed set bounded even for
+      // high-branching rings; fire-and-forget, errors ignored (pure
+      // optimization -- the deep per-rat tail still streams in lazily).
+      db_prewarm(ring, 3).catch(() => {});
       return meta;
     } catch (err) {
       console.warn(`RatDB ring=${ring} not loaded:`, err);
