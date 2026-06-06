@@ -160,9 +160,11 @@ substitute `$D/dafsa` for the asset path below (e.g.
 the datasets.json `name` uses underscores (`zz4_n32_free`).
 
 ```sh
-# 0. computed per section 2 into /tmp/zz24_n8_free; sanity-check it
-#    (run verify_canonical.py too -- catches non-canonical/dup entries)
-python3 /tmp/zz24_n8_free/tools/verify_sha256.py /tmp/zz24_n8_free
+# 0. computed per section 2 into /tmp/zz24_n8_free; sanity-check it.
+#    --strict FAILS if the build was -dirty/unknown -- a published
+#    dataset MUST carry a clean commit (build from a tag worktree, not a
+#    dirty workspace). verify_canonical catches non-canonical/dup entries.
+python3 /tmp/zz24_n8_free/tools/verify_sha256.py /tmp/zz24_n8_free --strict
 python3 /tmp/zz24_n8_free/tools/verify_canonical.py /tmp/zz24_n8_free
 
 # 1. publish as orphan branch of tilezz-ratdb
@@ -187,6 +189,14 @@ metadata into `web/ratdb/data/zz24_n8_free/`, `build_web_rocrate` scans
 `web/ratdb/data/*/ro-crate-metadata.json` into the top-level RO-Crate,
 and the explorer JS drives ring/dataset selection off that single
 fetch. Nothing else to wire up.
+
+Provenance is enforced at deploy time: a gate in `pages.yml` (after
+`build_web_rocrate`, before upload) reads the `#tilezz softwareVersion`
+of the top-level crate AND every `data/*/` crate and refuses to deploy
+if any is non-pristine (`-dirty` or `unknown`, i.e. not a bare 40-hex
+commit). So neither a dirty dataset nor a dirty *app* build can reach
+the live site -- the app and every dataset it serves carry a clean
+source commit, or the deploy fails.
 
 Note: pass `--oeis-a-number` (at compute time) only when the count
 sequence actually matches an OEIS entry; it lands in the RO-Crate
@@ -382,7 +392,7 @@ a dataset. Run from a dataset directory (the asset dir, i.e. the
 |---|---|---|
 | `decode.py` | walk the DAFSA, print every rat (one line of signed ints each) | manual; also the shared block-reader the other tools import |
 | `count.py` | per-perimeter family terms (all 7): `--print` (fast -- free off the index + cross-check, others echoed from metadata) / `--verify` (slow -- decode + re-derive all 7, check vs metadata) | manual (read terms for a submission / validate); CI round-trip runs `--verify` |
-| `verify_sha256.py` | recorded sha256 vs disk bytes; FAILS on unexpected files; WARNS on `-dirty`/`unknown` provenance | CI round-trip; manual audit |
+| `verify_sha256.py` | recorded sha256 vs disk bytes; FAILS on unexpected files; WARNS (or with `--strict`, FAILS) on `-dirty`/`unknown` provenance | CI round-trip (`--strict`); manual audit; publish gate |
 | `verify_canonical.py` | independently recompute each rat's dihedral-canonical CCW form; assert stored == it (no non-canonical entry, no dup class) | CI round-trip; **run before publishing/submitting** |
 | `reproduce.sh` | clone tilezz @ the recorded commit, build `rat_enum`, provenance-guard (`--version` must report that commit), re-run the producing pipeline | archival reproduction; CI round-trip runs it + diffs |
 

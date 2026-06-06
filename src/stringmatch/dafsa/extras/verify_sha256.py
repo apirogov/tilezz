@@ -17,17 +17,18 @@ Three independent checks, any of which fails the run:
    `__pycache__/` byproducts of running these tools are exempt.
 
 3. Provenance sanity: the producing-tool `softwareVersion` (the build
-   commit) is reported, and a loud WARNING is printed if it is
-   `unknown` (built outside a git checkout) or `-dirty` (built from an
-   unclean tree) -- i.e. when the recorded commit does not fully
-   describe the binary that produced the asset.
+   commit) is reported, and `unknown` (built outside a git checkout) or
+   `-dirty` (built from an unclean tree) is a WARNING by default -- and
+   a FAILURE under `--strict`. Use `--strict` as the publish gate: a
+   deployed dataset must carry a clean 40-hex source commit.
 
 Run from the asset directory root, or pass it as the first argument:
 
-    python3 tools/verify_sha256.py [path/to/asset]
+    python3 tools/verify_sha256.py [path/to/asset] [--strict]
 
-Exits 0 on full match, 1 on any mismatch / missing / unexpected file,
-2 on usage error. No external dependencies; stdlib only.
+Exits 0 on full match, 1 on any mismatch / missing / unexpected file
+(or non-pristine provenance under --strict), 2 on usage error. No
+external dependencies; stdlib only.
 """
 
 from __future__ import annotations
@@ -72,7 +73,7 @@ def _provenance_warnings(meta: dict) -> list[str]:
     return warns
 
 
-def verify(asset_dir: pathlib.Path) -> int:
+def verify(asset_dir: pathlib.Path, strict: bool = False) -> int:
     crate_path = asset_dir / "ro-crate-metadata.json"
     if not crate_path.exists():
         sys.stderr.write(
@@ -116,9 +117,16 @@ def verify(asset_dir: pathlib.Path) -> int:
             print(f"{rel}: UNEXPECTED (present on disk but not in the manifest)")
             errs += 1
 
-    # (3) provenance sanity (warnings, not failures).
-    for w in _provenance_warnings(meta):
-        print(f"WARNING: {w}")
+    # (3) provenance sanity. A non-pristine commit (`-dirty` / `unknown`)
+    # is a WARNING by default -- an archivist's tarball build legitimately
+    # has `unknown` -- but a FAILURE under --strict, which is the gate for
+    # anything you intend to PUBLISH: a deployed dataset must carry a clean
+    # 40-hex source commit.
+    prov = _provenance_warnings(meta)
+    for w in prov:
+        print(f"{'PROVENANCE FAILURE' if strict else 'WARNING'}: {w}")
+    if strict:
+        errs += len(prov)
 
     if errs:
         print(f"{errs} problem(s); {checked} file(s) verified")
@@ -128,8 +136,17 @@ def verify(asset_dir: pathlib.Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    asset_dir = pathlib.Path(argv[1] if len(argv) >= 2 else ".")
-    return verify(asset_dir)
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("asset_dir", nargs="?", default=".")
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="also FAIL (not just warn) on non-pristine provenance "
+        "(softwareVersion 'unknown' or '-dirty') -- use before publishing",
+    )
+    args = ap.parse_args(argv[1:])
+    return verify(pathlib.Path(args.asset_dir), strict=args.strict)
 
 
 if __name__ == "__main__":

@@ -83,7 +83,11 @@ jobs:
           # README's verification recipe: tools/verify_sha256.py
           # exits non-zero if any recorded sha256 disagrees with the
           # on-disk bytes.
-          python3 /tmp/asset-original/tools/verify_sha256.py /tmp/asset-original
+          # --strict: also fail on non-pristine provenance. CI builds
+          # rat_enum from a clean checkout, so the emitted asset must
+          # carry a bare commit -- if it ever shows -dirty/unknown here,
+          # the build environment regressed.
+          python3 /tmp/asset-original/tools/verify_sha256.py /tmp/asset-original --strict
 
           # tools/count.py --verify re-derives the variableMeasured
           # sub-family sequences (free, oneSided, achiral,

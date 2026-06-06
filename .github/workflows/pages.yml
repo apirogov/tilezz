@@ -87,6 +87,38 @@ jobs:
             --web-dir web/ratdb/ \
             --page-url "${{ steps.pages.outputs.base_url }}"
 
+      - name: Provenance gate (no -dirty / unknown in deployed crates)
+        # Refuse to deploy if the app's OWN build commit (the aggregate
+        # RO-Crate's #tilezz softwareVersion, stamped by build_web_rocrate)
+        # or ANY served dataset's commit is non-pristine. A clean tag
+        # checkout produces a bare 40-hex commit; a `-dirty` suffix or
+        # `unknown` means a non-reproducible build slipped in -- never
+        # publish that. Guarantees the live site records only clean
+        # provenance.
+        run: |
+          python3 - <<'PY'
+          import json, glob, re, sys
+          HEX = re.compile(r'^[0-9a-f]{40}$')
+          def software_version(path):
+              meta = json.load(open(path))
+              return next((e.get("softwareVersion")
+                           for e in meta.get("@graph", [])
+                           if e.get("@id") == "#tilezz"), None)
+          paths = ["web/ratdb/ro-crate-metadata.json",
+                   *sorted(glob.glob("web/ratdb/data/*/ro-crate-metadata.json"))]
+          bad = []
+          for p in paths:
+              v = software_version(p)
+              ok = isinstance(v, str) and bool(HEX.match(v))
+              print(f"{p}: {v}  {'OK' if ok else 'DIRTY/UNKNOWN'}")
+              if not ok:
+                  bad.append(p)
+          if bad:
+              print("::error::non-pristine provenance, refusing to deploy: " + ", ".join(bad))
+              sys.exit(1)
+          print("provenance gate: every deployed crate carries a clean commit")
+          PY
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

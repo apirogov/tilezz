@@ -379,7 +379,7 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
         ),
         "tools/verify_sha256.py" => (
             "verify_sha256.py (Python 3 hash verifier)",
-            "Standalone, dependency-free Python 3 script that checks every sha256 recorded in ro-crate-metadata.json against the on-disk file bytes. Run as `python3 tools/verify_sha256.py`; exits 0 on full match, 1 on mismatch.",
+            "Standalone, dependency-free Python 3 script that checks every sha256 recorded in ro-crate-metadata.json against the on-disk file bytes, flags any file on disk not in the manifest, and reports the producing-tool commit. Run as `python3 tools/verify_sha256.py`; add `--strict` to also fail on non-pristine provenance (`-dirty`/`unknown`). Exits 0 on full match, 1 on mismatch.",
         ),
         "tools/count.py" => (
             "count.py (Python 3 per-perimeter family counter + verifier)",
