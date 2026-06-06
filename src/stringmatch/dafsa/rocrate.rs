@@ -83,6 +83,16 @@ const COUNT_BY_LENGTH_PY: &str = include_str!("extras/count_by_length.py");
 /// against what the writer emitted into the RO-Crate.
 const VERIFY_COUNTS_PY: &str = include_str!("extras/verify_counts.py");
 
+/// Standalone Python canonical-form verifier. Shipped at
+/// `tools/verify_canonical.py` inside every asset. Independently
+/// recomputes each stored rat's dihedral-canonical CCW form (lex-min
+/// over rotations of the sequence and its reverse, turn-sum > 0) and
+/// checks the stored sequence already equals it -- catching any
+/// non-canonical entry and, since the DAFSA stores each string once,
+/// excluding the "non-canonical duplicate" failure mode that a hash /
+/// count check cannot see.
+const VERIFY_CANONICAL_PY: &str = include_str!("extras/verify_canonical.py");
+
 /// How the dataset was produced. Determines what `reproduce.sh`
 /// emits (one-step in-memory build vs. three-stage streaming
 /// pipeline) and what the `CreateAction.description` records.
@@ -380,6 +390,10 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
         "tools/verify_counts.py" => (
             "verify_counts.py (Python 3 sub-family verifier)",
             "Standalone Python 3 script (stdlib + sibling decode.py) that re-derives the per-perimeter sub-family sequences (free, oneSided, achiral, rotationSymmetric, symmetric, subring, coset) from the DAFSA and checks them against the `variableMeasured` block in ro-crate-metadata.json. Run as `python3 tools/verify_counts.py`; exits 0 if all match, 1 on mismatch.",
+        ),
+        "tools/verify_canonical.py" => (
+            "verify_canonical.py (Python 3 canonical-form verifier)",
+            "Standalone Python 3 script (stdlib + sibling decode.py) that independently recomputes each stored rat's dihedral-canonical CCW form (lex-min over rotations of the sequence and its reverse, turn-sum > 0) and checks the stored sequence equals it. Catches any non-canonical entry and excludes non-canonical duplicates. Run as `python3 tools/verify_canonical.py`; `--stride N` / `--max N` sample large assets. Exits 0 if all canonical, 1 on violation.",
         ),
         "README.md" => (
             "README.md",
@@ -1179,6 +1193,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
     std::fs::write(tools.join("count_by_length.py"), COUNT_BY_LENGTH_PY)?;
     std::fs::write(tools.join("verify_counts.py"), VERIFY_COUNTS_PY)?;
+    std::fs::write(tools.join("verify_canonical.py"), VERIFY_CANONICAL_PY)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
     std::fs::write(&sh_path, reproduce_sh(params))?;
@@ -1695,6 +1710,7 @@ to its schema.
     verify_sha256.py        SHA-256 verifier (no deps; exits 0 on full match)
     count_by_length.py      per-exact-length counts (OEIS-style terms)
     verify_counts.py        re-derive + verify the variableMeasured sub-family sequences
+    verify_canonical.py     independently check every rat is dihedral-canonical CCW
     reproduce.sh            executable rebuild script (clones + builds + runs)
 ```
 

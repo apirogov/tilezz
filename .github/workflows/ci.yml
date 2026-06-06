@@ -93,6 +93,13 @@ jobs:
           # the (Rust) emitter on a real asset.
           python3 /tmp/asset-original/tools/verify_counts.py /tmp/asset-original
 
+          # tools/verify_canonical.py independently recomputes each
+          # stored rat's dihedral-canonical CCW form and asserts the
+          # stored sequence equals it -- catches a non-canonical entry
+          # (and, with the DAFSA's one-string-per-set guarantee, any
+          # non-canonical duplicate) that a hash/count check cannot see.
+          python3 /tmp/asset-original/tools/verify_canonical.py /tmp/asset-original
+
           # Run tools/reproduce.sh against the local checkout and
           # the same SOURCE_DATE_EPOCH. The pre-built target dir
           # inside the clone is fresh, so cargo build inside the
