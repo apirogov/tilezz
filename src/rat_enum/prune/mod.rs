@@ -16,10 +16,12 @@
 
 pub mod closure_key;
 pub mod modular;
+pub mod shadow;
 pub mod units;
 
 pub use closure_key::ClosureKeyPrune;
 pub use modular::{MOD_PRUNE_CELL_BUDGET, ModularPrune};
+pub use shadow::ShadowPrune;
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -36,6 +38,7 @@ use std::sync::Mutex;
 pub struct Prunes {
     pub mod_prune: Option<Arc<ModularPrune>>,
     pub closure_key_prune: Option<Arc<ClosureKeyPrune>>,
+    pub shadow_prune: Option<Arc<ShadowPrune>>,
 }
 
 /// Single global `Prunes` configured by `main` from CLI flags.
@@ -90,5 +93,20 @@ pub fn install_closure_key_prune(ring: u8, max_l: usize) {
     let mut guard = PRUNES.lock().unwrap();
     let mut current = guard.take().unwrap_or_default();
     current.closure_key_prune = Some(Arc::new(prune));
+    *guard = Some(current);
+}
+
+/// Build the shadow-radius prune for ring `ring`, install into the
+/// global `PRUNES` bundle, and report the shadow places. Idempotent.
+pub fn install_shadow_prune(ring: u8) {
+    let prune = ShadowPrune::for_ring(ring);
+    eprintln!(
+        "shadow-prune: ring={ring}: {} shadow place(s), exponents {:?}",
+        prune.exps.len(),
+        prune.exps,
+    );
+    let mut guard = PRUNES.lock().unwrap();
+    let mut current = guard.take().unwrap_or_default();
+    current.shadow_prune = Some(Arc::new(prune));
     *guard = Some(current);
 }

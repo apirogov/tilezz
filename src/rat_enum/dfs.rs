@@ -146,6 +146,19 @@ pub fn rat_enum_step<ZZ: IsRing>(
             stats.too_far += 1;
             continue;
         }
+        // Archimedean half of the reachability prune (set via
+        // `--mod-prune`, alongside the modular/finite-place half): the
+        // same `within_radius` bound in the non-physical conjugate
+        // embeddings. A closing walk returns to 0 in every place, so
+        // |sigma_g(new_pt)| <= remaining must hold for each. Completes
+        // the always-on physical `within_radius`. See `prune::shadow`.
+        if let Some(sp) = prunes.shadow_prune.as_deref()
+            && !new_pt.is_zero()
+            && !sp.allows_closure(&new_pt, remaining)
+        {
+            stats.shadow_skip += 1;
+            continue;
+        }
 
         // Optional modular reachability prune (set via `--mod-prune`).
         // After taking this direction, the snake will be at `new_pt`
@@ -275,6 +288,14 @@ pub fn collect_seeds<ZZ: IsRing>(
             + <ZZ as Units>::unit(snake.direction()) * <ZZ as Units>::unit(direction);
         if !new_pt.is_zero() && !new_pt.within_radius(remaining) {
             gather.stats.too_far += 1;
+            continue;
+        }
+        // Shadow-radius reachability (see `rat_enum_step`).
+        if let Some(sp) = prunes.shadow_prune.as_deref()
+            && !new_pt.is_zero()
+            && !sp.allows_closure(&new_pt, remaining)
+        {
+            gather.stats.shadow_skip += 1;
             continue;
         }
 

@@ -83,7 +83,7 @@ use clap::{Parser, ValueEnum};
 
 use tilezz::rat_enum::dfs::STREAM_RAT_LINES;
 use tilezz::rat_enum::output::{print_stats, run_rat_enum_polylines};
-use tilezz::rat_enum::prune::{install_closure_key_prune, install_mod_prune};
+use tilezz::rat_enum::prune::{install_closure_key_prune, install_mod_prune, install_shadow_prune};
 use tilezz::rat_enum::run_rat_enum_seqs;
 use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_from_seed};
 use tilezz::stringmatch::{DEFAULT_TARGET_BLOCK_BYTES, RatDafsa};
@@ -257,7 +257,7 @@ Output is selected via `--mode` (default: render):\n\
                   new `--base-url` / `--doi` (no recompute; see -o)\n\
 \n\
 Performance opts (combine for maximum speedup):\n\
-  --mod-prune          modular reachability prune; up to 376x on some rings\n\
+  --mod-prune          reachability prune, finite + archimedean places; up to 376x\n\
   --closure-key-prune  exact lattice closure-key prune; another 2-5x on top\n\
   --threads N          parallel DFS; near-linear in streaming modes,\n\
                        sub-linear in HashSet modes (set-merge overhead)\n\
@@ -348,14 +348,17 @@ struct Cli {
     #[arg(long)]
     paranoid: bool,
 
-    /// Enable the modular reachability prune. For each modulus
-    /// `m in {2..=16}` whose state space `m^phi` fits the cell
-    /// budget, precomputes the cumulative reachable mod-m
-    /// displacement set and rejects any candidate direction whose
-    /// post-extension displacement can't reach 0 mod m in any
-    /// number of remaining steps. Cheap per-node (one packed hash
-    /// lookup per modulus). Use `--mod-prune-moduli` to A/B test
-    /// different modulus sets.
+    /// Enable the reachability prune (finite + archimedean places).
+    /// FINITE half: for each modulus `m in {2..=16}` whose state space
+    /// `m^phi` fits the cell budget, precomputes the cumulative
+    /// reachable mod-m displacement set and rejects any candidate
+    /// direction whose post-extension displacement can't reach 0 mod m
+    /// in any number of remaining steps (one packed hash lookup per
+    /// modulus; `--mod-prune-moduli` to A/B test). ARCHIMEDEAN half
+    /// (shadow-radius): the same `within_radius` reachability bound in
+    /// the non-physical conjugate embeddings -- `O(phi)`, no precompute,
+    /// and the dominant half on high-`phi` rings (e.g. ZZ32/60) where
+    /// the modular budget collapses to `m=2`.
     #[arg(long)]
     mod_prune: bool,
 
@@ -522,7 +525,14 @@ fn main() {
     };
 
     if cli.mod_prune {
+        // The reachability prune has two complementary halves, both under
+        // this one flag: the modular tables (finite places, mod m) and the
+        // shadow-radius check (the non-physical archimedean places --
+        // extending the always-on physical `within_radius` to all of them).
+        // They are the same "can the remaining budget cancel the head"
+        // test at different places of the field, so they share a flag.
         install_mod_prune(ring, max_steps, cli.mod_prune_moduli.as_deref());
+        install_shadow_prune(ring);
     }
     if cli.closure_key_prune {
         install_closure_key_prune(ring, cli.closure_key_depth);
@@ -861,6 +871,9 @@ fn main() {
             }
         }
         Mode::Bench => {
+            // Don't stream RAT lines: this mode times the DFS, and the
+            // per-rat printing would land inside the timed region.
+            STREAM_RAT_LINES.store(false, std::sync::atomic::Ordering::Relaxed);
             let profile = tilezz::util::profile::ProfileGuard::start(cli.profile.as_deref());
 
             let t0 = Instant::now();
@@ -1253,6 +1266,7 @@ mod opt_correctness_tests {
     use tilezz::cyclotomic::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60};
     use tilezz::rat_enum::prune::closure_key::{ClosureKeyPrune, collect_closure_keys};
     use tilezz::rat_enum::prune::modular::ModularPrune;
+    use tilezz::rat_enum::prune::shadow::ShadowPrune;
     use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
     use tilezz::rat_enum::seed::rat_enum_parallel;
 
@@ -1266,7 +1280,13 @@ mod opt_correctness_tests {
     /// Both prunes are constructed against `(ring, max_steps)`
     /// regardless of whether they're enabled, so each test case is
     /// self-contained and independent of any global state.
-    fn build_prunes(ring: u8, max_steps: usize, with_mod: bool, with_ck: bool) -> Prunes {
+    fn build_prunes(
+        ring: u8,
+        max_steps: usize,
+        with_mod: bool,
+        with_ck: bool,
+        with_shadow: bool,
+    ) -> Prunes {
         let (units, phi) = unit_vectors_for_ring(ring);
         let mut prunes = Prunes::default();
         if with_mod {
@@ -1277,6 +1297,9 @@ mod opt_correctness_tests {
             let max_l = 4;
             let keys = closure_keys_for(ring, max_l);
             prunes.closure_key_prune = Some(Arc::new(ClosureKeyPrune { max_l, keys }));
+        }
+        if with_shadow {
+            prunes.shadow_prune = Some(Arc::new(ShadowPrune::for_ring(ring)));
         }
         prunes
     }
@@ -1300,8 +1323,8 @@ mod opt_correctness_tests {
     }
 
     /// Enumerate the 4 subsets of {mod, closure-key}.
-    fn opt_subsets() -> impl Iterator<Item = (bool, bool)> {
-        (0..4).map(|mask| (mask & 1 != 0, mask & 2 != 0))
+    fn opt_subsets() -> impl Iterator<Item = (bool, bool, bool)> {
+        (0..8).map(|mask| (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0))
     }
 
     /// Cross-validation matrix: every opt subset x every thread count
@@ -1309,15 +1332,15 @@ mod opt_correctness_tests {
     fn check_ring<ZZ: IsRing>(ring: u8, max_steps: usize) {
         for &free in &[false, true] {
             let baseline = run::<ZZ>(max_steps, free, 1, &Prunes::default());
-            for (with_mod, with_ck) in opt_subsets() {
-                let prunes = build_prunes(ring, max_steps, with_mod, with_ck);
+            for (with_mod, with_ck, with_shadow) in opt_subsets() {
+                let prunes = build_prunes(ring, max_steps, with_mod, with_ck, with_shadow);
                 for &n_threads in &[1usize, 4] {
                     let got = run::<ZZ>(max_steps, free, n_threads, &prunes);
                     assert_eq!(
                         got,
                         baseline,
                         "ZZ{ring} n={max_steps} free={free} \
-                         mod={with_mod} ck={with_ck} threads={n_threads}: \
+                         mod={with_mod} ck={with_ck} shadow={with_shadow} threads={n_threads}: \
                          result set differs from baseline ({} vs {} rats)",
                         got.len(),
                         baseline.len(),
@@ -1547,8 +1570,8 @@ mod opt_correctness_tests {
         ];
         let max_n = OEIS.iter().map(|&(n, _)| n).max().unwrap();
 
-        for (with_mod, with_ck) in opt_subsets() {
-            let prunes = build_prunes(12, max_n, with_mod, with_ck);
+        for (with_mod, with_ck, with_shadow) in opt_subsets() {
+            let prunes = build_prunes(12, max_n, with_mod, with_ck, with_shadow);
             for &n_threads in &[1usize, 4] {
                 let rats = run::<ZZ12>(max_n, true, n_threads, &prunes);
                 let mut by_len: std::collections::BTreeMap<usize, usize> =
@@ -1572,8 +1595,8 @@ mod opt_correctness_tests {
                         );
                     }
                     panic!(
-                        "OEIS mismatch with mod={with_mod} ck={with_ck} threads={n_threads}: \
-                         {} length(s) differ",
+                        "OEIS mismatch with mod={with_mod} ck={with_ck} shadow={with_shadow} \
+                         threads={n_threads}: {} length(s) differ",
                         mismatches.len()
                     );
                 }
@@ -1602,17 +1625,17 @@ mod opt_correctness_tests {
     #[ignore = "opt-in (cargo test -- --include-ignored): ~4 min; pre-submission / thorough CI \
                 guard, not part of the default debug or release suite"]
     fn zz12_extension_frontier_guard() {
-        // Prune-invariance at n=11 (optional prunes on vs off).
-        let none = build_prunes(12, 11, false, false);
-        let all11 = build_prunes(12, 11, true, true);
+        // Prune-invariance at n=11 (all prunes on vs off).
+        let none = build_prunes(12, 11, false, false, false);
+        let all11 = build_prunes(12, 11, true, true, true);
         let base = by_length(&run::<ZZ12>(11, true, 0, &none));
         let pruned = by_length(&run::<ZZ12>(11, true, 0, &all11));
         assert_eq!(
             base, pruned,
-            "ZZ12 free n=11: optional prunes changed the count -- over-pruning at the frontier",
+            "ZZ12 free n=11: prunes changed the count -- over-pruning at the frontier",
         );
         // Value pins for the first two extension terms.
-        let all12 = build_prunes(12, 12, true, true);
+        let all12 = build_prunes(12, 12, true, true, true);
         let c12 = by_length(&run::<ZZ12>(12, true, 0, &all12));
         assert_eq!(c12.get(&11).copied(), Some(89075), "ZZ12 a(11) regression");
         assert_eq!(c12.get(&12).copied(), Some(597581), "ZZ12 a(12) regression");
@@ -1635,7 +1658,7 @@ mod opt_correctness_tests {
     /// `oeis`. Used by the cheap external-anchor pins below.
     fn assert_oeis_pins<ZZ: IsRing>(ring: u8, oeis_name: &str, oeis: &[(usize, usize)]) {
         let max_n = oeis.iter().map(|&(n, _)| n).max().unwrap();
-        let prunes = build_prunes(ring, max_n, true, true);
+        let prunes = build_prunes(ring, max_n, true, true, true);
         let rats = run::<ZZ>(max_n, true, 1, &prunes);
         let by_len = by_length(&rats);
         let mut mismatches: Vec<(usize, usize, usize)> = Vec::new();

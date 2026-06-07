@@ -4,6 +4,8 @@
 //! - `closed`: snake reached the origin and was recorded as a rat.
 //! - `intersected`: `Snake::add` rejected the candidate (self-intersection).
 //! - `too_far`: Euclidean reachability prune fired (snake too far from origin).
+//! - `shadow_skip`: shadow-radius reachability prune fired (too far in a
+//!   non-physical archimedean place; archimedean half of `--mod-prune`).
 //! - `recursed`: snake extended; DFS descended further.
 //! - `canonical_skip`: canonical-rotation prune fired (lex-min violation).
 //! - `mod_skip`: modular reachability prune fired (set via `--mod-prune`).
@@ -17,6 +19,12 @@ pub struct DfsStats {
     pub closed: u64,
     pub intersected: u64,
     pub too_far: u64,
+    /// Branches eliminated by the shadow-radius prune (reachability in
+    /// the non-physical archimedean places; archimedean half of
+    /// `--mod-prune`). Counted only when `within_radius` (physical
+    /// place) already passed, so it reflects ADDITIONAL pruning beyond
+    /// `too_far`.
+    pub shadow_skip: u64,
     pub recursed: u64,
     pub canonical_skip: u64,
     /// Branches eliminated by the modular reachability prune (set
@@ -34,6 +42,7 @@ impl DfsStats {
         self.closed
             + self.intersected
             + self.too_far
+            + self.shadow_skip
             + self.recursed
             + self.canonical_skip
             + self.mod_skip
@@ -44,6 +53,7 @@ impl DfsStats {
         self.closed += other.closed;
         self.intersected += other.intersected;
         self.too_far += other.too_far;
+        self.shadow_skip += other.shadow_skip;
         self.recursed += other.recursed;
         self.canonical_skip += other.canonical_skip;
         self.mod_skip += other.mod_skip;
@@ -85,6 +95,12 @@ impl std::fmt::Display for DfsStats {
             "  too_far:          {:>10} ({:>5.1}%)",
             self.too_far,
             pct(self.too_far)
+        )?;
+        writeln!(
+            f,
+            "  shadow_skip:      {:>10} ({:>5.1}%)",
+            self.shadow_skip,
+            pct(self.shadow_skip)
         )?;
         writeln!(
             f,

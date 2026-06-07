@@ -1424,6 +1424,7 @@ mod tests {
         let prunes = Prunes {
             mod_prune: Some(Arc::new(ModularPrune::build(&units, phi, max_steps, None))),
             closure_key_prune: Some(Arc::new(ClosureKeyPrune { max_l: 4, keys })),
+            shadow_prune: None,
         };
 
         let (rats, _) = rat_enum_with::<ZZ12>(
