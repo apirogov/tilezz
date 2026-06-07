@@ -399,14 +399,15 @@ function decodeSeqParam(s) {
 }
 
 // Parse the angle input box into a `Vec<i8>`-compatible `Int8Array`
-// before handing it to Rust. Tolerates a trailing bare "-" or "+"
-// so live updates don't flash a parse error while the user is
-// mid-typing a negative angle.
+// before handing it to Rust. Separators are whitespace and/or commas,
+// so a copied sequence like `0, -1, 1` pastes in directly. Tolerates a
+// trailing bare "-" or "+" so live updates don't flash a parse error
+// while the user is mid-typing a negative angle.
 //
 // Returns `{ angles: Int8Array, error: null }` on success and
 // `{ angles: null, error: "..." }` on parse failure.
 function parseAnglesText(text) {
-  const tokens = text.trim().split(/\s+/).filter(t => t.length > 0);
+  const tokens = text.trim().split(/[\s,]+/).filter(t => t.length > 0);
   if (tokens.length > 0) {
     const last = tokens[tokens.length - 1];
     if (last === '-' || last === '+') tokens.pop();
@@ -711,7 +712,7 @@ function syncUrl() {
   if (text.length > 0) {
     const parsed = parseAnglesText(text);
     if (parsed.error) {
-      params.set('seq', text.split(/\s+/).join(','));
+      params.set('seq', text.split(/[\s,]+/).filter(Boolean).join(','));
     } else if (parsed.angles.length > 0) {
       params.set('seq', encodeSeqParam(parsed.angles));
     }
@@ -915,7 +916,7 @@ function commitPreview() {
 
 // Pop the last committed angle. Returns true if it popped anything.
 function popLast() {
-  const tokens = anglesEl.value.trim().split(/\s+/).filter(Boolean);
+  const tokens = anglesEl.value.trim().split(/[\s,]+/).filter(Boolean);
   if (tokens.length === 0) return false;
   tokens.pop();
   anglesEl.value = tokens.join(' ');
