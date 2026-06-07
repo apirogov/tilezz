@@ -1,6 +1,6 @@
 [package]
 name = "tilezz"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Anton Pirogov <apirogov@users.noreply.github.com>"]
 description = "Utilities to work with perfect-precision polygonal tiles built on top of cyclotomic integer rings."
 license = "MIT"

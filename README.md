@@ -125,7 +125,7 @@ Add the crate to a Rust project:
 
 ```toml
 [dependencies]
-tilezz = "0.1.1"
+tilezz = "0.1.2"
 ```
 
 Full API reference (auto-built by docs.rs against the current published version):
