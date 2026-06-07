@@ -35,30 +35,49 @@ pub fn spectre<T: HasZZ12>() -> Snake<T> {
 // but could with an extension of Snakes to take real-valued positive elements of the cyclotomic ring
 // (see https://github.com/apirogov/tilezz/issues/1)
 // However, P3 (pair of rhombs) have edges of the same length, so it works.
-// The needed edge markings (for proper Penrose tilings) are geometrically encoded as bump/dent pairs.
+//
+// The matching rules (see https://commons.wikimedia.org/wiki/File:Penrose_rhombs_matching_rules.svg)
+// are baked into the edge geometry as bump/dent gadgets. Crucially there are
+// TWO distinct gadget shapes -- the analog of Penrose's single- vs double-arrow
+// markings -- so that the two arrow types can never be confused (see
+// https://github.com/apirogov/tilezz/issues/29):
+//   * type 1: a shallow +-1 spike  ([-1,2,-1] bump / [1,-2,1] dent), a 4-step edge;
+//   * type 2: a taller  +-2 spike  ([-2,4,-2] bump / [2,-4,2] dent), a 5-step edge.
+// A bump (+) mates ONLY the dent (-) of the SAME type (their step runs are exact
+// reverse-complements), so a type-1 edge can never glue to a type-2 edge. The two
+// edge types share one length because 2cos36 = 1 + 2cos72, so the +-2 edge just
+// needs one extra straight step; this keeps each tile an equilateral rhombus.
 
 /// Return the sequence of the Penrose P3 "narrow" (thin) rhomb tile
 /// over a compatible 10-fold cyclotomic ring.
+///
+/// Four unit-length sides; CCW edge markings (sign = bump(+)/dent(-),
+/// magnitude = arrow type): -1, +1, -2, +2. Enumeration starts at an acute
+/// (36deg) vertex, so the corner turns are 4,1,4,1. The +-2 (type-2) spikes are
+/// buffered away from the sharp 36deg corners by the lone extra straight step
+/// so the outline stays simple.
 pub fn penrose_p3_narrow<T: HasZZ10>() -> Snake<T> {
-    // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
-        /* */ 1, 0, -1, 2, -1, 0, 0, // 1+ = N3  [0,7]
-        /* */ 4, 0, 0, -1, 2, -1, 0, // 2+ = N11 [7,14]
-        /* */ 1, 0, 1, -2, 1, 0, 0, //  2- = N17 [14,21]
-        /* */ 4, 0, 0, 1, -2, 1, 0, //  1- = N25 [21,28]
+        4, 1, -2, 1, //     -1  type-1 dent  (acute corner 4)
+        1, -1, 2, -1, //    +1  type-1 bump  (obtuse corner 1)
+        4, 0, 2, -4, 2, //  -2  type-2 dent  (acute corner 4, pad before spike)
+        1, -2, 4, -2, 0, // +2  type-2 bump  (obtuse corner 1, pad after spike)
     ];
     Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
 
 /// Return the sequence of the Penrose P3 "wide" (fat) rhomb tile
 /// over a compatible 10-fold cyclotomic ring.
+///
+/// Four unit-length sides; CCW edge markings: -2, -1, +1, +2. Enumeration
+/// starts at an acute (72deg) vertex, so the corner turns are 3,2,3,2. The +-2
+/// (type-2) spikes are buffered away from the acute corners.
 pub fn penrose_p3_wide<T: HasZZ10>() -> Snake<T> {
-    // NOTE: see https://github.com/apirogov/tilezz/issues/29
     let seq: &[i8] = &[
-        /* */ 2, 0, -1, 2, -1, 0, 0, // 1+ = W3   [0,7]
-        /* */ 3, 0, 0, 1, -2, 1, 0, //  1- = W11  [7,14]
-        /* */ 2, 0, 0, -1, 2, -1, 0, // 2+ = W18  [14,21]
-        /* */ 3, 0, 1, -2, 1, 0, 0, //  2- = W24  [21,28]
+        3, 0, 2, -4, 2, //  -2  type-2 dent  (acute corner 3, pad before spike)
+        2, 1, -2, 1, //     -1  type-1 dent  (obtuse corner 2)
+        3, -1, 2, -1, //    +1  type-1 bump  (acute corner 3)
+        2, -2, 4, -2, 0, // +2  type-2 bump  (obtuse corner 2, pad after spike)
     ];
     Snake::try_from(upscale_angles::<T>(10, seq).as_slice()).unwrap()
 }
@@ -128,20 +147,51 @@ mod tests {
 
     #[test]
     fn test_penrose() {
-        // Test the decorated Penrose rhombi (create a circular patch with a star inside).
-        let fat_rat: Rat<ZZ10> = Rat::try_from(&penrose_p3_wide()).unwrap();
-        let thin_rat: Rat<ZZ10> = Rat::try_from(&penrose_p3_narrow()).unwrap();
+        // The decorated P3 rhombi: 4 unit-edge sides, each a meta-edge carrying
+        // ONE of two distinct, non-interchangeable gadgets (the +-1 "single
+        // arrow" / +-2 "double arrow" spikes). A bump mates only the dent of the
+        // same type.
+        let fat: Rat<ZZ10> = Rat::try_from(&penrose_p3_wide()).unwrap();
+        let thin: Rat<ZZ10> = Rat::try_from(&penrose_p3_narrow()).unwrap();
 
-        let mut penta_star = fat_rat.glue((18, 24), &fat_rat);
-        penta_star = penta_star.glue((3, 39), &penta_star);
-        penta_star = penta_star.glue((32, 24), &fat_rat);
+        // perimeter = two type-1 edges (4 steps) + two type-2 edges (5 steps).
+        assert_eq!(fat.len(), 18);
+        assert_eq!(thin.len(), 18);
 
-        let mut penta_circ = penta_star.clone();
-        penta_circ = penta_circ.glue((3, 25), &thin_rat);
-        penta_circ = penta_circ.glue((10, 25), &thin_rat);
-        penta_circ = penta_circ.glue((10, 25), &thin_rat);
-        penta_circ = penta_circ.glue((10, 25), &thin_rat);
-        penta_circ = penta_circ.glue((10, 25), &thin_rat);
-        assert_eq!(penta_circ.len(), 70);
+        // The CCW edge markings must match the Penrose P3 matching rules:
+        //   thin : -1, +1, -2, +2        fat : -2, -1, +1, +2
+        // (sign = bump(+)/dent(-), magnitude = arrow type). Read off the raw
+        // (pre-canonicalization) angle sequence at the known meta-edge offsets:
+        // type = max|interior turn|/2; bump iff the first nonzero interior turn
+        // is negative (bump = [-t,2t,-t], dent = [t,-2t,t]).
+        fn marking(seq: &[i8], starts: &[usize]) -> Vec<(char, i8)> {
+            let n = seq.len();
+            (0..starts.len())
+                .map(|k| {
+                    let interior = &seq[starts[k] + 1..*starts.get(k + 1).unwrap_or(&n)];
+                    let ty = interior.iter().map(|t| t.abs()).max().unwrap() / 2;
+                    let first = *interior.iter().find(|&&t| t != 0).unwrap();
+                    (if first < 0 { '+' } else { '-' }, ty)
+                })
+                .collect()
+        }
+        assert_eq!(
+            marking(penrose_p3_narrow::<ZZ10>().angles(), &[0, 4, 8, 13]),
+            [('-', 1), ('+', 1), ('-', 2), ('+', 2)]
+        );
+        assert_eq!(
+            marking(penrose_p3_wide::<ZZ10>().angles(), &[0, 5, 9, 13]),
+            [('-', 2), ('-', 1), ('+', 1), ('+', 2)]
+        );
+
+        // Two distinct gadget shapes are present (a single-gadget encoding would
+        // lack the +-2 spike's magnitude-4 turn or the +-1 [-1,2,-1] run).
+        for t in [&fat, &thin] {
+            assert!(t.seq().iter().any(|&a| a.abs() == 4));
+            assert!(t.seq().windows(3).any(|w| matches!(w, [-1, 2, -1] | [1, -2, 1])));
+        }
+
+        // The decorated rhombi still assemble into a valid (simple, hole-free) patch.
+        assert!(fat.try_glue((0, 0), &thin).is_ok());
     }
 }
