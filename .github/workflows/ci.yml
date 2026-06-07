@@ -95,7 +95,7 @@ jobs:
           # DAFSA and checks them against what the writer emitted into
           # ro-crate-metadata.json -- an independent (Python) check of
           # the (Rust) emitter on a real asset.
-          python3 /tmp/asset-original/tools/count.py /tmp/asset-original --verify
+          python3 /tmp/asset-original/tools/count.py /tmp/asset-original --verify | tee /tmp/py-count.out
 
           # tools/verify_canonical.py independently recomputes each
           # stored rat's dihedral-canonical CCW form and asserts the
@@ -103,6 +103,24 @@ jobs:
           # (and, with the DAFSA's one-string-per-set guarantee, any
           # non-canonical duplicate) that a hash/count check cannot see.
           python3 /tmp/asset-original/tools/verify_canonical.py /tmp/asset-original
+
+          # tools/verify.rs is the verifier the pipeline runs by
+          # default (compiled + multi-threaded; the Python tools above
+          # are the zero-dependency fallback). It performs the SAME
+          # checks -- per-block sha256, canonical-CCW, and the seven
+          # per-perimeter family re-derivation -- so CI runs it too and
+          # asserts the two agree on every family series. A disagreement
+          # means one of the two reimplementations (or the emitter)
+          # drifted.
+          cargo install rust-script --locked
+          rust-script /tmp/asset-original/tools/verify.rs /tmp/asset-original | tee /tmp/rust-verify.out
+          fams='^(free|oneSided|achiral|rotationSymmetric|symmetric|subring|coset):'
+          grep -E "$fams" /tmp/rust-verify.out | sort > /tmp/rust-series.txt
+          grep -E "$fams" /tmp/py-count.out  | sort > /tmp/py-series.txt
+          diff -u /tmp/py-series.txt /tmp/rust-series.txt \
+            || { echo "Rust verify.rs and Python count.py disagree on the family series"; exit 1; }
+          grep -q '^# OK' /tmp/rust-verify.out \
+            || { echo "verify.rs did not report overall OK"; exit 1; }
 
           # Run tools/reproduce.sh against the local checkout and
           # the same SOURCE_DATE_EPOCH. The pre-built target dir

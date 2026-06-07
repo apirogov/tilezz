@@ -91,6 +91,16 @@ const COUNT_PY: &str = include_str!("extras/count.py");
 /// count check cannot see.
 const VERIFY_CANONICAL_PY: &str = include_str!("extras/verify_canonical.py");
 
+/// Independent Rust verifier (rust-script single file). Shipped at
+/// `tools/verify.rs` inside every asset and the verifier the project's
+/// pipeline runs by default: it decodes every stored rat straight from
+/// the binary blocks (reimplementing the format, no `tilezz` dependency)
+/// and runs the per-block SHA-256, canonical-CCW, and seven-family
+/// re-derivation checks in one compiled, multi-threaded pass -- orders
+/// of magnitude faster than the Python sweep. The Python tools remain
+/// the zero-dependency, no-toolchain fallback; CI asserts they agree.
+const VERIFY_RS: &str = include_str!("extras/verify.rs");
+
 /// How the dataset was produced. Determines what `reproduce.sh`
 /// emits (one-step in-memory build vs. three-stage streaming
 /// pipeline) and what the `CreateAction.description` records.
@@ -388,6 +398,10 @@ fn human_label_for(rel_path: &str) -> (&'static str, &'static str) {
         "tools/verify_canonical.py" => (
             "verify_canonical.py (Python 3 canonical-form verifier)",
             "Standalone Python 3 script (stdlib + sibling decode.py) that independently recomputes each stored rat's dihedral-canonical CCW form (lex-min over rotations of the sequence and its reverse, turn-sum > 0) and checks the stored sequence equals it. Catches any non-canonical entry and excludes non-canonical duplicates. Run as `python3 tools/verify_canonical.py`; `--stride N` / `--max N` sample large assets. Exits 0 if all canonical, 1 on violation.",
+        ),
+        "tools/verify.rs" => (
+            "verify.rs (Rust verifier, rust-script)",
+            "Independent single-file Rust verifier (run with `cargo install rust-script && rust-script tools/verify.rs`). Decodes every stored rat straight from the binary blocks -- reimplementing the format with no dependency on the tilezz crate that produced the asset -- and in one compiled, multi-threaded pass checks per-block SHA-256 against the manifest, that every sequence is its own dihedral-canonical CCW form, and that the seven per-perimeter family series re-derived from the rats match variableMeasured and n_sequences. This is the fast verifier the project pipeline runs by default; the Python tools (count.py --verify + verify_canonical.py + verify_sha256.py) are the zero-dependency, no-toolchain fallback that performs the same checks. Exits 0 on success, 1 on any mismatch / violation.",
         ),
         "README.md" => (
             "README.md",
@@ -1187,6 +1201,7 @@ pub fn write_archival_extras(dir: &Path, params: &AssetParams) -> io::Result<()>
     std::fs::write(tools.join("verify_sha256.py"), VERIFY_SHA256_PY)?;
     std::fs::write(tools.join("count.py"), COUNT_PY)?;
     std::fs::write(tools.join("verify_canonical.py"), VERIFY_CANONICAL_PY)?;
+    std::fs::write(tools.join("verify.rs"), VERIFY_RS)?;
     std::fs::write(dir.join("README.md"), readme_md(params))?;
     let sh_path = tools.join("reproduce.sh");
     std::fs::write(&sh_path, reproduce_sh(params))?;
