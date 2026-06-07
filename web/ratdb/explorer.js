@@ -182,21 +182,33 @@ function hasRenderableShape() {
 }
 
 // Filename stem (no extension), prefixed with the ring `zz{n}`.
-//   closed + resolved RatDB id  -> zz12_id12345
-//   otherwise (incl. open snakes) -> zz12_seqN3N2P1
+//   closed, shown sequence IS the canonical rep -> zz12_id12345
+//   otherwise (open snakes, or a non-canonical spelling) -> zz12_seqN3N2P1
 // where each committed angle becomes a sign letter (N negative, P
 // non-negative) plus its magnitude, so the sequence stays filesystem
 // safe. `idEl.value` is kept in sync with the displayed shape by
 // augmentInfoWithDbId, and is empty for open/miss shapes.
+//
+// The RatDB id names the FREE (dihedral-reduced) canonical representative,
+// but a rotation / reflection / CW spelling of the same rat resolves to
+// the same id while drawing a different sequence. So only stamp the id
+// into the filename when the shown angles ARE that canonical form
+// (state.rat.canonical_achiral); otherwise name it by the actual sequence
+// so the file matches what's on the canvas.
 function exportBasename() {
   const ring = parseInt(ringEl.value, 10);
   const ringTag = Number.isFinite(ring) ? `zz${ring}` : 'zz';
   const state = lastResult?.state;
   const id = idEl.value.trim();
-  if (state?.closed && /^\d+$/.test(id)) {
+  const angles = state?.angles ?? [];
+  const canonical = state?.rat?.canonical_achiral;
+  const isCanonical = Array.isArray(canonical) || ArrayBuffer.isView(canonical)
+    ? Array.from(angles).length === canonical.length
+      && Array.from(angles).every((a, i) => a === canonical[i])
+    : false;
+  if (state?.closed && /^\d+$/.test(id) && isCanonical) {
     return `${ringTag}_id${id}`;
   }
-  const angles = state?.angles ?? [];
   if (angles.length > 0) {
     return `${ringTag}_seq${encodeSeqParam(angles)}`;
   }
