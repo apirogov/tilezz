@@ -18,7 +18,7 @@
 //!   for the remaining-steps slot. ~10-376× wall-time win on rings
 //!   with non-trivial mod-2/3/4/6 structure.
 //!
-//! - **Closure-key prune** ([`prune::closure_key`]): pre-enumerates
+//! - **Closure-table prune** ([`prune::closure_table`]): pre-enumerates
 //!   every simple open snake up to length `L` and stores their
 //!   (endpoint, facing) "closure keys". When the DFS's remaining
 //!   step budget is `<= L`, rejects any candidate whose required

@@ -73,7 +73,7 @@ Always pass for our published datasets:
 - `--threads 0` -- use all cores.
 
 Optional accelerators (pure pruning, never change the output;
-combine freely): `--mod-prune`, `--closure-key-prune`. Use
+combine freely): `--reachability-prune`, `--closure-table-prune`. Use
 `--paranoid` for an (expensive) self-checking validation run when
 touching enumeration internals.
 

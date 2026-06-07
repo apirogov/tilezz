@@ -1406,7 +1406,7 @@ mod tests {
         use crate::rat_enum::dfs::rat_enum_with;
         use crate::rat_enum::prune::{
             Prunes,
-            closure_key::{ClosureKeyPrune, collect_closure_keys},
+            closure_table::{ClosureTablePrune, collect_closure_keys},
             modular::ModularPrune,
             units::unit_vectors_for_ring,
         };
@@ -1422,8 +1422,8 @@ mod tests {
         let (units, phi) = unit_vectors_for_ring(12);
         let keys = collect_closure_keys::<ZZ12>(4);
         let prunes = Prunes {
-            mod_prune: Some(Arc::new(ModularPrune::build(&units, phi, max_steps, None))),
-            closure_key_prune: Some(Arc::new(ClosureKeyPrune { max_l: 4, keys })),
+            modular_prune: Some(Arc::new(ModularPrune::build(&units, phi, max_steps, None))),
+            closure_table_prune: Some(Arc::new(ClosureTablePrune { max_l: 4, keys })),
             shadow_prune: None,
         };
 

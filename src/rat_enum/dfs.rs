@@ -9,7 +9,7 @@
 //! - [`rat_enum_step`]: the recursive worker. Holds the snake as
 //!   `&mut`, tries every direction (subject to `step`), applies all
 //!   prunes in order (canonical -> reachability -> modular ->
-//!   closure-key -> intersect), recurses or records.
+//!   closure-table -> intersect), recurses or records.
 //!
 //! - [`collect_seeds`]: the parallel variant's seed-collection
 //!   prepass. Walks down to `split_depth` and accumulates alive
@@ -147,7 +147,7 @@ pub fn rat_enum_step<ZZ: IsRing>(
             continue;
         }
         // Archimedean half of the reachability prune (set via
-        // `--mod-prune`, alongside the modular/finite-place half): the
+        // `--reachability-prune`, alongside the modular/finite-place half): the
         // same `within_radius` bound in the non-physical conjugate
         // embeddings. A closing walk returns to 0 in every place, so
         // |sigma_g(new_pt)| <= remaining must hold for each. Completes
@@ -160,23 +160,23 @@ pub fn rat_enum_step<ZZ: IsRing>(
             continue;
         }
 
-        // Optional modular reachability prune (set via `--mod-prune`).
+        // Optional modular reachability prune (set via `--reachability-prune`).
         // After taking this direction, the snake will be at `new_pt`
         // with `remaining - 1` directions still to add for closure.
         // If no sum of (remaining-1) unit vectors equals `-new_pt`
         // (modulo any active modulus), closure is impossible.
         let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref()
+        if let Some(mp) = prunes.modular_prune.as_deref()
             && !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after)
         {
-            stats.mod_skip += 1;
+            stats.modular_skip += 1;
             continue;
         }
-        // Optional closure-key prune (set via `--closure-key-prune`).
+        // Optional closure-table prune (set via `--closure-table-prune`).
         // Only fires when `remaining_after <= max_l` (otherwise the
         // tabulated suffix lengths aren't enough to cover the
         // closing range, and pruning would be unsound).
-        if let Some(ck) = prunes.closure_key_prune.as_deref()
+        if let Some(ck) = prunes.closure_table_prune.as_deref()
             && remaining_after <= ck.max_l
         {
             let turn = ZZ::turn();
@@ -186,7 +186,7 @@ pub fn rat_enum_step<ZZ: IsRing>(
             let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
             let key = (target.int_coeffs_slice().to_vec(), neg_facing);
             if !ck.keys.contains(&key) {
-                stats.closure_key_skip += 1;
+                stats.closure_table_skip += 1;
                 continue;
             }
         }
@@ -301,13 +301,13 @@ pub fn collect_seeds<ZZ: IsRing>(
 
         // Modular reachability prune (see `rat_enum_step`).
         let remaining_after = (remaining as usize).saturating_sub(1);
-        if let Some(mp) = prunes.mod_prune.as_deref()
+        if let Some(mp) = prunes.modular_prune.as_deref()
             && !mp.allows_closure(new_pt.int_coeffs_slice(), remaining_after)
         {
-            gather.stats.mod_skip += 1;
+            gather.stats.modular_skip += 1;
             continue;
         }
-        if let Some(ck) = prunes.closure_key_prune.as_deref()
+        if let Some(ck) = prunes.closure_table_prune.as_deref()
             && remaining_after <= ck.max_l
         {
             let turn = ZZ::turn();
@@ -316,7 +316,7 @@ pub fn collect_seeds<ZZ: IsRing>(
             let target: ZZ = -(<ZZ as Units>::unit(neg_facing) * new_pt);
             let key = (target.int_coeffs_slice().to_vec(), neg_facing);
             if !ck.keys.contains(&key) {
-                gather.stats.closure_key_skip += 1;
+                gather.stats.closure_table_skip += 1;
                 continue;
             }
         }

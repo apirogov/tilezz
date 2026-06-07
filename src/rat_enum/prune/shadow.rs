@@ -27,7 +27,7 @@
 //! modular one -- the necessary condition "can the remaining unit-step
 //! budget cancel the head" -- just checked at the other places of the
 //! field: archimedean here, finite (mod m) there. They are two halves
-//! of one reachability prune and share the `--mod-prune` flag. They are
+//! of one reachability prune and share the `--reachability-prune` flag. They are
 //! complementary, not redundant: the modular tables are `m^phi` cells
 //! (budget-capped, so they shrink as `phi` grows), while this check is
 //! `O(phi)` arithmetic with no precomputation -- so it carries the most
@@ -145,8 +145,8 @@ mod tests {
                 for &g in &sp.exps {
                     let (mut re, mut im) = (0.0f64, 0.0f64);
                     for (j, &c) in coeffs.iter().enumerate() {
-                        let ang = std::f64::consts::TAU * (g * j as i64).rem_euclid(n) as f64
-                            / n as f64;
+                        let ang =
+                            std::f64::consts::TAU * (g * j as i64).rem_euclid(n) as f64 / n as f64;
                         re += c as f64 * ang.cos();
                         im += c as f64 * ang.sin();
                     }

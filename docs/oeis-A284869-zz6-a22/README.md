@@ -68,12 +68,12 @@ argues *against* a systematic tilezz bug, but does not prove anything.
 |---|-------|--------|--------|
 | 1 | OEIS published value | live fetch (oeis.org JSON) | a(22) = **374,128,188** |
 | 2 | tilezz ZZ6 free, full pipeline | bench (in-memory HashSet) == stream->merge cert == build n_sequences == count.py; cumulative <=23 = 1,904,072,327 = sum of per-length | a(22) = **374,128,154**, internally consistent |
-| 3 | Independent ring cross-check | **ZZ12 step-2** = ZZ6 sub-ring; different ring arithmetic + different mod-prune moduli + different closure-key tables | a(22) = **374,128,154** (agrees with native ZZ6) |
+| 3 | Independent ring cross-check | **ZZ12 step-2** = ZZ6 sub-ring; different ring arithmetic + different reachability-prune moduli + different closure-table tables | a(22) = **374,128,154** (agrees with native ZZ6) |
 | 4 | Duplicate-storage failure mode | a DAFSA stores each string at most once; intermediate dihedral-image dups collapse at merge and are idempotent in the build | **excluded** -- the gap is a true distinct-count difference, not a storage artifact |
 | 5 | Non-canonical-duplicate failure mode | `tools/verify_canonical.py` independently recomputes each rat's dihedral-canonical CCW form; a wrong canonical would also have disagreed between the two rings in #3 | **excluded** (overcount-via-bad-canonicalization) |
 | 6 | Build provenance | binary built at commit 89d34a0f, whose `src/`, `build.rs`, `Cargo.*` are byte-identical to the v0.1.0 tag (dd4fd14) | runs are v0.1.0-equivalent enumeration code |
-| 7 | closure-key-prune soundness | ZZ6 n22 with **mod-prune only** (closure-key disabled; ~3.9 h, ~1.5e10 records emitted then deduped) | a(22) = **374,128,154** -- closure-key prune **EXONERATED** (count unchanged without it) |
-| 8 | mod-prune cross-validation | native ZZ6 uses ZZ6 reachability moduli; ZZ12 step-2 (#3) uses ZZ12 moduli -- *different* mod-prune tables | both give **374,128,154**; an unsound mod-prune would have to drop the same 34 under two different moduli sets |
+| 7 | closure-table-prune soundness | ZZ6 n22 with **reachability-prune only** (closure-table disabled; ~3.9 h, ~1.5e10 records emitted then deduped) | a(22) = **374,128,154** -- closure-table prune **EXONERATED** (count unchanged without it) |
+| 8 | reachability-prune cross-validation | native ZZ6 uses ZZ6 reachability moduli; ZZ12 step-2 (#3) uses ZZ12 moduli -- *different* reachability-prune tables | both give **374,128,154**; an unsound reachability-prune would have to drop the same 34 under two different moduli sets |
 
 Note on #3: the two ring representations share the DFS *core* and the prune
 *algorithm* (only the ring-specific constants/tables differ), so they are not
@@ -88,8 +88,8 @@ which exercises the core at large scale on another ring.
 | Duplicate strings stored | overcount | impossible by construction (DAFSA = set) |
 | Non-canonical duplicate (bad canonicalization) | overcount | excluded (#5, and two rings agree) |
 | Pipeline drops records (stream/merge/gzip) | undercount | unlikely: ZZ4 n32 (435M) matched OEIS exactly through the same pipeline; ZZ12 n13 stream==in-memory verified earlier |
-| closure-key-prune unsound | undercount | **excluded** (#7: mod-prune-only gives the same 374,128,154) |
-| mod-prune unsound | undercount | strongly constrained (#8: ZZ6 and ZZ12 moduli differ yet agree); a clean no-mod-prune run is ~infeasible at n22 |
+| closure-table-prune unsound | undercount | **excluded** (#7: reachability-prune-only gives the same 374,128,154) |
+| reachability-prune unsound | undercount | strongly constrained (#8: ZZ6 and ZZ12 moduli differ yet agree); a clean no-reachability-prune run is ~infeasible at n22 |
 | DFS core / geometry bug | either | strongly constrained: a(3..21) exact, ZZ4 n32 exact |
 | Published a(22) wrong | (Trump high) | open; would require strong independent confirmation given the source |
 | Different objects (polyiamond vs self-avoiding walk; vertex-pinch) | either | the smallest vertex-pinch ("bowtie", perimeter 6) is excluded by both (a(6) = 4 matches), so this is not a simple definitional gap |
@@ -97,12 +97,12 @@ which exercises the core at large scale on another ring.
 ## Where we stand
 
 **Three** tilezz configurations now agree at 374,128,154 -- native ZZ6 (both
-prunes), native ZZ6 (closure-key off, #7), and ZZ12 step-2 (different ring,
+prunes), native ZZ6 (closure-table off, #7), and ZZ12 step-2 (different ring,
 different prune tables, #3) -- versus the published 374,128,188 (Walter Trump,
 2023), differing by 34 at perimeter 22 only. Every tilezz-side failure mode is
 now excluded or strongly constrained: storage dups (impossible by
-construction), non-canonical dups (excluded, #5), closure-key prune
-(exonerated, #7), mod-prune (two different moduli agree, #8), DFS core (ZZ4 n32
+construction), non-canonical dups (excluded, #5), closure-table prune
+(exonerated, #7), reachability-prune (two different moduli agree, #8), DFS core (ZZ4 n32
 = 435,646,127 matches A266549 exactly). Internal consistency holds (per-length
 sum = n_sequences). No tilezz mechanism for the -34 has been found.
 
@@ -117,8 +117,8 @@ established independently, this stays OPEN.
 
 ## Next steps
 
-1. Finish the mod-prune-only run (#7) and record the result here.
-2. If closure-key is exonerated: assess mod-prune (cost permitting) and/or a
+1. Finish the reachability-prune-only run (#7) and record the result here.
+2. If closure-table is exonerated: assess reachability-prune (cost permitting) and/or a
    clean-room enumerator anchored at a smaller perimeter, and cross-reference
    A057729 (the holes-allowed sibling) where it still coincides.
 3. Do not submit anything to OEIS until one direction is established
@@ -131,16 +131,16 @@ terms (build rat_enum from a clean checkout; see the dataset's
 `tools/reproduce.sh` and the v0.1.1 provenance guard):
 
 ```sh
-rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode stream -o zz6
-rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode merge -o zz6
-rat_enum --ring 6 -n 23 --free --threads 0 --mod-prune --closure-key-prune --mode build --oeis-a-number A284869 -o zz6
+rat_enum --ring 6 -n 23 --free --threads 0 --reachability-prune --closure-table-prune --mode stream -o zz6
+rat_enum --ring 6 -n 23 --free --threads 0 --reachability-prune --closure-table-prune --mode merge -o zz6
+rat_enum --ring 6 -n 23 --free --threads 0 --reachability-prune --closure-table-prune --mode build --oeis-a-number A284869 -o zz6
 python3 zz6/dafsa/tools/count.py zz6/dafsa --print   # free series, perimeter-22 term = 374128154
 ```
 
 Independent ring cross-check (ZZ12 step-2 = ZZ6):
 
 ```sh
-rat_enum --ring 12 --step 2 -n 22 --free --threads 0 --mod-prune --closure-key-prune --mode stream -o chk
+rat_enum --ring 12 --step 2 -n 22 --free --threads 0 --reachability-prune --closure-table-prune --mode stream -o chk
 # ... merge, build ... ; count.py --print free series, perimeter-22 = 374128154
 ```
 
@@ -148,7 +148,7 @@ rat_enum --ring 12 --step 2 -n 22 --free --threads 0 --mod-prune --closure-key-p
 
 - `zz6_native_bylen.txt` -- per-perimeter counts, native ZZ6 free, n<=23.
 - `zz12step2_bylen.txt` -- per-perimeter counts, ZZ12 step-2, n<=22.
-- `zz6_modpruneonly_bylen.txt` -- per-perimeter counts, ZZ6 with closure-key
+- `zz6_modpruneonly_bylen.txt` -- per-perimeter counts, ZZ6 with closure-table
   prune disabled, n<=22 (same a(22) = 374128154; #7 above).
 
 ## Timings (16-core / 58 GB box, this run)
@@ -157,6 +157,6 @@ rat_enum --ring 12 --step 2 -n 22 --free --threads 0 --mod-prune --closure-key-p
   = **~3 h 36 m** (1.9e9 cumulative records; gzipped scratch peaked ~18 GB).
 - ZZ12 step-2 n22 cross-check, full prunes: stream 2816 s + merge 373 s +
   build 532 s = **~1 h 2 m**.
-- ZZ6 n22 mod-prune-only (closure-key off): **~3.9 h** (14170 s); ~1.5e10
-  records emitted (the closure-key prune normally suppresses ~10x the
+- ZZ6 n22 reachability-prune-only (closure-table off): **~3.9 h** (14170 s); ~1.5e10
+  records emitted (the closure-table prune normally suppresses ~10x the
   emission) then merged/deduped to the same a(22) = 374,128,154.

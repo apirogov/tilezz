@@ -77,7 +77,7 @@ cargo build --release --bin rat_enum --features cli
 ```sh
 # ZZ10 directly, prunes on/off, single/multi-thread:
 ./target/release/rat_enum --ring 10 -n 11 --free --threads 0 --mode bench
-./target/release/rat_enum --ring 10 -n 11 --free --threads 1 --mode bench --mod-prune --closure-key-prune
+./target/release/rat_enum --ring 10 -n 11 --free --threads 1 --mode bench --reachability-prune --closure-table-prune
 # ZZ20 with step=2 enumerates the ZZ10-equivalent subset:
 ./target/release/rat_enum --ring 20 -n 11 --free --step 2 --threads 0 --mode bench
 # Streaming pipeline (stream -> merge -> build) over a temp dir:

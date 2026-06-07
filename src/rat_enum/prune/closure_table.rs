@@ -1,4 +1,4 @@
-//! Closure-key prune.
+//! Closure-table prune.
 //!
 //! Pre-pass: DFS-enumerate every simple open snake up to length `L`
 //! and store the set of `(endpoint, facing)` pairs they reach -- the
@@ -17,7 +17,7 @@ use crate::cyclotomic::{IsRing, Units};
 use crate::geom::snake::Snake;
 
 /// Set of closure keys indexed by ring-coefficient vector + facing.
-pub struct ClosureKeyPrune {
+pub struct ClosureTablePrune {
     /// Maximum tabulated suffix length. The prune fires only when
     /// `remaining_after <= max_l`.
     pub max_l: usize,

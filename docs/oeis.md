@@ -145,8 +145,8 @@ free run:
 
 ## Reach (measured 2026-06-05; 16-core / 61 GB box, all cores, full prunes)
 
-Per-ring `--mode bench --free --threads 0 --mod-prune
---closure-key-prune` timing sweeps: a measured anchor `(n, seconds)`
+Per-ring `--mode bench --free --threads 0 --reachability-prune
+--closure-table-prune` timing sweeps: a measured anchor `(n, seconds)`
 plus the measured per-`n` growth factor, extrapolated PESSIMISTICALLY
 (factor held flat or worst-observed; reach rounded down). These are
 ENUMERATION (count) times; a deployable dataset adds the build stage
@@ -203,7 +203,7 @@ Per-lookup cost in the explorer is unaffected (lazy block fetch).
 
 1. Build `rat_enum` from a tagged (`origin/main`) commit (reproducibility).
 2. One deep free run: `rat_enum --ring R -n N --free --threads 0
-   --mod-prune --closure-key-prune --mode dafsa-blocks -o ...`
+   --reachability-prune --closure-table-prune --mode dafsa-blocks -o ...`
    (or the streaming pipeline for big N).
 3. The RO-Crate now carries all 7 sequences (`variableMeasured`);
    `tools/count.py --verify` confirms them; `tools/count.py --print`

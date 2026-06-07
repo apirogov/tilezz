@@ -5,11 +5,11 @@
 //! - `intersected`: `Snake::add` rejected the candidate (self-intersection).
 //! - `too_far`: Euclidean reachability prune fired (snake too far from origin).
 //! - `shadow_skip`: shadow-radius reachability prune fired (too far in a
-//!   non-physical archimedean place; archimedean half of `--mod-prune`).
+//!   non-physical archimedean place; archimedean half of `--reachability-prune`).
 //! - `recursed`: snake extended; DFS descended further.
 //! - `canonical_skip`: canonical-rotation prune fired (lex-min violation).
-//! - `mod_skip`: modular reachability prune fired (set via `--mod-prune`).
-//! - `closure_key_skip`: closure-key prune fired (set via `--closure-key-prune`).
+//! - `modular_skip`: modular reachability prune fired (set via `--reachability-prune`).
+//! - `closure_table_skip`: closure-table prune fired (set via `--closure-table-prune`).
 //!
 //! These categories partition every direction attempted; their sum
 //! is `total()`.
@@ -21,20 +21,20 @@ pub struct DfsStats {
     pub too_far: u64,
     /// Branches eliminated by the shadow-radius prune (reachability in
     /// the non-physical archimedean places; archimedean half of
-    /// `--mod-prune`). Counted only when `within_radius` (physical
+    /// `--reachability-prune`). Counted only when `within_radius` (physical
     /// place) already passed, so it reflects ADDITIONAL pruning beyond
     /// `too_far`.
     pub shadow_skip: u64,
     pub recursed: u64,
     pub canonical_skip: u64,
     /// Branches eliminated by the modular reachability prune (set
-    /// via `--mod-prune`). Always 0 when the prune is off, so the
+    /// via `--reachability-prune`). Always 0 when the prune is off, so the
     /// existing bench output stays comparable.
-    pub mod_skip: u64,
-    /// Branches eliminated by the closure-key prune (set via
-    /// `--closure-key-prune`). Counted only when all prior prunes
+    pub modular_skip: u64,
+    /// Branches eliminated by the closure-table prune (set via
+    /// `--closure-table-prune`). Counted only when all prior prunes
     /// passed, so this reflects ADDITIONAL pruning power.
-    pub closure_key_skip: u64,
+    pub closure_table_skip: u64,
 }
 
 impl DfsStats {
@@ -45,8 +45,8 @@ impl DfsStats {
             + self.shadow_skip
             + self.recursed
             + self.canonical_skip
-            + self.mod_skip
-            + self.closure_key_skip
+            + self.modular_skip
+            + self.closure_table_skip
     }
 
     pub fn merge(&mut self, other: &DfsStats) {
@@ -56,8 +56,8 @@ impl DfsStats {
         self.shadow_skip += other.shadow_skip;
         self.recursed += other.recursed;
         self.canonical_skip += other.canonical_skip;
-        self.mod_skip += other.mod_skip;
-        self.closure_key_skip += other.closure_key_skip;
+        self.modular_skip += other.modular_skip;
+        self.closure_table_skip += other.closure_table_skip;
     }
 }
 
@@ -104,15 +104,15 @@ impl std::fmt::Display for DfsStats {
         )?;
         writeln!(
             f,
-            "  mod_skip:         {:>10} ({:>5.1}%)",
-            self.mod_skip,
-            pct(self.mod_skip)
+            "  modular_skip:         {:>10} ({:>5.1}%)",
+            self.modular_skip,
+            pct(self.modular_skip)
         )?;
         write!(
             f,
-            "  closure_key_skip: {:>10} ({:>5.1}%)",
-            self.closure_key_skip,
-            pct(self.closure_key_skip)
+            "  closure_table_skip: {:>10} ({:>5.1}%)",
+            self.closure_table_skip,
+            pct(self.closure_table_skip)
         )
     }
 }

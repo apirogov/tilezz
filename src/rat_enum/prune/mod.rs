@@ -4,7 +4,7 @@
 //!
 //! - [`modular`]: precomputed mod-`m` reachable-displacement tables
 //!   (cheap, broad applicability, 10-376× depending on ring).
-//! - [`closure_key`]: precomputed exact (endpoint, facing) closure
+//! - [`closure_table`]: precomputed exact (endpoint, facing) closure
 //!   keys for short suffix lengths (more expensive, strictly stronger
 //!   than the modular prune, an additional 2-5× on top).
 //!
@@ -14,13 +14,13 @@
 //! flags and `snapshot_prunes()` makes a cheap Arc-clone copy at DFS
 //! entry. Tests bypass the global and pass `Prunes` directly.
 
-pub mod closure_key;
+pub mod closure_table;
 pub mod modular;
 pub mod shadow;
 pub mod units;
 
-pub use closure_key::ClosureKeyPrune;
-pub use modular::{MOD_PRUNE_CELL_BUDGET, ModularPrune};
+pub use closure_table::ClosureTablePrune;
+pub use modular::{MODULAR_CELL_BUDGET, ModularPrune};
 pub use shadow::ShadowPrune;
 
 use std::sync::Arc;
@@ -36,8 +36,8 @@ use std::sync::Mutex;
 /// combinations in the same process.
 #[derive(Clone, Default)]
 pub struct Prunes {
-    pub mod_prune: Option<Arc<ModularPrune>>,
-    pub closure_key_prune: Option<Arc<ClosureKeyPrune>>,
+    pub modular_prune: Option<Arc<ModularPrune>>,
+    pub closure_table_prune: Option<Arc<ClosureTablePrune>>,
     pub shadow_prune: Option<Arc<ShadowPrune>>,
 }
 
@@ -58,7 +58,7 @@ pub fn snapshot_prunes() -> Prunes {
 /// kept. Idempotent within a process; replaces any previously
 /// installed modular prune. `moduli_override` lets the CLI A/B test
 /// by forcing a specific modulus list.
-pub fn install_mod_prune(ring: u8, max_steps: usize, moduli_override: Option<&[i64]>) {
+pub fn install_modular_prune(ring: u8, max_steps: usize, moduli_override: Option<&[i64]>) {
     let (units, phi) = units::unit_vectors_for_ring(ring);
     let prune = ModularPrune::build(&units, phi, max_steps, moduli_override);
     let cells = prune.cell_counts();
@@ -69,30 +69,30 @@ pub fn install_mod_prune(ring: u8, max_steps: usize, moduli_override: Option<&[i
         .map(|(m, c)| format!("m={m} ({c} cells)"))
         .collect();
     eprintln!(
-        "mod-prune: ring={ring} phi={phi} max_steps={max_steps}: {}",
+        "reachability-prune: ring={ring} phi={phi} max_steps={max_steps}: {}",
         summary.join(", ")
     );
     let mut guard = PRUNES.lock().unwrap();
     let mut current = guard.take().unwrap_or_default();
-    current.mod_prune = Some(Arc::new(prune));
+    current.modular_prune = Some(Arc::new(prune));
     *guard = Some(current);
 }
 
-/// Build the closure-key prune for ring `ring` up to suffix length
+/// Build the closure-table prune for ring `ring` up to suffix length
 /// `max_l`, install into the global `PRUNES` bundle, report the
 /// build time and key count. Idempotent.
-pub fn install_closure_key_prune(ring: u8, max_l: usize) {
+pub fn install_closure_table_prune(ring: u8, max_l: usize) {
     let t0 = std::time::Instant::now();
-    let keys = closure_key::collect_closure_keys_for_ring(ring, max_l);
+    let keys = closure_table::collect_closure_keys_for_ring(ring, max_l);
     eprintln!(
-        "closure-key-prune: ring={ring} max_l={max_l}: {} distinct keys collected in {:?}",
+        "closure-table-prune: ring={ring} max_l={max_l}: {} distinct keys collected in {:?}",
         keys.len(),
         t0.elapsed(),
     );
-    let prune = ClosureKeyPrune { max_l, keys };
+    let prune = ClosureTablePrune { max_l, keys };
     let mut guard = PRUNES.lock().unwrap();
     let mut current = guard.take().unwrap_or_default();
-    current.closure_key_prune = Some(Arc::new(prune));
+    current.closure_table_prune = Some(Arc::new(prune));
     *guard = Some(current);
 }
 

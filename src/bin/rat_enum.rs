@@ -83,7 +83,9 @@ use clap::{Parser, ValueEnum};
 
 use tilezz::rat_enum::dfs::STREAM_RAT_LINES;
 use tilezz::rat_enum::output::{print_stats, run_rat_enum_polylines};
-use tilezz::rat_enum::prune::{install_closure_key_prune, install_mod_prune, install_shadow_prune};
+use tilezz::rat_enum::prune::{
+    install_closure_table_prune, install_modular_prune, install_shadow_prune,
+};
 use tilezz::rat_enum::run_rat_enum_seqs;
 use tilezz::rat_enum::seed::{dispatch_collect_seed_prefixes, dispatch_enumerate_from_seed};
 use tilezz::stringmatch::{DEFAULT_TARGET_BLOCK_BYTES, RatDafsa};
@@ -257,8 +259,8 @@ Output is selected via `--mode` (default: render):\n\
                   new `--base-url` / `--doi` (no recompute; see -o)\n\
 \n\
 Performance opts (combine for maximum speedup):\n\
-  --mod-prune          reachability prune, finite + archimedean places; up to 376x\n\
-  --closure-key-prune  exact lattice closure-key prune; another 2-5x on top\n\
+  --reachability-prune          reachability prune, finite + archimedean places; up to 376x\n\
+  --closure-table-prune  exact lattice closure-table prune; another 2-5x on top\n\
   --threads N          parallel DFS; near-linear in streaming modes,\n\
                        sub-linear in HashSet modes (set-merge overhead)\n\
   --free               free (= full dihedral reduction) output:\n\
@@ -354,23 +356,23 @@ struct Cli {
     /// reachable mod-m displacement set and rejects any candidate
     /// direction whose post-extension displacement can't reach 0 mod m
     /// in any number of remaining steps (one packed hash lookup per
-    /// modulus; `--mod-prune-moduli` to A/B test). ARCHIMEDEAN half
+    /// modulus; `--reachability-moduli` to A/B test). ARCHIMEDEAN half
     /// (shadow-radius): the same `within_radius` reachability bound in
     /// the non-physical conjugate embeddings -- `O(phi)`, no precompute,
     /// and the dominant half on high-`phi` rings (e.g. ZZ32/60) where
     /// the modular budget collapses to `m=2`.
     #[arg(long)]
-    mod_prune: bool,
+    reachability_prune: bool,
 
-    /// Comma-separated list of moduli to use with `--mod-prune`
+    /// Comma-separated list of moduli to use with `--reachability-prune`
     /// (default: 2..=16, filtered by ring's state-space budget).
-    /// Useful for A/B testing: e.g. `--mod-prune-moduli 2,3,4,6`
+    /// Useful for A/B testing: e.g. `--reachability-moduli 2,3,4,6`
     /// reproduces the original hardcoded set.
     #[arg(long, value_delimiter = ',', num_args = 1..)]
-    mod_prune_moduli: Option<Vec<i64>>,
+    reachability_moduli: Option<Vec<i64>>,
 
-    /// Enable the closure-key prune: pre-enumerate every simple
-    /// open snake up to length L (= `--closure-key-depth`) and
+    /// Enable the closure-table prune: pre-enumerate every simple
+    /// open snake up to length L (= `--closure-table-depth`) and
     /// store their (endpoint, facing) keys. During DFS, when the
     /// remaining-after-this-direction count is <= L, the candidate
     /// is pruned iff its required suffix's closure key isn't in
@@ -379,16 +381,16 @@ struct Cli {
     /// and pre-pass cost; per-node cost is one ring mul + one
     /// hash lookup.
     #[arg(long)]
-    closure_key_prune: bool,
+    closure_table_prune: bool,
 
-    /// Suffix-length cap for `--closure-key-prune`. Memory/pre-pass
+    /// Suffix-length cap for `--closure-table-prune`. Memory/pre-pass
     /// cost scales as |S_L| ~ c^L (c ~ 5-10 for typical rings);
     /// the prune only fires when `remaining_after <= L`. L=4 was
     /// empirically optimal across ZZ8/12/16 at n=10..15: larger L
     /// finds more skips but the table-build cost dominates the
     /// per-node savings.
     #[arg(long, default_value_t = 4)]
-    closure_key_depth: usize,
+    closure_table_depth: usize,
 
     /// Target uncompressed bytes per block file when writing the
     /// `--mode dafsa-blocks` asset. The writer closes a block once its
@@ -524,18 +526,18 @@ fn main() {
         std::process::exit(2);
     };
 
-    if cli.mod_prune {
+    if cli.reachability_prune {
         // The reachability prune has two complementary halves, both under
         // this one flag: the modular tables (finite places, mod m) and the
         // shadow-radius check (the non-physical archimedean places --
         // extending the always-on physical `within_radius` to all of them).
         // They are the same "can the remaining budget cancel the head"
         // test at different places of the field, so they share a flag.
-        install_mod_prune(ring, max_steps, cli.mod_prune_moduli.as_deref());
+        install_modular_prune(ring, max_steps, cli.reachability_moduli.as_deref());
         install_shadow_prune(ring);
     }
-    if cli.closure_key_prune {
-        install_closure_key_prune(ring, cli.closure_key_depth);
+    if cli.closure_table_prune {
+        install_closure_table_prune(ring, cli.closure_table_depth);
     }
     // `--mode list-seeds`: walk the DFS down to split_depth, print
     // alive prefixes as `SEED a,b,c` lines and any already-closed
@@ -1251,7 +1253,7 @@ mod free_tests {
 ///
 /// For each ring x mode (rotation/free) x thread-count, the test
 /// matrix runs the enumeration under every subset of the optional
-/// prunes (`mod`, `closure-key`) and asserts the resulting
+/// prunes (`mod`, `closure-table`) and asserts the resulting
 /// canonical-rat set is bit-identical to the baseline (no prunes). A
 /// regression in any single prune -- or any composition -- shows up
 /// as a set-equality mismatch on these tests.
@@ -1264,15 +1266,15 @@ mod opt_correctness_tests {
     use super::*;
     use std::sync::Arc;
     use tilezz::cyclotomic::{ZZ4, ZZ6, ZZ8, ZZ10, ZZ12, ZZ14, ZZ16, ZZ18, ZZ20, ZZ24, ZZ32, ZZ60};
-    use tilezz::rat_enum::prune::closure_key::{ClosureKeyPrune, collect_closure_keys};
+    use tilezz::rat_enum::prune::closure_table::{ClosureTablePrune, collect_closure_keys};
     use tilezz::rat_enum::prune::modular::ModularPrune;
     use tilezz::rat_enum::prune::shadow::ShadowPrune;
     use tilezz::rat_enum::prune::units::unit_vectors_for_ring;
     use tilezz::rat_enum::seed::rat_enum_parallel;
 
     /// Dispatch helper: collect closure keys for `ring` up to length
-    /// `max_l`. Mirrors the per-ring match in `install_closure_key_prune`.
-    fn closure_keys_for(ring: u8, max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
+    /// `max_l`. Mirrors the per-ring match in `install_closure_table_prune`.
+    fn closure_tables_for(ring: u8, max_l: usize) -> rustc_hash::FxHashSet<(Vec<i64>, i8)> {
         tilezz::dispatch_ring!(ring, collect_closure_keys::<ZZ>(max_l))
     }
 
@@ -1291,12 +1293,12 @@ mod opt_correctness_tests {
         let mut prunes = Prunes::default();
         if with_mod {
             let mp = ModularPrune::build(&units, phi, max_steps, None);
-            prunes.mod_prune = Some(Arc::new(mp));
+            prunes.modular_prune = Some(Arc::new(mp));
         }
         if with_ck {
             let max_l = 4;
-            let keys = closure_keys_for(ring, max_l);
-            prunes.closure_key_prune = Some(Arc::new(ClosureKeyPrune { max_l, keys }));
+            let keys = closure_tables_for(ring, max_l);
+            prunes.closure_table_prune = Some(Arc::new(ClosureTablePrune { max_l, keys }));
         }
         if with_shadow {
             prunes.shadow_prune = Some(Arc::new(ShadowPrune::for_ring(ring)));
@@ -1322,7 +1324,7 @@ mod opt_correctness_tests {
         rats.into_iter().collect()
     }
 
-    /// Enumerate the 4 subsets of {mod, closure-key}.
+    /// Enumerate the 4 subsets of {mod, closure-table}.
     fn opt_subsets() -> impl Iterator<Item = (bool, bool, bool)> {
         (0..8).map(|mask| (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0))
     }
@@ -1609,7 +1611,7 @@ mod opt_correctness_tests {
     /// we would submit, so they have no external oracle.
     ///
     /// Two oracle-free checks at n=11 (the first unanchored term):
-    /// prune-invariance -- the optional prunes (mod + closure-key)
+    /// prune-invariance -- the optional prunes (mod + closure-table)
     /// must not change the free count vs the baseline (free/canonical/
     /// reachability prunes only), so an over-aggressive prune that
     /// dropped a valid rat is caught one step past the pinned range;

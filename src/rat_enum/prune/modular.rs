@@ -1,6 +1,6 @@
 //! Modular reachability prune.
 //!
-//! Opt-in via `--mod-prune`. For each chosen modulus `m`, BFS the
+//! Opt-in via `--reachability-prune`. For each chosen modulus `m`, BFS the
 //! set `R_{<=r}^(m) ⊆ (Z/m)^phi` of mod-`m` displacements reachable
 //! by sums of AT MOST `r` unit vectors, for `r` in `0..=max_steps`.
 //! Then during DFS, after the canonical / too-far prunes but before
@@ -24,7 +24,7 @@
 /// m=4 sits right at this budget; ZZ32/60 at m=2 fits comfortably.
 /// Larger moduli on higher-phi rings either saturate the prune (and
 /// stop being useful) or blow memory; this cutoff trades both off.
-pub const MOD_PRUNE_CELL_BUDGET: u64 = 1 << 16; // 65536
+pub const MODULAR_CELL_BUDGET: u64 = 1 << 16; // 65536
 
 /// Per-(modulus, remaining) reachable-displacement table.
 pub struct ModularPrune {
@@ -47,8 +47,8 @@ impl ModularPrune {
     /// `d in 0..n`.
     ///
     /// `moduli_override`, when present, replaces the default
-    /// candidate list (used by `--mod-prune-moduli` for A/B testing).
-    /// Either way, candidates are filtered by [`MOD_PRUNE_CELL_BUDGET`].
+    /// candidate list (used by `--reachability-prune-moduli` for A/B testing).
+    /// Either way, candidates are filtered by [`MODULAR_CELL_BUDGET`].
     pub fn build(
         units: &[Vec<i64>],
         phi: usize,
@@ -64,7 +64,7 @@ impl ModularPrune {
         // savings -- wall time is equal or worse. The "right" knob
         // is the number of moduli (~4 lookups balance lookup cost
         // vs prune-rate); specific values within {2,3,4,5,6,...}
-        // barely matter. Override with `--mod-prune-moduli` to
+        // barely matter. Override with `--reachability-prune-moduli` to
         // experiment.
         let default_candidates: [i64; 4] = [2, 3, 4, 6];
         let candidates: &[i64] = moduli_override.unwrap_or(&default_candidates);
@@ -74,7 +74,7 @@ impl ModularPrune {
                 continue;
             }
             let cells = (m as u64).checked_pow(phi as u32).unwrap_or(u64::MAX);
-            if cells <= MOD_PRUNE_CELL_BUDGET {
+            if cells <= MODULAR_CELL_BUDGET {
                 moduli.push(m);
             }
         }
@@ -187,7 +187,7 @@ impl ModularPrune {
 
 /// Pack a coefficient vector mod `m` as a base-`m` integer. Safe up
 /// to `m^PHI <= u64::MAX`. Caller guarantees this via
-/// [`MOD_PRUNE_CELL_BUDGET`].
+/// [`MODULAR_CELL_BUDGET`].
 #[inline]
 fn pack_coeffs(coeffs: &[i64], m: i64) -> u64 {
     let mut key = 0u64;
