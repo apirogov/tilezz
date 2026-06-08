@@ -12,6 +12,29 @@ const diceBtn = document.getElementById('dice-btn');
 const idDecBtn = document.getElementById('id-dec-btn');
 const idIncBtn = document.getElementById('id-inc-btn');
 
+// Vertex/edge label overlay mode (Settings panel), passed to analyze()
+// and persisted across sessions: 0 = none, 1 = turn angle on each
+// vertex, 2 = sequence index on each vertex + turn angle on its outgoing
+// edge. Restore the saved choice into the radios before the first run().
+const LABELS_KEY = 'ratExplorerLabels';
+function labelMode() {
+  const checked = document.querySelector('input[name="labels"]:checked');
+  return checked ? (parseInt(checked.value, 10) || 0) : 0;
+}
+try {
+  const saved = localStorage.getItem(LABELS_KEY);
+  if (saved !== null) {
+    const r = document.querySelector(`input[name="labels"][value="${CSS.escape(saved)}"]`);
+    if (r) r.checked = true;
+  }
+} catch (err) { /* localStorage unavailable; the default (none) stands */ }
+document.querySelectorAll('input[name="labels"]').forEach((radio) =>
+  radio.addEventListener('change', () => {
+    try { localStorage.setItem(LABELS_KEY, String(labelMode())); } catch (err) { /* ignore */ }
+    run();
+  })
+);
+
 // Angles are ring-specific, so the ring can only be changed while
 // the sequence is empty (guards against silently discarding a rat
 // you built). Disable the ring select whenever angles are present;
@@ -445,7 +468,7 @@ function run() {
   const parsed = parseAnglesText(anglesEl.value);
   const result = parsed.error
     ? errorResult(parsed.error)
-    : analyze(ring, parsed.angles, previewAngle);
+    : analyze(ring, parsed.angles, previewAngle, labelMode());
   applyResult(result);
   syncRingGuard();
   syncUrl();

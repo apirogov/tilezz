@@ -64,6 +64,32 @@ pub fn start() {
     console_error_panic_hook::set_once();
 }
 
+/// Vertex / edge label overlay, chosen in the explorer's Settings panel.
+/// Purely a rendering option -- it adds text to the SVG and changes
+/// nothing about the structured result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LabelMode {
+    /// No labels (clean shape).
+    #[default]
+    None,
+    /// Each vertex labelled with its turn angle.
+    Angles,
+    /// Each vertex labelled with its 0-based sequence index; each
+    /// outgoing edge labelled with the turn angle taken to begin it.
+    IndexEdge,
+}
+
+impl LabelMode {
+    /// Map the JS-side integer (0/1/2) to a mode; anything else is `None`.
+    fn from_u8(v: u8) -> Self {
+        match v {
+            1 => LabelMode::Angles,
+            2 => LabelMode::IndexEdge,
+            _ => LabelMode::None,
+        }
+    }
+}
+
 // ============================================================
 // Structured analysis result
 // ============================================================
@@ -141,8 +167,8 @@ pub struct PreviewSummary {
 /// negative-number typing, parse-error messages) stays on the JS side
 /// where it belongs.
 #[wasm_bindgen]
-pub fn analyze(ring: u8, angles: Vec<i8>, preview: Option<i32>) -> JsValue {
-    let result = analyze_data(ring, &angles, preview);
+pub fn analyze(ring: u8, angles: Vec<i8>, preview: Option<i32>, labels: u8) -> JsValue {
+    let result = analyze_data_with_labels(ring, &angles, preview, LabelMode::from_u8(labels));
     serde_wasm_bindgen::to_value(&result).unwrap_or(JsValue::NULL)
 }
 
@@ -206,6 +232,19 @@ fn halve_displayed_turns(result: &mut AnalysisResult, scale: i8) {
 /// longest accepted prefix and record the failing step in
 /// `self_intersect_at`.
 pub fn analyze_data(ring: u8, angles: &[i8], preview: Option<i32>) -> AnalysisResult {
+    analyze_data_with_labels(ring, angles, preview, LabelMode::None)
+}
+
+/// Implementation of [`analyze_data`] with the explorer's label overlay
+/// mode threaded through to the SVG. `analyze_data` is the label-free
+/// entry point used by tests; the WASM `analyze` export passes the
+/// user's chosen mode here.
+fn analyze_data_with_labels(
+    ring: u8,
+    angles: &[i8],
+    preview: Option<i32>,
+    labels: LabelMode,
+) -> AnalysisResult {
     // Clamp the JS preview value into the i8 angle domain. Out-of-range
     // or null becomes "no preview".
     let preview_angle: Option<i8> = preview.and_then(|p| i8::try_from(p).ok());
@@ -223,12 +262,12 @@ pub fn analyze_data(ring: u8, angles: &[i8], preview: Option<i32>) -> AnalysisRe
     if let Some((parent, scale)) = odd_ring_parent(ring) {
         let scaled: Vec<i8> = angles.iter().map(|&a| a.saturating_mul(scale)).collect();
         let scaled_preview = preview_angle.map(|p| p.saturating_mul(scale));
-        let mut result = dispatch_ring(parent, &scaled, scaled_preview, scale);
+        let mut result = dispatch_ring(parent, &scaled, scaled_preview, scale, labels);
         halve_displayed_turns(&mut result, scale);
         return result;
     }
 
-    dispatch_ring(ring, angles, preview_angle, 1)
+    dispatch_ring(ring, angles, preview_angle, 1, labels)
 }
 
 /// Dispatch to the concrete-ring analyzer. `display_scale` divides the
@@ -242,20 +281,21 @@ fn dispatch_ring(
     angles: &[i8],
     preview_angle: Option<i8>,
     display_scale: i8,
+    labels: LabelMode,
 ) -> AnalysisResult {
     match ring {
-        4 => analyze_for_ring::<ZZ4>(angles, preview_angle, display_scale),
-        6 => analyze_for_ring::<ZZ6>(angles, preview_angle, display_scale),
-        8 => analyze_for_ring::<ZZ8>(angles, preview_angle, display_scale),
-        10 => analyze_for_ring::<ZZ10>(angles, preview_angle, display_scale),
-        12 => analyze_for_ring::<ZZ12>(angles, preview_angle, display_scale),
-        14 => analyze_for_ring::<ZZ14>(angles, preview_angle, display_scale),
-        16 => analyze_for_ring::<ZZ16>(angles, preview_angle, display_scale),
-        18 => analyze_for_ring::<ZZ18>(angles, preview_angle, display_scale),
-        20 => analyze_for_ring::<ZZ20>(angles, preview_angle, display_scale),
-        24 => analyze_for_ring::<ZZ24>(angles, preview_angle, display_scale),
-        32 => analyze_for_ring::<ZZ32>(angles, preview_angle, display_scale),
-        60 => analyze_for_ring::<ZZ60>(angles, preview_angle, display_scale),
+        4 => analyze_for_ring::<ZZ4>(angles, preview_angle, display_scale, labels),
+        6 => analyze_for_ring::<ZZ6>(angles, preview_angle, display_scale, labels),
+        8 => analyze_for_ring::<ZZ8>(angles, preview_angle, display_scale, labels),
+        10 => analyze_for_ring::<ZZ10>(angles, preview_angle, display_scale, labels),
+        12 => analyze_for_ring::<ZZ12>(angles, preview_angle, display_scale, labels),
+        14 => analyze_for_ring::<ZZ14>(angles, preview_angle, display_scale, labels),
+        16 => analyze_for_ring::<ZZ16>(angles, preview_angle, display_scale, labels),
+        18 => analyze_for_ring::<ZZ18>(angles, preview_angle, display_scale, labels),
+        20 => analyze_for_ring::<ZZ20>(angles, preview_angle, display_scale, labels),
+        24 => analyze_for_ring::<ZZ24>(angles, preview_angle, display_scale, labels),
+        32 => analyze_for_ring::<ZZ32>(angles, preview_angle, display_scale, labels),
+        60 => analyze_for_ring::<ZZ60>(angles, preview_angle, display_scale, labels),
         _ => AnalysisResult {
             error: Some(format!("unsupported ring: {ring}")),
             svg: empty_svg(),
@@ -277,6 +317,7 @@ fn analyze_for_ring<R: IsRing>(
     angles: &[i8],
     preview_angle: Option<i8>,
     display_scale: i8,
+    labels: LabelMode,
 ) -> AnalysisResult {
     let mut snake: Snake<R> = Snake::new();
     let mut self_intersect_at: Option<usize> = None;
@@ -293,6 +334,11 @@ fn analyze_for_ring<R: IsRing>(
     // tentatively extends past it.
     let committed_was_closed = snake.is_closed();
     let committed_polyline: Vec<P64> = snake.to_polyline_f64(Turtle::default());
+    // Committed turn sequence captured BEFORE any preview is attempted, so
+    // the label overlay reflects the in-the-bank shape. For a closed rat
+    // angles[0] is the closure-rewritten turn at the start/closing vertex,
+    // which is exactly what should be shown there.
+    let committed_angles: Vec<i8> = snake.angles().to_vec();
 
     // Try the preview. Three short-circuits:
     // - The committed sequence already self-intersected (error mode);
@@ -457,6 +503,56 @@ fn analyze_for_ring<R: IsRing>(
         // preview has something to attach to visually.
         let start_marker = MarkerStyle::filled_circle(marker_size * 1.4, Color::RED);
         scene.draw_points(&[p], &start_marker);
+    }
+
+    // Optional vertex / edge label overlay (explorer Settings). The
+    // committed polyline is P0..Pn (Pn == P0 when closed); committed_angles[i]
+    // is the turn at vertex Pi and edge i = Pi->P{i+1} is its outgoing edge
+    // (the CCW edge for a CCW rat, the CW edge for a CW one, since edges
+    // follow the traversal). Angle values are shown in display units (odd
+    // rings halve via display_scale). Text is drawn with a zero-size,
+    // fully transparent marker so only the glyphs show.
+    if !matches!(labels, LabelMode::None) && !committed_angles.is_empty() {
+        let n = committed_angles.len();
+        let no_marker = MarkerStyle::filled_circle(0.0, Color::BLACK.with_alpha(0));
+        match labels {
+            LabelMode::Angles => {
+                let style = TextStyle::new(marker_size * 1.7, Color::BLACK).bold();
+                for i in 0..n {
+                    let a = committed_angles[i] / display_scale;
+                    scene.draw_labeled_points(&[committed[i]], &no_marker, &style, move |_, _| {
+                        format!("{a}")
+                    });
+                }
+            }
+            LabelMode::IndexEdge => {
+                let idx_style = TextStyle::new(marker_size * 1.7, Color::BLACK).bold();
+                let edge_style = TextStyle::new(marker_size * 1.5, Color::rgb(0, 90, 160));
+                for i in 0..n {
+                    scene.draw_labeled_points(
+                        &[committed[i]],
+                        &no_marker,
+                        &idx_style,
+                        move |_, _| format!("{i}"),
+                    );
+                    // Angle on the outgoing edge, nudged off the edge line
+                    // (perpendicular to it) so it clears the mid-edge arrow.
+                    let (from, to) = (committed[i], committed[i + 1]);
+                    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+                    let len = (dx * dx + dy * dy).sqrt().max(1e-9);
+                    let off = marker_size * 1.4;
+                    let mid = (
+                        (from.0 + to.0) / 2.0 - dy / len * off,
+                        (from.1 + to.1) / 2.0 + dx / len * off,
+                    );
+                    let a = committed_angles[i] / display_scale;
+                    scene.draw_labeled_points(&[mid], &no_marker, &edge_style, move |_, _| {
+                        format!("{a}")
+                    });
+                }
+            }
+            LabelMode::None => {}
+        }
     }
 
     // Preview overlay: a dashed segment with a mid-arrow showing
