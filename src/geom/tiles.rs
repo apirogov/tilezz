@@ -188,7 +188,11 @@ mod tests {
         // lack the +-2 spike's magnitude-4 turn or the +-1 [-1,2,-1] run).
         for t in [&fat, &thin] {
             assert!(t.seq().iter().any(|&a| a.abs() == 4));
-            assert!(t.seq().windows(3).any(|w| matches!(w, [-1, 2, -1] | [1, -2, 1])));
+            assert!(
+                t.seq()
+                    .windows(3)
+                    .any(|w| matches!(w, [-1, 2, -1] | [1, -2, 1]))
+            );
         }
 
         // The decorated rhombi still assemble into a valid (simple, hole-free) patch.
