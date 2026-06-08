@@ -36,8 +36,8 @@ function settingsHtml() {
     + '<summary>settings</summary>'
     + '<fieldset class="settings"><legend class="hint">vertex / edge labels</legend>'
     + opt(0, 'none')
-    + opt(1, 'turn angle on each vertex')
-    + opt(2, 'index on each vertex, turn angle on its outgoing edge')
+    + opt(1, 'vertices: external angle')
+    + opt(2, 'vertices: outgoing edge index, edges: turning angle')
     + '</fieldset></details>';
 }
 

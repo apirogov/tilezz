@@ -714,8 +714,8 @@ fn emit_polyline_arrows(
 ///   decorated (vertex markers etc.).
 ///
 /// `size` is the length of the triangle from tip to base center,
-/// in scene units. Base width is fixed at 0.7 × size — gives a
-/// classic isoceles arrowhead shape.
+/// in scene units. Base width is fixed at 0.9 × size — a slightly
+/// broad isoceles arrowhead that reads clearly as a direction tip.
 fn emit_edge_arrow(
     out: &mut String,
     from: P64,
@@ -735,7 +735,7 @@ fn emit_edge_arrow(
     }
     let ux = dx / len;
     let uy = dy / len;
-    let half_base = size * 0.35;
+    let half_base = size * 0.45;
 
     let (tip_x, tip_y) = if mid {
         // Centered on midpoint, tip half a size forward.
