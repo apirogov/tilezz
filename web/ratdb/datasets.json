@@ -8,5 +8,15 @@
     "name": "zz4_n32_free",
     "repo": "apirogov/tilezz-ratdb",
     "ref": "5dfacad2abe90258fd35f2d28a64aa218eeaeccd"
+  },
+  {
+    "name": "zz8_n20_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "a7ef0d81f30c5adc7a1016ef784db90f95e425a9"
+  },
+  {
+    "name": "zz6_n24_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "fb9d5fbbe52780a421b4625826e3f3ce2944ab53"
   }
 ]
