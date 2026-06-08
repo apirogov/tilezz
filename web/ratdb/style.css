@@ -629,3 +629,10 @@ ul.hint li {
 .settings input[type="radio"] {
   margin-right: .4rem;
 }
+
+/* Settings disclosure lives in the render column, just under the canvas
+   and above the export links. */
+.settings-panel {
+  margin: .5rem 0 .25rem;
+  align-self: stretch;
+}

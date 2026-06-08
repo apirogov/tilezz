@@ -510,37 +510,41 @@ fn analyze_for_ring<R: IsRing>(
     // is the turn at vertex Pi and edge i = Pi->P{i+1} is its outgoing edge
     // (the CCW edge for a CCW rat, the CW edge for a CW one, since edges
     // follow the traversal). Angle values are shown in display units (odd
-    // rings halve via display_scale). Text is drawn with a zero-size,
-    // fully transparent marker so only the glyphs show.
+    // rings halve via display_scale).
+    //
+    // Each labelled vertex gets a filled disk -- larger than the plain
+    // vertex dot so the digits stay legible -- with WHITE text on it; the
+    // start vertex keeps its red cue, the rest are blue. Edge labels are
+    // dark-blue text on the white canvas (transparent marker).
     if !matches!(labels, LabelMode::None) && !committed_angles.is_empty() {
         let n = committed_angles.len();
         let no_marker = MarkerStyle::filled_circle(0.0, Color::BLACK.with_alpha(0));
+        let vtxt = TextStyle::new(marker_size * 1.6, Color::WHITE).bold();
+        let disk_for = |i: usize| {
+            let col = if i == 0 { Color::RED } else { Color::BLUE };
+            MarkerStyle::filled_circle(marker_size * 2.0, col)
+        };
         match labels {
             LabelMode::Angles => {
-                let style = TextStyle::new(marker_size * 1.7, Color::BLACK).bold();
                 for i in 0..n {
                     let a = committed_angles[i] / display_scale;
-                    scene.draw_labeled_points(&[committed[i]], &no_marker, &style, move |_, _| {
+                    scene.draw_labeled_points(&[committed[i]], &disk_for(i), &vtxt, move |_, _| {
                         format!("{a}")
                     });
                 }
             }
             LabelMode::IndexEdge => {
-                let idx_style = TextStyle::new(marker_size * 1.7, Color::BLACK).bold();
-                let edge_style = TextStyle::new(marker_size * 1.5, Color::rgb(0, 90, 160));
+                let edge_style = TextStyle::new(marker_size * 1.5, Color::rgb(0, 70, 150)).bold();
                 for i in 0..n {
-                    scene.draw_labeled_points(
-                        &[committed[i]],
-                        &no_marker,
-                        &idx_style,
-                        move |_, _| format!("{i}"),
-                    );
+                    scene.draw_labeled_points(&[committed[i]], &disk_for(i), &vtxt, move |_, _| {
+                        format!("{i}")
+                    });
                     // Angle on the outgoing edge, nudged off the edge line
                     // (perpendicular to it) so it clears the mid-edge arrow.
                     let (from, to) = (committed[i], committed[i + 1]);
                     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
                     let len = (dx * dx + dy * dy).sqrt().max(1e-9);
-                    let off = marker_size * 1.4;
+                    let off = marker_size * 1.6;
                     let mid = (
                         (from.0 + to.0) / 2.0 - dy / len * off,
                         (from.1 + to.1) / 2.0 + dx / len * off,

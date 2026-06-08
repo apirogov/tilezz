@@ -12,28 +12,43 @@ const diceBtn = document.getElementById('dice-btn');
 const idDecBtn = document.getElementById('id-dec-btn');
 const idIncBtn = document.getElementById('id-inc-btn');
 
-// Vertex/edge label overlay mode (Settings panel), passed to analyze()
-// and persisted across sessions: 0 = none, 1 = turn angle on each
-// vertex, 2 = sequence index on each vertex + turn angle on its outgoing
-// edge. Restore the saved choice into the radios before the first run().
+// Vertex/edge label overlay mode (Settings panel, rendered below the
+// canvas), passed to analyze() and persisted across sessions: 0 = none,
+// 1 = turn angle on each vertex, 2 = sequence index on each vertex +
+// turn angle on its outgoing edge. Held in a variable (not read off the
+// DOM) so labelMode() works before the result skeleton -- which hosts
+// the radios -- exists; the radios just write this variable on change.
 const LABELS_KEY = 'ratExplorerLabels';
-function labelMode() {
-  const checked = document.querySelector('input[name="labels"]:checked');
-  return checked ? (parseInt(checked.value, 10) || 0) : 0;
-}
+let currentLabels = 0;
 try {
-  const saved = localStorage.getItem(LABELS_KEY);
-  if (saved !== null) {
-    const r = document.querySelector(`input[name="labels"][value="${CSS.escape(saved)}"]`);
-    if (r) r.checked = true;
-  }
+  const saved = parseInt(localStorage.getItem(LABELS_KEY) ?? '', 10);
+  if (saved === 1 || saved === 2) currentLabels = saved;
 } catch (err) { /* localStorage unavailable; the default (none) stands */ }
-document.querySelectorAll('input[name="labels"]').forEach((radio) =>
-  radio.addEventListener('change', () => {
-    try { localStorage.setItem(LABELS_KEY, String(labelMode())); } catch (err) { /* ignore */ }
-    run();
-  })
-);
+function labelMode() { return currentLabels; }
+
+// The Settings disclosure markup, injected into the render column between
+// the canvas and the export links. The current mode is pre-checked.
+function settingsHtml() {
+  const opt = (v, text) =>
+    `<label><input type="radio" name="labels" value="${v}"`
+    + `${currentLabels === v ? ' checked' : ''}> ${text}</label>`;
+  return '<details class="hint-details settings-panel">'
+    + '<summary>settings</summary>'
+    + '<fieldset class="settings"><legend class="hint">vertex / edge labels</legend>'
+    + opt(0, 'none')
+    + opt(1, 'turn angle on each vertex')
+    + opt(2, 'index on each vertex, turn angle on its outgoing edge')
+    + '</fieldset></details>';
+}
+
+// Delegated so it survives the one-time skeleton build of the radios.
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t || t.name !== 'labels') return;
+  currentLabels = parseInt(t.value, 10) || 0;
+  try { localStorage.setItem(LABELS_KEY, String(currentLabels)); } catch (err) { /* ignore */ }
+  run();
+});
 
 // Angles are ring-specific, so the ring can only be changed while
 // the sequence is empty (guards against silently discarding a rat
@@ -164,10 +179,13 @@ function applyResult(result) {
     // canvas in both the two-column and narrow single-column layouts.
     // The links are buttons (an action, not navigation) styled to read
     // as plain text links, hidden until there's a shape to export.
+    // Settings sits between the canvas and the export links, inside the
+    // render column.
     outEl.innerHTML =
       '<div class="rat-explorer-result">' +
         '<div class="rat-explorer-render">' +
           '<div class="rat-explorer-svg"></div>' +
+          settingsHtml() +
           '<div class="rat-explorer-export" hidden>' +
             '<button type="button" class="export-link" data-export="svg">SVG</button>' +
             '<button type="button" class="export-link" data-export="png">PNG</button>' +
