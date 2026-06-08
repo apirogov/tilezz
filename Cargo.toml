@@ -164,3 +164,12 @@ rat_explorer = [
   "dep:serde-wasm-bindgen",
   "dep:clap",
 ]
+
+# Disable wasm-pack's post-compile wasm-opt pass. wasm-pack downloads a
+# pinned binaryen release from GitHub at build time to run it, and that
+# download is flaky / blocked on the CI runner (the Pages deploy failed
+# on it). The wasm compiles fine; we just skip the optional size pass.
+# If a smaller bundle is wanted later, run wasm-opt from the runner's
+# apt `binaryen` on web/ratdb/pkg/tilezz_bg.wasm in pages.yml instead.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
