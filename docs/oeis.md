@@ -50,8 +50,9 @@ subring-step cross-checks). Pinned in `opt_correctness_tests`.
 OEIS provenance (re-verified against oeis.org, 2026-06): A266549 (ZZ4
 free) is Luca Petrone, to a(20). A284869 (ZZ6 free) is Petrone for
 a(1..14), Hugo Pfoertner for a(15), and **Walter Trump (Nov 2023) for
-a(16..22), a(22)=374128188** -- so the disputed a(22) is Trump's, not
-Petrone's. Every A3161xx sequence -- free ZZ8/ZZ10/ZZ12,
+a(16..22), a(22)=374128188** -- the a(22) we corrected is Trump's, not
+Petrone's; he withdrew it as non-reproducible (2026-06), so tilezz
+a(22)=374128154 stands. Every A3161xx sequence -- free ZZ8/ZZ10/ZZ12,
 symmetric, and coset -- is Hugo Pfoertner (Jun/Jul 2018). The
 holes-allowed siblings A057729/A057730 are N. J. A. Sloane. All carry
 the OEIS `more` keyword, i.e. they are open for extension. Indexing
@@ -77,8 +78,10 @@ A one-time term-by-term screen of every published sequence we touch
 against tilezz (`tools/count.py` for the per-perimeter counts; the
 `variableMeasured` symmetric / coset arrays for the filtered ones).
 **Every published term we can reach agrees exactly, with exactly two
-exceptions** -- the two disputes below. "Reached frontier?" = did we
-verify through the deepest published term.
+exceptions** -- the two corrections below, BOTH now resolved in tilezz's
+favor (A316200 a(11) by an independent clean-room recompute; A284869
+a(22) by the publishing author withdrawing his value as non-reproducible).
+"Reached frontier?" = did we verify through the deepest published term.
 
 | OEIS | object | verified | published frontier | reached frontier? |
 |---|---|---|---|---|
@@ -89,8 +92,8 @@ verify through the deepest published term.
 | A316195 | ZZ10 coset | a(1..7) | a(7) | YES (full extent) |
 | A316199 | ZZ18 coset | a(1..6) | a(6) | YES (full extent) |
 | A316197 | ZZ14 coset | a(1..7) | a(7) | YES (full extent) |
-| A316200 | ZZ10 free | a(1..10) | a(11) | a(1..10) match; **a(11) DISPUTED** (tilezz 9883 vs 19405; see Improve / docs/oeis-A316200-correction) |
-| A284869 | ZZ6 free | a(1..21) | a(22) | a(1..21) match; **a(22) DISPUTED** (tilezz 374128154 vs 374128188; see docs/oeis-A284869-zz6-a22) |
+| A316200 | ZZ10 free | a(1..10) | a(11) | a(1..10) match; **a(11): tilezz 9883 vs OEIS 19405 -- correction READY** (independent clean-room recompute; see Improve / docs/oeis-A316200-correction) |
+| A284869 | ZZ6 free | a(1..21) | a(22) | a(1..21) match; **a(22) RESOLVED in tilezz's favor = 374128154** (Walter Trump withdrew his 374128188 as non-reproducible, 2026-06; a(23)/a(24) now computed -- see docs/oeis-A284869-zz6-a22) |
 | A266549 | ZZ4 free | a(1..16) | a(20) | **NO** -- see exception below |
 
 **The ZZ4 exception.** A266549 is the one sequence published well past
@@ -109,18 +112,27 @@ already confirmed against every known value.
 
 ## Improve (extend or correct published data)
 
-- **CORRECT A316200(11): 19405 -> 9883.** Resolved this session by an
-  independent clean-room exact-`Z[sqrt5]` enumerator (zero floating
-  point) that reproduces a(4..10) and gives a(11)=9883; tilezz agrees
-  via five paths. Full evidence + reproducible enumerators in
-  `docs/oeis-A316200-correction/`. **Submittable.**
+Submission is being held until all the planned datasets are generated,
+then filed as one batch (these are ready now):
+
+- **CORRECT A316200(11): 19405 -> 9883.** Independent clean-room exact-
+  `Z[sqrt5]` enumerator (zero floating point) reproduces a(4..10) and
+  gives a(11)=9883; tilezz agrees via five paths. Evidence in
+  `docs/oeis-A316200-correction/`. **Correction ready.**
+- **CORRECT A284869(22): 374128188 -> 374128154, and EXTEND a(23), a(24).**
+  Resolved in tilezz's favor: Walter Trump (the value's author) reran his
+  software, got different numbers again, and withdrew 374128188 as
+  unreliable. tilezz a(22)=374128154 has five internal cross-checks; the
+  `zz6_n24_free` dataset (perim 24, v0.1.2) reproduces a(3..23) exactly
+  and adds **a(23)=1390909413, a(24)=5195731483**. Evidence in
+  `docs/oeis-A284869-zz6-a22/`. **Correction + 2 new terms ready.**
 - **Extend the free sequences** past their published depth (all
   reachable; see Reach):
+  - A316198 (ZZ8): **DONE -- a(7..10) = 240549, 5191160, 118346760,
+    2816763296** (dataset `zz8_n20_free`, perim 20, v0.1.2; full
+    re-derivation verified). Ready.
   - A316192 (ZZ12): a(11..14) = 89075, 597581, 4076855, 28499301.
-  - A316198 (ZZ8): a(7) = 240549 (perim 14).
   - A316200 (ZZ10): a(12..14) once a(11) is accepted.
-  - A284869 (ZZ6): OEIS lists to a(22)=374128188 (Petrone); a day of
-    compute (n~24) extends it.
 - **Extend the coset/symmetric** sequences (A316195/197/199,
   A316194/196) past their published terms — same filtered free runs.
   Given A316200 was wrong at its deepest term, **re-checking the

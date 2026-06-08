@@ -1,12 +1,18 @@
-# A284869 a(22): tilezz gets 374128154, OEIS lists 374128188 (UNRESOLVED)
+# A284869 a(22): tilezz 374128154 vs OEIS 374128188 -- RESOLVED (tilezz correct)
 
-**Status: OPEN / under investigation. This is NOT (yet) a correction claim.**
-Unlike the A316200 case (where the published value was an outlier and an
-independent clean-room enumerator confirmed tilezz), here the published value
-is recent and from a highly reliable source, and we have *not* established
-which side is right. This document is the running map of evidence so it can
-become either a **bug post-mortem** (if tilezz is undercounting) or a
-**correction case** (if the published term is wrong).
+**Status: RESOLVED in tilezz's favor (2026-06).** Walter Trump -- the author
+of the published a(16..22) -- reran his software, got *different* numbers
+again, and concluded his computation is non-reproducible at that size; he
+withdrew a(22)=374128188 as unreliable and agreed the tilezz value is correct.
+So **a(22) = 374,128,154** stands (backed by the five independent internal
+cross-checks below), and the published 374128188 is an overcount by 34. This
+is now a **correction case** (a(22)), and the extension terms below are
+trustworthy. Note: Trump conceded via non-reproducibility -- he did not
+independently land on 374128154 -- so the submission rests on tilezz's
+cross-checks, with his withdrawal clearing the "trusted source" prior.
+
+Now also computed and verified to perimeter 24 (dataset `zz6_n24_free`,
+v0.1.2, full re-derivation): the new terms below.
 
 ## The discrepancy
 
@@ -21,8 +27,10 @@ tilezz enumerates as "ZZ6 free". `a(n)` indexes perimeter `n` directly.
 | OEIS A284869 (published) | **374,128,188** |
 | difference | **-34** (tilezz is lower) |
 
-tilezz also yields a(23) = 1,390,909,413, but since a(22) is in dispute that
-term is **not** trustworthy and is not being proposed as an extension.
+Extension terms (now trustworthy, a(22) resolved): **a(23) = 1,390,909,413**
+and **a(24) = 5,195,731,483** (perimeter 23, 24). The `zz6_n24_free` dataset
+reproduces a(3..23) exactly against this document's recorded counts, so a(24)
+rests on an enumerator confirmed at every prior term.
 
 ## Provenance of the published term (sets the prior)
 
@@ -35,10 +43,13 @@ From the OEIS entry's extension history:
   lattice") and the comment "a(n) is the number of simply connected
   polyiamonds with perimeter n."
 
-Walter Trump is an exceptionally careful enumerator with documented methods.
-So the a-priori expectation is that **the published a(22) is right and tilezz
-undercounts by 34** -- the opposite prior to the A316200 dispute. We treat it
-that way until evidence says otherwise.
+Walter Trump is an exceptionally careful enumerator with documented methods,
+so the a-priori expectation was that **the published a(22) is right and tilezz
+undercounts by 34** -- the opposite prior to the A316200 dispute. That prior
+was overturned by the author himself: on rerun his software produced yet
+another, different value, so he withdrew 374128188 as non-reproducible. With
+the "trusted source" prior gone, the five independent internal cross-checks
+below (which all agree on 374128154) carry the result.
 
 ## What matches exactly
 
