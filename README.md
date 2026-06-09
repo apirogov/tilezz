@@ -30,6 +30,7 @@ The concepts this work is based on are described in the following blog posts:
 
 * https://pirogov.de/blog/perfect-precision-2d-geometry-complex-integers/
 * https://pirogov.de/blog/intersecting-segments-without-tears/
+* https://pirogov.de/blog/turtles-snakes-rats/
 * (more posts will probably be added over time)
 
 Note that due to time constraints, this is a work-(not-so-fast-)in-progress.
