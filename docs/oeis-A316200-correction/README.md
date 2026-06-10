@@ -3,6 +3,13 @@
 **Claim.** The published value **A316200(11) = 19405 is incorrect**; the
 correct value is **9883**.
 
+**Extension (computed 2026-06-10, not yet submitted).** Beyond the
+corrected a(11)=9883, the `zz10_n18_free` dataset (perimeter 18, v0.1.2,
+full re-derivation verified) reproduces a(1..11) exactly and gives the
+new terms **a(12..18) = 63556, 313726, 1970548, 10693249, 66850339,
+384547086, 2411380580**. Deployed to RatDB; submission pending alongside
+the a(11) correction.
+
 A316200 (Hugo Pfoertner, Jul 2018; from Al Zimmermann's "Snakes on a Plane"
 contest, Fall 2006) is defined as:
 

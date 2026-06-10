@@ -112,27 +112,35 @@ already confirmed against every known value.
 
 ## Improve (extend or correct published data)
 
-Submission is being held until all the planned datasets are generated,
-then filed as one batch (these are ready now):
+STATUS 2026-06-10: all four free datasets below are **computed,
+re-derivation-verified, and deployed to RatDB** (branches on
+tilezz-ratdb, pinned in the explorer) -- **but NOT yet submitted to
+OEIS**. Submission was held to file as one batch; that batch is ready.
+"COMPUTED" = the terms exist + are verified; "SUBMITTED" stays NO until
+filed on oeis.org.
 
-- **CORRECT A316200(11): 19405 -> 9883.** Independent clean-room exact-
-  `Z[sqrt5]` enumerator (zero floating point) reproduces a(4..10) and
-  gives a(11)=9883; tilezz agrees via five paths. Evidence in
-  `docs/oeis-A316200-correction/`. **Correction ready.**
+- **CORRECT A316200(11): 19405 -> 9883, and EXTEND a(12..18).** The
+  a(11) correction: independent clean-room exact-`Z[sqrt5]` enumerator
+  (zero float) reproduces a(4..10) and gives 9883; tilezz agrees via
+  five paths (evidence `docs/oeis-A316200-correction/`). The extension:
+  `zz10_n18_free` (perim 18, v0.1.2) reproduces a(1..11) incl 9883 and
+  adds **a(12..18) = 63556, 313726, 1970548, 10693249, 66850339,
+  384547086, 2411380580**. COMPUTED + deployed; SUBMITTED: no.
 - **CORRECT A284869(22): 374128188 -> 374128154, and EXTEND a(23), a(24).**
   Resolved in tilezz's favor: Walter Trump (the value's author) reran his
   software, got different numbers again, and withdrew 374128188 as
   unreliable. tilezz a(22)=374128154 has five internal cross-checks; the
   `zz6_n24_free` dataset (perim 24, v0.1.2) reproduces a(3..23) exactly
   and adds **a(23)=1390909413, a(24)=5195731483**. Evidence in
-  `docs/oeis-A284869-zz6-a22/`. **Correction + 2 new terms ready.**
-- **Extend the free sequences** past their published depth (all
-  reachable; see Reach):
-  - A316198 (ZZ8): **DONE -- a(7..10) = 240549, 5191160, 118346760,
-    2816763296** (dataset `zz8_n20_free`, perim 20, v0.1.2; full
-    re-derivation verified). Ready.
-  - A316192 (ZZ12): a(11..14) = 89075, 597581, 4076855, 28499301.
-  - A316200 (ZZ10): a(12..14) once a(11) is accepted.
+  `docs/oeis-A284869-zz6-a22/`. COMPUTED + deployed; SUBMITTED: no.
+- **EXTEND the free sequences** past their published depth (all COMPUTED
+  + deployed; SUBMITTED: no):
+  - A316198 (ZZ8): **a(7..10) = 240549, 5191160, 118346760, 2816763296**
+    (`zz8_n20_free`, perim 20).
+  - A316192 (ZZ12): **a(11..16) = 89075, 597581, 4076855, 28499301,
+    202464580, 1460982297** (`zz12_n16_free`, perim 16).
+  - (A316200 ZZ10 extension a(12..18) listed in its correction bullet
+    above.)
 - **Extend the coset/symmetric** sequences (A316195/197/199,
   A316194/196) past their published terms — same filtered free runs.
   Given A316200 was wrong at its deepest term, **re-checking the
