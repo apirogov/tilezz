@@ -55,15 +55,38 @@ cmd_start() {
   GIT_STATE="$HOME/.rust-sandbox/git"
   mkdir -p "$GIT_STATE"
 
+  # Ensure the host paths bind-mounted as Claude's config exist first:
+  # docker materialises a missing bind *source* as a root-owned dir, so
+  # an absent ~/.claude.json would mount as a directory and Claude could
+  # not read its config file. mkdir/touch run as the host user, so these
+  # come out user-owned.
+  mkdir -p "$HOME/.claude"
+  touch "$HOME/.claude.json"
+
+  # Optional read-only mount of the host's zellij config. Guarded so a
+  # host without one doesn't abort start -- realpath errors on a missing
+  # path, which would leave a malformed `-v` and break `docker run`. An
+  # absent config just means zellij falls back to its defaults.
+  ZELLIJ_MOUNT=()
+  if [ -d "$HOME/.config/zellij" ]; then
+    ZELLIJ_MOUNT=(-v "$(realpath "$HOME/.config/zellij")":/home/ubuntu/.config/zellij:ro)
+  fi
+
+  # We run as the host uid/gid (so files land host-owned). Only uid 1000
+  # matches the image's `ubuntu` /etc/passwd entry; any other uid has no
+  # match, so docker leaves HOME unset (-> "/"). Pin HOME explicitly so
+  # Claude's installer and the ~/... bind mounts resolve to /home/ubuntu
+  # regardless of which uid we run as.
   docker run -d -it \
     --name "$CONTAINER_NAME" \
     -u $(id -u):$(id -g) \
     -w /home/ubuntu/workspace \
+    -e HOME=/home/ubuntu \
     -e GIT_AUTHOR_NAME="$GIT_NAME" \
     -e GIT_AUTHOR_EMAIL="$GIT_EMAIL" \
     -e GIT_COMMITTER_NAME="$GIT_NAME" \
     -e GIT_COMMITTER_EMAIL="$GIT_EMAIL" \
-    -v $(realpath $HOME/.config/zellij):/home/ubuntu/.config/zellij:ro \
+    "${ZELLIJ_MOUNT[@]+"${ZELLIJ_MOUNT[@]}"}" \
     -v "$GH_STATE":/home/ubuntu/.config/gh \
     -v "$GIT_STATE":/home/ubuntu/.config/git \
     -v $HOME/.claude:/home/ubuntu/.claude \
@@ -90,7 +113,10 @@ cmd_build() {
 cmd_stop() {
   if ! docker ps -q -f name="^${CONTAINER_NAME}$" | grep -q .; then
     echo "Not running."
-    exit 0
+    # return, not exit: cmd_restart calls this and `exit` in a function
+    # kills the whole script, so a restart of a stopped container would
+    # never reach cmd_start.
+    return 0
   fi
   docker stop "$CONTAINER_NAME"
   docker rm "$CONTAINER_NAME"

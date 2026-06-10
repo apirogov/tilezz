@@ -78,13 +78,15 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && chmod -R a+w /usr/local/rustup /usr/local/cargo
 
 # Use mold for native linking. gcc 12.1+ supports `-fuse-ld=mold`
-# directly so we don't need to switch the C compiler to clang. Only
-# the x86_64 target is configured -- wasm32 uses LLVM's own linker
-# (lld) and isn't affected. Written under CARGO_HOME so every user
-# (including the cargo install below + the non-root runtime user)
+# directly so we don't need to switch the C compiler to clang. The
+# target triple is derived from rustc's own host (works on x86_64 and
+# aarch64) so this isn't pinned to one arch -- wasm32 uses LLVM's own
+# linker (lld) and isn't affected. Written under CARGO_HOME so every
+# user (including the cargo install below + the non-root runtime user)
 # picks it up automatically.
-RUN printf '%s\n' \
-        '[target.x86_64-unknown-linux-gnu]' \
+RUN triple="$(rustc -Vv | sed -n 's/^host: //p')" \
+    && printf '%s\n' \
+        "[target.${triple}]" \
         'rustflags = ["-C", "link-arg=-fuse-ld=mold"]' \
         > /usr/local/cargo/config.toml
 
@@ -105,8 +107,16 @@ RUN cargo install --locked \
         samply \
     && chmod -R a+w /usr/local/cargo
 
-# Install zellij
-RUN curl -fsSL https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
+# Install zellij. The release asset is arch-specific, so map the Debian
+# arch to zellij's triple instead of hardcoding x86_64 (lets the image
+# build on arm64 hosts too).
+RUN arch="$(dpkg --print-architecture)" \
+    && case "$arch" in \
+        amd64) ztriple=x86_64-unknown-linux-musl ;; \
+        arm64) ztriple=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported arch for zellij: $arch" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/zellij-org/zellij/releases/latest/download/zellij-${ztriple}.tar.gz" \
     | tar -xz -C /usr/local/bin
 
 # Install uv to /usr/local/bin
