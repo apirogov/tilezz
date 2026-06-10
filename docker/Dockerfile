@@ -142,24 +142,29 @@ RUN uv tool install ruff
 # /root/.local/bin.
 RUN chmod 755 /root && chmod -R a+rX /root/.local
 
-# Pre-create ~/.config owned by ubuntu. rust-sandbox.sh bind-mounts
-# the host's zellij config to /home/ubuntu/.config/zellij; if the
-# mount target's parent is missing, the docker daemon creates it as
-# root:root (the -u flag only applies to the container process, not
-# mount setup), which then blocks every other tool (nnn, ...) from
-# creating its own config dir with "Permission denied".
-RUN mkdir -p /home/ubuntu/.config && chown ubuntu:ubuntu /home/ubuntu/.config
+# Pre-create ~/.config and ~/.cache owned by ubuntu. rust-sandbox.sh
+# bind-mounts host dirs *under* these (the zellij config under .config,
+# the Mathlib olean cache under .cache/mathlib); if a mount target's
+# parent is missing, the docker daemon creates it as root:root (the -u
+# flag only applies to the container process, not mount setup), which
+# then blocks every other tool (nnn, lake, ...) from creating its own
+# subdir there with "Permission denied".
+RUN mkdir -p /home/ubuntu/.config /home/ubuntu/.cache \
+    && chown ubuntu:ubuntu /home/ubuntu/.config /home/ubuntu/.cache
 
-# Claude Code is NOT baked into the image: the native launcher manages
-# per-user installs under $HOME/.local/share/claude and symlinks
-# $HOME/.local/bin/claude, so an image copy under /root just gets
-# duplicated (233 MB) into the runtime user's home on first run anyway.
-# Instead, /home/ubuntu/.local is bind-mounted from the host (see
-# rust-sandbox.sh) and the install happens once on first `start`;
-# auto-updates land in the mount and survive container recreation.
-# /home/ubuntu/.local/bin comes first so claude resolves there;
-# /root/.local/bin stays on PATH for the uv tools above.
-ENV PATH="/home/ubuntu/.local/bin:/root/.local/bin:$PATH"
+# Neither Claude Code nor the Lean toolchain is baked into the image;
+# both are installed on first `start` into host-bind-mounted home dirs
+# (see rust-sandbox.sh), so a single install plus its auto-updates
+# survive container recreation:
+#   ~/.local   Claude Code -- per-user install under .local/share with a
+#              launcher symlinked into .local/bin. Baking a copy under
+#              /root would just get duplicated (233 MB) into the runtime
+#              user's home on first run anyway.
+#   ~/.elan    elan + Lean toolchains -- installed via elan-init; each
+#              project's pinned toolchain auto-installs here on first use.
+# .elan/bin and .local/bin go first so lean/lake/claude resolve to the
+# mounts; /root/.local/bin stays on PATH for the uv tools above.
+ENV PATH="/home/ubuntu/.elan/bin:/home/ubuntu/.local/bin:/root/.local/bin:$PATH"
 
 ENV SHELL=/bin/bash
 

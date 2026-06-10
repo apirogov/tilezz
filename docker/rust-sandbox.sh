@@ -55,6 +55,18 @@ cmd_start() {
   GIT_STATE="$HOME/.rust-sandbox/git"
   mkdir -p "$GIT_STATE"
 
+  # Persist the Lean toolchain + Mathlib cache so neither has to be
+  # re-fetched after a container is recreated. elan and its toolchains
+  # live under ~/.elan (installed on first start, see below); Mathlib's
+  # prebuilt olean download cache lives under ~/.cache/mathlib (hundreds
+  # of MB, shared across every project that pulls Mathlib). Per-project
+  # build artifacts (.lake, multi-GB) are project-specific, so they stay
+  # in the workspace mount rather than here.
+  ELAN_STATE="$HOME/.rust-sandbox/elan"
+  mkdir -p "$ELAN_STATE"
+  MATHLIB_CACHE="$HOME/.rust-sandbox/mathlib-cache"
+  mkdir -p "$MATHLIB_CACHE"
+
   # Ensure the host paths bind-mounted as Claude's config exist first:
   # docker materialises a missing bind *source* as a root-owned dir, so
   # an absent ~/.claude.json would mount as a directory and Claude could
@@ -92,6 +104,8 @@ cmd_start() {
     -v $HOME/.claude:/home/ubuntu/.claude \
     -v $HOME/.claude.json:/home/ubuntu/.claude.json \
     -v "$SANDBOX_STATE":/home/ubuntu/.local \
+    -v "$ELAN_STATE":/home/ubuntu/.elan \
+    -v "$MATHLIB_CACHE":/home/ubuntu/.cache/mathlib \
     -v "$WORKSPACE":/home/ubuntu/workspace \
     "$IMAGE"
 
@@ -99,6 +113,13 @@ cmd_start() {
   # mounted ~/.local. No-op on every later start.
   docker exec "$CONTAINER_NAME" bash -c \
     'command -v claude >/dev/null || curl -fsSL https://claude.ai/install.sh | bash'
+
+  # Likewise install elan (the Lean toolchain manager) into the mounted
+  # ~/.elan on first start. --default-toolchain stable gives a working
+  # lean/lake immediately; a project's own lean-toolchain auto-installs
+  # on use. --no-modify-path: the image PATH already has ~/.elan/bin.
+  docker exec "$CONTAINER_NAME" bash -c \
+    'command -v elan >/dev/null || curl -fsSL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain stable --no-modify-path'
 
   echo "Started as ${GIT_NAME} <${GIT_EMAIL}>. Use 'bash'|'zellij'|'run ...' to connect."
 }
