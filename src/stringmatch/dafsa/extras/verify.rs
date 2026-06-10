@@ -156,9 +156,11 @@ impl Acc {
 
         // Doubled stack buffers (no heap, no modulo): dd = rat ++ rat,
         // rr = reverse(rat) ++ reverse(rat). Every rotation is then a
-        // contiguous length-n slice. n <= 31 here (2n <= 64).
-        let mut dd = [0i8; 64];
-        let mut rr = [0i8; 64];
+        // contiguous length-n slice. Sized for perimeter <= 64 (2n <=
+        // 128); main() rejects assets whose max_indexed_length exceeds
+        // that, so the indexing below never overflows.
+        let mut dd = [0i8; 128];
+        let mut rr = [0i8; 128];
         for i in 0..n {
             dd[i] = rat[i];
             dd[n + i] = rat[i];
@@ -270,6 +272,14 @@ fn main() {
     let maxp = manifest["max_indexed_length"]
         .as_u64()
         .unwrap_or_else(|| die("max_indexed_length")) as usize;
+    // The canonical-form check uses fixed 128-byte doubled-rotation
+    // buffers, so it handles perimeter up to 64. Refuse (don't silently
+    // mis-verify) anything deeper.
+    if maxp > 64 {
+        die(format!(
+            "verify.rs handles perimeter <= 64; this asset has max_indexed_length {maxp}"
+        ));
+    }
 
     // Decode + integrity-check the whole DAFSA (root from the manifest,
     // states from the gzipped blocks).
