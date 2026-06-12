@@ -23,5 +23,25 @@
     "name": "zz12_n16_free",
     "repo": "apirogov/tilezz-ratdb",
     "ref": "8d7943bcbe95f3120f65f5933e75c3f6c349eee3"
+  },
+  {
+    "name": "zz3_n39_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "f8e064eb65c9c64d7bbaf9be0031883c25cc59a3"
+  },
+  {
+    "name": "zz5_n25_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "5da739204f00c747945ccab4b300d1084458d785"
+  },
+  {
+    "name": "zz7_n14_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "17e4eeda4223c7fc222e17971e00bb5bd9189808"
+  },
+  {
+    "name": "zz9_n15_free",
+    "repo": "apirogov/tilezz-ratdb",
+    "ref": "ff2e823bff2a095b48dac862d65735ea9613ea42"
   }
 ]
