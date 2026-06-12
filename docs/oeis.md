@@ -34,6 +34,41 @@ ring as deep as the budget allows; everything else falls out.** In
 particular the odd-turn ("bipartite", A316195/197/199) families need
 no turn-restriction mechanism — they are the `coset` filter.
 
+## Submission manifest (what is deployed -> what to submit)
+
+Snapshot 2026-06-12, read from the **deployed** RO-Crate metadata at the
+SHAs pinned in `web/ratdb/datasets.json` (each series is stored as a
+`variableMeasured` comma-string; perimeter = index + 1). Every row is
+COMPUTED + re-derivation-verified + DEPLOYED to RatDB; **SUBMITTED:
+none.** Indexing differs per sequence: perimeter `2n` for A266549,
+A316194, A316195, A316198; perimeter `n` for A284869, A316192, A316196,
+A316200. Evidence/context for each is in Match / Verification log /
+Improve / Add below.
+
+| dataset | OEIS (object) | published to | our new terms | action |
+|---|---|---|---|---|
+| `zz10-n18` | A316200 (ZZ10 free) | a(11)=19405 WRONG | a(11)=**9883**; a(12..18)=63556, 313726, 1970548, 10693249, 66850339, 384547086, 2411380580 | CORRECT + EXTEND |
+| `zz6-n24` | A284869 (ZZ6 free) | a(22)=374128188 WRONG | a(22)=**374128154**; a(23)=1390909413, a(24)=5195731483 | CORRECT + EXTEND |
+| `zz8-n20` | A316198 (ZZ8 free) | a(6) | a(7..10)=240549, 5191160, 118346760, 2816763296 | EXTEND |
+| `zz12-n16` | A316192 (ZZ12 free) | a(10) | a(11..16)=89075, 597581, 4076855, 28499301, 202464580, 1460982297 | EXTEND |
+| `zz4-n32` | A316194 (ZZ4 symmetric) | a(8) | a(9..16)=128, 485, 739, 2798, 4352, 16507, 26132, 99302 | EXTEND |
+| `zz6-n24` | A316196 (ZZ6 symmetric) | a(15) | a(16..24)=1617, 1115, 6019, 4039, 22049, 15107, 82677, 55237, 313033 | EXTEND |
+| `zz10-n18` | A316195 (ZZ10 coset) | a(7) | a(8)=2681, a(9)=23833 | EXTEND (recheck deepest published term -- A316200 was wrong) |
+| `zz3-n39` | -- (new) | -- | 1,1,2,7,33,209,1510,12054,100800,874203,7773270,70559545,651358451 | ADD |
+| `zz5-n25` | -- (new) | -- | 2, 56, 10713, 3808749, 1695574649 | ADD |
+| `zz7-n14` | -- (new) | -- | 10, 43104 | ADD |
+| `zz9-n15` | -- (new) | -- | 1, 7, 236, 22712, 3075974 | ADD |
+| all 9 | -- (new) | -- | one-sided (`2*free - achiral`), per ring | ADD (stored, uncatalogued) |
+| `zz8/10/12` + odd | -- (new) | -- | symmetric / achiral / rotationSymmetric beyond ZZ4/6 | ADD (stored, uncatalogued) |
+| `zz4-n32` | A266549 (ZZ4 free) | a(20) | -- (matched a(1..16); a(17..20) beyond reach) | none -- behind frontier |
+
+**To file:** 2 corrections (A316200, A284869 -- each also extended), 5
+pure extensions (A316198, A316192, A316194, A316196, A316195), 4 new
+odd-ring registrations (ZZ3/5/7/9), plus the uncatalogued one-sided and
+higher-ring symmetric/achiral/rotationSymmetric families. All values
+above are readable with no recompute via `tools/count.py --print` on any
+deployed dataset.
+
 ## Match (verified, reproduced exactly)
 
 Free counts, multiple independent paths (prunes on/off, streaming,
@@ -153,8 +188,25 @@ None of these are in OEIS; each is a `variableMeasured` column of a
 free run:
 
 - **one-sided** for every ring (`2*free - achiral`) — uncatalogued.
-- **odd sub-rings** ZZ3/5/7/9 (= `subring` filter of ZZ6/10/14/18) —
-  no OEIS entry; also obtainable via `--step 2` directly.
+- **odd sub-rings ZZ3/5/7/9 -- COMPUTED + DEPLOYED (tilezz v0.1.3).**
+  The `subring` filter of ZZ6/10/14/18, equivalently `--ring 2r --step
+  2`: the true Z[zeta_r] r-direction lattice (turns multiples of
+  2*Pi/r, straight allowed; polygons at multiples of r, or of 3 for ZZ9
+  since 3 | 9). NOT in OEIS, and DISTINCT from the coset family
+  A316195/197/199/201 (those are the odd-turn +-Pi/r objects, perimeter
+  2n -- e.g. ZZ9 at perimeter 6 = 7, whereas A316199 = 8, and A316199 is
+  nonzero at perimeter 8/10 where ZZ9 is zero). Free series, verify.rs +
+  verify_sha256 --strict clean:
+  - ZZ3 (perimeter 3,6,..,39): 1, 1, 2, 7, 33, 209, 1510, 12054,
+    100800, 874203, 7773270, 70559545, 651358451  (`zz3-n39-free`)
+  - ZZ5 (perimeter 5,10,15,20,25): 2, 56, 10713, 3808749, 1695574649
+    (`zz5-n25-free`)
+  - ZZ7 (perimeter 7,14): 10, 43104  (`zz7-n14-free`; n=21 not reached)
+  - ZZ9 (perimeter 3,6,9,12,15): 1, 7, 236, 22712, 3075974
+    (`zz9-n15-free`; n=18 ~ 600M rats / ~17-20h, deferred)
+
+  Each is a submittable new sequence (perimeter = multiples of r). The
+  same `subring` column is emitted by every parent even-ring run.
 - **symmetric / achiral / rotationSymmetric** for rings beyond ZZ4/6,
   and the achiral vs rotational split per family. (A323188/A323189 do an
   analogous mirror/point-symmetry split but for square-lattice
@@ -192,6 +244,17 @@ target it). ZZ6 1-day is n23 (~8h), NOT n24 (n24 ~28h). On the
 rising/steep rings (ZZ10/14/20/24) treat the 1-day cell as an upper
 bound -- bank one less `n` for certainty. ZZ32/ZZ60 not calibrated
 (extreme branching; small-n only).
+
+**Odd sub-ring (`--step 2`) reaches, measured 2026-06-12.** ZZ3 (ring 6
+step 2) is slow-growing and went deep cheaply: n=39 in ~5.7h. The
+higher-order odd rings cliff hard, and a single cheap bench point badly
+UNDERSELLS them -- e.g. ZZ7 (ring 14 step 2) n=21 benched ">150s" but
+the real run was aborted after >22h still streaming (never finished;
+deployed n=14 instead). ZZ9 (ring 18 step 2) probe: n=9/12/15 =
+1s/3s/359s, with n=18 extrapolated ~600M rats / ~17-20h (a bounded run,
+unlike ZZ7 n=21). Lesson: for fast high-order rings, the last cheap
+bench point is the EDGE OF A CLIFF, not a reach -- calibrate with two
+adjacent points and read the growth factor, not one timeout.
 
 ## Resources (measured 2026-06-05; constants from a stream->merge->build sweep, rings 4/6/8/10/12)
 
