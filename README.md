@@ -122,13 +122,6 @@ SVG, PNG (`raster` feature) or GIF (`animation` feature).
 
 ### As a library
 
-Add the crate to a Rust project:
-
-```toml
-[dependencies]
-tilezz = "0.1.2"
-```
-
 Full API reference (auto-built by docs.rs against the current published version):
 **https://docs.rs/tilezz**
 
