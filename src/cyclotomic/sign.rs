@@ -1123,6 +1123,42 @@ pub fn sign_at_cubic_root_in_interval(
         return sturm_sign_at_root(&minpoly, &coeffs, lo.0, hi.0);
     }
 
+    // **O(1) fast path (the hot case).** For the two cubic rings the
+    // DFS actually uses (ZZ14, ZZ18) the isolating root `c` is known to
+    // high precision as a dyadic rational `C / 2^P` with `|C - c*2^P| <
+    // 1/2` (correctly-rounded, verified offline). Evaluate
+    // `value(c)*2^(2P) = a*2^(2P) + b*(C*2^P) + d*C^2` exactly in i128;
+    // the substitution error is `|V - value(c)*2^(2P)| <= (1/2)*L*2^P <
+    // L*2^P` with the same Lipschitz `L = l_bound` used below. So when
+    // `|V| > L*2^P` the sign of `value(c)` provably equals `sign(V)` --
+    // no bisection. Near-zero values (|V| <= L*2^P) fall through to the
+    // proven bisection. Constants P=50; (C*2^P, C^2) per minpoly:
+    const P: u32 = 50;
+    let fast = match minpoly {
+        // ZZ14: c = 2cos(pi/7), c^3 - c^2 - 2c + 1 = 0
+        [1, -2, -1, 1] => Some((
+            2284227452366899633255690010624i128,
+            4116035643581264728217479023376i128,
+        )),
+        // ZZ18: c = 2cos(pi/9), c^3 - 3c - 1 = 0
+        [-1, -3, 0, 1] => Some((
+            2382403829538589549223439499264i128,
+            4477454596699003705844035366321i128,
+        )),
+        _ => None,
+    };
+    let fast_sign = fast.and_then(|(c_two_p, c_sq)| {
+        let v = (1i128 << (2 * P))
+            .checked_mul(a)
+            .and_then(|t| b.checked_mul(c_two_p).and_then(|x| t.checked_add(x)))
+            .and_then(|t| d.checked_mul(c_sq).and_then(|x| t.checked_add(x)))?;
+        let thresh = l_bound.checked_mul(1i128 << P)?;
+        (v.abs() > thresh).then_some(v.signum() as i8)
+    });
+    if let Some(s) = fast_sign {
+        return s;
+    }
+
     for _ in 0..MAX_BISECTIONS {
         let v_lo = f_abs_num(lo_n, lo_d);
         let v_hi = f_abs_num(hi_n, hi_d);
@@ -1229,6 +1265,33 @@ mod cubic_root_tests {
     }
     fn s18(a: i64, b: i64, d: i64) -> i8 {
         sign_at_cubic_root_in_interval([a, b, d], ZZ18_MINPOLY, ZZ18_ISO_LO, ZZ18_ISO_HI)
+    }
+
+    /// Exhaustive small-grid cross-check of the full sign routine
+    /// (O(1) fast path + bisection fallback) against the independent
+    /// Sturm-Tarski oracle, for BOTH cubic rings. Dense small coeffs
+    /// are where `value(c)` lands closest to zero relative to its
+    /// magnitude, so this directly stresses the fast-path certainty
+    /// threshold and the fall-through to bisection. ~13^3 * 2 cases.
+    #[test]
+    fn cubic_sign_exhaustive_small_grid_matches_sturm() {
+        for (minpoly, lo, hi) in [
+            (ZZ14_MINPOLY, ZZ14_ISO_LO, ZZ14_ISO_HI),
+            (ZZ18_MINPOLY, ZZ18_ISO_LO, ZZ18_ISO_HI),
+        ] {
+            for a in -6..=6 {
+                for b in -6..=6 {
+                    for d in -6..=6 {
+                        let got = sign_at_cubic_root_in_interval([a, b, d], minpoly, lo, hi);
+                        let want = super::sturm_sign_at_root(&minpoly, &[a, b, d], lo.0, hi.0);
+                        assert_eq!(
+                            got, want,
+                            "minpoly {minpoly:?} coeffs [{a},{b},{d}]: fast/bisect={got} sturm={want}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// Zero vector → zero sign, regardless of which ring.
