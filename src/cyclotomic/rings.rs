@@ -2061,12 +2061,25 @@ impl crate::cyclotomic::ReImSign for ZZ10 {
 /// `b2 = sqrt(10 - 2*sqrt(5)), b3 = sqrt(5)*b2`. Routes through the
 /// pentagonal closed-form helper, same as ZZ20 / ZZ60.
 fn zz10_real_sign(x: &[i64; 4]) -> i8 {
-    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(
-        x[0] as i128,
-        x[1] as i128,
-        x[2] as i128,
-        x[3] as i128,
-    ) as i8
+    // O(1) fast path. The value is
+    //   a + b*sqrt(5) + c*sqrt(10-2*sqrt(5)) + d*sqrt(50-10*sqrt(5)).
+    // Evaluate it once at the three sqrt constants rounded to dyadic
+    // rationals R_i = round(sqrt_i * 2^P) (|R_i - sqrt_i*2^P| < 1/2,
+    // computed offline). Then V = a*2^P + b*R5 + c*R1 + d*R3 satisfies
+    // |V - value*2^P| <= (|b|+|c|+|d|)/2, so when `2*|V| > |b|+|c|+|d|`
+    // the sign provably equals sign(V). Near-zero values fall through
+    // to the exact pentagonal reduction. i64 coefficients can never
+    // overflow i128 here (worst term < 2^116).
+    const P: u32 = 50;
+    const R5: i128 = 2517588727560788; // round(sqrt(5)             * 2^50)
+    const R1: i128 = 2647149443198255; // round(sqrt(10-2*sqrt(5))  * 2^50)
+    const R3: i128 = 5919206101592016; // round(sqrt(50-10*sqrt(5)) * 2^50)
+    let [a, b, c, d] = [x[0] as i128, x[1] as i128, x[2] as i128, x[3] as i128];
+    let v = (a << P) + b * R5 + c * R1 + d * R3;
+    if 2 * v.abs() > b.abs() + c.abs() + d.abs() {
+        return v.signum() as i8;
+    }
+    crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal::<i128>(a, b, c, d) as i8
 }
 
 crate::impl_integral_intersect_unit_segments_via_basis!(ZZ10, 4, 4, zz10_real_sign);
@@ -2111,6 +2124,36 @@ impl crate::cyclotomic::CellFloor for ZZ10 {
 }
 
 crate::zz_integral_ring_tests!(name: ZZ10);
+
+#[cfg(test)]
+mod zz10_real_sign_fast_path {
+    use super::zz10_real_sign;
+    use crate::cyclotomic::sign::signum_sum_sqrt_expr_4_pentagonal;
+
+    /// The O(1) fast path must agree with the exact pentagonal
+    /// reduction on every input. Dense small grid (where value(c) is
+    /// closest to zero relative to magnitude) stresses the certainty
+    /// threshold and the fall-through to the exact routine.
+    #[test]
+    fn fast_path_matches_exact_pentagonal_small_grid() {
+        for a in -6..=6 {
+            for b in -6..=6 {
+                for c in -6..=6 {
+                    for d in -6..=6 {
+                        let got = zz10_real_sign(&[a, b, c, d]);
+                        let want = signum_sum_sqrt_expr_4_pentagonal::<i128>(
+                            a as i128, b as i128, c as i128, d as i128,
+                        ) as i8;
+                        assert_eq!(
+                            got, want,
+                            "zz10_real_sign disagrees with exact at [{a},{b},{c},{d}]"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
 
 // ----------------
 // ZZ16 -- hex integers Z[zeta_16].
