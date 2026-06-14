@@ -20,6 +20,17 @@ use crate::rat_enum::dfs::{SeedGather, collect_seeds, hashset_recorder, rat_enum
 use crate::rat_enum::prune::Prunes;
 use crate::rat_enum::stats::DfsStats;
 
+/// Per-level DFS branching factor: the number of step-valid turn
+/// directions the loop `(-hturn+1)..hturn` walks, i.e.
+/// `2 * ((hturn - 1) / step) + 1`. E.g. ZZ4 step1 -> 3, ZZ12 step1 -> 11,
+/// ZZ14 step2 (the ZZ7 subring) -> 7. Single source for the seed-split
+/// sizing (`splitting_depth`) and the cylinder odometer
+/// (`super::super::stream::progress::odometer_fraction`).
+pub fn branch_factor(hturn: i8, step: i8) -> usize {
+    let hm1 = (hturn.max(1) - 1) as usize;
+    2 * (hm1 / step.max(1) as usize) + 1
+}
+
 /// Pick a DFS splitting depth such that the seed-walk produces
 /// roughly `10 * n_threads` work units. With a branching factor of
 /// `b` candidate directions per level, depth `d` enumerates at most
@@ -56,8 +67,7 @@ pub fn rat_enum_parallel<ZZ: IsRing>(
     paranoid: bool,
     prunes: &Prunes,
 ) -> (Vec<Vec<i8>>, DfsStats) {
-    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
-    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
+    let branching = branch_factor(ZZ::hturn(), step);
     let split_depth = splitting_depth(n_threads, branching);
 
     println!("-------- {label} started --------");
@@ -160,6 +170,7 @@ pub fn parallel_drain_seeds<ZZ: IsRing>(
                         ops,
                         paranoid,
                         prunes,
+                        None,
                     );
                 }
                 (local, stats)

@@ -31,6 +31,7 @@
 
 pub mod enumerate;
 pub mod merge;
+pub mod progress;
 pub mod records;
 pub mod runs;
 

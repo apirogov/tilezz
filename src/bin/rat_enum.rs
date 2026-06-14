@@ -392,6 +392,15 @@ struct Cli {
     #[arg(long, default_value_t = 4)]
     closure_table_depth: usize,
 
+    /// Print a live progress heartbeat to stderr every N seconds during
+    /// `--mode stream` (0 = off). Each line reports seeds dispatched/
+    /// retired, closures and branch-attempts per second, the in-flight
+    /// recursion-depth spread, and scratch (`runs/`) growth. A per-seed
+    /// cost distribution (the load-balance / skew picture) is printed at
+    /// the end regardless of this flag.
+    #[arg(long, default_value_t = 0)]
+    heartbeat: u64,
+
     /// Target uncompressed bytes per block file when writing the
     /// `--mode dafsa-blocks` asset. The writer closes a block once its
     /// serialised size crosses this threshold (the final block may be
@@ -733,6 +742,7 @@ fn main() {
                 cli.free,
                 cli.paranoid,
                 std::path::Path::new(out_dir),
+                cli.heartbeat,
             )
             .expect("stream_enum_dispatch");
             let dt = t0.elapsed();

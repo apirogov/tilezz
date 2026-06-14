@@ -14,16 +14,20 @@
 //! global dedup.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::cyclotomic::IsRing;
 use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::make_ops;
 use crate::rat_enum::dfs::{SeedGather, collect_seeds, rat_enum_step};
 use crate::rat_enum::prune::{Prunes, snapshot_prunes};
-use crate::rat_enum::seed::parallel::splitting_depth;
+use crate::rat_enum::seed::parallel::{branch_factor, splitting_depth};
 use crate::rat_enum::stats::DfsStats;
+use crate::rat_enum::stream::progress::{
+    STATE_DONE, STATE_RUNNING, SeedCost, SeedCostSummary, WorkerCell, fmt_dur, run_monitor,
+};
 use crate::rat_enum::stream::runs::RunWriter;
 
 /// Filesystem layout: `out_dir/runs/run_tNN_rMM.bin`. Created on first flush.
@@ -45,6 +49,7 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
     paranoid: bool,
     prunes: &Prunes,
     out_dir: &Path,
+    heartbeat: Option<Duration>,
 ) -> std::io::Result<DfsStats> {
     let ops = make_ops(free);
     let runs_dir = out_dir.join(RUNS_SUBDIR);
@@ -60,8 +65,7 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
         println!("paranoid: per-step fresh-snake cross-check enabled");
     }
 
-    let hm1 = (ZZ::hturn() as usize).saturating_sub(1);
-    let branching = 2 * (hm1 / step.max(1) as usize) + 1;
+    let branching = branch_factor(ZZ::hturn(), step);
     let split_depth = splitting_depth(n_threads.max(1), branching);
     println!("stream: n_threads={n_threads} branching={branching} split_depth={split_depth}");
 
@@ -92,28 +96,66 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
     }
     println!("stream: {} seed states collected", seeds.len());
 
-    // Parallel workers: each consumes seeds via the shared atomic
-    // counter, owns a `RunWriter` keyed by thread index.
+    // Parallel workers + an optional live monitor share these. Workers
+    // consume seeds via the shared atomic counter, own a `RunWriter`
+    // keyed by thread index, publish live telemetry into their own
+    // `WorkerCell`, and record per-seed cost as each seed retires.
     let next_idx = AtomicUsize::new(0);
     let next_ref = &next_idx;
+    let completed = AtomicUsize::new(0);
+    let completed_ref = &completed;
     let runs_dir_ref = &runs_dir;
     let seeds_ref: &[Vec<i8>] = &seeds;
     let n_workers = n_threads.max(1);
+    let seeds_total = seeds.len();
 
-    let worker_stats: Vec<DfsStats> = thread::scope(|s| {
+    let board: Vec<WorkerCell> = (0..n_workers).map(|_| WorkerCell::default()).collect();
+    let board_ref = &board;
+    let monitor_done = AtomicBool::new(false);
+    let monitor_done_ref = &monitor_done;
+    let started = Instant::now();
+
+    let (worker_stats, seed_costs): (Vec<DfsStats>, Vec<SeedCost>) = thread::scope(|s| {
+        // Live heartbeat (opt-in via --heartbeat); runs until the
+        // workers finish and flip `monitor_done`.
+        if let Some(interval) = heartbeat {
+            s.spawn(move || {
+                run_monitor(
+                    board_ref,
+                    next_ref,
+                    completed_ref,
+                    seeds_total,
+                    runs_dir_ref,
+                    started,
+                    interval,
+                    monitor_done_ref,
+                );
+            });
+        }
+
         let mut handles = Vec::with_capacity(n_workers);
-        for worker_id in 0..n_workers {
+        for (worker_id, cell) in board_ref.iter().enumerate() {
             // Thread ids start at 1 -- thread 0 is reserved for the
             // seed-walk early closures above.
             let tid = worker_id + 1;
-            handles.push(s.spawn(move || -> DfsStats {
+            handles.push(s.spawn(move || -> (DfsStats, Vec<SeedCost>) {
                 let mut local_stats = DfsStats::default();
+                let mut costs: Vec<SeedCost> = Vec::new();
                 let mut writer = RunWriter::new(runs_dir_ref, tid);
                 loop {
                     let i = next_ref.fetch_add(1, Ordering::Relaxed);
                     if i >= seeds_ref.len() {
                         break;
                     }
+                    cell.seed_idx.store(i as u32, Ordering::Relaxed);
+                    cell.seed_len
+                        .store(seeds_ref[i].len() as u32, Ordering::Relaxed);
+                    cell.seed_start_ms
+                        .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    cell.progress_ppm.store(0, Ordering::Relaxed);
+                    cell.state.store(STATE_RUNNING, Ordering::Relaxed);
+                    let closed_before = local_stats.closed;
+                    let t0 = Instant::now();
                     let mut snake: Snake<ZZ> = Snake::from_slice_unsafe(&seeds_ref[i]);
                     let mut record = |seq: &[i8]| writer.record(seq);
                     rat_enum_step::<ZZ>(
@@ -125,21 +167,56 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
                         ops,
                         paranoid,
                         prunes,
+                        Some(cell),
                     );
+                    costs.push(SeedCost {
+                        elapsed_ns: t0.elapsed().as_nanos() as u64,
+                        closures: local_stats.closed - closed_before,
+                    });
+                    completed_ref.fetch_add(1, Ordering::Relaxed);
                 }
                 drop(writer); // explicit; flushes remaining buffer
-                local_stats
+                cell.state.store(STATE_DONE, Ordering::Relaxed);
+                (local_stats, costs)
             }));
         }
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("worker panic"))
-            .collect()
+        // Join every worker FIRST (collecting Results, not unwrapping), then
+        // signal the monitor, then propagate any panic. Doing this before the
+        // unwrap matters: `thread::scope` joins the monitor on exit, so if a
+        // worker panicked and we unwound before flipping `monitor_done`, the
+        // monitor's loop would never terminate and the scope would deadlock.
+        let joined: Vec<std::thread::Result<(DfsStats, Vec<SeedCost>)>> =
+            handles.into_iter().map(|h| h.join()).collect();
+        monitor_done_ref.store(true, Ordering::Relaxed);
+        let mut stats_acc: Vec<DfsStats> = Vec::with_capacity(n_workers);
+        let mut costs_acc: Vec<SeedCost> = Vec::new();
+        for r in joined {
+            let (st, mut costs) = r.expect("worker panic");
+            stats_acc.push(st);
+            costs_acc.append(&mut costs);
+        }
+        (stats_acc, costs_acc)
     });
 
     let mut total_stats = seed_stats;
     for ws in &worker_stats {
         total_stats.merge(ws);
+    }
+
+    // Per-seed cost distribution: the empirical answer to "are the seeds
+    // roughly equal work, or heavy-tailed?" (skew = max / median).
+    if let Some(sum) = SeedCostSummary::from_costs(&seed_costs) {
+        println!(
+            "stream: per-seed cost over {} seeds -- elapsed min/median/p90/max = \
+             {}/{}/{}/{}, skew(max/median)={:.1}x, closures total={}",
+            sum.n,
+            fmt_dur(Duration::from_nanos(sum.min_ns)),
+            fmt_dur(Duration::from_nanos(sum.median_ns)),
+            fmt_dur(Duration::from_nanos(sum.p90_ns)),
+            fmt_dur(Duration::from_nanos(sum.max_ns)),
+            sum.skew,
+            sum.total_closures,
+        );
     }
 
     // Inventory the runs we produced. Useful for users / Stage 2.
@@ -161,6 +238,7 @@ pub fn stream_enum_parallel<ZZ: IsRing>(
 /// Runtime-ring dispatcher for [`stream_enum_parallel`]. Snapshots
 /// the global prune state, picks the typed ring impl, runs the
 /// stream.
+#[allow(clippy::too_many_arguments)]
 pub fn stream_enum_dispatch(
     ring: u8,
     max_steps: usize,
@@ -169,12 +247,16 @@ pub fn stream_enum_dispatch(
     free: bool,
     paranoid: bool,
     out_dir: &Path,
+    heartbeat_secs: u64,
 ) -> std::io::Result<DfsStats> {
     let prunes = snapshot_prunes();
     let n = n_threads.max(1);
+    let heartbeat = (heartbeat_secs > 0).then(|| Duration::from_secs(heartbeat_secs));
     crate::dispatch_ring!(
         ring,
-        stream_enum_parallel::<ZZ>(max_steps, step, n, free, paranoid, &prunes, out_dir)
+        stream_enum_parallel::<ZZ>(
+            max_steps, step, n, free, paranoid, &prunes, out_dir, heartbeat
+        )
     )
 }
 
@@ -217,7 +299,7 @@ mod tests {
         let dir = tempdir();
         let prunes = Prunes::default();
 
-        let stats = stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir)
+        let stats = stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir, None)
             .expect("stream_enum_parallel");
         assert!(stats.closed > 0, "no closures recorded -- did Stage 1 run?");
 
@@ -294,7 +376,7 @@ mod tests {
         let dir = tempdir();
         let prunes = Prunes::default();
 
-        stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir)
+        stream_enum_parallel::<ZZ>(max_steps, 1, 4, free, false, &prunes, &dir, None)
             .expect("stream_enum_parallel");
         merge_runs(&dir, ring, max_steps, 1, free).expect("merge_runs");
 
@@ -440,7 +522,7 @@ mod tests {
         let max_steps = 8;
 
         // First full run.
-        stream_enum_parallel::<ZZ8>(max_steps, 1, 2, true, false, &prunes, &dir)
+        stream_enum_parallel::<ZZ8>(max_steps, 1, 2, true, false, &prunes, &dir, None)
             .expect("stream pass 1");
         let cert1 = merge_runs(&dir, ring, max_steps, 1, true).expect("merge pass 1");
         let unique_bytes_1 = std::fs::read(dir.join(UNIQUE_FILENAME)).unwrap();
@@ -461,7 +543,7 @@ mod tests {
         // (which already has files from pass 1), so we wipe runs/
         // first to model the "user re-runs from scratch" workflow.
         std::fs::remove_dir_all(dir.join(super::RUNS_SUBDIR)).ok();
-        stream_enum_parallel::<ZZ8>(max_steps, 1, 2, true, false, &prunes, &dir)
+        stream_enum_parallel::<ZZ8>(max_steps, 1, 2, true, false, &prunes, &dir, None)
             .expect("stream pass 2");
         let cert2 = merge_runs(&dir, ring, max_steps, 1, true).expect("merge pass 2");
         let unique_bytes_2 = std::fs::read(dir.join(UNIQUE_FILENAME)).unwrap();

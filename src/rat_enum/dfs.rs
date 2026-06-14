@@ -33,6 +33,7 @@ use crate::geom::snake::Snake;
 use crate::rat_enum::canonical::CanonicalOps;
 use crate::rat_enum::prune::Prunes;
 use crate::rat_enum::stats::DfsStats;
+use crate::rat_enum::stream::progress::{FLUSH_MASK, WorkerCell, odometer_fraction};
 
 /// When `true`, the DFS streams each newly-discovered rat to stdout
 /// as `RAT [...]` on the fly. This is the protocol used by `--seed`
@@ -76,6 +77,7 @@ pub fn rat_enum_with<ZZ: IsRing>(
             ops,
             paranoid,
             prunes,
+            None,
         );
     }
     println!(
@@ -101,6 +103,44 @@ pub fn hashset_recorder<'a>(set: &'a mut HashSet<Vec<i8>>) -> impl FnMut(&[i8]) 
     }
 }
 
+/// Publish a live telemetry snapshot for the current worker: the
+/// running counters plus the base-`B` odometer reading over the
+/// in-cylinder turns (the path below the worker's seed prefix). Called
+/// only on the [`FLUSH_MASK`] cadence, so the per-call cost (a handful
+/// of arithmetic ops over <=`max_steps` digits) is paid ~once per
+/// million DFS events.
+#[inline]
+fn publish_progress<ZZ: IsRing>(cell: &WorkerCell, snake: &Snake<ZZ>, stats: &DfsStats, step: i8) {
+    let seed_len = cell.seed_len.load(Ordering::Relaxed) as usize;
+    let angles = snake.angles();
+    let rel: &[i8] = angles.get(seed_len..).unwrap_or(&[]);
+    // Clamp to < 1e6 so the swept fraction never reads >= 100% and the
+    // per-seed ETA divide stays strictly positive (see `seed_eta`).
+    let ppm = ((odometer_fraction(rel, ZZ::hturn(), step) * 1_000_000.0) as u32).min(999_999);
+    cell.publish(stats.total(), stats.closed, angles.len() as u32, ppm);
+}
+
+/// Cadence-gated wrapper around [`publish_progress`]: publish only when
+/// the gating counter `key` crosses a [`FLUSH_MASK`] boundary. The DFS
+/// keeps two regimes -- closure-storm (`key = stats.closed`) and descent
+/// (`key = stats.recursed`) -- so one advances when the other stalls;
+/// both funnel through here. A no-op (one mask test) when `progress` is
+/// `None`, i.e. on the in-memory / seed-collection paths.
+#[inline]
+fn maybe_publish<ZZ: IsRing>(
+    progress: Option<&WorkerCell>,
+    key: u64,
+    snake: &Snake<ZZ>,
+    stats: &DfsStats,
+    step: i8,
+) {
+    if let Some(cell) = progress
+        && key & FLUSH_MASK == 0
+    {
+        publish_progress(cell, snake, stats, step);
+    }
+}
+
 /// Recursive DFS worker. Mutates `snake` in place across recursion
 /// (via `add` / `pop`). On every closure the canonical sequence is
 /// passed to `record`; the callback decides where it goes (e.g.
@@ -118,6 +158,7 @@ pub fn rat_enum_step<ZZ: IsRing>(
     ops: CanonicalOps,
     paranoid: bool,
     prunes: &Prunes,
+    progress: Option<&WorkerCell>,
 ) {
     let depth = snake.angles().len();
     if depth >= max_steps {
@@ -220,6 +261,7 @@ pub fn rat_enum_step<ZZ: IsRing>(
         }
         if snake.is_closed() {
             stats.closed += 1;
+            maybe_publish(progress, stats.closed, snake, stats, step);
             let r = {
                 let tmp = Rat::from_unchecked(snake);
                 if tmp.chirality() > 0 {
@@ -233,7 +275,10 @@ pub fn rat_enum_step<ZZ: IsRing>(
             record(&seq);
         } else {
             stats.recursed += 1;
-            rat_enum_step::<ZZ>(snake, max_steps, step, record, stats, ops, paranoid, prunes);
+            maybe_publish(progress, stats.recursed, snake, stats, step);
+            rat_enum_step::<ZZ>(
+                snake, max_steps, step, record, stats, ops, paranoid, prunes, progress,
+            );
         }
         snake.pop();
     }

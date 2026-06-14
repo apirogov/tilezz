@@ -118,6 +118,7 @@ pub fn enumerate_from_seed<ZZ: IsRing>(
                 ops,
                 paranoid,
                 &prunes,
+                None,
             );
         }
         return local;
