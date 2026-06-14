@@ -56,8 +56,8 @@ Improve / Add below.
 | `zz10-n18` | A316195 (ZZ10 coset) | a(7) | a(8)=2681, a(9)=23833 | EXTEND (recheck deepest published term -- A316200 was wrong) |
 | `zz3-n39` | -- (new) | -- | 1,1,2,7,33,209,1510,12054,100800,874203,7773270,70559545,651358451 | ADD |
 | `zz5-n25` | -- (new) | -- | 2, 56, 10713, 3808749, 1695574649 | ADD |
-| `zz7-n14` | -- (new) | -- | 10, 43104 | ADD |
-| `zz9-n15` | -- (new) | -- | 1, 7, 236, 22712, 3075974 | ADD |
+| `zz7-n21` | -- (new) | -- | 10, 43104, 1116780731 | ADD |
+| `zz9-n18` | -- (new) | -- | 1, 7, 236, 22712, 3075974, 500299032 | ADD |
 | all 9 | -- (new) | -- | one-sided (`2*free - achiral`), per ring | ADD (stored, uncatalogued) |
 | `zz8/10/12` + odd | -- (new) | -- | symmetric / achiral / rotationSymmetric beyond ZZ4/6 | ADD (stored, uncatalogued) |
 | `zz4-n32` | A266549 (ZZ4 free) | a(20) | -- (matched a(1..16); a(17..20) beyond reach) | none -- behind frontier |
@@ -201,9 +201,11 @@ free run:
     100800, 874203, 7773270, 70559545, 651358451  (`zz3-n39-free`)
   - ZZ5 (perimeter 5,10,15,20,25): 2, 56, 10713, 3808749, 1695574649
     (`zz5-n25-free`)
-  - ZZ7 (perimeter 7,14): 10, 43104  (`zz7-n14-free`; n=21 not reached)
-  - ZZ9 (perimeter 3,6,9,12,15): 1, 7, 236, 22712, 3075974
-    (`zz9-n15-free`; n=18 ~ 600M rats / ~17-20h, deferred)
+  - ZZ7 (perimeter 7,14,21): 10, 43104, 1116780731  (`zz7-n21-free`,
+    tilezz v0.1.4; a(21) run 2026-06-13, ~11h stream)
+  - ZZ9 (perimeter 3,6,9,12,15,18): 1, 7, 236, 22712, 3075974,
+    500299032  (`zz9-n18-free`, tilezz v0.1.4; a(18) computed after the
+    phi=6 sign optimization brought the run to ~6h)
 
   Each is a submittable new sequence (perimeter = multiples of r). The
   same `subring` column is emitted by every parent even-ring run.
@@ -249,12 +251,21 @@ bound -- bank one less `n` for certainty. ZZ32/ZZ60 not calibrated
 step 2) is slow-growing and went deep cheaply: n=39 in ~5.7h. The
 higher-order odd rings cliff hard, and a single cheap bench point badly
 UNDERSELLS them -- e.g. ZZ7 (ring 14 step 2) n=21 benched ">150s" but
-the real run was aborted after >22h still streaming (never finished;
-deployed n=14 instead). ZZ9 (ring 18 step 2) probe: n=9/12/15 =
+the pre-v0.1.4 run was aborted after >22h still streaming (later
+completed in ~11h with the phi=6 fast path -- see below). ZZ9 (ring 18
+step 2) probe: n=9/12/15 =
 1s/3s/359s, with n=18 extrapolated ~600M rats / ~17-20h (a bounded run,
 unlike ZZ7 n=21). Lesson: for fast high-order rings, the last cheap
 bench point is the EDGE OF A CLIFF, not a reach -- calibrate with two
 adjacent points and read the growth factor, not one timeout.
+
+After the v0.1.4 phi=6 sign optimization (fast cubic-root sign for
+ZZ14/ZZ18, ~3.6x end-to-end on ring 14/18), ZZ9 n=18 was actually run:
+6h02m stream + ~14m merge/build, 503397962 rats, a(18)=500299032 (the
+~600M extrapolation was close). ZZ7 n=21 was then run too (2026-06-13):
+~11h07m stream + ~15m merge/build, 1116823845 rats, a(21)=1116780731 --
+the a(21) closure enumeration that was "invisible from below" finished
+well inside a day on the v0.1.4 binary (`zz7-n21-free`).
 
 ## Resources (measured 2026-06-05; constants from a stream->merge->build sweep, rings 4/6/8/10/12)
 
