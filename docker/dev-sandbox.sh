@@ -91,8 +91,23 @@ cmd_start() {
   # Run as the host uid/gid (files land host-owned). Pin HOME explicitly so the
   # installers and ~/... bind mounts resolve to /home/ubuntu regardless of
   # which uid we run as.
+  # Hardening. Shrinks in-container privilege escalation; NOT an escape
+  # boundary -- the daemon is still root, so rootless/userns-remap/gVisor are
+  # what stop a kernel escape. The process is already non-root, so:
+  #   no-new-privileges  blocks setuid/setcap escalation (sudo is also dropped
+  #                      from the image).
+  #   cap-drop=ALL       a non-root process holds no effective caps anyway;
+  #                      this also empties the bounding set. ping still works
+  #                      (unprivileged ICMP socket, no CAP_NET_RAW); strace/gdb
+  #                      would need --cap-add=SYS_PTRACE.
+  #   pids-limit         fork-bomb guard. No --memory/--cpus: heavy compiles
+  #                      and long runs want the whole box, and neither is a
+  #                      real security control.
   docker run -d -it \
     --name "$CONTAINER_NAME" \
+    --security-opt=no-new-privileges:true \
+    --cap-drop=ALL \
+    --pids-limit=4096 \
     -u "$(id -u):$(id -g)" \
     -w /home/ubuntu/workspace \
     -e HOME=/home/ubuntu \

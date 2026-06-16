@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   build + native deps Rust crates link against:
 #       curl git build-essential pkg-config libssl-dev libfontconfig1-dev
 #   version control + editors + file manager + multiplexer + misc:
-#       vim nnn tmux rsync sudo ca-certificates
+#       vim nnn tmux rsync ca-certificates
 #   linker + WASM optimiser (mold cuts Rust link time ~5x; binaryen provides
 #   wasm-opt so wasm-pack does not fetch it on first run):
 #       mold binaryen
@@ -33,7 +33,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #       openssh-client
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git build-essential pkg-config libssl-dev \
-    vim nnn tmux rsync sudo libfontconfig1-dev ca-certificates \
+    vim nnn tmux rsync libfontconfig1-dev ca-certificates \
     mold binaryen \
     just \
     time jq \
