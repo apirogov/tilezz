@@ -88,18 +88,65 @@ cmd_start() {
     ZELLIJ_MOUNT=(-v "$(realpath "$HOME/.config/zellij")":/home/ubuntu/.config/zellij:ro)
   fi
 
-  # Run as the host uid/gid (files land host-owned). Pin HOME explicitly so the
-  # installers and ~/... bind mounts resolve to /home/ubuntu regardless of
-  # which uid we run as.
-  # Hardening. Shrinks in-container privilege escalation; NOT an escape
-  # boundary -- the daemon is still root, so rootless/userns-remap/gVisor are
-  # what stop a kernel escape. The process is already non-root, so:
+  # --- Own everything as the host user: pick uid/gid + caps per docker flavour.
+  # Goal in BOTH modes: every file the container writes into the bind mounts
+  # (the workspace, toolchain caches, agent auth) lands owned by the *host*
+  # user, so you can edit and delete it from the host without sudo. Rootful and
+  # rootless docker map container uids to host uids differently, so reaching
+  # that goal needs a different uid:gid in each:
+  #
+  #   rootful  -- the daemon runs as root and a container uid IS that uid on the
+  #               host. Run as the host's own uid:gid and writes land host-owned
+  #               directly. That uid is unprivileged, so cap-drop=ALL below
+  #               leaves it with no capabilities -- exactly right, nothing is
+  #               added back.
+  #
+  #   rootless -- the daemon runs as the host user inside a user namespace.
+  #               Container uid 0 maps to the host user's real uid; every *other*
+  #               container uid maps to a subuid that is NOT the host user. So to
+  #               get host-owned files we must run as container-root (0:0): then
+  #               "root in here" == "me on the host" and writes land owned by me.
+  #               (Running as $(id -u) under rootless maps to a subuid, leaving
+  #               files owned by a phantom high uid the host cannot touch without
+  #               sudo -- this is the bug this branch fixes.)
+  #
+  #               Container-root needs two caps back after cap-drop=ALL: the
+  #               image's /home/ubuntu is owned by the baked-in uid 1000 (the
+  #               `ubuntu` user), which under the userns is a subuid, not
+  #               container-root, so a cap-less root cannot traverse or write it
+  #               and provisioning dies with EACCES. DAC_READ_SEARCH restores
+  #               "read + traverse any file"; DAC_OVERRIDE restores "read / write
+  #               / exec any file" -- the file-permission bypass a real root has
+  #               by default.
+  #
+  #               Why re-adding them is harmless here: under rootless, container
+  #               uid 0 is NOT host root -- the user namespace pins it to your
+  #               unprivileged host uid, and Linux capabilities are namespaced
+  #               too. So DAC_OVERRIDE / DAC_READ_SEARCH grant their bypass only
+  #               *inside* this namespace, over files your own user already owns;
+  #               they confer zero authority on the host. The worst this "root"
+  #               can do is what your normal account can already do. (Under
+  #               rootful the same caps would be genuine privilege -- which is
+  #               why that branch runs as an unprivileged uid and adds nothing.)
+  ID_CAP_OPTS=(-u "$(id -u):$(id -g)")
+  if docker info -f '{{json .SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    ID_CAP_OPTS=(-u 0:0 --cap-add=DAC_OVERRIDE --cap-add=DAC_READ_SEARCH)
+    echo "Rootless docker detected: running as container-root (maps to your host uid via userns)."
+  fi
+
+  # Hardening. Shrinks in-container privilege escalation; NOT an escape boundary
+  # -- under rootful the daemon is still root (userns-remap/gVisor are what stop
+  # a kernel escape); under rootless the daemon is already unprivileged. HOME is
+  # pinned explicitly so installers and ~/... bind mounts resolve to
+  # /home/ubuntu whichever uid we run as. The flags:
   #   no-new-privileges  blocks setuid/setcap escalation (sudo is also dropped
-  #                      from the image).
-  #   cap-drop=ALL       a non-root process holds no effective caps anyway;
-  #                      this also empties the bounding set. ping still works
-  #                      (unprivileged ICMP socket, no CAP_NET_RAW); strace/gdb
-  #                      would need --cap-add=SYS_PTRACE.
+  #                      from the image), so the cap set the container starts
+  #                      with is the most it can ever hold.
+  #   cap-drop=ALL       drops the whole capability set and empties the bounding
+  #                      set; the rootless branch above then adds back only the
+  #                      two DAC caps, the rootful branch adds nothing. ping
+  #                      still works (unprivileged ICMP socket, no CAP_NET_RAW);
+  #                      strace/gdb would need --cap-add=SYS_PTRACE.
   #   pids-limit         fork-bomb guard. No --memory/--cpus: heavy compiles
   #                      and long runs want the whole box, and neither is a
   #                      real security control.
@@ -108,7 +155,7 @@ cmd_start() {
     --security-opt=no-new-privileges:true \
     --cap-drop=ALL \
     --pids-limit=4096 \
-    -u "$(id -u):$(id -g)" \
+    "${ID_CAP_OPTS[@]}" \
     -w /home/ubuntu/workspace \
     -e HOME=/home/ubuntu \
     -e GIT_AUTHOR_NAME="$GIT_NAME" \
